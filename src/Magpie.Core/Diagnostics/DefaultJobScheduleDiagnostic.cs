@@ -7,37 +7,32 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Config;
 using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Runtime;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Diagnostics;
 
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Diagnostics;
 
 internal sealed class DefaultJobScheduleDiagnostic(
     IScheduleTriggerRepository scheduleTriggers,
     IEventTriggerRepository eventTriggers,
+    IJobExecutionRepository executions,
     IJobRegistry jobRegistry,
-    IConfiguration configuration) : IDiagnosticCheck
+    SearchOptions searchOptions,
+    ILogger<DefaultJobScheduleDiagnostic> logger) : IDiagnosticCheck
 {
     private static readonly DateTime CadenceSampleStart = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     private static readonly TimeSpan CadenceSampleWindow = TimeSpan.FromDays(400);
-    private static readonly TimeSpan DefaultMinimumSearchAge = TimeSpan.FromHours(24);
     private const string Id = "core.config.missing-default-job";
 
     private const int MaximumCadenceIntervals = 10000;
-    private const string ReleaseAutoGrabScanJobType = "ReleaseAutoGrabScan";
-    private const string ReleaseSearchScanJobType = "ReleaseSearchScan";
-    private const string DownloadImportScanJobType = "DownloadImportScan";
-    private const string RetentionCleanupJobType = "RetentionCleanup";
-    private const string DownloadStuckDetectionJobType = "DownloadStuckDetection";
-    private const string DatabaseMaintenanceJobType = "DatabaseMaintenance";
-    private const string IntegrationHealthCheckJobType = "IntegrationHealthCheck";
-    private const string MediaInfoExtractScanJobType = "MediaInfoExtractScan";
 
     private enum DurationUnit
     {
@@ -55,364 +50,6 @@ internal sealed class DefaultJobScheduleDiagnostic(
     public string DiagnosticCheckId => Id;
 
     public string Category => "Schedules";
-
-    private TimeSpan MinimumSearchAge
-    {
-        get
-        {
-            var raw = configuration["Magpie:Search:MinimumSearchAgeHours"];
-            return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hours) && hours > 0
-                ? TimeSpan.FromHours(hours)
-                : DefaultMinimumSearchAge;
-        }
-    }
-
-    private static void ValidateReleaseSearchScan(
-        ScheduleTrigger trigger,
-        CadenceMeasurement? cadence,
-        TimeSpan minimumSearchAge,
-        List<DiagnosticFinding> findings)
-    {
-        if (cadence is not { } measured)
-        {
-            return;
-        }
-
-        AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromMinutes(15), findings);
-        AddLessOftenFindingIfNeeded(
-            trigger,
-            measured,
-            minimumSearchAge,
-            "Magpie:Search:MinimumSearchAgeHours",
-            findings);
-    }
-
-    private static void ValidateReleaseAutoGrabScan(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        CadenceMeasurement? cadence,
-        List<DiagnosticFinding> findings)
-    {
-        _ = ReadIntegerParameter(trigger, spec, "retryCooldownHours", ParameterFloor.NonNegative, findings);
-
-        if (cadence is not { } measured)
-        {
-            return;
-        }
-
-        AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromMinutes(30), findings);
-        AddLessOftenFindingIfNeeded(trigger, measured, TimeSpan.FromHours(12), "12 hours", findings);
-    }
-
-    private static void ValidateRetentionCleanup(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        CadenceMeasurement? cadence,
-        List<DiagnosticFinding> findings)
-    {
-        var jobExecutionRetentionDays = ReadIntegerParameter(
-            trigger,
-            spec,
-            "jobExecutionRetentionDays",
-            ParameterFloor.NonNegative,
-            findings);
-        var auditRetentionDays = ReadIntegerParameter(
-            trigger,
-            spec,
-            "auditRetentionDays",
-            ParameterFloor.NonNegative,
-            findings);
-        var releaseObservationRetentionDays = ReadIntegerParameter(
-            trigger,
-            spec,
-            "releaseObservationRetentionDays",
-            ParameterFloor.NonNegative,
-            findings);
-        var failedDownloadRetentionDays = ReadIntegerParameter(
-            trigger,
-            spec,
-            "failedDownloadRetentionDays",
-            ParameterFloor.Positive,
-            findings);
-
-        if (releaseObservationRetentionDays is { } releaseDays &&
-            failedDownloadRetentionDays is { } failedDays &&
-            releaseDays > failedDays)
-        {
-            findings.Add(Warning(
-                "Release observations are retained longer than failed downloads",
-                "Release observations are kept longer than the failed downloads that use them. " +
-                "Release observation retention should be reduced, or failed download retention increased.",
-                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
-        }
-
-        if (cadence is not { } measured)
-        {
-            return;
-        }
-
-        var validRetentionWindows = new[]
-            {
-                jobExecutionRetentionDays,
-                auditRetentionDays,
-                releaseObservationRetentionDays,
-                failedDownloadRetentionDays,
-            }
-            .OfType<int>()
-            .ToArray();
-        if (validRetentionWindows.Length != 4)
-        {
-            return;
-        }
-
-        var shortestRetentionDays = validRetentionWindows.Min();
-        if (shortestRetentionDays >= 7)
-        {
-            AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromHours(6), findings);
-        }
-
-        if (shortestRetentionDays > 0 &&
-            TryCreateDuration(shortestRetentionDays, DurationUnit.Days, trigger, "retentionDays", findings)
-                is { } maximumCadence)
-        {
-            AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, "shortest retention window", findings);
-        }
-    }
-
-    private static void ValidateDownloadStuckDetection(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        CadenceMeasurement? cadence,
-        List<DiagnosticFinding> findings)
-    {
-        var fetchingMinutes = ReadIntegerParameter(trigger, spec, "fetchingMinutes", ParameterFloor.Positive, findings);
-        _ = ReadIntegerParameter(trigger, spec, "stalledMinutes", ParameterFloor.Positive, findings);
-
-        if (cadence is not { } measured ||
-            fetchingMinutes is not { } minutes ||
-            TryCreateDuration(minutes / 2d, DurationUnit.Minutes, trigger, "fetchingMinutes", findings)
-                is not { } maximumCadence)
-        {
-            return;
-        }
-
-        AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, "half of fetchingMinutes", findings);
-    }
-
-    private static void ValidateDownloadImportScan(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        CadenceMeasurement? cadence,
-        List<DiagnosticFinding> findings)
-    {
-        var settleMinutes = ReadIntegerParameter(trigger, spec, "settleMinutes", ParameterFloor.Positive, findings);
-
-        if (cadence is not { } measured ||
-            settleMinutes is not { } minutes ||
-            TryCreateDuration(minutes * 6d, DurationUnit.Minutes, trigger, "settleMinutes", findings)
-                is not { } maximumCadence)
-        {
-            return;
-        }
-
-        AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, "six times settleMinutes", findings);
-    }
-
-    private static void ValidateDatabaseMaintenance(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        List<DiagnosticFinding> findings)
-    {
-        var backupEnabled = ReadBooleanParameter(trigger, spec, "backupEnabled", findings);
-        var optimizeEnabled = ReadBooleanParameter(trigger, spec, "optimizeEnabled", findings);
-
-        if (backupEnabled == true)
-        {
-            _ = ReadIntegerParameter(trigger, spec, "backupIntervalDays", ParameterFloor.Positive, findings);
-            _ = ReadIntegerParameter(trigger, spec, "backupRetentionCount", ParameterFloor.Positive, findings);
-        }
-
-        if (optimizeEnabled == true)
-        {
-            _ = ReadIntegerParameter(trigger, spec, "optimizeIntervalDays", ParameterFloor.Positive, findings);
-        }
-    }
-
-    private static void ValidateIntegrationHealthCheck(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        CadenceMeasurement? cadence,
-        List<DiagnosticFinding> findings)
-    {
-        var staleAfterMinutes = ReadIntegerParameter(
-            trigger,
-            spec,
-            MagpieJobs.Parameters.StaleAfterMinutes,
-            ParameterFloor.Positive,
-            findings);
-        var timeoutSeconds = ReadIntegerParameter(
-            trigger,
-            spec,
-            MagpieJobs.Parameters.TimeoutSeconds,
-            ParameterFloor.Positive,
-            findings);
-
-        if (staleAfterMinutes is { } staleMinutes && timeoutSeconds is { } seconds && seconds > staleMinutes * 60)
-        {
-            findings.Add(Warning(
-                "IntegrationHealthCheck timeout exceeds stale window",
-                "The integration health check timeout is longer than the time before a connection " +
-                "is considered stale. The timeout should be reduced, or the stale window increased.",
-                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
-        }
-
-        if (cadence is not { } measured)
-        {
-            return;
-        }
-
-        AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromMinutes(10), findings);
-        if (staleAfterMinutes is not { } minutes ||
-            TryCreateDuration(
-                minutes,
-                DurationUnit.Minutes,
-                trigger,
-                MagpieJobs.Parameters.StaleAfterMinutes,
-                findings) is not { } maximumCadence)
-        {
-            return;
-        }
-
-        AddLessOftenFindingIfNeeded(
-            trigger,
-            measured,
-            maximumCadence,
-            MagpieJobs.Parameters.StaleAfterMinutes,
-            findings);
-    }
-
-    private static void ValidateMediaInfoExtractScan(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        CadenceMeasurement? cadence,
-        List<DiagnosticFinding> findings)
-    {
-        var maxAgeHours = ReadIntegerParameter(trigger, spec, "maxAgeHours", ParameterFloor.Positive, findings);
-
-        if (cadence is not { } measured ||
-            maxAgeHours is not { } hours ||
-            TryCreateDuration(hours, DurationUnit.Hours, trigger, "maxAgeHours", findings)
-                is not { } maximumCadence)
-        {
-            return;
-        }
-
-        AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, "maxAgeHours", findings);
-    }
-
-    private static bool? ReadBooleanParameter(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        string parameterName,
-        List<DiagnosticFinding> findings)
-    {
-        var parameter = spec.Parameters
-            .FirstOrDefault(p => string.Equals(p.Name, parameterName, StringComparison.Ordinal));
-        if (parameter is null)
-        {
-            findings.Add(Error(
-                $"Job spec for {spec.JobType} is missing timing parameter {parameterName}",
-                $"Doctor schedule checks expect {spec.JobType}.{parameterName} so cadence can be validated.",
-                JobDiagnosticAffectedEntityPrefixes.Job + spec.JobType));
-            return null;
-        }
-
-        if (parameter.Type != DataType.Boolean)
-        {
-            findings.Add(Error(
-                $"Job spec for {spec.JobType} has invalid timing parameter {parameterName}",
-                $"{spec.JobType}.{parameterName} must be declared as a boolean parameter.",
-                JobDiagnosticAffectedEntityPrefixes.Job + spec.JobType));
-            return null;
-        }
-
-        var hasConfiguredValue = TryGetParameterValue(trigger.Parameters, parameterName, out var configuredValue);
-        var raw = hasConfiguredValue ? configuredValue : parameter.DefaultValue;
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            findings.Add(Error(
-                $"Schedule {trigger.Name} is missing timing parameter {parameterName}",
-                $"The schedule does not set {trigger.JobType}.{parameterName}, and the job spec does not define a " +
-                "default.",
-                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
-            return null;
-        }
-
-        if (bool.TryParse(raw, out var value))
-        {
-            return value;
-        }
-
-        var source = hasConfiguredValue ? "configured" : "default";
-        findings.Add(Error(
-            $"Schedule {trigger.Name} has invalid timing parameter {parameterName}",
-            $"The {source} value {raw} for {trigger.JobType}.{parameterName} must be true or false.",
-            JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
-        return null;
-    }
-
-    private static int? ReadIntegerParameter(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        string parameterName,
-        ParameterFloor floor,
-        List<DiagnosticFinding> findings)
-    {
-        var parameter = spec.Parameters
-            .FirstOrDefault(p => string.Equals(p.Name, parameterName, StringComparison.Ordinal));
-        if (parameter is null)
-        {
-            findings.Add(Error(
-                $"Job spec for {spec.JobType} is missing timing parameter {parameterName}",
-                $"Doctor schedule checks expect {spec.JobType}.{parameterName} so cadence can be validated.",
-                JobDiagnosticAffectedEntityPrefixes.Job + spec.JobType));
-            return null;
-        }
-
-        if (parameter.Type != DataType.Number)
-        {
-            findings.Add(Error(
-                $"Job spec for {spec.JobType} has invalid timing parameter {parameterName}",
-                $"{spec.JobType}.{parameterName} must be declared as a numeric parameter.",
-                JobDiagnosticAffectedEntityPrefixes.Job + spec.JobType));
-            return null;
-        }
-
-        var hasConfiguredValue = TryGetParameterValue(trigger.Parameters, parameterName, out var configuredValue);
-        var raw = hasConfiguredValue ? configuredValue : parameter.DefaultValue;
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            findings.Add(Error(
-                $"Schedule {trigger.Name} is missing timing parameter {parameterName}",
-                $"The schedule does not set {trigger.JobType}.{parameterName}, and the job spec does not define a " +
-                "default.",
-                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
-            return null;
-        }
-
-        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ||
-            !IsAllowed(value, floor))
-        {
-            var source = hasConfiguredValue ? "configured" : "default";
-            findings.Add(Error(
-                $"Schedule {trigger.Name} has invalid timing parameter {parameterName}",
-                $"The {source} value {raw} for {trigger.JobType}.{parameterName} must be " + $"{DescribeFloor(floor)}.",
-                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
-            return null;
-        }
-
-        return value;
-    }
 
     private static void AddMoreOftenFindingIfNeeded(
         ScheduleTrigger trigger,
@@ -664,6 +301,345 @@ internal sealed class DefaultJobScheduleDiagnostic(
         return value.ToString("c", CultureInfo.InvariantCulture);
     }
 
+    private void ValidateReleaseSearchScan(
+        ScheduleTrigger trigger,
+        CadenceMeasurement? cadence,
+        TimeSpan minimumSearchAge,
+        List<DiagnosticFinding> findings)
+    {
+        if (cadence is not { } measured)
+        {
+            return;
+        }
+
+        AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromMinutes(15), findings);
+        AddLessOftenFindingIfNeeded(
+            trigger,
+            measured,
+            minimumSearchAge,
+            "Search:MinimumSearchAge",
+            findings);
+    }
+
+    private void ValidateReleaseAutoGrabScan(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        CadenceMeasurement? cadence,
+        List<DiagnosticFinding> findings)
+    {
+        _ = ReadIntegerParameter(
+            trigger, spec, MagpieJobs.Parameters.RetryCooldownHours, ParameterFloor.NonNegative, findings);
+
+        if (cadence is not { } measured)
+        {
+            return;
+        }
+
+        AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromMinutes(30), findings);
+        AddLessOftenFindingIfNeeded(trigger, measured, TimeSpan.FromHours(12), "12 hours", findings);
+    }
+
+    private void ValidateRetentionCleanup(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        CadenceMeasurement? cadence,
+        List<DiagnosticFinding> findings)
+    {
+        var jobExecutionRetentionDays = ReadIntegerParameter(
+            trigger,
+            spec,
+            MagpieJobs.Parameters.JobExecutionRetentionDays,
+            ParameterFloor.NonNegative,
+            findings);
+        var auditRetentionDays = ReadIntegerParameter(
+            trigger,
+            spec,
+            MagpieJobs.Parameters.AuditRetentionDays,
+            ParameterFloor.NonNegative,
+            findings);
+        var releaseObservationRetentionDays = ReadIntegerParameter(
+            trigger,
+            spec,
+            MagpieJobs.Parameters.ReleaseObservationRetentionDays,
+            ParameterFloor.NonNegative,
+            findings);
+        var failedDownloadRetentionDays = ReadIntegerParameter(
+            trigger,
+            spec,
+            MagpieJobs.Parameters.FailedDownloadRetentionDays,
+            ParameterFloor.Positive,
+            findings);
+
+        if (releaseObservationRetentionDays is { } releaseDays &&
+            failedDownloadRetentionDays is { } failedDays &&
+            releaseDays > failedDays)
+        {
+            findings.Add(Warning(
+                "Release observations are retained longer than failed downloads",
+                "Release observations are kept longer than the failed downloads that use them. " +
+                "Release observation retention should be reduced, or failed download retention increased.",
+                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
+        }
+
+        if (cadence is not { } measured)
+        {
+            return;
+        }
+
+        var validRetentionWindows = new[]
+            {
+                jobExecutionRetentionDays,
+                auditRetentionDays,
+                releaseObservationRetentionDays,
+                failedDownloadRetentionDays,
+            }
+            .OfType<int>()
+            .ToArray();
+        if (validRetentionWindows.Length != 4)
+        {
+            return;
+        }
+
+        var shortestRetentionDays = validRetentionWindows.Min();
+        if (shortestRetentionDays >= 7)
+        {
+            AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromHours(6), findings);
+        }
+
+        if (shortestRetentionDays > 0 &&
+            TryCreateDuration(shortestRetentionDays, DurationUnit.Days, trigger, "retentionDays", findings)
+                is { } maximumCadence)
+        {
+            AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, "shortest retention window", findings);
+        }
+    }
+
+    private void ValidateDownloadStuckDetection(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        CadenceMeasurement? cadence,
+        List<DiagnosticFinding> findings)
+    {
+        var fetchingMinutes = ReadIntegerParameter(
+            trigger, spec, MagpieJobs.Parameters.FetchingMinutes, ParameterFloor.Positive, findings);
+        _ = ReadIntegerParameter(
+            trigger, spec, MagpieJobs.Parameters.StalledMinutes, ParameterFloor.Positive, findings);
+
+        if (cadence is not { } measured ||
+            fetchingMinutes is not { } minutes ||
+            TryCreateDuration(
+                minutes / 2d, DurationUnit.Minutes, trigger, MagpieJobs.Parameters.FetchingMinutes, findings)
+                is not { } maximumCadence)
+        {
+            return;
+        }
+
+        AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, "half of fetchingMinutes", findings);
+    }
+
+    private void ValidateDownloadImportScan(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        CadenceMeasurement? cadence,
+        List<DiagnosticFinding> findings)
+    {
+        var settleMinutes = ReadIntegerParameter(
+            trigger, spec, MagpieJobs.Parameters.SettleMinutes, ParameterFloor.Positive, findings);
+
+        if (cadence is not { } measured ||
+            settleMinutes is not { } minutes ||
+            TryCreateDuration(
+                minutes * 6d, DurationUnit.Minutes, trigger, MagpieJobs.Parameters.SettleMinutes, findings)
+                is not { } maximumCadence)
+        {
+            return;
+        }
+
+        AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, "six times settleMinutes", findings);
+    }
+
+    private void ValidateDatabaseMaintenance(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        List<DiagnosticFinding> findings)
+    {
+        var backupEnabled = ReadBooleanParameter(trigger, spec, MagpieJobs.Parameters.BackupEnabled, findings);
+        var optimizeEnabled = ReadBooleanParameter(trigger, spec, MagpieJobs.Parameters.OptimizeEnabled, findings);
+
+        if (backupEnabled == true)
+        {
+            _ = ReadIntegerParameter(
+                trigger, spec, MagpieJobs.Parameters.BackupIntervalDays, ParameterFloor.Positive, findings);
+            _ = ReadIntegerParameter(
+                trigger, spec, MagpieJobs.Parameters.BackupRetentionCount, ParameterFloor.Positive, findings);
+        }
+
+        if (optimizeEnabled == true)
+        {
+            _ = ReadIntegerParameter(
+                trigger, spec, MagpieJobs.Parameters.OptimizeIntervalDays, ParameterFloor.Positive, findings);
+        }
+    }
+
+    private void ValidateIntegrationHealthCheck(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        CadenceMeasurement? cadence,
+        List<DiagnosticFinding> findings)
+    {
+        var staleAfterMinutes = ReadIntegerParameter(
+            trigger,
+            spec,
+            MagpieJobs.Parameters.StaleAfterMinutes,
+            ParameterFloor.Positive,
+            findings);
+        var timeoutSeconds = ReadIntegerParameter(
+            trigger,
+            spec,
+            MagpieJobs.Parameters.TimeoutSeconds,
+            ParameterFloor.Positive,
+            findings);
+
+        if (staleAfterMinutes is { } staleMinutes && timeoutSeconds is { } seconds && seconds > staleMinutes * 60)
+        {
+            findings.Add(Warning(
+                "IntegrationHealthCheck timeout exceeds stale window",
+                "The integration health check timeout is longer than the time before a connection " +
+                "is considered stale. The timeout should be reduced, or the stale window increased.",
+                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
+        }
+
+        if (cadence is not { } measured)
+        {
+            return;
+        }
+
+        AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromMinutes(10), findings);
+        if (staleAfterMinutes is not { } minutes ||
+            TryCreateDuration(
+                minutes,
+                DurationUnit.Minutes,
+                trigger,
+                MagpieJobs.Parameters.StaleAfterMinutes,
+                findings) is not { } maximumCadence)
+        {
+            return;
+        }
+
+        AddLessOftenFindingIfNeeded(
+            trigger,
+            measured,
+            maximumCadence,
+            MagpieJobs.Parameters.StaleAfterMinutes,
+            findings);
+    }
+
+    private void ValidateMediaInfoExtractScan(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        CadenceMeasurement? cadence,
+        List<DiagnosticFinding> findings)
+    {
+        var maxAgeHours = ReadIntegerParameter(
+            trigger, spec, MagpieJobs.Parameters.MaxAgeHours, ParameterFloor.Positive, findings);
+
+        if (cadence is not { } measured ||
+            maxAgeHours is not { } hours ||
+            TryCreateDuration(hours, DurationUnit.Hours, trigger, MagpieJobs.Parameters.MaxAgeHours, findings)
+                is not { } maximumCadence)
+        {
+            return;
+        }
+
+        AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, MagpieJobs.Parameters.MaxAgeHours, findings);
+    }
+
+    private bool? ReadBooleanParameter(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        string parameterName,
+        List<DiagnosticFinding> findings)
+    {
+        var parameter = spec.Parameters
+            .FirstOrDefault(p => string.Equals(p.Name, parameterName, StringComparison.Ordinal));
+        if (parameter is null || parameter.Type != DataType.Boolean)
+        {
+            logger.LogError(
+                "Job spec {JobType} has a missing or invalid timing parameter {ParameterName}",
+                spec.JobType,
+                parameterName);
+            return null;
+        }
+
+        var hasConfiguredValue = TryGetParameterValue(trigger.Parameters, parameterName, out var configuredValue);
+        var raw = hasConfiguredValue ? configuredValue : parameter.DefaultValue;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            findings.Add(Error(
+                $"Schedule {trigger.Name} is missing timing parameter {parameterName}",
+                $"The schedule does not set {trigger.JobType}.{parameterName}, and the job spec does not define a " +
+                "default.",
+                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
+            return null;
+        }
+
+        if (bool.TryParse(raw, out var value))
+        {
+            return value;
+        }
+
+        var source = hasConfiguredValue ? "configured" : "default";
+        findings.Add(Error(
+            $"Schedule {trigger.Name} has invalid timing parameter {parameterName}",
+            $"The {source} value {raw} for {trigger.JobType}.{parameterName} must be true or false.",
+            JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
+        return null;
+    }
+
+    private int? ReadIntegerParameter(
+        ScheduleTrigger trigger,
+        JobSpec spec,
+        string parameterName,
+        ParameterFloor floor,
+        List<DiagnosticFinding> findings)
+    {
+        var parameter = spec.Parameters
+            .FirstOrDefault(p => string.Equals(p.Name, parameterName, StringComparison.Ordinal));
+        if (parameter is null || parameter.Type != DataType.Number)
+        {
+            logger.LogError(
+                "Job spec {JobType} has a missing or invalid timing parameter {ParameterName}",
+                spec.JobType,
+                parameterName);
+            return null;
+        }
+
+        var hasConfiguredValue = TryGetParameterValue(trigger.Parameters, parameterName, out var configuredValue);
+        var raw = hasConfiguredValue ? configuredValue : parameter.DefaultValue;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            findings.Add(Error(
+                $"Schedule {trigger.Name} is missing timing parameter {parameterName}",
+                $"The schedule does not set {trigger.JobType}.{parameterName}, and the job spec does not define a " +
+                "default.",
+                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
+            return null;
+        }
+
+        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ||
+            !IsAllowed(value, floor))
+        {
+            var source = hasConfiguredValue ? "configured" : "default";
+            findings.Add(Error(
+                $"Schedule {trigger.Name} has invalid timing parameter {parameterName}",
+                $"The {source} value {raw} for {trigger.JobType}.{parameterName} must be " + $"{DescribeFloor(floor)}.",
+                JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
+            return null;
+        }
+
+        return value;
+    }
+
     public async Task<IReadOnlyList<DiagnosticFinding>> RunAsync(
         DiagnosticContext context,
         CancellationToken cancellationToken = default)
@@ -728,6 +704,36 @@ internal sealed class DefaultJobScheduleDiagnostic(
             }
         }
 
+        var referencedJobTypes = triggersByJobType.Values
+            .SelectMany(triggers => triggers)
+            .Where(trigger => trigger.Enabled)
+            .Select(trigger => trigger.JobType)
+            .Concat(eventTriggersByJobType.Values
+                .SelectMany(triggers => triggers)
+                .Where(trigger => trigger.Enabled)
+                .Select(trigger => trigger.JobType))
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var jobType in referencedJobTypes)
+        {
+            if (jobRegistry.TryGetJobSpec(jobType, out _))
+            {
+                continue;
+            }
+
+            var queued = await executions.QueryAsync(
+                new JobExecutionQuery { Status = JobExecutionStatus.Queued, JobTypes = [jobType] },
+                new() { PageNumber = 1, PageSize = 1 },
+                null,
+                cancellationToken).ConfigureAwait(false);
+            findings.Add(Warning(
+                $"Job type {jobType} has no handler on this node",
+                $"Enabled triggers reference {jobType}, but this node cannot run it, and " +
+                $"{queued.TotalItems} queued execution(s) wait for it. " +
+                "Restore its extension or remove its triggers and cancel its queued executions. " +
+                "In a cluster, first check whether another scheduler-eligible node provides the handler.",
+                JobDiagnosticAffectedEntityPrefixes.Job + jobType));
+        }
+
         return findings;
     }
 
@@ -737,14 +743,14 @@ internal sealed class DefaultJobScheduleDiagnostic(
         bool hasValidCron,
         List<DiagnosticFinding> findings)
     {
-        if (entry.JobType is not (ReleaseAutoGrabScanJobType
-            or ReleaseSearchScanJobType
-            or DownloadImportScanJobType
-            or DatabaseMaintenanceJobType
-            or IntegrationHealthCheckJobType
-            or MediaInfoExtractScanJobType
-            or RetentionCleanupJobType
-            or DownloadStuckDetectionJobType))
+        if (entry.JobType is not (MagpieJobs.Types.ReleaseAutoGrabScan
+            or MagpieJobs.Types.ReleaseSearchScan
+            or MagpieJobs.Types.DownloadImportScan
+            or MagpieJobs.Types.DatabaseMaintenance
+            or MagpieJobs.Types.IntegrationHealthCheck
+            or MagpieJobs.Types.MediaInfoExtractScan
+            or MagpieJobs.Types.RetentionCleanup
+            or MagpieJobs.Types.DownloadStuckDetection))
         {
             return;
         }
@@ -759,28 +765,28 @@ internal sealed class DefaultJobScheduleDiagnostic(
 
         switch (entry.JobType)
         {
-            case ReleaseSearchScanJobType:
-                ValidateReleaseSearchScan(trigger, cadence, MinimumSearchAge, findings);
+            case MagpieJobs.Types.ReleaseSearchScan:
+                ValidateReleaseSearchScan(trigger, cadence, searchOptions.MinimumSearchAge, findings);
                 break;
-            case ReleaseAutoGrabScanJobType:
+            case MagpieJobs.Types.ReleaseAutoGrabScan:
                 ValidateReleaseAutoGrabScan(trigger, spec, cadence, findings);
                 break;
-            case RetentionCleanupJobType:
+            case MagpieJobs.Types.RetentionCleanup:
                 ValidateRetentionCleanup(trigger, spec, cadence, findings);
                 break;
-            case DownloadStuckDetectionJobType:
+            case MagpieJobs.Types.DownloadStuckDetection:
                 ValidateDownloadStuckDetection(trigger, spec, cadence, findings);
                 break;
-            case DownloadImportScanJobType:
+            case MagpieJobs.Types.DownloadImportScan:
                 ValidateDownloadImportScan(trigger, spec, cadence, findings);
                 break;
-            case DatabaseMaintenanceJobType:
+            case MagpieJobs.Types.DatabaseMaintenance:
                 ValidateDatabaseMaintenance(trigger, spec, findings);
                 break;
-            case IntegrationHealthCheckJobType:
+            case MagpieJobs.Types.IntegrationHealthCheck:
                 ValidateIntegrationHealthCheck(trigger, spec, cadence, findings);
                 break;
-            case MediaInfoExtractScanJobType:
+            case MagpieJobs.Types.MediaInfoExtractScan:
                 ValidateMediaInfoExtractScan(trigger, spec, cadence, findings);
                 break;
         }

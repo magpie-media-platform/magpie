@@ -1,7 +1,8 @@
 ARG DOTNET_RUNTIME_VERSION=10.0
+ARG APP_IMAGE=magpie-integration:latest
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_RUNTIME_VERSION} AS dotnet-runtime
-FROM magpie-integration:latest AS app
+FROM ${APP_IMAGE} AS app
 
 FROM mcr.microsoft.com/playwright:v1.49.1-jammy
 

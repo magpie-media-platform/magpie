@@ -13,20 +13,20 @@ public enum FulfillmentStatus
     /// <summary>
     /// The content item has media files and accepts upgrades.
     /// </summary>
-    Upgradable,
+    Upgradable = 1,
 
     /// <summary>
     /// The content item has media files and needs no more.
     /// </summary>
-    Fulfilled,
+    Fulfilled = 2,
 
     /// <summary>
     /// An external source fulfills the content item, so it needs no acquisition.
     /// </summary>
-    FulfilledExternally,
+    FulfilledExternally = 3,
 
     /// <summary>
     /// A container with some, but not all, of its descendant leaves covered.
     /// </summary>
-    Partial
+    Partial = 4
 }

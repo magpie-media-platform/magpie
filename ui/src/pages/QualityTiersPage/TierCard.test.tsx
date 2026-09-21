@@ -35,7 +35,22 @@ const noopHandlers = {
     onDragOver: vi.fn(),
     onDragLeave: vi.fn(),
     onDrop: vi.fn(),
+    onTouchStart: vi.fn(),
+    onTouchMove: vi.fn(),
+    onTouchEnd: vi.fn(),
+    onTouchCancel: vi.fn(),
+    onMove: vi.fn(),
+    onFocusRestored: vi.fn(),
 };
+
+const reorderState = {
+    isMoving: false,
+    isReorderDisabled: false,
+    isDragging: false,
+    isDropTarget: false,
+    dropPosition: null,
+    focusDirection: null,
+} as const;
 
 describe('TierCard', () => {
     it('renders the tier name, priority, and criterion', () => {
@@ -48,9 +63,7 @@ describe('TierCard', () => {
                     isDeleting={false}
                     isCloning={false}
                     canManage
-                    isDragging={false}
-                    isDropTarget={false}
-                    dropPosition={null}
+                    {...reorderState}
                     {...noopHandlers}
                 />
             </TestWrapper>,
@@ -73,9 +86,7 @@ describe('TierCard', () => {
                     isDeleting={false}
                     isCloning={false}
                     canManage
-                    isDragging={false}
-                    isDropTarget={false}
-                    dropPosition={null}
+                    {...reorderState}
                     {...noopHandlers}
                 />
             </TestWrapper>,
@@ -97,9 +108,7 @@ describe('TierCard', () => {
                     isDeleting={false}
                     isCloning={false}
                     canManage
-                    isDragging={false}
-                    isDropTarget={false}
-                    dropPosition={null}
+                    {...reorderState}
                     {...noopHandlers}
                     onEdit={onEdit}
                     onDelete={onDelete}
@@ -127,9 +136,7 @@ describe('TierCard', () => {
                     isDeleting={false}
                     isCloning={false}
                     canManage={false}
-                    isDragging={false}
-                    isDropTarget={false}
-                    dropPosition={null}
+                    {...reorderState}
                     {...noopHandlers}
                 />
             </TestWrapper>,
@@ -137,5 +144,51 @@ describe('TierCard', () => {
 
         expect(screen.queryByRole('button', { name: /edit/i })).not.toBeInTheDocument();
         expect(screen.queryByTestId('tier-list-detail-page__drag-handle')).not.toBeInTheDocument();
+    });
+
+    it('offers keyboard move buttons that report the direction', async () => {
+        const onMove = vi.fn();
+        const tier = createTier();
+        render(
+            <TestWrapper>
+                <TierCard
+                    tier={tier}
+                    priority={2}
+                    totalTiers={3}
+                    isDeleting={false}
+                    isCloning={false}
+                    canManage
+                    {...reorderState}
+                    {...noopHandlers}
+                    onMove={onMove}
+                />
+            </TestWrapper>,
+        );
+
+        await userEvent.click(screen.getByRole('button', { name: 'Move Bluray-1080p up' }));
+        await userEvent.click(screen.getByRole('button', { name: 'Move Bluray-1080p down' }));
+
+        expect(onMove).toHaveBeenNthCalledWith(1, tier, 'up');
+        expect(onMove).toHaveBeenNthCalledWith(2, tier, 'down');
+    });
+
+    it('disables the move buttons at the ends of the list', () => {
+        render(
+            <TestWrapper>
+                <TierCard
+                    tier={createTier()}
+                    priority={1}
+                    totalTiers={1}
+                    isDeleting={false}
+                    isCloning={false}
+                    canManage
+                    {...reorderState}
+                    {...noopHandlers}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByRole('button', { name: 'Move Bluray-1080p up' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Move Bluray-1080p down' })).toBeDisabled();
     });
 });

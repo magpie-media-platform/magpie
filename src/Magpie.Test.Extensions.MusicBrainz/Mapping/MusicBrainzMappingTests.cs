@@ -69,8 +69,10 @@ public class MusicBrainzMappingTests
                 contribution.References.Select(reference => reference.Kind),
                 Is.EqualTo(["official homepage", "streaming music"]));
             Assert.That(hit.Aliases, Has.Count.EqualTo(3));
-            Assert.That(hit.BirthDate?.Precision, Is.EqualTo(TemporalPrecision.Month));
-            Assert.That(hit.DeathDate?.Precision, Is.EqualTo(TemporalPrecision.Year));
+            Assert.That(hit.Established?.Precision, Is.EqualTo(TemporalPrecision.Month));
+            Assert.That(hit.Dissolved?.Precision, Is.EqualTo(TemporalPrecision.Year));
+            Assert.That(hit.BirthDate, Is.Null);
+            Assert.That(hit.DeathDate, Is.Null);
         }
     }
 
@@ -512,10 +514,10 @@ public class MusicBrainzMappingTests
             Assert.That(contribution.DeathDate is not null, Is.EqualTo(expectedPerson));
             Assert.That(contribution.Established is not null, Is.EqualTo(!expectedPerson));
             Assert.That(contribution.Dissolved is not null, Is.EqualTo(!expectedPerson));
-            Assert.That(hit.BirthDate, Is.Not.Null);
-            Assert.That(hit.DeathDate, Is.Not.Null);
-            Assert.That(hit.Established, Is.Not.Null);
-            Assert.That(hit.Dissolved, Is.Not.Null);
+            Assert.That(hit.BirthDate is not null, Is.EqualTo(expectedPerson));
+            Assert.That(hit.DeathDate is not null, Is.EqualTo(expectedPerson));
+            Assert.That(hit.Established is not null, Is.EqualTo(!expectedPerson));
+            Assert.That(hit.Dissolved is not null, Is.EqualTo(!expectedPerson));
             Assert.That(
                 contribution.CustomMetadata.Single(value => value.Key == "country").Value,
                 Is.EqualTo("GB"));
@@ -796,7 +798,7 @@ public class MusicBrainzMappingTests
             Assert.That(
                 relationships,
                 Has.All.Property(nameof(SubjectRelationshipDefinition.SubjectKind))
-                    .EqualTo(Constants.PersonSubjectKind));
+                    .EqualTo("person"));
             Assert.That(
                 relationships[0].InitialSubjectContribution!.SortTitle,
                 Is.EqualTo("Credited Performer, The"));
@@ -860,7 +862,7 @@ public class MusicBrainzMappingTests
             Assert.That(
                 relationships,
                 Has.All.Property(nameof(SubjectRelationshipDefinition.RelationshipKind))
-                    .EqualTo(Constants.CrewRelationshipKind));
+                    .EqualTo("crew"));
         }
     }
 
@@ -954,13 +956,22 @@ public class MusicBrainzMappingTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(relationships, Has.Count.EqualTo(61));
-            Assert.That(relationships[0].RelationshipKind, Is.EqualTo(Constants.LabelSubjectKind));
+            Assert.That(relationships[0].RelationshipKind, Is.EqualTo("music-label"));
             Assert.That(relationships.Count(value => value.RelationshipKind == "performer"), Is.EqualTo(30));
             Assert.That(relationships.Count(value => value.RelationshipKind == "crew"), Is.EqualTo(20));
             Assert.That(relationships.Count(value => value.RelationshipKind == "writer"), Is.EqualTo(10));
             Assert.That(
                 relationships.Select(value => value.RelationshipOrdinal),
-                Is.EqualTo(Enumerable.Range(0, 61)));
+                Is.EqualTo(
+                [
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+                    10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                    20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+                    30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+                    40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+                    50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+                    60
+                ]));
         }
     }
 

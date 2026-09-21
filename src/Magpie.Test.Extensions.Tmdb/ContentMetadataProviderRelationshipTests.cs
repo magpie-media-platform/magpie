@@ -37,6 +37,11 @@ public class ContentMetadataProviderRelationshipTests
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RequestContext { ApiKey = "key", Language = "en-US" });
+        _resolver.Setup(resolver => resolver.AcquireContextAsync(
+                It.IsAny<IEnumerable<string>?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RequestContext { ApiKey = "key", Language = "en-US" });
         var cache = new Mock<IQueryCoordinator>();
         cache.Setup(queryCache => queryCache.GetImageBaseUrlAsync(
                 It.IsAny<RequestContext>(),
@@ -154,8 +159,11 @@ public class ContentMetadataProviderRelationshipTests
         _client.VerifyNoOtherCalls();
     }
 
-    [Test]
-    public async Task GetRelationshipsAsync_EmitsCastCrewAndStudios_WhenRouteIsMovie()
+    [TestCase(false, 1)]
+    [TestCase(true, 2)]
+    public async Task GetRelationshipsAsync_EmitsCastCrewAndStudios_WhenRouteIsMovie(
+        bool fetchMetadataFirst,
+        int expectedDetailRequests)
     {
         // Arrange
         _client.Setup(client => client.GetAsync<MovieDetailDto>(
@@ -189,11 +197,20 @@ public class ContentMetadataProviderRelationshipTests
         existing.ExternalIds.Add(new ExternalId { Source = "tmdb", Value = "550" });
 
         // Act
+        var contribution = fetchMetadataFirst
+            ? (await _subject.TryGetMetadataAsync(new MetadataFetchRequest
+            {
+                Item = item,
+                ExistingMetadata = [existing],
+                AncestorMetadata = [],
+                DefaultLanguagePreference = "en-US"
+            }, default).ConfigureAwait(false))!.Contribution!
+            : new MetadataContribution { ProviderType = Constants.ProviderType };
         var relationships = await _subject.GetRelationshipsAsync(
             new MetadataRelationshipRequest
             {
                 Item = item,
-                Contribution = new MetadataContribution { ProviderType = Constants.ProviderType },
+                Contribution = contribution,
                 ExistingMetadata = [existing],
             },
             default).ConfigureAwait(false);
@@ -213,10 +230,20 @@ public class ContentMetadataProviderRelationshipTests
             Assert.That(relationships[0].RelationshipQualifier, Is.EqualTo("The Narrator"));
             Assert.That(relationships[2].SubjectKind, Is.EqualTo("studio"));
         }
+
+        _client.Verify(client => client.GetAsync<MovieDetailDto>(
+            It.IsAny<RequestContext>(),
+            "3/movie/550",
+            It.IsAny<IReadOnlyList<(string Key, string Value)>?>(),
+            ResponseProfile.Detail,
+            It.IsAny<CancellationToken>()), Times.Exactly(expectedDetailRequests));
     }
 
-    [Test]
-    public async Task GetRelationshipsAsync_AppendsNetworks_WhenRouteIsTvShow()
+    [TestCase(false, 1)]
+    [TestCase(true, 2)]
+    public async Task GetRelationshipsAsync_AppendsNetworks_WhenRouteIsTvShow(
+        bool fetchMetadataFirst,
+        int expectedDetailRequests)
     {
         // Arrange
         _client.Setup(client => client.GetAsync<TvDetailDto>(
@@ -256,11 +283,20 @@ public class ContentMetadataProviderRelationshipTests
         existing.ExternalIds.Add(new ExternalId { Source = "tmdb", Value = "1396" });
 
         // Act
+        var contribution = fetchMetadataFirst
+            ? (await _subject.TryGetMetadataAsync(new MetadataFetchRequest
+            {
+                Item = item,
+                ExistingMetadata = [existing],
+                AncestorMetadata = [],
+                DefaultLanguagePreference = "en-US"
+            }, default).ConfigureAwait(false))!.Contribution!
+            : new MetadataContribution { ProviderType = Constants.ProviderType };
         var relationships = await _subject.GetRelationshipsAsync(
             new MetadataRelationshipRequest
             {
                 Item = item,
-                Contribution = new MetadataContribution { ProviderType = Constants.ProviderType },
+                Contribution = contribution,
                 ExistingMetadata = [existing],
             },
             default).ConfigureAwait(false);
@@ -279,10 +315,20 @@ public class ContentMetadataProviderRelationshipTests
                 relationships[2].InitialSubjectContribution!.Source,
                 Is.EqualTo("tmdb:network:174"));
         }
+
+        _client.Verify(client => client.GetAsync<TvDetailDto>(
+            It.IsAny<RequestContext>(),
+            "3/tv/1396",
+            It.IsAny<IReadOnlyList<(string Key, string Value)>?>(),
+            ResponseProfile.Detail,
+            It.IsAny<CancellationToken>()), Times.Exactly(expectedDetailRequests));
     }
 
-    [Test]
-    public async Task GetRelationshipsAsync_ReadsTheSeasonEndpoint_WhenRouteIsTvSeason()
+    [TestCase(false, 1)]
+    [TestCase(true, 2)]
+    public async Task GetRelationshipsAsync_ReadsTheSeasonEndpoint_WhenRouteIsTvSeason(
+        bool fetchMetadataFirst,
+        int expectedDetailRequests)
     {
         // Arrange
         _client.Setup(client => client.GetAsync<SeasonDetailDto>(
@@ -314,11 +360,20 @@ public class ContentMetadataProviderRelationshipTests
         seriesMetadata.ExternalIds.Add(new ExternalId { Source = "tmdb", Value = "1396" });
 
         // Act
+        var contribution = fetchMetadataFirst
+            ? (await _subject.TryGetMetadataAsync(new MetadataFetchRequest
+            {
+                Item = item,
+                ExistingMetadata = [],
+                AncestorMetadata = [seriesMetadata],
+                DefaultLanguagePreference = "en-US"
+            }, default).ConfigureAwait(false))!.Contribution!
+            : new MetadataContribution { ProviderType = Constants.ProviderType };
         var relationships = await _subject.GetRelationshipsAsync(
             new MetadataRelationshipRequest
             {
                 Item = item,
-                Contribution = new MetadataContribution { ProviderType = Constants.ProviderType },
+                Contribution = contribution,
                 ExistingMetadata = [],
                 AncestorMetadata = [seriesMetadata],
             },
@@ -330,10 +385,20 @@ public class ContentMetadataProviderRelationshipTests
             Assert.That(relationships.Single().RelationshipKind, Is.EqualTo("cast"));
             Assert.That(relationships.Single().SubjectName, Is.EqualTo("Aaron Paul"));
         }
+
+        _client.Verify(client => client.GetAsync<SeasonDetailDto>(
+            It.IsAny<RequestContext>(),
+            "3/tv/1396/season/2",
+            It.IsAny<IReadOnlyList<(string Key, string Value)>?>(),
+            ResponseProfile.Detail,
+            It.IsAny<CancellationToken>()), Times.Exactly(expectedDetailRequests));
     }
 
-    [Test]
-    public async Task GetRelationshipsAsync_MergesGuestStars_WhenRouteIsTvEpisode()
+    [TestCase(false, 1)]
+    [TestCase(true, 2)]
+    public async Task GetRelationshipsAsync_MergesGuestStars_WhenRouteIsTvEpisode(
+        bool fetchMetadataFirst,
+        int expectedDetailRequests)
     {
         // Arrange
         _client.Setup(client => client.GetAsync<EpisodeDto>(
@@ -376,11 +441,20 @@ public class ContentMetadataProviderRelationshipTests
         seriesMetadata.ExternalIds.Add(new ExternalId { Source = "tmdb", Value = "1396" });
 
         // Act
+        var contribution = fetchMetadataFirst
+            ? (await _subject.TryGetMetadataAsync(new MetadataFetchRequest
+            {
+                Item = item,
+                ExistingMetadata = [],
+                AncestorMetadata = [seriesMetadata],
+                DefaultLanguagePreference = "en-US"
+            }, default).ConfigureAwait(false))!.Contribution!
+            : new MetadataContribution { ProviderType = Constants.ProviderType };
         var relationships = await _subject.GetRelationshipsAsync(
             new MetadataRelationshipRequest
             {
                 Item = item,
-                Contribution = new MetadataContribution { ProviderType = Constants.ProviderType },
+                Contribution = contribution,
                 ExistingMetadata = [],
                 AncestorMetadata = [seriesMetadata],
             },
@@ -396,6 +470,13 @@ public class ContentMetadataProviderRelationshipTests
                 relationships.Select(relationship => relationship.RelationshipKind),
                 Is.EqualTo(["cast", "cast", "director"]));
         }
+
+        _client.Verify(client => client.GetAsync<EpisodeDto>(
+            It.IsAny<RequestContext>(),
+            "3/tv/1396/season/2/episode/3",
+            It.IsAny<IReadOnlyList<(string Key, string Value)>?>(),
+            ResponseProfile.Detail,
+            It.IsAny<CancellationToken>()), Times.Exactly(expectedDetailRequests));
     }
 
     [Test]

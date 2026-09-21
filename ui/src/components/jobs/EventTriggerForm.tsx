@@ -134,9 +134,12 @@ export function EventTriggerForm({
     const [eventBoundParameters, setEventBoundParameters] = useState(() =>
         getEventBoundParameters(initialValues?.parameters),
     );
-    const filterKeyCounter = useRef(0);
+    const listKeyCounter = useRef(0);
+    const [patternKeys, setPatternKeys] = useState<string[]>(() =>
+        (initialValues ?? emptyValues).eventNamePatterns.map(() => `pattern-${listKeyCounter.current++}`),
+    );
     const [filterKeys, setFilterKeys] = useState<string[]>(() =>
-        (initialValues?.filters ?? []).map(() => `filter-${filterKeyCounter.current++}`),
+        (initialValues?.filters ?? []).map(() => `filter-${listKeyCounter.current++}`),
     );
     const [selectedPreset, setSelectedPreset] = useState<string>(() => {
         const primaryPattern = initialValues?.eventNamePatterns?.[0];
@@ -172,7 +175,8 @@ export function EventTriggerForm({
         setEventBoundParameters(getEventBoundParameters(newValues.parameters));
         setShowUnsavedDialog(false);
         setShowStaleSaveConfirmation(false);
-        setFilterKeys(newValues.filters.map(() => `filter-${filterKeyCounter.current++}`));
+        setPatternKeys(newValues.eventNamePatterns.map(() => `pattern-${listKeyCounter.current++}`));
+        setFilterKeys(newValues.filters.map(() => `filter-${listKeyCounter.current++}`));
         const primaryPattern = newValues.eventNamePatterns[0];
         const preset = eventPatternPresets.find((p) => p.value === primaryPattern);
         setSelectedPreset(preset ? preset.value : CUSTOM_PRESET);
@@ -232,41 +236,51 @@ export function EventTriggerForm({
         [templates],
     );
 
-    const handlePresetChange = useCallback((preset: string) => {
-        setSelectedPreset(preset);
-        if (preset !== CUSTOM_PRESET) {
+    const handlePresetChange = useCallback(
+        (preset: string) => {
+            setSelectedPreset(preset);
+            if (preset !== CUSTOM_PRESET) {
+                setValues((prev) => ({
+                    ...prev,
+                    eventNamePatterns: prev.eventNamePatterns.map((pattern, i) => (i === 0 ? preset : pattern)),
+                }));
+                setErrors((prev) => ({ ...prev, [patternKeys[0]]: '' }));
+            }
+        },
+        [patternKeys],
+    );
+
+    const handlePatternChange = useCallback(
+        (index: number, newValue: string) => {
             setValues((prev) => ({
                 ...prev,
-                eventNamePatterns: prev.eventNamePatterns.map((pattern, i) => (i === 0 ? preset : pattern)),
+                eventNamePatterns: prev.eventNamePatterns.map((pattern, i) => (i === index ? newValue : pattern)),
             }));
-            setErrors((prev) => ({ ...prev, eventNamePattern: '' }));
-        }
-    }, []);
-
-    const handlePatternChange = useCallback((index: number, newValue: string) => {
-        setValues((prev) => ({
-            ...prev,
-            eventNamePatterns: prev.eventNamePatterns.map((pattern, i) => (i === index ? newValue : pattern)),
-        }));
-        setErrors((prev) => ({ ...prev, [index === 0 ? 'eventNamePattern' : `eventNamePattern-${index}`]: '' }));
-        if (index === 0) {
-            const preset = eventPatternPresets.find((p) => p.value === newValue);
-            setSelectedPreset(preset ? preset.value : CUSTOM_PRESET);
-        }
-    }, []);
+            setErrors((prev) => ({ ...prev, [patternKeys[index]]: '' }));
+            if (index === 0) {
+                const preset = eventPatternPresets.find((p) => p.value === newValue);
+                setSelectedPreset(preset ? preset.value : CUSTOM_PRESET);
+            }
+        },
+        [patternKeys],
+    );
 
     const handleAddPattern = useCallback(() => {
         setValues((prev) => ({ ...prev, eventNamePatterns: [...prev.eventNamePatterns, ''] }));
+        setPatternKeys((prev) => [...prev, `pattern-${listKeyCounter.current++}`]);
     }, []);
 
-    const handleRemovePattern = useCallback((index: number) => {
-        setValues((prev) => {
-            if (prev.eventNamePatterns.length <= 1) {
-                return prev;
-            }
-            return { ...prev, eventNamePatterns: prev.eventNamePatterns.filter((_, i) => i !== index) };
-        });
-    }, []);
+    const handleRemovePattern = useCallback(
+        (index: number) => {
+            if (values.eventNamePatterns.length <= 1) return;
+            const patterns = values.eventNamePatterns.filter((_, i) => i !== index);
+            setValues((prev) => ({ ...prev, eventNamePatterns: patterns }));
+            setPatternKeys((prev) => prev.filter((_, i) => i !== index));
+            const preset = eventPatternPresets.find((p) => p.value === patterns[0]);
+            setSelectedPreset(preset ? preset.value : CUSTOM_PRESET);
+        },
+        [values.eventNamePatterns],
+    );
 
     const handleDelaySecondsChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         const parsed = Number(e.target.value);
@@ -311,7 +325,7 @@ export function EventTriggerForm({
             ...prev,
             filters: [...prev.filters, { key: '', pattern: null, negate: false }],
         }));
-        setFilterKeys((prev) => [...prev, `filter-${filterKeyCounter.current++}`]);
+        setFilterKeys((prev) => [...prev, `filter-${listKeyCounter.current++}`]);
     }, []);
 
     const handleRemoveFilter = useCallback((index: number) => {
@@ -362,7 +376,7 @@ export function EventTriggerForm({
 
         const nonBlankPatterns = values.eventNamePatterns.filter((pattern) => pattern.trim() !== '');
         if (nonBlankPatterns.length === 0) {
-            newErrors.eventNamePattern = 'Event pattern is required';
+            newErrors[patternKeys[0]] = 'Event pattern is required';
         } else {
             values.eventNamePatterns.forEach((pattern, index) => {
                 if (!pattern.trim()) {
@@ -371,7 +385,7 @@ export function EventTriggerForm({
                 try {
                     new RegExp(pattern);
                 } catch {
-                    newErrors[index === 0 ? 'eventNamePattern' : `eventNamePattern-${index}`] = 'Invalid regex pattern';
+                    newErrors[patternKeys[index]] = 'Invalid regex pattern';
                 }
             });
         }
@@ -382,13 +396,13 @@ export function EventTriggerForm({
 
         values.filters.forEach((filter, index) => {
             if (!filter.key.trim()) {
-                newErrors[`filter-${index}-key`] = 'Key is required';
+                newErrors[`${filterKeys[index]}-key`] = 'Key is required';
             }
             if (filter.pattern) {
                 try {
                     new RegExp(filter.pattern);
                 } catch {
-                    newErrors[`filter-${index}-pattern`] = 'Invalid regex';
+                    newErrors[`${filterKeys[index]}-pattern`] = 'Invalid regex';
                 }
             }
         });
@@ -398,7 +412,7 @@ export function EventTriggerForm({
 
         setErrors(newErrors);
         return Object.keys(newErrors).length === 0;
-    }, [currentTemplateId, templates, values]);
+    }, [currentTemplateId, templates, values, patternKeys, filterKeys]);
 
     const save = useCallback(async () => {
         conflict.beginOwnSave();
@@ -552,7 +566,7 @@ export function EventTriggerForm({
 
                         <div className="event-trigger-form__field">
                             <div className="event-trigger-form__label-row">
-                                <Label htmlFor="event-trigger-preset" error={!!errors.eventNamePattern}>
+                                <Label htmlFor="event-trigger-preset" error={!!errors[patternKeys[0]]}>
                                     Event Pattern
                                 </Label>
                                 <Tooltip
@@ -595,7 +609,7 @@ export function EventTriggerForm({
                         </div>
 
                         <div className="event-trigger-form__field">
-                            <Label htmlFor="event-trigger-pattern" error={!!errors.eventNamePattern} required>
+                            <Label htmlFor="event-trigger-pattern" error={!!errors[patternKeys[0]]} required>
                                 Pattern (Regex)
                             </Label>
                             <div className="event-trigger-form__patterns">
@@ -603,7 +617,7 @@ export function EventTriggerForm({
                                     const fieldName = index === 0 ? 'eventNamePattern' : `eventNamePattern-${index}`;
                                     return (
                                         <div
-                                            key={index}
+                                            key={patternKeys[index]}
                                             className="event-trigger-form__pattern-row"
                                             data-pattern-index={index}
                                         >
@@ -616,8 +630,8 @@ export function EventTriggerForm({
                                                 value={pattern}
                                                 onChange={(e) => handlePatternChange(index, e.target.value)}
                                                 placeholder={eventPatternExample.pattern}
-                                                error={!!errors[fieldName]}
-                                                errorMessage={errors[fieldName] || undefined}
+                                                error={!!errors[patternKeys[index]]}
+                                                errorMessage={errors[patternKeys[index]] || undefined}
                                                 disabled={isSubmitting}
                                                 data-field={fieldName}
                                                 className="event-trigger-form__pattern-input"
@@ -748,8 +762,8 @@ export function EventTriggerForm({
                                                     value={filter.key}
                                                     onChange={(e) => handleFilterKeyChange(index, e.target.value)}
                                                     placeholder="Key"
-                                                    error={!!errors[`filter-${index}-key`]}
-                                                    errorMessage={errors[`filter-${index}-key`] || undefined}
+                                                    error={!!errors[`${filterKeys[index]}-key`]}
+                                                    errorMessage={errors[`${filterKeys[index]}-key`] || undefined}
                                                     disabled={isSubmitting}
                                                     aria-label={`Filter ${index + 1} key`}
                                                     data-field={`filter-${index}-key`}
@@ -761,8 +775,8 @@ export function EventTriggerForm({
                                                     value={filter.pattern ?? ''}
                                                     onChange={(e) => handleFilterPatternChange(index, e.target.value)}
                                                     placeholder="Pattern (regex)"
-                                                    error={!!errors[`filter-${index}-pattern`]}
-                                                    errorMessage={errors[`filter-${index}-pattern`] || undefined}
+                                                    error={!!errors[`${filterKeys[index]}-pattern`]}
+                                                    errorMessage={errors[`${filterKeys[index]}-pattern`] || undefined}
                                                     disabled={isSubmitting}
                                                     aria-label={`Filter ${index + 1} pattern`}
                                                     data-field={`filter-${index}-pattern`}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -7,6 +7,12 @@ import type { ReactNode } from 'react';
 import { SystemStatusPage } from './SystemStatusPage';
 import type { SystemStatusData } from '@/hooks/useSystemStatus';
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
+
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('react-router-dom')>()),
+    useNavigate: () => mockNavigate,
+}));
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
@@ -119,6 +125,17 @@ describe('SystemStatusPage', () => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
+    });
+
+    it('opens root folders without an unsupported row parameter', async () => {
+        // Arrange
+        await renderSystemStatus();
+
+        // Act
+        fireEvent.click(screen.getByText('TV Shows'));
+
+        // Assert
+        expect(mockNavigate).toHaveBeenCalledWith('/admin/root-folders');
     });
 
     it('renders the system status page with correct data-page attribute', async () => {

@@ -2,7 +2,6 @@ import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 import { Link } from 'react-router-dom';
 
 import {
-    ArrowLeftIcon,
     ArrowsLeftRightIcon,
     BellIcon,
     ClockCountdownIcon,
@@ -24,6 +23,7 @@ import { Sidebar, SidebarContent, SidebarGroup, SidebarItem, SidebarSeparator } 
 import { Header } from '../Header';
 import { UserMenu } from '../UserMenu';
 import { ExtensionAdminNavigation } from '../Slot';
+import { AdminLink } from '@/auth';
 import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 import { useIsActive } from '@/lib/routes';
 
@@ -93,7 +93,12 @@ function AdminHeader() {
             onSidebarToggle={toggleSidebar}
             sidebarOpen={sidebarExpanded}
             sidebarNavId="admin-navigation-menu"
-            actions={<UserMenu />}
+            actions={
+                <>
+                    <AdminLink />
+                    <UserMenu />
+                </>
+            }
         />
     );
 }
@@ -106,14 +111,6 @@ function AdminSidebar() {
     return (
         <Sidebar open={sidebarOpen} collapsed={sidebarCollapsed} onCollapsedChange={toggleSidebarCollapsed}>
             <SidebarContent>
-                <SidebarGroup>
-                    <SidebarItem to="/" icon={<ArrowLeftIcon weight="duotone" />} onClick={closeSidebar}>
-                        Exit admin
-                    </SidebarItem>
-                </SidebarGroup>
-
-                <SidebarSeparator />
-
                 <SidebarGroup label="System">
                     <SidebarItem
                         to="/admin/system"

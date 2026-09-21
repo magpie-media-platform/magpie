@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { LinkSimpleIcon, DownloadSimpleIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { FilterBar } from '@/components/filters/FilterBar';
 import { Button } from '@/components/ui/Button';
 import {
@@ -17,6 +18,8 @@ import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useContentList } from '@/hooks/useContent';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useLibraryTypes } from '@/hooks/useLibraryTypes';
+import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
 import { magpieQlAnd, magpieQlString } from '@/lib/magpieQl';
 import type { ContentListItem } from '@/types/content';
 
@@ -35,6 +38,7 @@ interface ContentPickerDialogProps {
 }
 
 export function ContentPickerDialog({ open, mode, isSubmitting, onOpenChange, onSelect }: ContentPickerDialogProps) {
+    const { contentTypes } = useLibraryTypes();
     const [text, setText] = useState('');
     const [filter, setFilter] = useState('');
     const debouncedText = useDebouncedValue(text, 300);
@@ -93,15 +97,24 @@ export function ContentPickerDialog({ open, mode, isSubmitting, onOpenChange, on
                         <ul className="content-picker__list">
                             {items.map((item) => (
                                 <li key={item.id} className="content-picker__option">
-                                    {item.posterUrl ? (
-                                        <img className="content-picker__poster" src={item.posterUrl} alt="" />
-                                    ) : (
-                                        <span className="content-picker__poster" aria-hidden="true" />
-                                    )}
+                                    <ContentPoster
+                                        posterUrl={item.posterUrl}
+                                        alt=""
+                                        className="content-picker__poster"
+                                        placeholderClassName="content-picker__poster--placeholder"
+                                        placeholder={null}
+                                    />
                                     <span className="content-picker__meta">
                                         <span className="content-picker__title">{item.title}</span>
                                         <span className="content-picker__sub">
-                                            {item.levelLabel}
+                                            {resolveContentTypeLabel(
+                                                {
+                                                    level: item.level,
+                                                    levelLabel: item.levelLabel,
+                                                    contentType: item.contentType,
+                                                },
+                                                contentTypes,
+                                            )}
                                             {item.year ? ` · ${item.year}` : ''}
                                         </span>
                                     </span>

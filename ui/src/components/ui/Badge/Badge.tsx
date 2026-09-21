@@ -20,10 +20,6 @@ export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(
         { variant = 'default', size = 'md', badgeStyle = 'filled', dot = false, count, className, children, ...props },
         ref,
     ) => {
-        if (count === 0) {
-            return null;
-        }
-
         const classes = [
             'badge',
             `badge--${variant}`,
@@ -47,7 +43,7 @@ export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(
             >
                 {dot && <span className="badge__dot" aria-hidden="true" />}
                 {children}
-                {count !== undefined && <span className="badge__count">{count}</span>}
+                {count !== undefined && count !== 0 && <span className="badge__count">{count}</span>}
             </span>
         );
     },

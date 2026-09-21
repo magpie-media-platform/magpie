@@ -13,6 +13,7 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Models.Patch;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -26,9 +27,41 @@ internal sealed class ScheduleTriggerRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<ScheduleTriggerRepository> logger,
-    TimeProvider? timeProvider = null) : IScheduleTriggerRepository
+    TimeProvider timeProvider) : IScheduleTriggerRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
+
+    private static void ApplyPatch(
+        IDictionary<string, string> values,
+        DictionaryPatch<string, string, string> patch)
+    {
+        if (patch.Add is not null)
+        {
+            foreach (var (key, value) in patch.Add)
+            {
+                values[key] = value ?? string.Empty;
+            }
+        }
+
+        if (patch.Update is not null)
+        {
+            foreach (var (key, value) in patch.Update)
+            {
+                if (values.ContainsKey(key))
+                {
+                    values[key] = value ?? string.Empty;
+                }
+            }
+        }
+
+        if (patch.Remove is not null)
+        {
+            foreach (var key in patch.Remove)
+            {
+                values.Remove(key);
+            }
+        }
+    }
 
     private static IReadOnlyCollection<string> ChangedFields(ScheduleTriggerPatch patch)
     {
@@ -56,6 +89,11 @@ internal sealed class ScheduleTriggerRepository(
         if (patch.Parameters is not null)
         {
             fields.Add("parameters");
+        }
+
+        if (patch.NextRunAt is not null)
+        {
+            fields.Add("nextRunAt");
         }
 
         return fields;
@@ -132,14 +170,17 @@ internal sealed class ScheduleTriggerRepository(
 
             var totalCount = await triggers.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(ScheduleTrigger).GetProperties()
+            var sortProperty = context.Model.FindEntityType(typeof(ScheduleTrigger))!.GetProperties()
+                .Where(property => !property.IsShadowProperty() &&
+                    (property.ClrType.IsValueType || property.ClrType == typeof(string) ||
+                        property.ClrType == typeof(Uri)))
                 .Select(property => property.Name)
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 triggers = sort.Direction == SortDirection.Ascending
-                    ? triggers.OrderBy(t => EF.Property<ScheduleTrigger>(t, sortProperty)).ThenBy(t => t.Id)
-                    : triggers.OrderByDescending(t => EF.Property<ScheduleTrigger>(t, sortProperty)).ThenBy(t => t.Id);
+                    ? triggers.OrderBy(t => EF.Property<object>(t, sortProperty)).ThenBy(t => t.Id)
+                    : triggers.OrderByDescending(t => EF.Property<object>(t, sortProperty)).ThenBy(t => t.Id);
             }
             else
             {
@@ -400,34 +441,14 @@ internal sealed class ScheduleTriggerRepository(
 
                     if (patch.Parameters is not null)
                     {
-                        if (patch.Parameters.Add is not null)
-                        {
-                            foreach (var (key, value) in patch.Parameters.Add)
-                            {
-                                model.Parameters[key] = value ?? string.Empty;
-                            }
-                        }
-
-                        if (patch.Parameters.Update is not null)
-                        {
-                            foreach (var (key, value) in patch.Parameters.Update)
-                            {
-                                if (model.Parameters.ContainsKey(key))
-                                {
-                                    model.Parameters[key] = value ?? string.Empty;
-                                }
-                            }
-                        }
-
-                        if (patch.Parameters.Remove is not null)
-                        {
-                            foreach (var key in patch.Parameters.Remove)
-                            {
-                                model.Parameters.Remove(key);
-                            }
-                        }
+                        ApplyPatch(model.Parameters, patch.Parameters);
 
                         context.Entry(model).Property(t => t.Parameters).IsModified = true;
+                    }
+
+                    if (patch.NextRunAt is not null)
+                    {
+                        model.NextRunAt = patch.NextRunAt.Value;
                     }
 
                     model.ModifiedAt = now;

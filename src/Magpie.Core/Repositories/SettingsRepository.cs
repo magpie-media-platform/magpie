@@ -22,12 +22,11 @@ internal sealed class SettingsRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
-    IContentHierarchyItemRepository contentHierarchyItemRepository,
     IEventBus eventBus,
     ILogger<SettingsRepository> logger,
-    TimeProvider? timeProvider = null) : ISettingsRepository
+    TimeProvider timeProvider) : ISettingsRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     private static IReadOnlyCollection<string> ChangedFields(SettingsGroupPatch patch)
     {
@@ -48,14 +47,6 @@ internal sealed class SettingsRepository(
         }
 
         return [.. keys.OrderBy(key => key, StringComparer.Ordinal)];
-    }
-
-    private static bool AffectsSystemDefaultMonitoring(SettingsGroupPatch patch)
-    {
-        const string key = "system-default";
-        return patch.Settings.Add?.ContainsKey(key) == true ||
-            patch.Settings.Update?.ContainsKey(key) == true ||
-            patch.Settings.Remove?.Contains(key, StringComparer.Ordinal) == true;
     }
 
     public async Task<IEnumerable<SettingsGroup>> ListAllAsync(CancellationToken cancellationToken)
@@ -245,15 +236,6 @@ internal sealed class SettingsRepository(
                             changedFields),
                         token),
                     cancellationToken).ConfigureAwait(false);
-            }
-
-            if (patched &&
-                patch.ExtensionId is null &&
-                string.Equals(patch.Name, "monitoring", StringComparison.Ordinal) &&
-                AffectsSystemDefaultMonitoring(patch))
-            {
-                await contentHierarchyItemRepository.RecomputeAllEffectiveValuesAsync(cancellationToken)
-                    .ConfigureAwait(false);
             }
 
             return patched;

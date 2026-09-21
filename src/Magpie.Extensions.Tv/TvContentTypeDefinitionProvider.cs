@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 using Magpie.Extensions.Tv.Parsing;
 using Magpie.Models;
@@ -21,6 +22,10 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
         IPathResolutionContentTypeDefinitionProvider,
         IReleaseMatchContentTypeDefinitionProvider
 {
+    private static readonly Regex SamplePattern = new(
+        @"(?:^|[._-])sample(?:$|[._-])|\[sample\]",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly ContentTypeDefinition TvDefinition = new()
     {
         Slug = Constants.ContentTypeSlug,
@@ -148,7 +153,7 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
 
         var parsed = release.Title.ParseTvReleaseTitle();
         var metadata = target.Metadata.GetValueOrDefault(show.Id);
-        var showTitles =
+        var showTitles = (
             from title in (
                 from text in metadata?.AlternateTexts ?? []
                 where string.Equals(text.Kind, "Title", StringComparison.OrdinalIgnoreCase)
@@ -156,7 +161,7 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
                 .Prepend(metadata?.OriginalTitle)
                 .Prepend(metadata?.Title)
             where !string.IsNullOrWhiteSpace(title)
-            select title.Trim();
+            select title.Trim()).ToArray();
         var anchorLength = -1;
         foreach (var title in showTitles)
         {
@@ -343,9 +348,7 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? Parse(string filePath, out string? levelSlug)
     {
         levelSlug = null;
-        if (Path.GetFileNameWithoutExtension(filePath)
-            .Split(['.', ' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries)
-            .Contains("sample", StringComparer.OrdinalIgnoreCase))
+        if (SamplePattern.IsMatch(Path.GetFileNameWithoutExtension(filePath)))
         {
             return null;
         }
@@ -376,10 +379,23 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
                 .AddValue(SeasonSignal, parsed.Season)
                 .AddValue(EpisodeSignal, parsed.Episode)
                 .AddValue(ParsedFileSignalKeys.TitleToken, title)
+                .AddValue(ParsedFileSignalKeys.RootTitle, title)
                 .Build();
     }
 
     public string? BuildPath(
+        IReadOnlyList<ContentHierarchyItem> ancestors,
+        IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>> relationshipsByNode,
+        string originalFileName,
+        string extension)
+    {
+        var plan = BuildPathPlan(ancestors, relationshipsByNode, originalFileName, extension);
+        return plan is null
+            ? null
+            : string.Join("/", plan.Directories.Select(directory => directory.Name).Append(plan.FileName));
+    }
+
+    public ContentPathPlan? BuildPathPlan(
         IReadOnlyList<ContentHierarchyItem> ancestors,
         IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>> relationshipsByNode,
         string originalFileName,
@@ -416,7 +432,11 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             }
         }
 
-        return showFolder + "/" + WithExtension(fileName, extension);
+        return new ContentPathPlan
+        {
+            Directories = [new ContentPathPlanDirectory { LevelSlug = Constants.ShowLevelSlug, Name = showFolder }],
+            FileName = WithExtension(fileName, extension)
+        };
     }
 
     private static string WithExtension(string name, string extension) =>

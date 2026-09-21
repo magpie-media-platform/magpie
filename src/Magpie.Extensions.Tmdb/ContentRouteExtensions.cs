@@ -69,10 +69,8 @@ internal static class ContentRouteExtensions
 
     public static ContentRoute? ResolveAdvancedSearchRoute(
         this string contentType,
-        ContentHierarchyItemCriteria query,
-        out bool unsupportedTvLevelsSelected)
+        ContentHierarchyItemCriteria query)
     {
-        unsupportedTvLevelsSelected = false;
         if (!MatchesValue(query.ContentType.And, contentType))
         {
             return null;
@@ -93,8 +91,6 @@ internal static class ContentRouteExtensions
             return ContentRoute.TvShow;
         }
 
-        unsupportedTvLevelsSelected = MatchesValue(query.Level.And, "season") ||
-            MatchesValue(query.Level.And, "episode");
         return MatchesValue(query.Level.And, "show") ? ContentRoute.TvShow : null;
     }
 
@@ -119,8 +115,8 @@ internal static class ContentRouteExtensions
             !int.TryParse(seasonNumber, out _))
         {
             logger.LogDebug(
-                "TMDb provider cannot resolve the series id and season number for {Level} item {Id}. " +
-                "The provider skipped the cast.",
+                "The TMDb provider skipped the cast for {Level} item {Id} with no resolvable series id and " +
+                "season number.",
                 item.Level,
                 item.Id);
             return null;
@@ -136,8 +132,7 @@ internal static class ContentRouteExtensions
         if (episodeNumber is null || !int.TryParse(episodeNumber, out _))
         {
             logger.LogDebug(
-                "TMDb provider cannot resolve the episode number for episode item {Id}. " +
-                "The provider skipped the cast.",
+                "The TMDb provider skipped the cast for episode item {Id} with no resolvable episode number.",
                 item.Id);
             return null;
         }

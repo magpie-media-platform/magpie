@@ -12,13 +12,15 @@ const mocks = vi.hoisted(() => ({
     testConnection: vi.fn(),
     toast: vi.fn(),
     updatedAt: 1,
+    isLoading: false,
+    error: null as Error | null,
 }));
 
 vi.mock('@/hooks/useSettings', () => ({
     useExtensionSettingsGroups: () => ({
         groups: mocks.groups,
-        isLoading: false,
-        error: null,
+        isLoading: mocks.isLoading,
+        error: mocks.error,
         dataUpdatedAt: mocks.updatedAt,
     }),
     useUpdateExtensionSettingsGroup: () => ({
@@ -88,6 +90,24 @@ describe('ExtensionSettingsSection', () => {
         mocks.updateSettings.mockResolvedValue(undefined);
         mocks.testConnection.mockResolvedValue({ success: true, message: 'Connected' });
         mocks.updatedAt = 1;
+        mocks.isLoading = false;
+        mocks.error = null;
+    });
+
+    it.each([
+        [false, null, 'This extension has no configurable settings.'],
+        [true, null, 'Loading settings...'],
+        [false, new Error('Unavailable'), 'Failed to load settings. Unavailable'],
+    ])('Render_ShowsSectionState_WhenSettingsAreUnavailable (%s)', (isLoading, error, message) => {
+        // Arrange
+        mocks.groups = [];
+        mocks.isLoading = isLoading;
+        mocks.error = error;
+        // Act
+        render(<ExtensionSettingsSection extensionId="extension-1" />);
+        // Assert
+        expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+        expect(screen.getByText(message)).toBeInTheDocument();
     });
 
     it('disables save and sends no patch when settings are unchanged', async () => {

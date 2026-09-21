@@ -13,6 +13,7 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Integrations;
+using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,6 +27,8 @@ namespace Magpie.Test.Core.Jobs.Integrations;
 [TestFixture]
 public sealed class IntegrationHealthCheckJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IIndexerConnectionRepository> _indexerConnectionRepository = null!;
     private Mock<IDownloadClientRepository> _downloadClientRepository = null!;
     private Mock<IIndexerService> _indexerService = null!;
@@ -56,9 +59,9 @@ public sealed class IntegrationHealthCheckJobTests
 
         // Act
         var staleAfter = spec.Parameters.FirstOrDefault(p =>
-            p.Name == MagpieJobs.Parameters.StaleAfterMinutes);
+            p.Name == "staleAfterMinutes");
         var timeout = spec.Parameters.FirstOrDefault(
-            p => p.Name == MagpieJobs.Parameters.TimeoutSeconds);
+            p => p.Name == "timeoutSeconds");
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -114,7 +117,8 @@ public sealed class IntegrationHealthCheckJobTests
             downloadClientService,
             _mediaServerService.Object,
             TimeProvider.System,
-            NullLogger<IntegrationHealthCheckJob>.Instance);
+            NullLogger<IntegrationHealthCheckJob>.Instance,
+            _progressReporter);
         var jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,
@@ -146,7 +150,7 @@ public sealed class IntegrationHealthCheckJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_SkipsFreshEnabledDownloadClient_WithoutProbing()
+    public async Task ExecuteAsync_SkipsFreshEnabledDownloadClient_WhenClientHealthIsFresh()
     {
         // Arrange
         var client = new DownloadClient
@@ -175,7 +179,8 @@ public sealed class IntegrationHealthCheckJobTests
             downloadClientService,
             _mediaServerService.Object,
             TimeProvider.System,
-            NullLogger<IntegrationHealthCheckJob>.Instance);
+            NullLogger<IntegrationHealthCheckJob>.Instance,
+            _progressReporter);
         var jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,

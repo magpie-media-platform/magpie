@@ -36,6 +36,49 @@ const schema: IntegrationSettingDefinition[] = [
 ];
 
 describe('validateIntegrationSettings', () => {
+    it.each([
+        { key: '', type: SchemaDataType.String },
+        { key: 'hidden', type: 'Unknown' },
+    ])('ignores a required entry the form cannot render: $key $type', (entry) => {
+        // Arrange
+        const unrenderable = { ...entry, required: true } as IntegrationSettingDefinition;
+        // Act
+        const result = validateIntegrationSettings([unrenderable], { hidden: 'value' }, false);
+        // Assert
+        expect(result).toEqual({ isValid: true, issues: [] });
+    });
+
+    it.each([
+        ['1,234.50', true],
+        ['.5', true],
+        ['12-', true],
+        ['-12', true],
+        ['79228162514264337593543950335', true],
+        ['-79228162514264337593543950335', true],
+        ['000079228162514264337593543950335.0000', true],
+        ['79,228,162,514,264,337,593,543,950,335 -', true],
+        ['79228162514264337593543950335.4999999999', true],
+        ['79228162514264337593543950335.5', false],
+        ['79228162514264337593543950336', false],
+        ['-79228162514264337593543950336', false],
+        ['99999999999999999999999999999999999999', false],
+        ['0.123456789012345678901234567890', true],
+        ['0.0000000000000000000000000000000000001', true],
+        ['NaN', false],
+        ['Infinity', false],
+        ['1e3', false],
+        ['--12', false],
+        ['1.2.3', false],
+    ])('checks invariant decimal shape and range: %s', (value, isValid) => {
+        // Arrange
+        const numberSchema: IntegrationSettingDefinition[] = [{ key: 'number', type: SchemaDataType.Number }];
+        // Act
+        const result = validateIntegrationSettings(numberSchema, { number: value }, false);
+        // Assert
+        expect(result.isValid).toBe(isValid);
+        expect(result.issues).toEqual(isValid ? [] : [{ key: 'number', message: 'number must be a number.' }]);
+    });
+
     it('reports required schema settings using their display names', () => {
         const result = validateIntegrationSettings(schema, {}, false);
 

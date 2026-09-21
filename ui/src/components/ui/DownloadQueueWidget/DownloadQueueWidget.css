@@ -1,4 +1,20 @@
 @layer components {
+    .download-queue-widget .status-row[data-status='downloading'] {
+        color: var(--accent-primary);
+    }
+
+    .download-queue-widget .status-row[data-status='queued'] {
+        color: var(--status-degraded);
+    }
+
+    .download-queue-widget .status-row[data-status='paused'] {
+        color: var(--text-muted);
+    }
+
+    .download-queue-widget .status-row[data-status='stalled'] {
+        color: var(--status-unhealthy);
+    }
+
     .download-queue-widget {
         display: flex;
         flex-direction: column;
@@ -46,84 +62,6 @@
     .download-queue-widget__summary {
         padding: var(--space-sm) 0;
         border-bottom: 1px solid var(--border-default);
-    }
-
-    .download-queue-widget__row {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-        padding: var(--space-sm) var(--space-lg);
-        transition: background-color var(--duration-fast) var(--easing-default);
-        text-decoration: none;
-        color: inherit;
-    }
-
-    .download-queue-widget__row--clickable {
-        cursor: pointer;
-
-        &:hover {
-            background-color: var(--bg-tertiary);
-        }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: calc(-1 * var(--focus-ring-offset));
-        }
-    }
-
-    .download-queue-widget__indicator {
-        width: 8px;
-        height: 8px;
-        border-radius: var(--radius-full);
-        flex-shrink: 0;
-    }
-
-    .download-queue-widget__row--downloading .download-queue-widget__indicator {
-        background-color: var(--accent-primary);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
-    }
-
-    .download-queue-widget__row--queued .download-queue-widget__indicator {
-        background-color: var(--status-degraded);
-    }
-
-    .download-queue-widget__row--paused .download-queue-widget__indicator {
-        background-color: var(--text-muted);
-    }
-
-    .download-queue-widget__row--stalled .download-queue-widget__indicator {
-        background-color: var(--status-unhealthy);
-    }
-
-    .download-queue-widget__label {
-        flex: 1;
-        font-size: var(--text-sm);
-        color: var(--text-secondary);
-    }
-
-    .download-queue-widget__row--downloading .download-queue-widget__label {
-        color: var(--accent-primary);
-    }
-
-    .download-queue-widget__row--queued .download-queue-widget__label {
-        color: var(--status-degraded);
-    }
-
-    .download-queue-widget__row--paused .download-queue-widget__label {
-        color: var(--text-muted);
-    }
-
-    .download-queue-widget__row--stalled .download-queue-widget__label {
-        color: var(--status-unhealthy);
-    }
-
-    .download-queue-widget__count {
-        font-size: var(--text-sm);
-        font-weight: var(--weight-semibold);
-        font-family: var(--font-mono);
-        color: var(--text-primary);
-        min-width: 2ch;
-        text-align: right;
     }
 
     .download-queue-widget__items {
@@ -181,6 +119,16 @@
         white-space: nowrap;
         flex: 1;
         min-width: 0;
+    }
+
+    .download-queue-widget__item-link {
+        color: inherit;
+        text-decoration: none;
+
+        &:hover {
+            color: var(--accent-primary);
+            text-decoration: underline;
+        }
     }
 
     .download-queue-widget__item-meta {
@@ -266,52 +214,5 @@
             outline: var(--focus-ring-width) solid var(--focus-ring-color);
             outline-offset: var(--focus-ring-offset);
         }
-    }
-
-    .download-queue-widget__row--skeleton {
-        pointer-events: none;
-    }
-
-    .download-queue-widget__indicator--skeleton {
-        background-color: var(--bg-tertiary);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
-    }
-
-    .download-queue-widget__label--skeleton {
-        width: 80px;
-        height: 14px;
-        background-color: var(--bg-tertiary);
-        border-radius: var(--radius-sm);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
-    }
-
-    .download-queue-widget__count--skeleton {
-        width: 20px;
-        height: 14px;
-        background-color: var(--bg-tertiary);
-        border-radius: var(--radius-sm);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
-    }
-
-    .download-queue-widget__item--skeleton {
-        pointer-events: none;
-    }
-
-    .download-queue-widget__item-title--skeleton {
-        width: 70%;
-        height: 14px;
-        background-color: var(--bg-tertiary);
-        border-radius: var(--radius-sm);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
-    }
-
-    .download-queue-widget__progress-bar--skeleton {
-        background-color: var(--bg-tertiary);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
-    }
-
-    .download-queue-widget__progress-fill--skeleton {
-        width: 45%;
-        background-color: var(--bg-secondary);
     }
 }

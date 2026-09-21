@@ -5,23 +5,10 @@
         gap: var(--space-md);
     }
 
-    .activity-tab__error {
-        margin: 0;
-        padding: var(--space-sm);
-        background-color: var(--bg-secondary);
-        color: var(--status-unhealthy);
-        border-radius: var(--radius-md);
-        font-size: var(--text-sm);
-    }
-
     .activity-tab__skeletons {
         display: flex;
         flex-direction: column;
         gap: var(--space-xs);
-    }
-
-    .activity-tab__sort-controls {
-        display: none;
     }
 
     .activity-tab__status-icon {
@@ -87,34 +74,5 @@
 
     .activity-tab__pager {
         justify-content: flex-end;
-    }
-
-    @media (max-width: 1023px) {
-        .activity-tab__sort-controls {
-            display: flex;
-            align-items: center;
-            gap: var(--space-xs);
-            padding: var(--space-xs);
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-default);
-            border-radius: var(--radius-md);
-        }
-
-        .activity-tab__sort-icon {
-            flex: 0 0 auto;
-            color: var(--accent-primary);
-            font-size: var(--text-base);
-        }
-
-        .activity-tab__sort-controls .select-trigger {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .activity-tab__sort-direction {
-            flex: 0 0 auto;
-            min-width: auto;
-            padding: var(--space-xs);
-        }
     }
 }

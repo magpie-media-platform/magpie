@@ -167,6 +167,14 @@ test.describe.serial('Journey 2: the locked door', () => {
                 new ApiClient().post('/api/auth/login', { username: MEMBER_USERNAME, password: MEMBER_PASSWORD }),
             ).rejects.toMatchObject({ status: 401 });
             await api.patch(`/api/users/${member.id}`, { enabled: { value: true } });
+            await expect(
+                new ApiClient({ accessToken: memberAccessToken }).get('/api/users/my'),
+            ).rejects.toMatchObject({ status: 401 });
+            const restored = await request.post('/api/auth/login', {
+                data: { username: MEMBER_USERNAME, password: MEMBER_PASSWORD },
+            });
+            expect(restored.status()).toBe(200);
+            memberAccessToken = ((await restored.json()) as LoginResponse).accessToken;
         });
 
         await test.step('the member changes their own password using their current one', async () => {

@@ -13,15 +13,15 @@ public enum JobScope
     /// <summary>
     /// The scope for administrative jobs.
     /// </summary>
-    Administrative,
+    Administrative = 1,
 
     /// <summary>
     /// The scope for content jobs.
     /// </summary>
-    Content,
+    Content = 2,
 
     /// <summary>
     /// The scope for user jobs.
     /// </summary>
-    User,
+    User = 3,
 }

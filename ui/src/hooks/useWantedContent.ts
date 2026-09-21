@@ -16,11 +16,28 @@ export const WANTED_PAGE_SIZE = 200;
 
 const MAX_PAGES = 50;
 
+const WANTED_CHANGE_EVENTS = [
+    'content.hierarchyItem.created',
+    'content.hierarchyItem.deleted',
+    'content.hierarchyItem.updated',
+    'content.fulfillment.changed',
+    'metadata.refreshed',
+    'download.created',
+    'download.updated',
+    'download.deleted',
+    'download.completed',
+    'download.failed',
+    'download.imported',
+    'download.stalled',
+] as const;
+const WANTED_FAIL_OPEN_EVENTS = ['content.hierarchyItem.created', 'download.created'] as const;
+
 export const WANTED_CONTAINER_FILTER = 'Fulfillment in (Missing, Partial)';
 
 interface WantedResult {
     items: ApiContentHierarchyItem[];
     totalItems: number;
+    truncated: boolean;
 }
 
 interface UseWantedContentResult {
@@ -40,11 +57,12 @@ interface UseWantedContentResult {
 
     totalItems: number;
 
+    isTruncated: boolean;
+
     refetch: () => Promise<void>;
 }
 
 export const wantedQueryKeys = {
-    all: ['wanted'] as const,
     list: (parentId?: string) => ['wanted', 'list', { parentId: parentId ?? null }] as const,
     upgrades: (parentId?: string) => ['wanted', 'upgrades', { parentId: parentId ?? null }] as const,
     descendantCounts: ['wanted', 'descendant-counts'] as const,
@@ -65,12 +83,12 @@ async function fetchAllContent(params: ContentQueryParams): Promise<WantedResult
         totalItems = result.totalItems;
         accumulated.push(...result.items);
 
-        if (result.items.length < WANTED_PAGE_SIZE || accumulated.length >= totalItems) {
+        if (result.items.length === 0 || accumulated.length >= totalItems) {
             break;
         }
     }
 
-    return { items: accumulated, totalItems };
+    return { items: accumulated, totalItems, truncated: accumulated.length < totalItems };
 }
 
 function dedupe(items: ApiContentHierarchyItem[]): ApiContentHierarchyItem[] {
@@ -101,37 +119,27 @@ export function useWantedContent(parentId?: string): UseWantedContentResult {
         queryFn: () => fetchAllContent({ ...wantedScope(parentId), monitoring: true, fulfillment: 'Upgradable' }),
         staleTime: POLLING_INTERVALS.slow / 2,
     });
-    const scopedEntityIds = [
-        ...(parentId ? [parentId] : []),
-        ...(wantedQuery.data?.items.map((item) => item.id) ?? []),
-        ...(upgradesQuery.data?.items.map((item) => item.id) ?? []),
-    ];
-
-    useInvalidateQueriesOnEvents(
-        [
-            'content.hierarchyItem.created',
-            'content.hierarchyItem.deleted',
-            'content.hierarchyItem.updated',
-            'content.fulfillment.changed',
-            'metadata.refreshed',
-            'download.created',
-            'download.updated',
-            'download.deleted',
-            'download.completed',
-            'download.failed',
-            'download.imported',
-            'download.stalled',
+    const scopedEntityIds = useMemo(
+        () => [
+            ...(parentId ? [parentId] : []),
+            ...(wantedQuery.data?.items.map((item) => item.id) ?? []),
+            ...(upgradesQuery.data?.items.map((item) => item.id) ?? []),
         ],
-        [wantedQueryKeys.list(parentId), wantedQueryKeys.upgrades(parentId), wantedQueryKeys.descendantCounts],
-        {
-            debounceMs: 300,
-            entityIds: scopedEntityIds,
-            exact: false,
-            failOpenEventNames: ['content.hierarchyItem.created', 'download.created'],
-            maxWaitMs: 1200,
-            owner: 'wanted-content',
-        },
+        [parentId, wantedQuery.data?.items, upgradesQuery.data?.items],
     );
+    const queryKeys = useMemo(
+        () => [wantedQueryKeys.list(parentId), wantedQueryKeys.upgrades(parentId), wantedQueryKeys.descendantCounts],
+        [parentId],
+    );
+
+    useInvalidateQueriesOnEvents(WANTED_CHANGE_EVENTS, queryKeys, {
+        debounceMs: 300,
+        entityIds: scopedEntityIds,
+        exact: false,
+        failOpenEventNames: WANTED_FAIL_OPEN_EVENTS,
+        maxWaitMs: 1200,
+        owner: 'wanted-content',
+    });
     useInvalidateQueriesOnEvents(
         ['qualityTierList.created', 'qualityTierList.updated', 'qualityTierList.deleted'],
         [wantedQueryKeys.list(parentId), wantedQueryKeys.upgrades(parentId)],
@@ -143,6 +151,11 @@ export function useWantedContent(parentId?: string): UseWantedContentResult {
     const upgradeItems = useMemo(
         () => dedupe(upgradesQuery.data?.items ?? []).map(mapToContentListItem),
         [upgradesQuery.data?.items],
+    );
+
+    const totalItems = useMemo(
+        () => new Set([...items, ...upgradeItems].map((item) => item.id)).size,
+        [items, upgradeItems],
     );
 
     const refetch = async () => {
@@ -157,7 +170,8 @@ export function useWantedContent(parentId?: string): UseWantedContentResult {
         isFetching: wantedQuery.isFetching || upgradesQuery.isFetching,
         isError: wantedQuery.isError || upgradesQuery.isError,
         error: wantedQuery.error ?? upgradesQuery.error ?? null,
-        totalItems: (wantedQuery.data?.totalItems ?? 0) + (upgradesQuery.data?.totalItems ?? 0),
+        totalItems,
+        isTruncated: (wantedQuery.data?.truncated ?? false) || (upgradesQuery.data?.truncated ?? false),
         refetch,
     };
 }

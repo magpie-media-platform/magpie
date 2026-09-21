@@ -3,15 +3,12 @@ import { useCallback } from 'react';
 import { TagsChipStrip, type TagsPatch, type TagsPatchCallbacks } from '@/components/ui/TagsChipStrip';
 import { useUpdateSubjectTags } from '@/hooks/useSubjects';
 import { useTagsByEntity } from '@/hooks/useTags';
+import { magpieQlString } from '@/lib/magpieQl';
 
 interface SubjectTagsChipStripProps {
     subjectId: string;
     subjectListPath: string;
     canEdit: boolean;
-}
-
-function escapeFilterString(value: string): string {
-    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 export function SubjectTagsChipStrip({ subjectId, subjectListPath, canEdit }: SubjectTagsChipStripProps) {
@@ -20,7 +17,7 @@ export function SubjectTagsChipStrip({ subjectId, subjectListPath, canEdit }: Su
     const tagNames = tags.map((tag) => tag.name).sort((a, b) => a.localeCompare(b));
     const tagHref = useCallback(
         (tagName: string) => {
-            const filter = `tag has "${escapeFilterString(tagName)}"`;
+            const filter = `tag has ${magpieQlString(tagName)}`;
             return `${subjectListPath}?filter=${encodeURIComponent(filter)}`;
         },
         [subjectListPath],

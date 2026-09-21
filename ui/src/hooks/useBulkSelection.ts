@@ -1,27 +1,25 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { RowSelectionState } from '@tanstack/react-table';
+
+import type { BulkSelectionState } from '@/types/bulkSelection';
 
 type BulkSelectionResolution = { mode: 'ids'; ids: string[] } | { mode: 'all'; excludeIds: string[] };
 
-export interface BulkSelection {
+export interface BulkSelection extends BulkSelectionState {
     rowSelection: RowSelectionState;
-    headerChecked: boolean | 'indeterminate';
-    toggleHeader: (checked: boolean) => void;
-    isRowChecked: (id: string) => boolean;
-    toggleRow: (id: string, checked: boolean) => void;
-    allPages: boolean;
-    selectAllAcrossPages: () => void;
-    showAcrossPagesPrompt: boolean;
-    selectedCount: number;
-    hasSelection: boolean;
     selectedIds: string[];
-    clear: () => void;
+    selectionMode: boolean;
+    toggleSelectionMode: () => void;
+    selectOnly: (ids: string[]) => void;
     resolve: () => BulkSelectionResolution;
 }
 
 interface UseBulkSelectionArgs {
     pageRowIds: string[];
     totalCount: number;
+
+    /** A value that identifies the current row set; the selection clears whenever it changes. */
+    resetKey?: string;
 }
 
 function withKey(map: Record<string, true>, id: string, present: boolean): Record<string, true> {
@@ -34,10 +32,11 @@ function withKey(map: Record<string, true>, id: string, present: boolean): Recor
     return next;
 }
 
-export function useBulkSelection({ pageRowIds, totalCount }: UseBulkSelectionArgs): BulkSelection {
+export function useBulkSelection({ pageRowIds, totalCount, resetKey }: UseBulkSelectionArgs): BulkSelection {
     const [picks, setPicks] = useState<Record<string, true>>({});
     const [allPages, setAllPages] = useState(false);
     const [excluded, setExcluded] = useState<Record<string, true>>({});
+    const [selectionMode, setSelectionMode] = useState(false);
 
     const isRowChecked = useCallback(
         (id: string) => (allPages ? !excluded[id] : Boolean(picks[id])),
@@ -49,6 +48,10 @@ export function useBulkSelection({ pageRowIds, totalCount }: UseBulkSelectionArg
         setPicks({});
         setExcluded({});
     }, []);
+
+    useEffect(() => {
+        clear();
+    }, [clear, resetKey]);
 
     const toggleRow = useCallback(
         (id: string, checked: boolean) => {
@@ -97,12 +100,24 @@ export function useBulkSelection({ pageRowIds, totalCount }: UseBulkSelectionArg
         setExcluded({});
     }, []);
 
+    const selectOnly = useCallback((ids: string[]) => {
+        setAllPages(false);
+        setExcluded({});
+        setPicks(Object.fromEntries(ids.map((id) => [id, true as const])));
+    }, []);
+
+    const toggleSelectionMode = useCallback(() => {
+        clear();
+        setSelectionMode((active) => !active);
+    }, [clear]);
+
     const pageAllChecked = pageRowIds.length > 0 && pageRowIds.every(isRowChecked);
     const pageSomeChecked = pageRowIds.some(isRowChecked);
     const headerChecked: boolean | 'indeterminate' = pageAllChecked ? true : pageSomeChecked ? 'indeterminate' : false;
 
     const excludedCount = Object.keys(excluded).length;
     const selectedCount = allPages ? Math.max(0, totalCount - excludedCount) : Object.keys(picks).length;
+    const pageSelectedCount = pageRowIds.reduce((count, id) => (isRowChecked(id) ? count + 1 : count), 0);
     const hasSelection = selectedCount > 0;
     const showAcrossPagesPrompt = !allPages && pageAllChecked && totalCount > pageRowIds.length;
 
@@ -135,8 +150,13 @@ export function useBulkSelection({ pageRowIds, totalCount }: UseBulkSelectionArg
             selectAllAcrossPages,
             showAcrossPagesPrompt,
             selectedCount,
+            pageSelectedCount,
+            totalCount,
             hasSelection,
             selectedIds,
+            selectionMode,
+            toggleSelectionMode,
+            selectOnly,
             clear,
             resolve,
         }),
@@ -150,8 +170,13 @@ export function useBulkSelection({ pageRowIds, totalCount }: UseBulkSelectionArg
             selectAllAcrossPages,
             showAcrossPagesPrompt,
             selectedCount,
+            pageSelectedCount,
+            totalCount,
             hasSelection,
             selectedIds,
+            selectionMode,
+            toggleSelectionMode,
+            selectOnly,
             clear,
             resolve,
         ],

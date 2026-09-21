@@ -66,7 +66,7 @@ export function LiveAnnouncerProvider({ children }: LiveAnnouncerProps) {
                 className="live-announcer"
                 role="status"
                 aria-live="polite"
-                aria-atomic="true"
+                aria-atomic="false"
                 data-component="live-announcer"
                 data-politeness="polite"
             >
@@ -78,7 +78,7 @@ export function LiveAnnouncerProvider({ children }: LiveAnnouncerProps) {
                 className="live-announcer"
                 role="alert"
                 aria-live="assertive"
-                aria-atomic="true"
+                aria-atomic="false"
                 data-component="live-announcer"
                 data-politeness="assertive"
             >

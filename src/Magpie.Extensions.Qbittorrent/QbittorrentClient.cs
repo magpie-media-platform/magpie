@@ -4,9 +4,13 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Magpie.Sdk.Caching;
 
 using Microsoft.Extensions.Logging;
 
@@ -14,7 +18,8 @@ namespace Magpie.Extensions.Qbittorrent;
 
 internal sealed class QbittorrentClient(
     HttpClient http,
-    ILogger<QbittorrentClient> logger) : IQbittorrentClient, IDisposable
+    ILogger<QbittorrentClient> logger,
+    ICacheFactory cacheFactory) : IQbittorrentClient, IDisposable
 {
     private static readonly Version Qbit5BoundaryVersion = new(5, 0);
 
@@ -38,6 +43,13 @@ internal sealed class QbittorrentClient(
 
     private readonly SemaphoreSlim _loginGate = new(1, 1);
     private bool _disposed;
+
+    private readonly ICache _versions = cacheFactory.GetOrCreate("qbittorrent-versions", () => new CachePolicy
+    {
+        Freshness = TimeSpan.FromMinutes(5),
+        Retention = TimeSpan.FromMinutes(5),
+        MaximumEntries = 64,
+    });
 
     private static bool IsJsonTotalFailure(string body)
     {
@@ -219,12 +231,6 @@ internal sealed class QbittorrentClient(
             settings,
             () => CreateRequest(settings, HttpMethod.Get, VersionPath),
             cancellationToken).ConfigureAwait(false);
-
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-        {
-            throw new QbittorrentAuthenticationException(
-                $"qBittorrent returned HTTP {(int)response.StatusCode} for /app/version.");
-        }
 
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadAsStringAsync().ConfigureAwait(false)).Trim();
@@ -438,13 +444,11 @@ internal sealed class QbittorrentClient(
         void Reject(string responseBody)
         {
             logger.LogWarning(
-                "qBittorrent rejected the /torrents/add request with body {Body}. " +
-                "The client failed to add {What}.",
-                responseBody,
-                what);
+                "qBittorrent rejected the request to add {What} with body {Body}.",
+                what,
+                responseBody);
             throw new QbittorrentAddRejectedException(
-                $"qBittorrent rejected the {what} (response {responseBody}). Common causes: an unknown " +
-                "category, an unwritable save path, or a malformed payload.",
+                $"qBittorrent rejected the {what} (response {responseBody}).",
                 responseBody);
         }
     }
@@ -453,27 +457,33 @@ internal sealed class QbittorrentClient(
         QbittorrentSettings settings,
         CancellationToken cancellationToken)
     {
+        using var sha = SHA256.Create();
+        var key = Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(
+            settings.Host.AbsoluteUri + "\n" + settings.Username + "\n" + settings.Password)));
+        if (_versions.TryGet<bool>(key, out var cached))
+        {
+            return cached;
+        }
+
         try
         {
             var raw = await GetVersionAsync(settings, cancellationToken).ConfigureAwait(false);
             if (TryParseQbittorrentVersion(raw, out var parsed))
             {
-                return parsed >= Qbit5BoundaryVersion;
+                var version5 = parsed >= Qbit5BoundaryVersion;
+                _versions.Set(key, version5);
+                return version5;
             }
 
             logger.LogWarning(
-                "qBittorrent /app/version returned an invalid {Version}. The client will use the 4.x " +
-                "pause and resume endpoints.",
+                "qBittorrent /app/version returned an invalid version string {Version}.",
                 raw);
         }
         catch (Exception ex) when (
-            ex is HttpRequestException
-                or QbittorrentAuthenticationException
-                or TaskCanceledException)
+            !cancellationToken.IsCancellationRequested &&
+            ex is HttpRequestException or TaskCanceledException)
         {
-            logger.LogWarning(ex, "The qBittorrent version probe failed. The client will use the " +
-                "4.x pause and resume endpoints for this call. The client will retry the probe " +
-                "on the next call.");
+            logger.LogWarning(ex, "The qBittorrent version probe failed.");
         }
 
         return false;
@@ -524,12 +534,12 @@ internal sealed class QbittorrentClient(
             ]);
 
             using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            if (response.StatusCode == HttpStatusCode.Forbidden)
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             {
                 logger.LogWarning(
-                    "The qBittorrent login at {Host} failed with HTTP 403. " +
-                    "The failed-login throttle of qBittorrent banned this IP address.",
-                    settings.Host);
+                    "The qBittorrent login at {Host} failed with HTTP {Status}.",
+                    settings.Host,
+                    (int)response.StatusCode);
                 return false;
             }
 
@@ -566,7 +576,10 @@ internal sealed class QbittorrentClient(
             return;
         }
 
-        await LoginAsync(settings, cancellationToken).ConfigureAwait(false);
+        if (!await LoginAsync(settings, cancellationToken).ConfigureAwait(false))
+        {
+            throw new QbittorrentAuthenticationException("qBittorrent rejected the credentials.");
+        }
     }
 
     private async Task<HttpResponseMessage> SendWithRetryAsync(
@@ -575,32 +588,32 @@ internal sealed class QbittorrentClient(
         CancellationToken cancellationToken)
     {
         using var firstRequest = requestFactory();
-        var first = await http.SendAsync(firstRequest, cancellationToken).ConfigureAwait(false);
-        if (first.StatusCode != HttpStatusCode.Forbidden || !settings.HasCredentials)
+        var response = await http.SendAsync(firstRequest, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
         {
-            return first;
+            return response;
         }
 
+        var statusCode = response.StatusCode;
+        response.Dispose();
         _authenticatedSettings.TryRemove(settings, out _);
-        bool loggedIn;
-        try
+        if (!settings.HasCredentials)
         {
-            loggedIn = await LoginAsync(settings, cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            first.Dispose();
-            throw;
+            throw new QbittorrentAuthenticationException(
+                $"qBittorrent requires authentication (HTTP {(int)statusCode}).");
         }
 
-        if (!loggedIn)
-        {
-            return first;
-        }
-
-        first.Dispose();
+        await EnsureLoggedInAsync(settings, cancellationToken).ConfigureAwait(false);
         using var retryRequest = requestFactory();
-        return await http.SendAsync(retryRequest, cancellationToken).ConfigureAwait(false);
+        response = await http.SendAsync(retryRequest, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            response.Dispose();
+            _authenticatedSettings.TryRemove(settings, out _);
+            throw new QbittorrentAuthenticationException("qBittorrent rejected the authenticated request.");
+        }
+
+        return response;
     }
 
     private bool InterpretMutation(HttpResponseMessage response, string description)

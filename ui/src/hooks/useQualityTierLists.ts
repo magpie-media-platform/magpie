@@ -1,9 +1,11 @@
+import type { ScalarPatch } from '@/types/patch';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
+import { tagQueryKeys } from '@/hooks/useTags';
 
 export interface StringPropertyCriterion {
     operator?: CriteriaValueOperator;
@@ -120,11 +122,11 @@ interface QualityTierListRankCreate {
 }
 
 export interface QualityTierListRankPatch {
-    qualityTierId: { value: string };
+    qualityTierId: ScalarPatch<string>;
 
-    ordinal?: { value: number };
+    ordinal?: ScalarPatch<number>;
 
-    isCutoff?: { value: boolean };
+    isCutoff?: ScalarPatch<boolean>;
 }
 
 interface QualityTierListCreate {
@@ -134,19 +136,21 @@ interface QualityTierListCreate {
 
     upgradeAllowed?: boolean;
 
+    rules?: ApiQualityTierRule[];
+
     qualityTierRanks?: QualityTierListRankCreate[];
 }
 
 export interface QualityTierListPatch {
-    name?: { value: string };
-    mimeTypes?: { value: string[] };
-    upgradeAllowed?: { value: boolean };
+    name?: ScalarPatch<string>;
+    mimeTypes?: ScalarPatch<string[]>;
+    upgradeAllowed?: ScalarPatch<boolean>;
     qualityTierRanks?: {
         add?: QualityTierListRankCreate[];
         remove?: string[];
         update?: QualityTierListRankPatch[];
     };
-    rules?: { value: ApiQualityTierRule[] };
+    rules?: ScalarPatch<ApiQualityTierRule[]>;
     tags?: {
         add?: string[];
         remove?: string[];
@@ -162,9 +166,9 @@ interface QualityTierCreate {
 }
 
 interface QualityTierPatch {
-    name?: { value: string };
-    criteria?: { value: QualityTierCriteria };
-    rules?: { value: ApiQualityTierRule[] };
+    name?: ScalarPatch<string>;
+    criteria?: ScalarPatch<QualityTierCriteria>;
+    rules?: ScalarPatch<ApiQualityTierRule[]>;
 }
 
 export const qualityTierListQueryKeys = {
@@ -248,8 +252,10 @@ export function useQualityTierLists(options?: QualityTierListQueryOptions) {
 
     const patchMutation = useMutation({
         mutationFn: ({ id, patch }: { id: string; patch: QualityTierListPatch }) => patchQualityTierList(id, patch),
-        onSuccess: () => {
+        onSuccess: (_data, { id }) => {
             void queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: tagQueryKeys.byEntity(id) });
+            void queryClient.invalidateQueries({ queryKey: tagQueryKeys.all });
         },
     });
 

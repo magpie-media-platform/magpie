@@ -24,7 +24,9 @@ export function useListSorting(
     const activeSort = sorting[0];
     const activeOption = sortOptions.find((option) => option.id === activeSort?.id) ?? sortOptions[0];
     const isDescending =
-        activeSort?.id === activeOption?.id ? Boolean(activeSort.desc) : activeOption?.initialDirection === 'desc';
+        activeSort && activeOption && activeSort.id === activeOption.id
+            ? Boolean(activeSort.desc)
+            : activeOption?.initialDirection === 'desc';
 
     const selectField = useCallback(
         (id: string) => {

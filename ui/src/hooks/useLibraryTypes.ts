@@ -1,3 +1,4 @@
+import { EXTENSION_CATALOG_EVENTS } from '@/lib/extensionCatalogEvents';
 import { useMemo } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
@@ -255,18 +256,9 @@ interface ApiSubjectKindDefinition {
 }
 
 export const libraryTypesQueryKeys = {
-    all: ['libraryTypes'] as const,
     contentTypes: () => ['libraryTypes', 'content-types'] as const,
     subjectTypes: () => ['libraryTypes', 'subject-types'] as const,
 };
-
-const LIBRARY_TYPE_CATALOG_EVENTS = [
-    'extension.installed',
-    'extension.enabled',
-    'extension.disabled',
-    'extension.uninstalled',
-    'extension.upgraded',
-] as const;
 
 const LIBRARY_COUNT_EVENTS = [
     'content.hierarchyItem.created',
@@ -433,7 +425,7 @@ export function getRootLevels(type: LibraryTypeDefinition | null | undefined): L
 export function useLibraryTypes() {
     const { isAuthenticated } = useAuth();
     useInvalidateQueriesOnEvents(
-        isAuthenticated ? LIBRARY_TYPE_CATALOG_EVENTS : [],
+        isAuthenticated ? EXTENSION_CATALOG_EVENTS : [],
         [libraryTypesQueryKeys.contentTypes(), libraryTypesQueryKeys.subjectTypes()],
         { exact: true, owner: 'library-type-catalog' },
     );
@@ -483,9 +475,6 @@ function buildIconNameBySlug(types: LibraryTypeDefinition[]): Record<string, str
     const map: Record<string, string | undefined> = {};
     for (const type of types) {
         map[type.slug.toLowerCase()] = type.iconName ?? undefined;
-        for (const level of type.levels) {
-            map[level.slug.toLowerCase()] = level.iconName ?? undefined;
-        }
     }
     return map;
 }

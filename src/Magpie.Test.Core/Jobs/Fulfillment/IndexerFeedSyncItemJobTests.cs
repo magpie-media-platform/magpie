@@ -11,6 +11,7 @@ using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Integrations;
+using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -24,6 +25,8 @@ namespace Magpie.Test.Core.Jobs.Fulfillment;
 [TestFixture]
 public sealed class IndexerFeedSyncItemJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IIndexerFeedRepository> _indexerFeedRepository = null!;
     private Mock<IIndexerService> _indexerService = null!;
     private Mock<IAuditRecordRepository> _auditRecordRepository = null!;
@@ -106,7 +109,8 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
 
         // Act
         var ex = Assert.ThrowsAsync<ArgumentException>(() => service.ExecuteAsync(_jobContext));
@@ -129,12 +133,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = "not-a-guid"
+                ["feedId"] = "not-a-guid"
             }
         };
 
@@ -160,12 +165,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feedId.ToString("D")
+                ["feedId"] = feedId.ToString("D")
             }
         };
 
@@ -205,12 +211,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feed.Id.ToString("D")
+                ["feedId"] = feed.Id.ToString("D")
             }
         };
 
@@ -255,12 +262,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feed.Id.ToString("D")
+                ["feedId"] = feed.Id.ToString("D")
             }
         };
 
@@ -278,7 +286,7 @@ public sealed class IndexerFeedSyncItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_InsertsNewIndexers_FromProviderResults()
+    public async Task ExecuteAsync_InsertsNewIndexers_WhenTheProviderReturnsNewIndexers()
     {
         // Arrange
         var feed = new IndexerFeed
@@ -323,12 +331,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feed.Id.ToString("D")
+                ["feedId"] = feed.Id.ToString("D")
             }
         };
 
@@ -384,12 +393,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feed.Id.ToString("D")
+                ["feedId"] = feed.Id.ToString("D")
             }
         };
 
@@ -407,7 +417,7 @@ public sealed class IndexerFeedSyncItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_BumpsLastSync_OnFeedAfterSuccess()
+    public async Task ExecuteAsync_BumpsLastSync_WhenFeedSyncSucceeds()
     {
         // Arrange
         var beforeSync = DateTime.UtcNow;
@@ -436,12 +446,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feed.Id.ToString("D")
+                ["feedId"] = feed.Id.ToString("D")
             }
         };
 
@@ -459,7 +470,7 @@ public sealed class IndexerFeedSyncItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_WritesIntegrationsAuditRow_AlongsideUpsertedIndexers()
+    public async Task ExecuteAsync_WritesIntegrationsAuditRow_WhenIndexersAreUpserted()
     {
         // Arrange
         var feed = new IndexerFeed
@@ -491,12 +502,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feed.Id.ToString("D")
+                ["feedId"] = feed.Id.ToString("D")
             }
         };
 
@@ -549,12 +561,13 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feed.Id.ToString("D")
+                ["feedId"] = feed.Id.ToString("D")
             }
         };
 
@@ -572,7 +585,7 @@ public sealed class IndexerFeedSyncItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_PropagatesCancellation_FromProvider()
+    public async Task ExecuteAsync_PropagatesCancellation_WhenTheTokenIsAlreadyCancelled()
     {
         // Arrange
         var feed = new IndexerFeed
@@ -604,39 +617,24 @@ public sealed class IndexerFeedSyncItemJobTests
             _auditRecordRepository.Object,
             _transactionManager.Object,
             TimeProvider.System,
-            NullLogger<IndexerFeedSyncItemJob>.Instance);
+            NullLogger<IndexerFeedSyncItemJob>.Instance,
+            _progressReporter);
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [MagpieJobs.Parameters.FeedId] = feed.Id.ToString("D")
+                ["feedId"] = feed.Id.ToString("D")
             }
         };
 
         using var cts = new CancellationTokenSource();
-        var task = Task.Run(() => service.ExecuteAsync(context, cts.Token));
-
-        // Act
-        await Task.Delay(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        var guard = Task.Delay(TimeSpan.FromSeconds(5));
-        var winner = await Task.WhenAny(task, guard).ConfigureAwait(false);
-
-        Exception? caught = null;
-        if (winner == task)
-        {
-            try
-            {
-                await task.ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                caught = ex;
-            }
-        }
+        // Act
+        var caught = Assert.CatchAsync<OperationCanceledException>(
+            () => service.ExecuteAsync(context, cts.Token));
 
         // Assert
-        Assert.That(caught, Is.InstanceOf<OperationCanceledException>());
+        Assert.That(caught, Is.Not.Null);
     }
 }

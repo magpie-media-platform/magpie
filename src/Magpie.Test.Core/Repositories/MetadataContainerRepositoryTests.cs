@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -10,10 +11,12 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -22,7 +25,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class MetadataContainerRepositoryTests
+public sealed class MetadataContainerRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IMetadataContainerRepository _subject = null!;
@@ -57,9 +60,11 @@ public class MetadataContainerRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
@@ -70,7 +75,8 @@ public class MetadataContainerRepositoryTests
             auditRecordRepository,
             subjectRepository,
             transactionManager,
-            loggerFactory.CreateLogger<MetadataContainerRepository>());
+            loggerFactory.CreateLogger<MetadataContainerRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         _materializedMetadata = new MaterializedMetadataRepository(
             _context,
             loggerFactory.CreateLogger<MaterializedMetadataRepository>());
@@ -461,7 +467,7 @@ public class MetadataContainerRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_SetsPrimaryImage_AndClearsOthers()
+    public async Task PatchAsync_ReplacesThePrimaryImage_WhenANewPrimaryImageIsSet()
     {
         // Arrange
         var first = new Image { Type = "poster", Url = new Uri("https://e/a.jpg"), IsPrimary = true };
@@ -864,13 +870,51 @@ public class MetadataContainerRepositoryTests
         _context.MetadataContributions.AddRange(first, second);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
-        // Act / Assert
-        Assert.ThrowsAsync<MagpieException>(async () => await _subject.PatchAsync(
+        // Act
+        var act = (AsyncTestDelegate)(async () => await _subject.PatchAsync(
             new MetadataContainerPatch
             {
                 ContainerId = container.Id,
                 ContributionIds = [second.Id]
             },
             _userId).ConfigureAwait(false));
+
+        // Assert
+        Assert.ThrowsAsync<MagpieException>(act);
+    }
+
+    [Test]
+    public void PatchAsync_Throws_WhenARemovedAwardIsNotInTheContribution()
+    {
+        // Arrange
+        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container);
+        _context.SaveChanges();
+        var contribution = new MetadataContribution
+        {
+            MetadataContainerId = container.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = -1,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.MetadataContributions.Add(contribution);
+        _context.SaveChanges();
+        var unknownId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+
+        // Act
+        var act = async () => await _subject.PatchAsync(
+            new MetadataContainerPatch
+            {
+                ContainerId = container.Id,
+                Awards = new() { Remove = [unknownId] }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            act,
+            Throws.TypeOf<MagpieException>().With.Message
+                .EqualTo("The metadata changes do not contain Award 11111111-1111-1111-1111-111111111111."));
     }
 }

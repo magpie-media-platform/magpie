@@ -17,7 +17,6 @@ import {
 } from '@/components/ui/Dialog';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
-import { Switch } from '@/components/ui/Switch';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 import { SimpleFilterBuilder } from '@/components/filters/SimpleFilterBuilder';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
@@ -38,8 +37,6 @@ function isContentFilterCriteria(value: unknown): value is ContentFilterCriteria
 
 export interface FilterFormValues {
     name: string;
-
-    isShared: boolean;
 
     query: string;
 
@@ -75,7 +72,6 @@ type FilterMode = 'simple' | 'advanced';
 
 interface FilterCleanState {
     name: string;
-    shared: boolean;
     query: string;
 }
 
@@ -93,19 +89,18 @@ export function FilterForm({
     existingNames = EMPTY_EXISTING_NAMES,
 }: FilterFormProps) {
     const [name, setName] = useState('');
-    const [shared, setShared] = useState(false);
     const [query, setQuery] = useState('');
     const [mode, setMode] = useState<FilterMode>('simple');
     const [parseError, setParseError] = useState<string | null>(null);
     const [nameError, setNameError] = useState<string | null>(null);
     const [confirmSwitchOpen, , openConfirmSwitch, closeConfirmSwitch] = useToggle();
 
-    const cleanStateRef = useRef<FilterCleanState>({ name: '', shared: false, query: '' });
+    const cleanStateRef = useRef<FilterCleanState>({ name: '', query: '' });
 
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
     const [showStaleSaveConfirmation, setShowStaleSaveConfirmation] = useState(false);
     const loadedEntityIdRef = useRef<string | null | undefined>(undefined);
-    const isDirty = useFormDirty({ name, shared, query }, cleanStateRef.current);
+    const isDirty = useFormDirty({ name, query }, cleanStateRef.current);
     const isDirtyRef = useRef(isDirty);
     isDirtyRef.current = isDirty;
 
@@ -121,16 +116,14 @@ export function FilterForm({
         if (initialValues) {
             const q = initialValues.query ?? '';
             setName(initialValues.name);
-            setShared(initialValues.ownerId === null);
             setQuery(q);
             setMode(q && !isSimpleQuery(q, 'content') ? 'advanced' : 'simple');
-            cleanStateRef.current = { name: initialValues.name, shared: initialValues.ownerId === null, query: q };
+            cleanStateRef.current = { name: initialValues.name, query: q };
         } else {
             setName('');
-            setShared(false);
             setQuery('');
             setMode('simple');
-            cleanStateRef.current = { name: '', shared: false, query: '' };
+            cleanStateRef.current = { name: '', query: '' };
         }
         loadedEntityIdRef.current = nextEntityId;
         setParseError(null);
@@ -233,12 +226,12 @@ export function FilterForm({
         setNameError(null);
         conflict.beginOwnSave();
         try {
-            await onSubmit({ name: trimmedName, isShared: shared, query, criteria });
+            await onSubmit({ name: trimmedName, query, criteria });
             conflict.endOwnSave(true);
         } catch {
             conflict.endOwnSave(false);
         }
-    }, [conflict, existingNames, name, onSubmit, query, shared]);
+    }, [conflict, existingNames, name, onSubmit, query]);
 
     const handleSubmit = useCallback(
         (e: React.SubmitEvent) => {
@@ -303,25 +296,6 @@ export function FilterForm({
                                 data-field="name"
                             />
                         </div>
-
-                        {!isEditing && (
-                            <div className="filter-form__field filter-form__field--row">
-                                <div className="filter-form__field-label">
-                                    <Label htmlFor="filter-shared">Shared Filter</Label>
-                                    <p className="filter-form__field-hint">
-                                        Shared filters can be used by all users. Personal filters are only visible to
-                                        you.
-                                    </p>
-                                </div>
-                                <Switch
-                                    id="filter-shared"
-                                    checked={shared}
-                                    onCheckedChange={setShared}
-                                    disabled={isSubmitting}
-                                    data-field="shared"
-                                />
-                            </div>
-                        )}
 
                         {isEditing && !canEdit && (
                             <div className="filter-form__readonly-notice">

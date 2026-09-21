@@ -48,7 +48,6 @@ export interface BackupCapabilities {
 }
 
 export const backupQueryKeys = {
-    all: ['backups'] as const,
     capabilities: () => ['backups', 'capabilities'] as const,
     list: () => ['backups', 'list'] as const,
 };
@@ -90,14 +89,19 @@ async function restoreBackup(id: string): Promise<void> {
     return apiPost(`/database/backups/${encodeURIComponent(id)}/restore`);
 }
 
+/** The browser must still be able to read the blob when the download starts. */
+const BLOB_URL_LIFETIME_MS = 60_000;
+
 async function downloadBackup(id: string): Promise<void> {
     const response = await apiFetchResponse(`/database/backups/${encodeURIComponent(id)}/download`);
     const blobUrl = URL.createObjectURL(await response.blob());
     const anchor = document.createElement('a');
     anchor.href = blobUrl;
     anchor.download = `magpie-backup-${id}.db`;
+    document.body.append(anchor);
     anchor.click();
-    URL.revokeObjectURL(blobUrl);
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), BLOB_URL_LIFETIME_MS);
 }
 
 export function useBackups() {

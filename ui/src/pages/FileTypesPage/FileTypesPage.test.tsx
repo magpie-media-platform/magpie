@@ -200,7 +200,7 @@ describe('FileTypesPage tabs', () => {
         });
         expect(document.querySelector('[data-tab="mime-registry"]')).toHaveAttribute('data-state', 'inactive');
 
-        await user.click(document.querySelector('[data-tab="mime-registry"]') as HTMLButtonElement);
+        await user.click(screen.getByRole('tab', { name: /mime registry/i }));
 
         await waitFor(() => {
             expect(document.querySelector('[data-tab="mime-registry"]')).toHaveAttribute('data-state', 'active');
@@ -360,11 +360,14 @@ describe('FileTypesPage deny list', () => {
         });
     });
 
-    it('surfaces backend error responses on add failure', async () => {
+    it.each([
+        [400, 'Pattern already exists.', 'Pattern already exists.'],
+        [500, 'Request failed with status 500', 'The server request failed. Try again later.'],
+    ])('surfaces a readable error on add failure (%s)', async (status, message, expected) => {
         const mockApiPost = vi.mocked(apiPost);
         mockApiPost.mockRejectedValue({
-            status: 400,
-            message: 'Pattern already exists.',
+            status,
+            message,
         });
 
         const user = userEvent.setup();
@@ -381,7 +384,7 @@ describe('FileTypesPage deny list', () => {
         await user.click(within(form).getByRole('button', { name: /^add$/i }));
 
         await waitFor(() => {
-            expect(within(form).getByText(/pattern already exists/i)).toBeInTheDocument();
+            expect(within(form).getByText(expected)).toBeInTheDocument();
         });
     });
 
@@ -503,7 +506,7 @@ describe('FileTypesPage mime registry', () => {
         await waitFor(() => {
             expect(document.querySelector('[data-tab="mime-registry"]')).toBeInTheDocument();
         });
-        await user.click(document.querySelector('[data-tab="mime-registry"]') as HTMLButtonElement);
+        await user.click(screen.getByRole('tab', { name: /mime registry/i }));
 
         await user.click(document.querySelector('[data-action="add-mime-mapping"]') as HTMLButtonElement);
 
@@ -627,6 +630,42 @@ describe('FileTypesPage mime registry paging and sort', () => {
         expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
     });
 
+    it('takes only the rendered page when the header checkbox is ticked, and offers the escalation', async () => {
+        const user = userEvent.setup();
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(mimeRows()).toHaveLength(50);
+        });
+
+        await user.click(screen.getByLabelText('Select all MIME mappings'));
+
+        expect(screen.getByText('50 selected')).toBeInTheDocument();
+        expect(screen.getByText('All 50 on this page are selected.')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Select all 120 across all pages' })).toBeInTheDocument();
+    });
+
+    it('follows the rendered page when the user pages forward', async () => {
+        const user = userEvent.setup();
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(mimeRows()).toHaveLength(50);
+        });
+
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByLabelText('Select all MIME mappings'));
+
+        expect(screen.getByText('50 selected')).toBeInTheDocument();
+        expect(screen.getByLabelText('Select .ext050')).toBeChecked();
+        expect(screen.queryByLabelText('Select .ext000')).not.toBeInTheDocument();
+    });
+
     it('defaults to Extension ascending sort', async () => {
         render(<FileTypesPage />, { wrapper: createTestWrapper() });
 
@@ -664,7 +703,7 @@ describe('FileTypesPage mime registry paging and sort', () => {
             expect(document.querySelector('[data-table="mime-registry"]')).toBeInTheDocument();
         });
 
-        await user.click(document.querySelector('[data-column="extension"] [role="button"]') as HTMLElement);
+        await user.click(screen.getByRole('button', { name: 'Sort by Extension' }));
 
         await waitFor(() => {
             expect(mimeRows()[0].getAttribute('data-row-id')).toBe('.ext119');
@@ -700,7 +739,7 @@ describe('FileTypesPage mime registry paging and sort', () => {
             expect(search).toContain('mpage=2');
         });
 
-        await user.click(document.querySelector('[data-column="extension"] [role="button"]') as HTMLElement);
+        await user.click(screen.getByRole('button', { name: 'Sort by Extension' }));
 
         await waitFor(() => {
             expect(search).toContain('msort=');
@@ -715,5 +754,103 @@ describe('FileTypesPage mime registry paging and sort', () => {
         });
 
         expect(document.querySelector('[data-field="mime-filter"]')).not.toBeInTheDocument();
+    });
+});
+
+describe('FileTypesPage (mobile card collapse)', () => {
+    const mockApiDelete = vi.mocked(apiDelete);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        setupApiMocks();
+        mockApiDelete.mockResolvedValue(undefined);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('marks the pattern cell as header role and the select column as hidden (no layout-participating checkbox)', async () => {
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="deny-list"]')).toBeInTheDocument();
+        });
+        const section = document.querySelector('[data-section="deny-list"]') as HTMLElement;
+        expect(section.querySelector('td[data-column="pattern"]')).toHaveAttribute('data-mobile-role', 'header');
+        expect(section.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
+    });
+
+    it('shows the selection overlay only while selection mode is active, in each section', async () => {
+        const user = userEvent.setup();
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="deny-list"]')).toBeInTheDocument();
+        });
+        const denySection = document.querySelector('[data-section="deny-list"]') as HTMLElement;
+        expect(denySection.querySelectorAll('[data-action="toggle-row-mobile"]').length).toBe(0);
+
+        await user.click(within(denySection).getByRole('button', { name: 'Select' }));
+        expect(denySection.querySelectorAll('[data-action="toggle-row-mobile"]').length).toBeGreaterThan(0);
+    });
+
+    it('starts each section with the mobile selection mode inactive', async () => {
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="deny-list"]')).toBeInTheDocument();
+        });
+        const denySection = document.querySelector('[data-section="deny-list"]') as HTMLElement;
+        expect(within(denySection).getByRole('button', { name: 'Select' })).toBeInTheDocument();
+        expect(denySection.querySelector('.data-table')).toHaveAttribute('data-mobile-selection-active', 'false');
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="mime-registry"]')).toBeInTheDocument();
+        });
+        const mimeSection = document.querySelector('[data-section="mime-registry"]') as HTMLElement;
+        expect(within(mimeSection).getByRole('button', { name: 'Select' })).toBeInTheDocument();
+        expect(mimeSection.querySelector('.data-table')).toHaveAttribute('data-mobile-selection-active', 'false');
+    });
+
+    it('bulk-deletes every selected deny-list entry', async () => {
+        const user = userEvent.setup();
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="deny-list"]')).toBeInTheDocument();
+        });
+        const section = document.querySelector('[data-section="deny-list"]') as HTMLElement;
+
+        await user.click(within(section).getByLabelText('Select .iso'));
+        await user.click(within(section).getByLabelText('Select application/x-msdownload'));
+        await user.click(within(section).getByRole('button', { name: 'Delete selected deny-list entries' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(mockApiDelete).toHaveBeenCalledWith('/system/file-types/exclusions/deny-1');
+            expect(mockApiDelete).toHaveBeenCalledWith('/system/file-types/exclusions/deny-2');
+        });
+    });
+
+    it('bulk-deletes every selected MIME mapping', async () => {
+        const user = userEvent.setup();
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-tab="mime-registry"]')).toBeInTheDocument();
+        });
+        await user.click(screen.getByRole('tab', { name: /mime registry/i }));
+        const section = document.querySelector('[data-section="mime-registry"]') as HTMLElement;
+
+        await user.click(within(section).getByLabelText('Select .mkv'));
+        await user.click(within(section).getByLabelText('Select .weirdo'));
+        await user.click(within(section).getByRole('button', { name: 'Delete selected MIME mappings' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(mockApiDelete).toHaveBeenCalledWith('/system/file-types/mime/.mkv');
+            expect(mockApiDelete).toHaveBeenCalledWith('/system/file-types/mime/.weirdo');
+        });
     });
 });

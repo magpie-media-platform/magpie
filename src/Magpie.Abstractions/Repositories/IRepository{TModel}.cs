@@ -11,7 +11,7 @@ namespace Magpie.Abstractions.Repositories;
 public interface IRepository<TModel> : IRepository where TModel : class
 {
     /// <summary>
-    /// Gets every <typeparamref name="TModel"/> entity.
+    /// Lists every <typeparamref name="TModel"/> entity.
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>Every entity</returns>

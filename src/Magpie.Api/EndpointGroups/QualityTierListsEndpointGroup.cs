@@ -80,7 +80,7 @@ internal sealed class QualityTierListsEndpointGroup : IApiEndpointGroup
             });
         }
 
-        return Results.Created($"api/{Name}/{result.TierList!.Id}", result.TierList);
+        return Results.Created($"/api/{Name}/{result.TierList!.Id}", result.TierList);
     }
 
     [MagpieCommand("get", "GET", "{id:guid}", "Show a quality tier list")]

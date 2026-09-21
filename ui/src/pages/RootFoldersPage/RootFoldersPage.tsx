@@ -9,13 +9,17 @@ import {
 } from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { Badge } from '@/components/ui/Badge';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
-import { DataTable } from '@/components/ui/DataTable';
+import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { DiskSpaceWidget } from '@/components/ui/DiskSpaceWidget';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Pager } from '@/components/ui/Pager';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
@@ -34,6 +38,7 @@ import { MonitoringDefaultPanel } from './MonitoringDefaultPanel';
 import { RootFolderForm, type RootFolderFormValues } from '@/components/configuration/RootFolderForm';
 
 import './RootFoldersPage.css';
+import '@/styles/bulk-actions-toolbar.css';
 import '@/styles/card-actions.css';
 
 function getContentTypeName(id: string, contentTypes: LibraryTypeDefinition[]): string {
@@ -59,7 +64,7 @@ function toRootFolderFormValues(folder: ApiRootFolder): RootFolderFormValues {
         defaultMonitoring: folder.defaultMonitoring,
         renameTemplate: folder.renameTemplate ?? '',
         upgradeFileHandling: folder.upgradeFileHandling,
-        defaults: folder.defaults ?? [],
+        defaults: folder.defaults ?? {},
     };
 }
 
@@ -77,7 +82,11 @@ export function RootFoldersPage() {
     const [editingFolder, setEditingFolder] = useState<RootFolderFormValues | null>(null);
     const [deletingFolder, setDeletingFolder] = useState<ApiRootFolder | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [pageRowIds, setPageRowIds] = useState<string[]>([]);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
     const { toast } = useToast();
+    const runBulk = useBulkRun();
 
     const { contentTypes } = useLibraryTypes();
 
@@ -153,14 +162,14 @@ export function RootFoldersPage() {
                 const renameTemplateValue = trimmedTemplate === '' ? null : trimmedTemplate;
                 if (values.id) {
                     await updateFolder(values.id, {
-                        name: values.name,
-                        path: values.path,
-                        contentType: values.contentType,
-                        isDefault: values.isDefault,
+                        name: { value: values.name },
+                        path: { value: values.path },
+                        contentType: { value: values.contentType },
+                        isDefault: { value: values.isDefault },
                         defaultMonitoring: { value: values.defaultMonitoring },
                         renameTemplate: { value: renameTemplateValue },
-                        upgradeFileHandling: values.upgradeFileHandling,
-                        defaults: values.defaults,
+                        upgradeFileHandling: { value: values.upgradeFileHandling },
+                        defaults: { value: values.defaults },
                     });
                     toast({
                         title: values.name,
@@ -208,7 +217,7 @@ export function RootFoldersPage() {
             }
 
             try {
-                await updateFolder(folder.id, { isDefault: true });
+                await updateFolder(folder.id, { isDefault: { value: true } });
                 toast({
                     title: folder.name,
                     description: 'Default root folder updated.',
@@ -277,16 +286,48 @@ export function RootFoldersPage() {
         setDeletingFolder(null);
     }, []);
 
+    const selection = useBulkSelection({
+        pageRowIds,
+        totalCount: filteredFolders.length,
+        resetKey: filters.contentType,
+    });
+    const selectedFolders = useMemo(
+        () => filteredFolders.filter((f) => selection.isRowChecked(f.id)),
+        [filteredFolders, selection],
+    );
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedFolders, selection, {
+                action: (folder) => deleteFolder(folder.id),
+                verb: 'delete',
+                itemNounPlural: 'root folders',
+            });
+            void refetchDiskSpace();
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [deleteFolder, runBulk, selectedFolders, selection, refetchDiskSpace]);
+
     const handleRefresh = useCallback(async () => {
         await Promise.all([refetch(), refetchDiskSpace()]);
     }, [refetchDiskSpace, refetch]);
 
     const columns = useMemo<ColumnDef<ApiRootFolder>[]>(
         () => [
+            selectColumn<ApiRootFolder>({
+                selection,
+                getId: (row) => row.id,
+                headerLabel: 'Select all root folders',
+                rowLabel: (row) => row.name,
+            }),
             {
                 id: 'name',
                 accessorFn: (row) => row.name,
                 header: 'Name',
+                meta: { mobileRole: 'header' },
                 size: 220,
                 cell: ({ row }) => (
                     <span className="root-folders-table__name" title={row.original.name}>
@@ -407,6 +448,7 @@ export function RootFoldersPage() {
             },
         ],
         [
+            selection,
             contentTypes,
             contentTypeOptions,
             contentTypeFilter,
@@ -495,6 +537,25 @@ export function RootFoldersPage() {
                     />
                 </section>
 
+                <BulkActionsToolbar
+                    selection={selection}
+                    label="Root folder selection actions"
+                    itemNounPlural="root folders"
+                >
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected root folders"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                    </Button>
+                </BulkActionsToolbar>
+
+                <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+
                 <div className="root-folders-table" data-area="root-folders">
                     <DataTable<ApiRootFolder>
                         columns={columns}
@@ -509,9 +570,15 @@ export function RootFoldersPage() {
                         pageSize={PAGE_SIZE}
                         pagination={pagination}
                         getRowId={getRowId}
+                        onPageRowIdsChange={setPageRowIds}
                         loading={isLoading}
                         emptyState={error ? errorState : emptyState}
                         keepHeaderWhenEmpty={hasActiveFilters}
+                        mobileSelectionActive={selection.selectionMode}
+                        mobileSelectionOverlay={{
+                            isSelected: (folder) => selection.isRowChecked(folder.id),
+                            onToggle: (folder) => selection.toggleRow(folder.id, !selection.isRowChecked(folder.id)),
+                        }}
                         aria-label="Root folders"
                     />
                     {filteredFolders.length > PAGE_SIZE && (
@@ -539,11 +606,41 @@ export function RootFoldersPage() {
                 isDeleting={isDeleting}
             />
 
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Root Folders"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="root-folders-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="root folders"
+                >
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected root folders"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
+
             <RootFolderForm
                 open={formOpen}
                 onOpenChange={handleFormClose}
                 initialValues={currentEditingFolder}
                 contentTypes={contentTypes}
+                contentTypesWithFolders={folders.map((folder) => folder.contentType)}
                 onSubmit={handleFormSubmit}
                 isSubmitting={isSubmitting}
             />

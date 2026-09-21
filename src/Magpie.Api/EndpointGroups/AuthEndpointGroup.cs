@@ -1,4 +1,3 @@
-using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,7 +17,6 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
 {
     private const string RefreshCookieName = "magpie.refresh";
     private const string RefreshCookiePath = "/api/auth";
-    private const string BearerSchemePrefix = "Bearer ";
 
     public string Name => "auth";
 
@@ -53,48 +51,18 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
 
     private static void SetStreamAuthCookie(HttpContext httpContext, AuthSession session)
     {
-        SetStreamAuthCookie(httpContext, session.AccessToken, session.AccessTokenExpiresAt);
-    }
-
-    private static void SetStreamAuthCookie(HttpContext httpContext, string accessToken, DateTime? expires = null)
-    {
         httpContext.Response.Cookies.Append(
             StreamAuthentication.CookieName,
-            accessToken,
+            session.AccessToken,
             new CookieOptions
             {
                 HttpOnly = true,
                 Secure = httpContext.Request.IsHttps,
                 SameSite = SameSiteMode.Lax,
                 Path = StreamAuthentication.Path,
-                Expires = expires,
+                Expires = session.AccessTokenExpiresAt,
                 IsEssential = true,
             });
-    }
-
-    private static string? ExtractBearerToken(HttpContext httpContext)
-    {
-        if (!httpContext.Request.Headers.TryGetValue("Authorization", out var values))
-        {
-            return null;
-        }
-
-        foreach (var raw in values)
-        {
-            if (string.IsNullOrWhiteSpace(raw) ||
-                !raw.StartsWith(BearerSchemePrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var token = raw.AsSpan(BearerSchemePrefix.Length).Trim();
-            if (token.Length > 0)
-            {
-                return token.ToString();
-            }
-        }
-
-        return null;
     }
 
     private static void ClearStreamAuthCookie(HttpContext httpContext)
@@ -220,17 +188,9 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
     }
 
     internal IResult GetPermissions(
-        HttpContext httpContext,
         [FromServices] IAuthService authService,
         AuthenticatedUser user)
     {
-        var effective = authService.GetEffectivePermissions(user.Role);
-        var accessToken = ExtractBearerToken(httpContext);
-        if (accessToken is not null)
-        {
-            SetStreamAuthCookie(httpContext, accessToken);
-        }
-
-        return Results.Ok(effective);
+        return Results.Ok(authService.GetEffectivePermissions(user.Role));
     }
 }

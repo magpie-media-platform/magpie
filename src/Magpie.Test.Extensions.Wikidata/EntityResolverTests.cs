@@ -19,7 +19,7 @@ namespace Magpie.Test.Extensions.Wikidata;
 internal sealed class EntityResolverTests
 {
     [Test]
-    public async Task ResolveContentAsync_EpisodeWithoutSeasonNumber_UsesSeasonQidAndEpisodeOrdinal()
+    public async Task ResolveContentAsync_UsesSeasonQidAndEpisodeOrdinal_WhenEpisodeWithoutSeasonNumber()
     {
         // Arrange
         SparqlRequest? request = null;

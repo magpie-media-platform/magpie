@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import { QueryClient, QueryClientProvider, type Query } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
 
 vi.mock('@/lib/api', () => ({
@@ -33,12 +33,8 @@ import { apiGet, apiPost, apiDelete } from '@/lib/api';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import {
     useDownloads,
-    useDownload,
     useDownloadStatusCounts,
     useDownloadStatusTotal,
-    isTerminalDownloadStatus,
-    terminalDownloadStatuses,
-    downloadQueryKeys,
     type ApiDownload,
     type DownloadStatusValue,
     type PagedDownloads,
@@ -97,38 +93,6 @@ function createWrapper() {
         createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
-function createWrapperWithClient() {
-    const queryClient = new QueryClient({
-        defaultOptions: {
-            queries: {
-                retry: false,
-                gcTime: 0,
-            },
-            mutations: {
-                retry: false,
-            },
-        },
-    });
-
-    const Wrapper = ({ children }: { children: React.ReactNode }) =>
-        createElement(QueryClientProvider, { client: queryClient }, children);
-
-    return { queryClient, Wrapper };
-}
-
-function getRefetchIntervalForDownload(queryClient: QueryClient, id: string) {
-    const cache = queryClient.getQueryCache();
-    const query = cache.find({ queryKey: downloadQueryKeys.detail(id) });
-    expect(query, `query for ${id} should be in cache`).toBeDefined();
-    const observer = query!.observers[0];
-    expect(observer, `query for ${id} should have an observer`).toBeDefined();
-    const refetchInterval = observer.options.refetchInterval as
-        | number
-        | false
-        | ((query: Query<ApiDownload, Error>) => number | false | undefined);
-    return refetchInterval;
-}
-
 describe('useDownloads', () => {
     const mockApiGet = vi.mocked(apiGet);
     const mockApiPost = vi.mocked(apiPost);
@@ -137,6 +101,27 @@ describe('useDownloads', () => {
     beforeEach(() => {
         vi.clearAllMocks();
     });
+
+    it.each<DownloadStatusValue>(['Downloading', 'Imported', 'Failed'])(
+        'does not poll downloads with status %s',
+        async (status) => {
+            mockApiGet.mockResolvedValue({ ...mockPagedResponse, items: [{ ...mockApiDownloads[0], status }] });
+            const { result, unmount } = renderHook(() => useDownloads(), { wrapper: createWrapper() });
+            await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+            vi.useFakeTimers();
+            try {
+                mockApiGet.mockClear();
+                await act(async () => {
+                    await vi.advanceTimersByTimeAsync(120000);
+                });
+                expect(mockApiGet).not.toHaveBeenCalled();
+            } finally {
+                unmount();
+                vi.useRealTimers();
+            }
+        },
+    );
 
     it('fails open on download creation for a filtered list', async () => {
         mockApiGet.mockResolvedValue(mockPagedResponse);
@@ -591,130 +576,6 @@ describe('useDownloads', () => {
             expect(downloadStatusVariants.Imported).toBe('imported');
             expect(downloadStatusVariants.Failed).toBe('failed');
             expect(downloadStatusVariants.Cancelled).toBe('cancelled');
-        });
-    });
-});
-
-describe('useDownload', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
-
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
-
-    it('should fetch a single download by ID', async () => {
-        mockApiGet.mockResolvedValue(mockApiDownloads[0]);
-
-        const { result } = renderHook(() => useDownload('download-1'), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        expect(mockApiGet).toHaveBeenCalledWith('/downloads/download-1');
-        expect(result.current.download?.id).toBe('download-1');
-        expect(result.current.download?.title).toBe('Movie.2024.1080p.BluRay.x264');
-    });
-
-    it('should not fetch when disabled', async () => {
-        const { result } = renderHook(() => useDownload('download-1', false), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(mockApiGet).not.toHaveBeenCalled();
-        });
-
-        expect(result.current.download).toBeNull();
-    });
-
-    it('should not fetch when ID is empty', async () => {
-        const { result } = renderHook(() => useDownload(''), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(mockApiGet).not.toHaveBeenCalled();
-        });
-
-        expect(result.current.download).toBeNull();
-    });
-
-    it('should return error on failure', async () => {
-        mockApiGet.mockRejectedValue(new Error('Not found'));
-
-        const { result } = renderHook(() => useDownload('download-1'), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        expect(result.current.download).toBeNull();
-        expect(result.current.error).toBeInstanceOf(Error);
-    });
-
-    describe('polling gating', () => {
-        it('exposes the terminal-status set drawn from the DownloadStatus enum', () => {
-            expect(Array.from(terminalDownloadStatuses).sort()).toEqual(['Cancelled', 'Failed', 'Imported']);
-        });
-
-        it.each<[string, DownloadStatusValue, boolean]>([
-            ['Grabbed', 'Grabbed', false],
-            ['Queued', 'Queued', false],
-            ['Downloading', 'Downloading', false],
-            ['Paused', 'Paused', false],
-            ['Stalled', 'Stalled', false],
-            ['Downloaded', 'Downloaded', false],
-            ['Imported', 'Imported', true],
-            ['Failed', 'Failed', true],
-            ['Cancelled', 'Cancelled', true],
-        ])('isTerminalDownloadStatus(%s) === %s', (_label, status, expected) => {
-            expect(isTerminalDownloadStatus(status)).toBe(expected);
-        });
-
-        it('isTerminalDownloadStatus(undefined) is false', () => {
-            expect(isTerminalDownloadStatus(undefined)).toBe(false);
-        });
-
-        it('does not poll in-flight downloads', async () => {
-            const inflight: ApiDownload = { ...mockApiDownloads[0], status: 'Downloading' };
-            mockApiGet.mockResolvedValue(inflight);
-
-            const { queryClient, Wrapper } = createWrapperWithClient();
-            const { result } = renderHook(() => useDownload('download-1'), { wrapper: Wrapper });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            const refetchInterval = getRefetchIntervalForDownload(queryClient, 'download-1');
-            expect(refetchInterval).toBeUndefined();
-        });
-
-        it.each<[string, DownloadStatusValue]>([
-            ['Imported', 'Imported'],
-            ['Failed', 'Failed'],
-        ])('does not poll terminal status %s', async (_label, status) => {
-            const terminal: ApiDownload = { ...mockApiDownloads[0], status };
-            mockApiGet.mockResolvedValue(terminal);
-
-            const { queryClient, Wrapper } = createWrapperWithClient();
-            const { result } = renderHook(() => useDownload('download-1'), { wrapper: Wrapper });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            const refetchInterval = getRefetchIntervalForDownload(queryClient, 'download-1');
-            expect(refetchInterval).toBeUndefined();
         });
     });
 });

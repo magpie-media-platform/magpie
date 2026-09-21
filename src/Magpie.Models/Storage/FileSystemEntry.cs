@@ -8,20 +8,20 @@ public sealed record FileSystemEntry
     /// <summary>
     /// The display name of the file or folder.
     /// </summary>
-    public required string Name { get; set; }
+    public required string Name { get; init; }
 
     /// <summary>
     /// The full path to the file or folder.
     /// </summary>
-    public required string Path { get; set; }
+    public required string Path { get; init; }
 
     /// <summary>
-    /// The entry type: <c>file</c> or <c>folder</c>.
+    /// The entry type.
     /// </summary>
-    public required string Type { get; set; }
+    public required string Type { get; init; }
 
     /// <summary>
     /// The size in bytes, present only for a file.
     /// </summary>
-    public long? Size { get; set; }
+    public long? Size { get; init; }
 }

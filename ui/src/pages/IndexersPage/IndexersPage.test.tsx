@@ -176,7 +176,7 @@ function dataRows() {
     const table = screen.getByRole('grid');
     return within(table)
         .getAllByRole('row')
-        .filter((r) => within(r).queryAllByRole('cell').length > 0);
+        .filter((r) => within(r).queryAllByRole('gridcell').length > 0);
 }
 
 beforeEach(() => {
@@ -384,11 +384,165 @@ describe('Configured tab (table, row per connection)', () => {
             expect(mockDeleteConnection).toHaveBeenCalledWith('idx-1', 'c-2');
         });
     });
+
+    it('names every bulk action button for assistive technology', async () => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByLabelText('Select NZBgeek US'));
+        await user.click(screen.getByLabelText('Select NZBgeek EU'));
+
+        expect(document.querySelector('[data-action="bulk-search"]')).toHaveAccessibleName('Search selected indexers');
+        expect(document.querySelector('[data-action="bulk-test"]')).toHaveAccessibleName('Test selected indexers');
+        expect(document.querySelector('[data-action="bulk-delete"]')).toHaveAccessibleName('Delete selected indexers');
+    });
+});
+
+describe('Configured tab bulk test', () => {
+    it('shows each instance message when every bulk test succeeds', async () => {
+        mockTestConnection.mockImplementation((_indexerId: string, connectionId: string) =>
+            Promise.resolve({
+                success: true,
+                message: connectionId === 'c-1' ? 'NZBgeek US reachable.' : 'IPTorrents reachable.',
+            }),
+        );
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByLabelText('Select NZBgeek US'));
+        await user.click(screen.getByLabelText('Select IPTorrents'));
+        await user.click(screen.getByRole('button', { name: 'Test selected indexers' }));
+
+        await waitFor(() => {
+            expect(screen.getByText('NZBgeek US reachable.')).toBeInTheDocument();
+        });
+        expect(screen.getByText('IPTorrents reachable.')).toBeInTheDocument();
+        expect(document.querySelectorAll('[data-component="toast"]')).toHaveLength(2);
+    });
+
+    it('leaves a failed instance selected with its message when a bulk test fails', async () => {
+        mockTestConnection.mockImplementation((_indexerId: string, connectionId: string) =>
+            Promise.resolve(
+                connectionId === 'c-2'
+                    ? { success: false, message: 'NZBgeek EU timed out.' }
+                    : { success: true, message: 'Reachable.' },
+            ),
+        );
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByLabelText('Select NZBgeek US'));
+        await user.click(screen.getByLabelText('Select NZBgeek EU'));
+        await user.click(screen.getByRole('button', { name: 'Test selected indexers' }));
+
+        await waitFor(() => {
+            expect(screen.getByText('NZBgeek EU timed out.')).toBeInTheDocument();
+        });
+        expect(screen.getByLabelText('Select NZBgeek EU')).toBeChecked();
+        expect(screen.getByLabelText('Select NZBgeek US')).not.toBeChecked();
+        expect(screen.queryByText(/remain selected/)).not.toBeInTheDocument();
+    });
+
+    it('reports a rejected bulk request once and leaves the instance selected', async () => {
+        mockTestConnection.mockImplementation((_indexerId: string, connectionId: string) =>
+            connectionId === 'c-2'
+                ? Promise.reject(new Error('Network unavailable.'))
+                : Promise.resolve({ success: true, message: 'Reachable.' }),
+        );
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByLabelText('Select NZBgeek US'));
+        await user.click(screen.getByLabelText('Select NZBgeek EU'));
+        await user.click(screen.getByRole('button', { name: 'Test selected indexers' }));
+
+        expect(await screen.findByText('Network unavailable.')).toBeInTheDocument();
+        expect(screen.getByLabelText('Select NZBgeek EU')).toBeChecked();
+        expect(screen.getByLabelText('Select NZBgeek US')).not.toBeChecked();
+        expect(screen.getAllByText('Network unavailable.')).toHaveLength(1);
+        expect(screen.queryByText(/remain selected/)).not.toBeInTheDocument();
+    });
+});
+
+describe('Configured tab (mobile card collapse)', () => {
+    it('marks the name and status cells as header role, other labeled cells as field role, and the select column as hidden (no layout-participating checkbox)', () => {
+        render(
+            <TestWrapper>
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByText('NZBgeek US').closest('[data-column="name"]')).toHaveAttribute(
+            'data-mobile-role',
+            'header',
+        );
+        expect(document.querySelector('td[data-column="status"]')).toHaveAttribute('data-mobile-role', 'header');
+        expect(document.querySelector('td[data-column="indexer"]')).toHaveAttribute('data-mobile-role', 'field');
+        expect(document.querySelector('td[data-column="lastChecked"]')).toHaveAttribute('data-mobile-role', 'field');
+        expect(document.querySelector('td[data-column="actions"]')).toHaveAttribute('data-mobile-role', 'actions');
+        expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
+    });
+
+    it('hides the read-only Enabled badge column on mobile since the relocated toggle already shows it', () => {
+        render(
+            <TestWrapper>
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        expect(document.querySelector('td[data-column="enabled"]')).toHaveAttribute('data-mobile-role', 'hidden');
+    });
+
+    it('marks the relocated toggle icon so mobile CSS can hide it, leaving label + switch only', () => {
+        render(
+            <TestWrapper>
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        const toggle = document.querySelector('.card-actions__toggle');
+        expect(toggle?.querySelector('.card-actions__toggle-icon')).toBeInTheDocument();
+        expect(toggle?.querySelector('.card-actions__toggle-label')).toHaveTextContent('Enabled');
+    });
+
+    it('clears any selection made while exiting selection mode', async () => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByLabelText('Select NZBgeek US'));
+        expect(screen.getByLabelText('Select NZBgeek US')).toBeChecked();
+
+        await user.click(screen.getByRole('button', { name: 'Stop selecting' }));
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+
+        expect(screen.getByLabelText('Select NZBgeek US')).not.toBeChecked();
+    });
 });
 
 describe('Available tab (table + Configure button)', () => {
     async function gotoAvailable(user: ReturnType<typeof userEvent.setup>) {
-        await user.click(document.querySelector('[data-tab="available"]') as HTMLElement);
+        await user.click(screen.getByRole('tab', { name: /available/i }));
     }
 
     it('lists ALL definitions including already-configured ones', async () => {
@@ -481,7 +635,7 @@ describe('Available tab (table + Configure button)', () => {
 
 describe('Configure dialog (test + close-on-add)', () => {
     async function openAddDialog(user: ReturnType<typeof userEvent.setup>) {
-        await user.click(document.querySelector('[data-tab="available"]') as HTMLElement);
+        await user.click(screen.getByRole('tab', { name: /available/i }));
         const jackettRow = screen.getByRole('grid').querySelector('[data-row-id="idx-3"]') as HTMLElement;
         await user.click(jackettRow.querySelector('[data-action="configure"]') as HTMLElement);
         await waitFor(() => {
@@ -537,7 +691,7 @@ describe('Feeds tab (table)', () => {
             </TestWrapper>,
         );
 
-        await user.click(document.querySelector('[data-tab="feeds"]') as HTMLElement);
+        await user.click(screen.getByRole('tab', { name: /feeds/i }));
 
         expect(screen.getByRole('grid')).toBeInTheDocument();
         expect(screen.getByText('Prowlarr Sync')).toBeInTheDocument();
@@ -559,7 +713,7 @@ describe('Feeds tab (table)', () => {
                 </TestWrapper>,
             );
 
-            await user.click(document.querySelector('[data-tab="feeds"]') as HTMLElement);
+            await user.click(screen.getByRole('tab', { name: /feeds/i }));
 
             const name = screen.getByTitle(longName).querySelector('.indexers-table__name-text');
             expect(name).toHaveTextContent(longName);

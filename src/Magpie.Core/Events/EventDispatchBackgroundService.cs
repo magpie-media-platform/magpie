@@ -12,8 +12,6 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs;
-using Magpie.Core.Jobs.Fulfillment;
-using Magpie.Core.Jobs.Metadata;
 using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -36,7 +34,9 @@ internal sealed class EventDispatchBackgroundService(
     IEventBus eventBus,
     IServiceScopeFactory scopeFactory,
     ILogger<EventDispatchBackgroundService> logger,
-    TimeProvider? timeProvider = null) : BackgroundService
+    MagpieHostEnvironment hostEnvironment,
+    TimeProvider timeProvider,
+    DatabaseMigrationState databaseMigration) : BackgroundService
 {
     private static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromSeconds(1);
 
@@ -52,10 +52,23 @@ internal sealed class EventDispatchBackgroundService(
         MagpieEvents.Names.JobExecutionStarted,
     ];
 
+    private const string SuppressedReleaseSearchReason =
+        "Skipped because the content hierarchy item needs no release.";
+
+    private static readonly string EventTriggerNamePrefix = GetNamePrefix(MagpieEvents.Names.EventTriggerCreated);
+
+    private static readonly string NotificationRuleNamePrefix =
+        GetNamePrefix(MagpieEvents.Names.NotificationRuleCreated);
+
+    private static readonly string UserNamePrefix = GetNamePrefix(MagpieEvents.Names.UserCreated);
+
     private readonly TaskCompletionSource _listenerReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly JsonSerializerOptions _serializerOptions = new(JsonSerializerDefaults.Web);
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
-    private HashSet<string> _notificationProviderTypes = [];
+    private readonly TimeProvider _time = timeProvider;
+    private IReadOnlyList<EventTrigger>? _triggers;
+    private IReadOnlyList<NotificationRule>? _rules;
+    private Guid? _systemUserId;
+    private bool _systemUserLoaded;
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -90,6 +103,13 @@ internal sealed class EventDispatchBackgroundService(
     private static bool IsDispatchable(MagpieEvent magpieEvent)
     {
         return !NonDispatchableEventNames.Contains(magpieEvent.Name);
+    }
+
+    private static bool IsNotificationDeliveryFailure(MagpieEvent magpieEvent)
+    {
+        return string.Equals(magpieEvent.Name, MagpieEvents.Names.JobExecutionFailed, StringComparison.Ordinal) &&
+            magpieEvent.Context.TryGetValue(MagpieEvents.Keys.ExecutionJobType, out var jobType) &&
+            string.Equals(jobType, MagpieJobs.Types.SendNotification, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string GetNamePrefix(string name)
@@ -182,9 +202,9 @@ internal sealed class EventDispatchBackgroundService(
         JobExecution candidate,
         Guid contentHierarchyItemId)
     {
-        return parent.JobType == ContentMetadataRefreshItemJob.Spec.JobType &&
+        return parent.JobType == MagpieJobs.Types.ContentMetadataRefreshItem &&
             parent.CorrelationId is not null &&
-            candidate.JobType == ContentMetadataRefreshItemJob.Spec.JobType &&
+            candidate.JobType == MagpieJobs.Types.ContentMetadataRefreshItem &&
             candidate.EventTriggerId is null &&
             candidate.ScheduleTriggerId is null &&
             candidate.ParentExecutionId == parent.Id &&
@@ -203,7 +223,7 @@ internal sealed class EventDispatchBackgroundService(
         Guid? authoritativeMetadataRefreshTarget)
     {
         return authoritativeMetadataRefreshTarget is { } contentHierarchyItemId &&
-            trigger.JobType == ContentMetadataRefreshItemJob.Spec.JobType &&
+            trigger.JobType == MagpieJobs.Types.ContentMetadataRefreshItem &&
             TargetsContentHierarchyItem(trigger, contentHierarchyItemId);
     }
 
@@ -248,33 +268,101 @@ internal sealed class EventDispatchBackgroundService(
         return Guid.TryParse(raw, out downloadId);
     }
 
+    private static Task InvokeForeignExtensionLifecycleAsync(
+        MagpieEvent magpieEvent,
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        return magpieEvent.Name switch
+        {
+            MagpieEvents.Names.ExtensionDisabled => InvokeForeignDisableAsync(
+                magpieEvent,
+                services.GetRequiredService<IExtensionLifecycleManager>(),
+                services.GetRequiredService<IExtensionRepository>(),
+                cancellationToken),
+            MagpieEvents.Names.ExtensionUninstalled => InvokeForeignUninstallAsync(
+                magpieEvent,
+                services.GetRequiredService<IExtensionLifecycleManager>(),
+                cancellationToken),
+            _ => Task.CompletedTask,
+        };
+    }
+
+    private static async Task InvokeForeignDisableAsync(
+        MagpieEvent magpieEvent,
+        IExtensionLifecycleManager lifecycleManager,
+        IExtensionRepository repository,
+        CancellationToken cancellationToken)
+    {
+        if (!magpieEvent.Context.TryGetValue(MagpieEvents.Keys.ExtensionId, out var rawId) ||
+            !Guid.TryParse(rawId, out var extensionId))
+        {
+            return;
+        }
+
+        var extension = await repository.GetByIdAsync(extensionId, cancellationToken).ConfigureAwait(false);
+        if (extension is not null)
+        {
+            await lifecycleManager.InvokeDisableAsync(extension, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task InvokeForeignUninstallAsync(
+        MagpieEvent magpieEvent,
+        IExtensionLifecycleManager lifecycleManager,
+        CancellationToken cancellationToken)
+    {
+        magpieEvent.Context.TryGetValue(MagpieEvents.Keys.ExtensionAssemblyName, out var assemblyName);
+        magpieEvent.Context.TryGetValue(MagpieEvents.Keys.ExtensionFilePath, out var filePath);
+        if (string.IsNullOrWhiteSpace(assemblyName) && string.IsNullOrWhiteSpace(filePath))
+        {
+            return;
+        }
+
+        magpieEvent.Context.TryGetValue(MagpieEvents.Keys.ExtensionId, out var rawId);
+        _ = Guid.TryParse(rawId, out var extensionId);
+
+        var extension = new Extension
+        {
+            Id = extensionId,
+            PackageId = assemblyName ?? string.Empty,
+            Name = assemblyName ?? string.Empty,
+            Version = string.Empty,
+            AssemblyName = assemblyName ?? string.Empty,
+            FilePath = filePath ?? string.Empty,
+        };
+        await lifecycleManager.InvokeUninstallAsync(extension, cancellationToken).ConfigureAwait(false);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
-            using (var scope = scopeFactory.CreateScope())
-            {
-                _notificationProviderTypes =
-                [..
-                    from provider in scope.ServiceProvider.GetServices<INotificationProvider>()
-                    where !string.IsNullOrWhiteSpace(provider.ProviderType)
-                    select provider.ProviderType                                                ];
-            }
-        }
-        catch (Exception ex)
-        {
-            _listenerReady.TrySetException(ex);
-            throw;
-        }
-
-        try
-        {
             using var listener = eventBus is EventBus bus
-                ? bus.CreateListener(eventName: null, localOnly: true, callSite: "dispatch")
-                : eventBus.CreateListener(localOnly: true);
+                ? bus.CreateListener(eventName: null, localOnly: false, callSite: "dispatch")
+                : eventBus.CreateListener(localOnly: false);
             _listenerReady.TrySetResult();
+            await databaseMigration.Completion.WaitAsync(stoppingToken).ConfigureAwait(false);
+
             await foreach (var magpieEvent in listener.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
+                var namePrefix = GetNamePrefix(magpieEvent.Name);
+                if (namePrefix == EventTriggerNamePrefix)
+                {
+                    _triggers = null;
+                }
+
+                if (namePrefix == NotificationRuleNamePrefix)
+                {
+                    _rules = null;
+                }
+
+                if (namePrefix == UserNamePrefix)
+                {
+                    _systemUserId = null;
+                    _systemUserLoaded = false;
+                }
+
                 if (!IsDispatchable(magpieEvent))
                 {
                     continue;
@@ -284,6 +372,19 @@ internal sealed class EventDispatchBackgroundService(
                 {
                     var scope = scopeFactory.CreateAsyncScope();
                     await using var scopeHandle = scope.ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(magpieEvent.NodeId) && magpieEvent.NodeId != hostEnvironment.NodeId)
+                    {
+                        if (hostEnvironment.IsClustered)
+                        {
+                            await InvokeForeignExtensionLifecycleAsync(
+                                magpieEvent,
+                                scope.ServiceProvider,
+                                stoppingToken).ConfigureAwait(false);
+                        }
+
+                        continue;
+                    }
+
                     var eventTriggerRepository = scope.ServiceProvider.GetRequiredService<IEventTriggerRepository>();
                     var scheduleTriggerRepository =
                         scope.ServiceProvider.GetRequiredService<IScheduleTriggerRepository>();
@@ -297,13 +398,14 @@ internal sealed class EventDispatchBackgroundService(
                     var contentHierarchyItemRepository =
                         scope.ServiceProvider.GetRequiredService<IContentHierarchyItemRepository>();
                     var jobExecutionRepository = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
+                    var notificationProviders = scope.ServiceProvider.GetServices<INotificationProvider>();
                     IJobExecutionScope? parentScope = null;
                     try
                     {
                         if (magpieEvent.JobExecutionId is { } parentExecutionId)
                         {
                             parentScope = jobScopeFactory.CreateScope(parentExecutionId);
-                            parentScope.SetParentContext(parentExecutionId);
+                            parentScope.SetParentContext(parentExecutionId, magpieEvent.CorrelationId);
                         }
 
                         await DispatchAsync(
@@ -318,6 +420,7 @@ internal sealed class EventDispatchBackgroundService(
                             contentHierarchyItemRepository,
                             jobExecutionRepository,
                             jobScopeFactory,
+                            notificationProviders,
                             stoppingToken).ConfigureAwait(false);
                     }
                     finally
@@ -364,91 +467,133 @@ internal sealed class EventDispatchBackgroundService(
         IContentHierarchyItemRepository contentHierarchyItemRepository,
         IJobExecutionRepository jobExecutionRepository,
         IJobExecutionScopeFactory jobExecutionScopeFactory,
+        IEnumerable<INotificationProvider> notificationProviders,
         CancellationToken cancellationToken)
     {
         EventsTelemetry.DispatchLatency.Record(
             Math.Max(0, (_time.GetUtcNow().UtcDateTime - magpieEvent.PublishedAt).TotalMilliseconds),
             new KeyValuePair<string, object?>("name_prefix", GetNamePrefix(magpieEvent.Name)));
 
-        const int pageSize = 500;
-        var triggers = new List<EventTrigger>();
-        var pageNumber = 1;
-        while (true)
+        if (_triggers is null)
         {
-            var page = await eventTriggerRepository.QueryAsync(
+            var loadedTriggers = await eventTriggerRepository.QueryAllAsync(
                 new EventTriggerQuery { Enabled = true },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            triggers.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            pageNumber++;
+            _triggers = loadedTriggers;
         }
 
-        var rules = new List<NotificationRule>();
-        pageNumber = 1;
-        while (true)
+        if (_rules is null)
         {
-            var page = await notificationRuleRepository.QueryAsync(
+            var loadedRules = await notificationRuleRepository.QueryAllAsync(
                 new NotificationRuleQuery { Enabled = true },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            rules.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            pageNumber++;
+            _rules = loadedRules;
         }
 
-        var systemUsers = await userRepository.QueryAsync(
-            new UserQuery { Username = "system" },
-            new() { PageNumber = 1, PageSize = 1 },
-            null,
-            cancellationToken).ConfigureAwait(false);
-        var systemUserId = systemUsers.Items.SingleOrDefault()?.Id;
+        if (!_systemUserLoaded)
+        {
+            var systemUsers = await userRepository.QueryAsync(
+                new UserQuery { Username = "system" },
+                new() { PageNumber = 1, PageSize = 1 },
+                null,
+                cancellationToken).ConfigureAwait(false);
+            _systemUserId = systemUsers.Items.SingleOrDefault()?.Id;
+            _systemUserLoaded = true;
+        }
+
+        var systemUserId = _systemUserId;
+        var rules = _rules;
+        var triggers = new List<EventTrigger>(_triggers);
         var authoritativeMetadataRefreshTarget = await ResolveAuthoritativeMetadataRefreshTargetAsync(
             magpieEvent,
             triggers,
             jobManager,
-            cancellationToken)
-            .ConfigureAwait(false);
+            cancellationToken).ConfigureAwait(false);
+        triggers.RemoveAll(trigger =>
+            ShouldSuppressMetadataRefreshEventTrigger(trigger, authoritativeMetadataRefreshTarget));
 
-        var requests = await CollectFailedDownloadRetryRequestsAsync(
+        var correlationId = magpieEvent.CorrelationId;
+        var triggerFailures = new List<(EventTrigger Trigger, string Reason)>();
+        var requests = CollectEventTriggerRequests(
             magpieEvent,
+            triggers,
+            correlationId,
+            systemUserId,
+            jobManager.GetSpecs(),
+            triggerFailures);
+        var triggerOutcomes = triggerFailures
+            .Select(failure => (failure.Trigger, Status: JobExecutionStatus.Failed, failure.Reason))
+            .ToList();
+
+        if (magpieEvent.Name == MagpieEvents.Names.ContentFulfillmentChanged ||
+            requests.Exists(request => request.JobType == MagpieJobs.Types.ReleaseSearchItem))
+        {
+            var releaseSearchTarget = await ResolveAutomaticReleaseSearchTargetAsync(
+                magpieEvent,
+                contentHierarchyItemRepository,
+                cancellationToken).ConfigureAwait(false);
+            if (releaseSearchTarget is { NeedsSearch: false } fulfilledTarget)
+            {
+                if (magpieEvent.Name == MagpieEvents.Names.ContentFulfillmentChanged)
+                {
+                    await CancelAutomaticReleaseSearchesAsync(
+                        fulfilledTarget.Id,
+                        jobManager,
+                        jobExecutionRepository,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else if (magpieEvent.Name == MagpieEvents.Names.MetadataRefreshed)
+                {
+                    var droppedTriggerIds = requests
+                        .Where(request => IsUnforcedReleaseSearchFor(request, fulfilledTarget.Id))
+                        .Select(request => request.EventTriggerId)
+                        .ToList();
+                    if (droppedTriggerIds.Count > 0)
+                    {
+                        requests.RemoveAll(
+                            request => IsUnforcedReleaseSearchFor(request, fulfilledTarget.Id));
+                        logger.LogInformation(
+                            "The event dispatch service dropped {DroppedCount} automatic release searches for " +
+                            "content hierarchy item {ContentHierarchyItemId} because the item needs no release",
+                            droppedTriggerIds.Count,
+                            fulfilledTarget.Id);
+                        triggerOutcomes.AddRange(triggers
+                            .Where(trigger => droppedTriggerIds.Contains(trigger.Id))
+                            .Select(trigger => (
+                                Trigger: trigger,
+                                Status: JobExecutionStatus.Cancelled,
+                                Reason: SuppressedReleaseSearchReason)));
+                    }
+                }
+            }
+        }
+
+        requests.InsertRange(0, await CollectFailedDownloadRetryRequestsAsync(
+            magpieEvent,
+            correlationId,
             scheduleTriggerRepository,
             downloadScopeRepository,
             contentRepository,
             contentHierarchyItemRepository,
             systemUserId,
-            cancellationToken)
-            .ConfigureAwait(false);
-        var triggerFailures = new List<(EventTrigger Trigger, string Reason)>();
-        requests.AddRange(CollectEventTriggerRequests(
+            cancellationToken).ConfigureAwait(false));
+        requests.AddRange(CollectNotificationRequests(
             magpieEvent,
-            triggers,
-            systemUserId,
-            authoritativeMetadataRefreshTarget,
-            jobManager.GetSpecs(),
-            triggerFailures));
-        requests.AddRange(CollectNotificationRequests(magpieEvent, rules));
+            correlationId,
+            rules,
+            notificationProviders));
 
-        foreach (var (trigger, reason) in triggerFailures)
+        foreach (var (trigger, status, reason) in triggerOutcomes)
         {
             try
             {
-                await RecordEventTriggerFailureAsync(
+                await RecordEventTriggerOutcomeAsync(
                     trigger,
                     magpieEvent,
                     systemUserId,
+                    status,
                     reason,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -460,7 +605,7 @@ internal sealed class EventDispatchBackgroundService(
             {
                 logger.LogError(
                     ex,
-                    "The event dispatch service failed to record the failure of event trigger {TriggerId}",
+                    "The event dispatch service failed to record the outcome of event trigger {TriggerId}",
                     trigger.Id);
             }
         }
@@ -491,16 +636,17 @@ internal sealed class EventDispatchBackgroundService(
             }
         }
 
-        async Task RecordEventTriggerFailureAsync(
+        async Task RecordEventTriggerOutcomeAsync(
             EventTrigger trigger,
-            MagpieEvent failedEvent,
+            MagpieEvent triggeringEvent,
             Guid? userId,
+            JobExecutionStatus status,
             string reason,
             CancellationToken token)
         {
             var executionId = Guid.NewGuid();
-            var failedAt = _time.GetUtcNow().UtcDateTime;
-            var failed = new JobExecution
+            var completedAt = _time.GetUtcNow().UtcDateTime;
+            var outcome = new JobExecution
             {
                 Id = executionId,
                 ExtensionId = trigger.ExtensionId,
@@ -508,25 +654,31 @@ internal sealed class EventDispatchBackgroundService(
                 JobType = trigger.JobType,
                 Scope = trigger.Scope,
                 Parameters = new Dictionary<string, string>(trigger.Parameters),
-                TriggerContext = failedEvent.ToTriggerContext(),
+                TriggerContext = triggeringEvent.ToTriggerContext(),
                 ExecutionMode = JobExecutionMode.Queue,
-                Status = JobExecutionStatus.Failed,
+                Status = status,
                 StatusMessage = reason,
-                CompletedAt = failedAt,
-                CorrelationId = Guid.NewGuid(),
+                CompletedAt = completedAt,
+                CorrelationId = correlationId ?? Guid.NewGuid(),
                 ParentExecutionId = jobExecutionScopeFactory.CurrentExecutionId,
-                DedupKey = failedEvent.Id == Guid.Empty
+                DedupKey = triggeringEvent.Id == Guid.Empty
                     ? null
-                    : $"event-trigger:{trigger.Id:N}:{failedEvent.Id:N}",
+                    : $"event-trigger:{trigger.Id:N}:{triggeringEvent.Id:N}",
             };
 
-            var created = await jobExecutionRepository.CreateAsync(failed, userId, token).ConfigureAwait(false);
+            var created = await jobExecutionRepository.CreateAsync(outcome, userId, token).ConfigureAwait(false);
             if (created.Id != executionId)
             {
                 logger.LogDebug(
-                    "The event dispatch service skipped duplicate failure for event trigger {TriggerId} and event {EventId}",
+                    "The event dispatch service skipped duplicate outcome for event trigger {TriggerId} " +
+                    "and event {EventId}",
                     trigger.Id,
-                    failedEvent.Id);
+                    triggeringEvent.Id);
+                return;
+            }
+
+            if (status != JobExecutionStatus.Failed)
+            {
                 return;
             }
 
@@ -537,8 +689,137 @@ internal sealed class EventDispatchBackgroundService(
         }
     }
 
+    private async Task<(Guid Id, bool NeedsSearch)?> ResolveAutomaticReleaseSearchTargetAsync(
+        MagpieEvent magpieEvent,
+        IContentHierarchyItemRepository contentHierarchyItemRepository,
+        CancellationToken cancellationToken)
+    {
+        if (magpieEvent.Name is not (MagpieEvents.Names.MetadataRefreshed or
+                MagpieEvents.Names.ContentFulfillmentChanged) ||
+            !magpieEvent.Context.TryGetValue(MagpieEvents.Keys.ContentHierarchyItemId, out var rawId) ||
+            !Guid.TryParse(rawId, out var contentHierarchyItemId))
+        {
+            return null;
+        }
+
+        var item = await contentHierarchyItemRepository
+            .GetByIdAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (item is null)
+        {
+            return null;
+        }
+
+        if (item.ContentItem?.Fulfillment is not (FulfillmentStatus.Fulfilled or
+                FulfillmentStatus.FulfilledExternally))
+        {
+            return (item.Id, true);
+        }
+
+        var leafIds = await contentHierarchyItemRepository.QueryIdsAsync(
+            new ContentHierarchyItemCriteria { Ids = [contentHierarchyItemId], LeafOnly = true },
+            new PagingParameter { PageNumber = 1, PageSize = 1 },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+        if (leafIds.Count == 1)
+        {
+            return (item.Id, false);
+        }
+
+        var acquisitionCandidates = await contentHierarchyItemRepository.QueryIdsAsync(
+            new ContentHierarchyItemCriteria
+            {
+                AncestorId = contentHierarchyItemId,
+                LeafOnly = true,
+                EffectiveMonitoring = true,
+                Fulfillment = new()
+                {
+                    And = [new()
+                    {
+                        Operator = CriteriaValueOperator.In,
+                        Values = [FulfillmentStatus.Missing, FulfillmentStatus.Upgradable],
+                    }],
+                },
+            },
+            new PagingParameter { PageNumber = 1, PageSize = 1 },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+        return (item.Id, acquisitionCandidates.Count > 0);
+    }
+
+    private async Task CancelAutomaticReleaseSearchesAsync(
+        Guid contentHierarchyItemId,
+        IJobManager jobManager,
+        IJobExecutionRepository jobExecutionRepository,
+        CancellationToken cancellationToken)
+    {
+        var executions = await jobExecutionRepository.QueryAllAsync(
+            new JobExecutionQuery
+            {
+                JobType = MagpieJobs.Types.ReleaseSearchItem,
+                Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
+                ParameterValueReferences = [contentHierarchyItemId.ToString("D", CultureInfo.InvariantCulture)],
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var executionIds = executions
+            .Where(execution =>
+                execution.ExecutionMode == JobExecutionMode.Queue &&
+                (execution.EventTriggerId is not null ||
+                    execution.ScheduleTriggerId is not null ||
+                    execution.ParentExecutionId is not null) &&
+                !IsForcedReleaseSearch(execution.ExecutionMode, execution.Parameters) &&
+                execution.Parameters.TryGetValue(
+                    MagpieJobs.Parameters.ContentHierarchyItemId,
+                    out var rawId) &&
+                Guid.TryParse(rawId, out var targetId) &&
+                targetId == contentHierarchyItemId)
+            .Select(execution => execution.Id)
+            .ToList();
+
+        foreach (var executionId in executionIds)
+        {
+            try
+            {
+                await jobManager.RequestCancellationAsync(executionId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "The event dispatch service failed to cancel release search execution {ExecutionId}",
+                    executionId);
+            }
+        }
+    }
+
+    private bool IsUnforcedReleaseSearchFor(JobEnqueueRequest request, Guid contentHierarchyItemId)
+    {
+        return request.JobType == MagpieJobs.Types.ReleaseSearchItem &&
+            !IsForcedReleaseSearch(request.Mode, request.Parameters) &&
+            request.Parameters is not null &&
+            request.Parameters.TryGetValue(MagpieJobs.Parameters.ContentHierarchyItemId, out var rawId) &&
+            Guid.TryParse(rawId, out var targetId) &&
+            targetId == contentHierarchyItemId;
+    }
+
+    private bool IsForcedReleaseSearch(
+        JobExecutionMode executionMode,
+        IReadOnlyDictionary<string, string>? parameters)
+    {
+        return executionMode == JobExecutionMode.Immediate ||
+            (parameters is not null &&
+                parameters.TryGetValue(MagpieJobs.Parameters.Force, out var rawForce) &&
+                bool.TryParse(rawForce, out var force) &&
+                force);
+    }
+
     private async Task<List<JobEnqueueRequest>> CollectFailedDownloadRetryRequestsAsync(
         MagpieEvent magpieEvent,
+        Guid? correlationId,
         IScheduleTriggerRepository scheduleTriggerRepository,
         IDownloadScopeRepository downloadScopeRepository,
         IContentRepository contentRepository,
@@ -553,25 +834,10 @@ internal sealed class EventDispatchBackgroundService(
 
         try
         {
-            const int pageSize = 500;
-            var hierarchyItemIds = new HashSet<Guid>();
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await downloadScopeRepository.QueryAsync(
-                    new DownloadScopeQuery { DownloadId = downloadId },
-                    new() { PageNumber = pageNumber, PageSize = pageSize },
-                    null,
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                hierarchyItemIds.UnionWith(pageItems.Select(scope => scope.ContentHierarchyItemId));
-                if (pageItems.Count < pageSize)
-                {
-                    break;
-                }
-
-                pageNumber++;
-            }
+            var scopes = await downloadScopeRepository.QueryAllAsync(
+                new DownloadScopeQuery { DownloadId = downloadId },
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            var hierarchyItemIds = scopes.Select(scope => scope.ContentHierarchyItemId).ToHashSet();
 
             if (hierarchyItemIds.Count == 0)
             {
@@ -590,11 +856,18 @@ internal sealed class EventDispatchBackgroundService(
                 return [];
             }
 
-            var contentResults = await contentRepository.QueryAsync(
-                new() { ContentHierarchyItemIds = leafHierarchyItemIds },
-                new() { PageNumber = 1, PageSize = Math.Max(1, leafHierarchyItemIds.Count) },
-                null,
-                cancellationToken).ConfigureAwait(false);
+            const int contentBatchSize = 500;
+            var contentItems = new List<ContentItem>();
+            foreach (var batch in leafHierarchyItemIds.Distinct().Chunk(contentBatchSize))
+            {
+                var contentResults = await contentRepository.QueryAsync(
+                    new() { ContentHierarchyItemIds = batch },
+                    new() { PageNumber = 1, PageSize = batch.Length },
+                    null,
+                    cancellationToken).ConfigureAwait(false);
+                contentItems.AddRange(contentResults.Items);
+            }
+
             var retryCooldown = await ResolveFailedDownloadRetryCooldownAsync(
                 scheduleTriggerRepository,
                 cancellationToken)
@@ -602,19 +875,21 @@ internal sealed class EventDispatchBackgroundService(
             var notBeforeAt = _time.GetUtcNow().UtcDateTime.Add(retryCooldown);
             return
             [
-                .. contentResults.Items
+                .. contentItems
                     .Where(contentItem =>
                         contentItem.Fulfillment is FulfillmentStatus.Missing or FulfillmentStatus.Upgradable)
                     .Select(contentItem => new JobEnqueueRequest
                     {
-                        JobType = ReleaseAutoGrabItemJob.Spec.JobType,
+                        JobType = MagpieJobs.Types.ReleaseAutoGrabItem,
                         Parameters = new Dictionary<string, string>
                         {
                             [MagpieJobs.Parameters.ContentItemId] = contentItem.Id.ToString()
                         },
                         Mode = JobExecutionMode.Queue,
+                        TriggerContext = magpieEvent.ToTriggerContext(),
                         UserId = systemUserId,
                         NotBeforeAt = notBeforeAt,
+                        CorrelationId = correlationId,
                     })
             ];
         }
@@ -645,7 +920,7 @@ internal sealed class EventDispatchBackgroundService(
             var page = await scheduleTriggerRepository.QueryAsync(
                 new ScheduleTriggerQuery
                 {
-                    JobType = ReleaseAutoGrabScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ReleaseAutoGrabScan,
                     Enabled = true,
                 },
                 new() { PageNumber = pageNumber, PageSize = pageSize },
@@ -677,8 +952,8 @@ internal sealed class EventDispatchBackgroundService(
             }
 
             logger.LogWarning(
-                "Retry cooldown {Raw} for the auto-grab scan is not a non-negative integer. " +
-                "The event dispatch service will use the default value {Default}",
+                "Retry cooldown {Raw} for the auto-grab scan is not a non-negative integer; using " +
+                "default {Default}",
                 raw,
                 MagpieJobs.ParameterValues.DefaultRetryCooldownHours);
         }
@@ -686,7 +961,7 @@ internal sealed class EventDispatchBackgroundService(
         return TimeSpan.FromHours(MagpieJobs.ParameterValues.DefaultRetryCooldownHours);
     }
 
-    internal async Task<Guid?> ResolveAuthoritativeMetadataRefreshTargetAsync(
+    private async Task<Guid?> ResolveAuthoritativeMetadataRefreshTargetAsync(
         MagpieEvent magpieEvent,
         IEnumerable<EventTrigger> triggers,
         IJobManager jobManager,
@@ -695,7 +970,7 @@ internal sealed class EventDispatchBackgroundService(
         if (!TryGetCreatedHierarchyItemId(magpieEvent, out var contentHierarchyItemId) ||
             magpieEvent.JobExecutionId is not { } parentExecutionId ||
             !triggers.Any(trigger =>
-                trigger.JobType == ContentMetadataRefreshItemJob.Spec.JobType &&
+                trigger.JobType == MagpieJobs.Types.ContentMetadataRefreshItem &&
                 TargetsContentHierarchyItem(trigger, contentHierarchyItemId)))
         {
             return null;
@@ -706,7 +981,7 @@ internal sealed class EventDispatchBackgroundService(
             var parent = await jobManager.GetExecutionAsync(parentExecutionId, cancellationToken)
                 .ConfigureAwait(false);
             if (parent is null ||
-                parent.JobType != ContentMetadataRefreshItemJob.Spec.JobType ||
+                parent.JobType != MagpieJobs.Types.ContentMetadataRefreshItem ||
                 parent.CorrelationId is null)
             {
                 return null;
@@ -719,7 +994,7 @@ internal sealed class EventDispatchBackgroundService(
                 var page = await jobManager.QueryExecutionsAsync(
                     new JobExecutionQuery
                     {
-                        JobType = ContentMetadataRefreshItemJob.Spec.JobType,
+                        JobType = MagpieJobs.Types.ContentMetadataRefreshItem,
                         CorrelationId = parent.CorrelationId,
                         ParameterValueReferences =
                             [
@@ -764,8 +1039,8 @@ internal sealed class EventDispatchBackgroundService(
     private List<JobEnqueueRequest> CollectEventTriggerRequests(
         MagpieEvent magpieEvent,
         IEnumerable<EventTrigger> triggers,
+        Guid? correlationId,
         Guid? systemUserId,
-        Guid? authoritativeMetadataRefreshTarget,
         IReadOnlyList<JobSpec> specs,
         ICollection<(EventTrigger Trigger, string Reason)> failures)
     {
@@ -779,14 +1054,8 @@ internal sealed class EventDispatchBackgroundService(
                     continue;
                 }
 
-                if (ShouldSuppressMetadataRefreshEventTrigger(trigger, authoritativeMetadataRefreshTarget))
-                {
-                    continue;
-                }
-
                 var parameters = ResolveEventParameters(trigger.Parameters, magpieEvent.Context);
 
-                // Use a linear lookup because duplicate plugin job types are possible.
                 var spec = specs.FirstOrDefault(candidate => candidate.JobType == trigger.JobType);
                 if (spec is not null)
                 {
@@ -815,6 +1084,7 @@ internal sealed class EventDispatchBackgroundService(
                     Mode = JobExecutionMode.Queue,
                     UserId = systemUserId,
                     NotBeforeAt = notBeforeAt,
+                    CorrelationId = correlationId,
                 });
             }
             catch (MagpieException ex)
@@ -841,7 +1111,7 @@ internal sealed class EventDispatchBackgroundService(
         return requests;
     }
 
-    internal static string ResolveEventParameter(
+    private string ResolveEventParameter(
         string expression,
         IReadOnlyDictionary<string, string> eventContext)
     {
@@ -852,7 +1122,7 @@ internal sealed class EventDispatchBackgroundService(
                 : throw new MagpieException($"Event context key {key} is missing."));
     }
 
-    internal static Dictionary<string, string> ResolveEventParameters(
+    private Dictionary<string, string> ResolveEventParameters(
         Dictionary<string, string> parameters,
         IReadOnlyDictionary<string, string> eventContext)
     {
@@ -865,7 +1135,7 @@ internal sealed class EventDispatchBackgroundService(
         return result;
     }
 
-    internal static void ValidateResolvedParameterTypes(
+    private void ValidateResolvedParameterTypes(
         JobSpec spec,
         IReadOnlyDictionary<string, string> parameters)
     {
@@ -900,7 +1170,7 @@ internal sealed class EventDispatchBackgroundService(
         }
     }
 
-    private static string TransformEventParameter(
+    private string TransformEventParameter(
         string expression,
         Func<string, string> resolve)
     {
@@ -953,9 +1223,19 @@ internal sealed class EventDispatchBackgroundService(
 
     private List<JobEnqueueRequest> CollectNotificationRequests(
         MagpieEvent magpieEvent,
-        IEnumerable<NotificationRule> rules)
+        Guid? correlationId,
+        IEnumerable<NotificationRule> rules,
+        IEnumerable<INotificationProvider> notificationProviders)
     {
         var requests = new List<JobEnqueueRequest>();
+        if (IsNotificationDeliveryFailure(magpieEvent))
+        {
+            return requests;
+        }
+
+        var notificationProviderTypes = new HashSet<string>(notificationProviders
+            .Select(provider => provider.ProviderType)
+            .Where(type => !string.IsNullOrWhiteSpace(type)));
         foreach (var rule in rules)
         {
             bool matched;
@@ -967,8 +1247,8 @@ internal sealed class EventDispatchBackgroundService(
             {
                 logger.LogWarning(
                     ex,
-                    "The filter of notification rule {RuleName} ({RuleId}) failed for event {EventName}. " +
-                    "The event dispatch service skipped the rule",
+                    "The event dispatch service skipped notification rule {RuleName} ({RuleId}) because " +
+                    "its filter failed for event {EventName}",
                     rule.Name,
                     rule.Id,
                     magpieEvent.Name);
@@ -980,11 +1260,11 @@ internal sealed class EventDispatchBackgroundService(
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(rule.ProviderType) || !_notificationProviderTypes.Contains(rule.ProviderType))
+            if (string.IsNullOrWhiteSpace(rule.ProviderType) || !notificationProviderTypes.Contains(rule.ProviderType))
             {
                 logger.LogWarning(
-                    "Notification rule {RuleName} ({RuleId}) references unknown provider type " +
-                    "{ProviderType}. The event dispatch service skipped the rule",
+                    "The event dispatch service skipped notification rule {RuleName} ({RuleId}) with " +
+                    "unknown provider type {ProviderType}",
                     rule.Name,
                     rule.Id,
                     rule.ProviderType);
@@ -1006,9 +1286,11 @@ internal sealed class EventDispatchBackgroundService(
 
             requests.Add(new JobEnqueueRequest
             {
-                JobType = SendNotificationJob.Spec.JobType,
+                JobType = MagpieJobs.Types.SendNotification,
                 Parameters = parameters,
+                TriggerContext = magpieEvent.ToTriggerContext(),
                 Mode = JobExecutionMode.Queue,
+                CorrelationId = correlationId,
             });
         }
 

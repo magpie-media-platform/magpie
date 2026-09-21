@@ -5,12 +5,14 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
@@ -18,6 +20,7 @@ using Magpie.Sdk.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -26,7 +29,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class IndexerFeedRepositoryTests
+public sealed class IndexerFeedRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IIndexerFeedRepository _subject = null!;
@@ -62,7 +65,9 @@ public class IndexerFeedRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         _transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _eventBus = new Mock<IEventBus>();
@@ -81,7 +86,8 @@ public class IndexerFeedRepositoryTests
             _transactionManager,
             _eventBus.Object,
             NullLoggerFactory.Instance.CreateLogger<IndexerFeedRepository>(),
-            protector.Object);
+            protector.Object,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -220,7 +226,7 @@ public class IndexerFeedRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_WithSettings_PersistsSettings()
+    public async Task CreateAsync_PersistsSettings_WhenSettingsIsProvided()
     {
         // Arrange
         var indexerFeed = new IndexerFeed
@@ -381,13 +387,18 @@ public class IndexerFeedRepositoryTests
     }
 
     [Test]
-    public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
+    public async Task DeleteAsync_ReturnsFalseAndWritesNoAuditRecord_WhenNotExists()
     {
         // Act
         var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result, Is.False);
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            Assert.That(auditRecords, Is.Empty);
+        }
     }
 
     [Test]
@@ -416,17 +427,6 @@ public class IndexerFeedRepositoryTests
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("IndexerFeed"));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
         }
-    }
-
-    [Test]
-    public async Task DeleteAsync_DoesNotCreateAuditRecord_WhenNotExists()
-    {
-        // Act
-        await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
-        Assert.That(auditRecords, Is.Empty);
     }
 
     [Test]
@@ -494,6 +494,47 @@ public class IndexerFeedRepositoryTests
                     It.Is<MagpieEvent>(published => published.Name == "indexerFeed.deleted"),
                     It.IsAny<CancellationToken>()),
                 Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_KeepsStoredSettings_WhenThePatchAddsOneKey()
+    {
+        // Arrange
+        var indexerFeed = new IndexerFeed
+        {
+            ProviderType = "cardigann",
+            Name = "Cardigann",
+            Description = "A feed",
+            Enabled = true,
+            Settings = new() { ["url"] = "https://feeds.example/definitions", ["apiKey"] = "stored-secret" },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.IndexerFeeds.Add(indexerFeed);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var patched = await _subject
+            .PatchAsync(
+                new IndexerFeedPatch
+                {
+                    Id = indexerFeed.Id,
+                    Settings = new() { Add = new() { ["url"] = "https://feeds.example/other" } },
+                    Description = new() { Value = null }
+                },
+                _userId)
+            .ConfigureAwait(false);
+
+        // Assert
+        var updated = await _subject.GetByIdAsync(indexerFeed.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(patched, Is.True);
+            Assert.That(updated!.Settings["url"], Is.EqualTo("https://feeds.example/other"));
+            Assert.That(updated.Settings["apiKey"], Is.EqualTo("stored-secret"));
+            Assert.That(updated.Description, Is.Null);
+            Assert.That(updated.Name, Is.EqualTo("Cardigann"));
         }
     }
 }

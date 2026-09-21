@@ -1,0 +1,51 @@
+@layer components {
+    .status-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-sm) var(--space-lg);
+        transition: background-color var(--duration-fast) var(--easing-default);
+        text-decoration: none;
+        color: var(--text-secondary);
+    }
+
+    .status-row[data-clickable] {
+        cursor: pointer;
+
+        &:hover {
+            background-color: var(--bg-tertiary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: calc(-1 * var(--focus-ring-offset));
+        }
+    }
+
+    .status-row__indicator {
+        width: 8px;
+        height: 8px;
+        border-radius: var(--radius-full);
+        flex-shrink: 0;
+        background-color: currentcolor;
+    }
+
+    .status-row__label {
+        flex: 1;
+        font-size: var(--text-sm);
+        color: inherit;
+    }
+
+    .status-row__count {
+        font-size: var(--text-sm);
+        font-weight: var(--weight-semibold);
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+        min-width: 2ch;
+        text-align: right;
+    }
+
+    .status-row--pulse .status-row__indicator {
+        animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+}

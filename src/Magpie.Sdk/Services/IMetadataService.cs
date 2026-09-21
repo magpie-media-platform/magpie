@@ -34,11 +34,11 @@ public interface IMetadataService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lists the per-provider metadata contributions of a content hierarchy item, or <see langword="null"/>
-    /// when absent.
+    /// Lists the per-provider metadata contributions of a content hierarchy item.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item to read</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The contributions, or <see langword="null"/> when the item is absent</returns>
     Task<IReadOnlyList<MetadataContribution>?> GetContentContributionsAsync(
         Guid contentHierarchyItemId,
         CancellationToken cancellationToken = default);

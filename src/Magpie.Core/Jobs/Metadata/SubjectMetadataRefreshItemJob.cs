@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
@@ -24,11 +25,17 @@ internal sealed class SubjectMetadataRefreshItemJob(
     ITransactionManager transactionManager,
     TimeProvider timeProvider,
     ILogger<SubjectMetadataRefreshItemJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
+    private sealed record ProviderFetchResult(MetadataContribution? Contribution, Exception? Exception);
+
+    private sealed record ContributionReplacement(
+        IReadOnlyList<MetadataContribution> ExistingProviderContributions,
+        MetadataContribution Contribution);
+
     public static readonly JobSpec Spec = new()
     {
-        JobType = "SubjectMetadataRefreshItem",
+        JobType = MagpieJobs.Types.SubjectMetadataRefreshItem,
         DisplayName = "Subject metadata refresh item",
         Description = "Refreshes metadata for a subject.",
         Category = "Content",
@@ -40,11 +47,9 @@ internal sealed class SubjectMetadataRefreshItemJob(
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         RequesterTriggerModes = [JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
-        LockPartitionFields = [SubjectIdParameter],
-        Parameters = [new(SubjectIdParameter, "The subject id to refresh.", DataType.String, true, null)],
+        LockPartitionFields = [MagpieJobs.Parameters.SubjectId],
+        Parameters = [new(MagpieJobs.Parameters.SubjectId, "The subject id to refresh.", DataType.String, true, null)],
     };
-
-    private const string SubjectIdParameter = "subjectId";
 
     private const string UserProviderType = "user";
 
@@ -172,7 +177,8 @@ internal sealed class SubjectMetadataRefreshItemJob(
 
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
-        if (!context.Parameters.TryGetValue(SubjectIdParameter, out var rawId) || string.IsNullOrWhiteSpace(rawId))
+        if (!context.Parameters.TryGetValue(MagpieJobs.Parameters.SubjectId, out var rawId) ||
+            string.IsNullOrWhiteSpace(rawId))
         {
             throw new ArgumentException("A subject ID is required.");
         }
@@ -194,10 +200,10 @@ internal sealed class SubjectMetadataRefreshItemJob(
         Guid subjectId,
         Guid? userId,
         Guid? correlationId,
-        IProgressReporter? progress,
+        IProgressReporter progress,
         CancellationToken cancellationToken = default)
     {
-        progress?.Report(0, "The refresh will load the subject.");
+        progress.Report(0, "The refresh will load the subject.");
 
         var subject = await subjectRepository.GetByIdAsync(subjectId, cancellationToken).ConfigureAwait(false);
         if (subject is null)
@@ -224,7 +230,7 @@ internal sealed class SubjectMetadataRefreshItemJob(
                 "No subject metadata provider supports kind {Kind}, so the refresh skipped subject {SubjectId}",
                 subject.Kind,
                 subject.Id);
-            progress?.Report(1, "The refresh stopped because the subject kind has no provider.");
+            progress.Report(1, "The refresh stopped because the subject kind has no provider.");
             return;
         }
 
@@ -233,7 +239,7 @@ internal sealed class SubjectMetadataRefreshItemJob(
             .ThenBy(c => c.ProviderType, StringComparer.Ordinal)
             .ToList();
 
-        progress?.Report(0, "The refresh will get metadata from the providers.");
+        progress.Report(0, "The refresh will get metadata from the providers.");
 
         var providerTasks = new List<Task<ProviderFetchResult>>(providers.Length);
         foreach (var provider in providers)
@@ -249,15 +255,15 @@ internal sealed class SubjectMetadataRefreshItemJob(
         foreach (var fetch in fetchResults)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report(providers.Length == 0 ? 0.5 : Math.Min(0.95, completed / (double)providers.Length), null);
+            progress.Report(providers.Length == 0 ? 0.5 : Math.Min(0.95, completed / (double)providers.Length), null);
             completed++;
 
             if (fetch.Exception is not null)
             {
                 logger.LogWarning(
                     fetch.Exception,
-                    "A subject metadata provider failed for subject {SubjectId}." +
-                    " The refresh continued with the other providers",
+                    "A subject metadata provider failed for subject {SubjectId}, so the refresh continued" +
+                    " with the other providers",
                     subject.Id);
                 continue;
             }
@@ -271,8 +277,8 @@ internal sealed class SubjectMetadataRefreshItemJob(
             if (string.IsNullOrWhiteSpace(contribution.ProviderType))
             {
                 logger.LogWarning(
-                    "A subject metadata contribution for subject {SubjectId} has no ProviderType." +
-                    " The upsert key is not available, so the refresh skipped the contribution",
+                    "A subject metadata contribution for subject {SubjectId} has no ProviderType, so the" +
+                    " refresh skipped the contribution",
                     subject.Id);
                 continue;
             }
@@ -299,7 +305,7 @@ internal sealed class SubjectMetadataRefreshItemJob(
         await ApplyRefreshWritesAsync(container.Id, replacements, subject, userId, correlationId, cancellationToken)
             .ConfigureAwait(false);
 
-        progress?.Report(1, "The subject metadata refresh completed.");
+        progress.Report(1, "The subject metadata refresh completed.");
     }
 
     private async Task ApplyRefreshWritesAsync(
@@ -359,23 +365,30 @@ internal sealed class SubjectMetadataRefreshItemJob(
                     }
                 }
 
-                await MarkRefreshedAsync(subject, userId, correlationId, cancellationToken).ConfigureAwait(false);
+                await MarkRefreshedAsync(subject, cancellationToken).ConfigureAwait(false);
             },
             cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task MarkRefreshedAsync(
-        Subject subject,
-        Guid? userId,
-        Guid? correlationId,
-        CancellationToken cancellationToken)
+    private async Task MarkRefreshedAsync(Subject subject, CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow().UtcDateTime;
 
-        subject.DateLastRefreshed = now;
-        await subjectRepository.UpdateAsync(subject, userId, cancellationToken).ConfigureAwait(false);
+        await subjectRepository
+            .PatchAsync(
+                new SubjectRowPatch { Id = subject.Id, DateLastRefreshed = new() { Value = now } },
+                null,
+                cancellationToken)
+            .ConfigureAwait(false);
         await metadataContainerRepository
-            .UpdateLastRefreshedAsync(subject.MetadataContainerId, now, cancellationToken)
+            .PatchAsync(
+                new MetadataContainerPatch
+                {
+                    ContainerId = subject.MetadataContainerId,
+                    DateLastRefreshed = new() { Value = now }
+                },
+                null,
+                cancellationToken)
             .ConfigureAwait(false);
 
         logger.LogDebug(
@@ -383,10 +396,4 @@ internal sealed class SubjectMetadataRefreshItemJob(
             subject.Id,
             subject.Kind);
     }
-
-    private sealed record ProviderFetchResult(MetadataContribution? Contribution, Exception? Exception);
-
-    private sealed record ContributionReplacement(
-        IReadOnlyList<MetadataContribution> ExistingProviderContributions,
-        MetadataContribution Contribution);
 }

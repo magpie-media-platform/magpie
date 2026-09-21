@@ -30,6 +30,7 @@ import {
     type ExtensionItem,
 } from '@/hooks/useExtensionManagement';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { getStatusVariant, getStatusLabel } from './extensionStatus';
 import { ExtensionSettingsSection } from './ExtensionSettingsSection';
@@ -49,9 +50,9 @@ export function ExtensionDetailPage() {
         await refetch();
     }, [refetch]);
 
-    const runToggle = useCallback(
-        async (enabled: boolean): Promise<boolean> => {
-            if (!extension) return false;
+    const handleToggleEnabled = useCallback(
+        async (enabled: boolean) => {
+            if (!extension) return;
             setIsToggling(true);
             try {
                 await toggleEnabled(extension.id, enabled);
@@ -60,27 +61,18 @@ export function ExtensionDetailPage() {
                     description: `${extension.name} will be ${enabled ? 'enabled' : 'disabled'} after the next restart.`,
                     variant: 'success',
                 });
-                return true;
             } catch (err) {
-                const message = err instanceof Error ? err.message : 'Failed to update the extension.';
+                const message = getErrorMessage(err, 'Failed to update the extension.');
                 toast({
                     title: `Failed to ${enabled ? 'enable' : 'disable'} extension`,
                     description: message,
                     variant: 'error',
                 });
-                return false;
             } finally {
                 setIsToggling(false);
             }
         },
         [extension, toggleEnabled, toast],
-    );
-
-    const handleToggleEnabled = useCallback(
-        async (enabled: boolean) => {
-            await runToggle(enabled);
-        },
-        [runToggle],
     );
 
     const handleRetryEnable = useCallback(async () => {
@@ -93,7 +85,7 @@ export function ExtensionDetailPage() {
                 variant: 'success',
             });
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to enable the extension.';
+            const message = getErrorMessage(err, 'Failed to enable the extension.');
             toast({ title: 'Failed to Enable', description: message, variant: 'error' });
         }
     }, [extension, toggleEnabled, toast]);
@@ -284,7 +276,7 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
                     variant: 'success',
                 });
             } catch (err) {
-                const message = err instanceof Error ? err.message : 'Failed to update automatic upgrades.';
+                const message = getErrorMessage(err, 'Failed to update automatic upgrades.');
                 toast({ title: 'Failed to Update', description: message, variant: 'error' });
             }
         },
@@ -302,7 +294,7 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
                 variant: 'success',
             });
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to update the extension.';
+            const message = getErrorMessage(err, 'Failed to update the extension.');
             toast({ title: 'Update Failed', description: message, variant: 'error' });
         }
     }, [actions, extension.id, extension.name, toast]);
@@ -318,7 +310,7 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
             });
             void navigate('/admin/extensions');
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to uninstall the extension.';
+            const message = getErrorMessage(err, 'Failed to uninstall the extension.');
             toast({ title: 'Uninstall Failed', description: message, variant: 'error' });
         }
     }, [actions, extension.id, extension.name, navigate, toast]);
@@ -446,11 +438,7 @@ interface VersionHistorySectionProps {
 }
 
 function VersionHistorySection({ extension }: VersionHistorySectionProps) {
-    const { versions, isLoading } = useExtensionVersions(extension.name);
-
-    if (isLoading) {
-        return null;
-    }
+    const { versions, isLoading } = useExtensionVersions(extension.packageId);
 
     return (
         <section className="extension-detail__section" data-section="version-history">
@@ -487,8 +475,14 @@ function VersionHistorySection({ extension }: VersionHistorySectionProps) {
                     </div>
                 ))}
             </div>
-            {versions.length === 0 && (
-                <p className="extension-detail__versions-empty">This is the only installed version.</p>
+            {isLoading ? (
+                <p className="extension-detail__section-note" role="status">
+                    Loading version history...
+                </p>
+            ) : (
+                versions.length === 0 && (
+                    <p className="extension-detail__section-note">This is the only installed version.</p>
+                )
             )}
         </section>
     );

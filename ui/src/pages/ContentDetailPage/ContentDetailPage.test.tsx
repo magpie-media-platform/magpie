@@ -1,15 +1,14 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { act, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
+import { useLibraryTypes } from '@/hooks/useLibraryTypes';
+
 import { ContentDetailPage } from './ContentDetailPage';
 import { Role } from '@/auth';
-import { createApiError } from '@/lib/errors';
+import { ApiError } from '@/lib/api';
 import { ToastProvider, ToastStateProvider, ToastList, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import type { ContentDetailItem } from '@/types/content';
@@ -260,7 +259,7 @@ vi.mock('@/hooks/useContent', () => ({
     useReorderMetadataContributions: () => ({ mutateAsync: vi.fn(), isPending: false }),
     useUpdateContent: () => ({ mutate: vi.fn(), isPending: false }),
     useContentRelationships: () => ({ data: [], isLoading: false }),
-    usePendingRefresh: () => ({ data: { state: 'None' as const }, isLoading: false }),
+    usePendingRefresh: () => ({ data: false, isLoading: false }),
     useEffectiveRootFolder: () => ({
         data: {
             rootFolderId: 'root-1',
@@ -274,10 +273,6 @@ vi.mock('@/hooks/useContent', () => ({
     }),
     useSetContentRootFolder: () => ({ mutateAsync: vi.fn(), isPending: false }),
     useApplyContentPath: () => ({ mutateAsync: vi.fn(), isPending: false }),
-    useAcquisitionStatus: () => ({
-        data: { canAutoGrab: true, blockReason: 'None' as const, blockReasonDetail: null },
-        isLoading: false,
-    }),
     useEffectiveQualityTierList: () => ({
         data: {
             qualityTierListId: 'tier-1',
@@ -303,7 +298,7 @@ vi.mock('@/hooks/useLibraryTypes', async () => {
     const actual = await vi.importActual<typeof import('@/hooks/useLibraryTypes')>('@/hooks/useLibraryTypes');
     return {
         ...actual,
-        useLibraryTypes: () => ({
+        useLibraryTypes: vi.fn(() => ({
             contentTypes: [
                 {
                     id: 'movie',
@@ -381,7 +376,7 @@ vi.mock('@/hooks/useLibraryTypes', async () => {
             isLoading: false,
             error: null,
             refetch: vi.fn(),
-        }),
+        })),
     };
 });
 
@@ -503,14 +498,6 @@ vi.mock('@/hooks/useRemoveContent', () => ({
     }),
 }));
 
-vi.mock('@/hooks/useQualityStatus', async () => {
-    const actual = await vi.importActual<typeof import('@/hooks/useQualityStatus')>('@/hooks/useQualityStatus');
-    return {
-        ...actual,
-        useQualityStatus: () => ({ data: undefined, isLoading: false }),
-    };
-});
-
 function createTestQueryClient() {
     return new QueryClient({
         defaultOptions: {
@@ -591,6 +578,7 @@ describe('ContentDetailPage', () => {
     };
 
     beforeEach(() => {
+        window.innerWidth = 800;
         vi.clearAllMocks();
         mockContentReleaseRows.current = [];
         mockLatestDownload.current = null;
@@ -620,7 +608,7 @@ describe('ContentDetailPage', () => {
                     return {
                         data,
                         isLoading: false,
-                        error: data ? null : createApiError(404, 'Not found'),
+                        error: data ? null : new ApiError(404, 'Not found'),
                         refetch: vi.fn(),
                     };
                 };
@@ -779,7 +767,7 @@ describe('ContentDetailPage', () => {
                 isLoading: mockMetadataInspectorState.isLoading,
                 error:
                     mockMetadataInspectorState.error ??
-                    (item || mockMetadataInspectorState.isLoading ? null : createApiError(404, 'Not found')),
+                    (item || mockMetadataInspectorState.isLoading ? null : new ApiError(404, 'Not found')),
                 refetch: mockMetadataInspectorRefetch,
             };
         });
@@ -800,16 +788,6 @@ describe('ContentDetailPage', () => {
                 expect(libraryLinks.length).toBeGreaterThan(0);
                 expect(libraryLinks[0]).toHaveAttribute('href', '/library');
             });
-        });
-
-        it('leaves supporting-info spacing to the shared grid instead of re-spacing the block or the tags row', () => {
-            const css = readFileSync(
-                resolve(process.cwd(), 'src/pages/ContentDetailPage/ContentDetailPage.css'),
-                'utf8',
-            );
-
-            expect(css).not.toContain('__supporting-info');
-            expect(css).not.toContain("[data-testid='content-tags-row']");
         });
     });
 
@@ -1107,7 +1085,9 @@ describe('ContentDetailPage', () => {
         });
 
         it('shows a "Search complete" toast when the immediate search finishes', async () => {
-            const mutate = vi.fn((_vars: unknown, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+            const mutate = vi.fn((_vars: unknown, opts?: { onSuccess?: (disposition: unknown) => void }) =>
+                opts?.onSuccess?.({ executionId: 'execution-1', status: 'Completed', statusMessage: null }),
+            );
             mockUseSearchContentReleases.mockReturnValue({ mutate, isPending: false });
 
             const user = userEvent.setup();
@@ -1126,8 +1106,34 @@ describe('ContentDetailPage', () => {
             expect(screen.getByRole('tab', { name: /releases/i })).toHaveAttribute('aria-selected', 'false');
         });
 
+        it('shows the queued child search count reported by the search job', async () => {
+            const mutate = vi.fn((_vars: unknown, opts?: { onSuccess?: (disposition: unknown) => void }) =>
+                opts?.onSuccess?.({
+                    executionId: 'execution-1',
+                    status: 'Completed',
+                    statusMessage: 'The search queued 18 child searches.',
+                }),
+            );
+            mockUseSearchContentReleases.mockReturnValue({ mutate, isPending: false });
+
+            const user = userEvent.setup();
+            renderWithRouter('content-1');
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /search now/i })).toBeInTheDocument();
+            });
+
+            await user.click(screen.getByRole('button', { name: /search now/i }));
+
+            await waitFor(() => {
+                expect(screen.getByText('The search queued 18 child searches.')).toBeInTheDocument();
+            });
+        });
+
         it('does not register a queued search completion handler for immediate search', async () => {
-            const mutate = vi.fn((_vars: unknown, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+            const mutate = vi.fn((_vars: unknown, opts?: { onSuccess?: (disposition: unknown) => void }) =>
+                opts?.onSuccess?.({ executionId: 'execution-1', status: 'Completed', statusMessage: null }),
+            );
             mockUseSearchContentReleases.mockReturnValue({ mutate, isPending: false });
 
             const user = userEvent.setup();
@@ -1292,7 +1298,7 @@ describe('ContentDetailPage', () => {
         it('restores Grab and shows the existing feedback after a failed submission', async () => {
             mockContentReleaseRows.current = [releaseRow({ isMatch: true })];
             mockGrabMutate.mockImplementation((_variables, options) => {
-                options.onError(new Error('request failed'));
+                options.onError(new Error('The download client timed out'));
             });
 
             const user = userEvent.setup();
@@ -1301,6 +1307,8 @@ describe('ContentDetailPage', () => {
 
             expect(screen.getAllByRole('button', { name: /^grab$/i })[0]).toBeEnabled();
             expect(await screen.findByText('Grab failed')).toBeInTheDocument();
+            expect(screen.getByText('The download client timed out')).toBeInTheDocument();
+            expect(screen.queryByText('No download client configured')).not.toBeInTheDocument();
         });
 
         it('shows the app confirm dialog for a non-match and proceeds when confirmed', async () => {
@@ -1596,7 +1604,7 @@ describe('ContentDetailPage', () => {
             mockFileBrowserLocation.current = undefined;
             mockFileBrowserLocationRefetch.mockResolvedValue({
                 data: undefined,
-                error: createApiError(503, 'Browser offline'),
+                error: new ApiError(503, 'Browser offline'),
                 isError: true,
             });
             renderWithRouter('content-files', undefined, undefined, '?tab=files');
@@ -1611,7 +1619,7 @@ describe('ContentDetailPage', () => {
             const user = userEvent.setup();
             mockFileBrowserLocationRefetch.mockResolvedValue({
                 data: mockFileBrowserLocation.current,
-                error: createApiError(503, 'Browser offline'),
+                error: new ApiError(503, 'Browser offline'),
                 isError: true,
             });
             renderWithRouter('content-files', undefined, undefined, '?tab=files');
@@ -1698,6 +1706,20 @@ describe('ContentDetailPage', () => {
             expect(screen.queryByRole('button', { name: 'Delete the-matrix.mkv' })).not.toBeInTheDocument();
         });
 
+        it('does not claim a disk outcome the 204 response cannot confirm after a file delete', async () => {
+            mockDeleteFileMutate.mockImplementation((_vars, opts) => {
+                opts?.onSuccess?.();
+            });
+            const user = userEvent.setup();
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Delete the-matrix.mkv' }));
+            const dialog = screen.getByRole('dialog');
+            await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+
+            expect(await screen.findByText('Deleted "the-matrix.mkv".')).toBeInTheDocument();
+        });
+
         it('switches to Activity tab when clicked', async () => {
             const user = userEvent.setup();
             renderWithRouter('content-1');
@@ -1756,8 +1778,8 @@ describe('ContentDetailPage', () => {
                 expect(screen.getByTestId('content-detail-page__location-search')).toHaveTextContent('?view=grid');
             });
 
-            expect(screen.queryByRole('tab', { name: /seasons/i })).not.toBeInTheDocument();
-            expect(screen.queryByRole('tab', { name: /episodes/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('tab', { name: /season/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('tab', { name: /episode/i })).not.toBeInTheDocument();
             const tabPanel = screen.getByRole('tabpanel');
             expect(tabPanel.querySelector('[data-component="related-subjects-tab"]')).toBeInTheDocument();
         });
@@ -1833,6 +1855,53 @@ describe('ContentDetailPage', () => {
     });
 
     describe('children tab visibility', () => {
+        it.each([
+            ['Season', 'Seasons'],
+            ['Category', 'Categories'],
+            ['Items', 'Items'],
+            ['  ', 'Items'],
+        ])('renders plural collection labels for %s', async (displayName, expectedLabel) => {
+            // Arrange
+            const mockLibraryTypes = vi.mocked(useLibraryTypes);
+            const libraryTypes = mockLibraryTypes();
+            const definition = libraryTypes.contentTypes[1];
+            const levels = [
+                { ...definition.levels[0], displayName: 'Collection' },
+                { ...definition.levels[1], displayName },
+                { ...definition.levels[0], slug: 'other-root', displayName: 'Other root', parentSlug: null },
+            ];
+            await vi.mocked(useLibraryTypes).withImplementation(
+                () => ({ ...libraryTypes, contentTypes: [{ ...definition, levels }] }),
+                async () => {
+                    // Act
+                    renderWithRouter('content-1');
+                    // Assert
+                    expect(await screen.findByRole('tab', { name: `${expectedLabel} (0)` })).toBeInTheDocument();
+                    const breadcrumbs = within(screen.getByRole('navigation', { name: /breadcrumb/i })).getByRole(
+                        'list',
+                    );
+                    expect(within(breadcrumbs).getByRole('link', { name: 'Collections' })).toHaveAttribute(
+                        'href',
+                        '/library/content/tv/show',
+                    );
+                },
+            );
+        });
+
+        it('discloses a truncated child list while keeping the true total', async () => {
+            // Arrange
+            mockUseContentList.mockReturnValue({
+                data: { items: [], pageNumber: 1, pageSize: 1000, totalItems: 1500 },
+                isLoading: false,
+                error: null,
+            });
+            // Act
+            renderWithRouter('content-1');
+            // Assert
+            expect(await screen.findByText(/This tab shows 0 of 1500 items/)).toBeInTheDocument();
+            expect(screen.getByRole('tab', { name: /seasons/i }).querySelector('.tab-count')).toHaveTextContent('1500');
+        });
+
         it('shows Seasons tab when content has children', async () => {
             mockUseContentList.mockReturnValue({
                 data: {
@@ -2129,8 +2198,8 @@ describe('ContentDetailPage', () => {
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /related/i })).toBeInTheDocument();
             });
-            expect(screen.queryByRole('tab', { name: /seasons/i })).not.toBeInTheDocument();
-            expect(screen.queryByRole('tab', { name: /episodes/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('tab', { name: /season/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('tab', { name: /episode/i })).not.toBeInTheDocument();
         });
 
         it('shows Episodes tab when viewing a season with children', async () => {
@@ -2155,7 +2224,7 @@ describe('ContentDetailPage', () => {
 
             renderWithRouter('content-1', 'season-1');
             await waitFor(() => {
-                expect(screen.getByRole('tab', { name: /episodes/i })).toBeInTheDocument();
+                expect(screen.getByRole('tab', { name: /episode/i })).toBeInTheDocument();
             });
         });
 
@@ -2438,7 +2507,7 @@ describe('ContentDetailPage', () => {
             renderWithRouter('content-9');
             await waitFor(() => {
                 expect(screen.getByRole('heading', { name: /Fallout/i })).toBeInTheDocument();
-                expect(screen.getByTestId('content-details-header__poster--placeholder')).toBeInTheDocument();
+                expect(document.querySelector('.content-details-header__poster--placeholder')).toBeInTheDocument();
             });
         });
     });
@@ -2477,7 +2546,7 @@ describe('ContentDetailPage', () => {
                 errorHierarchy({
                     data: undefined,
                     isLoading: false,
-                    error: createApiError(500, 'Internal Server Error'),
+                    error: new ApiError(500, 'Internal Server Error'),
                     refetch: vi.fn(),
                 }),
             );
@@ -2489,20 +2558,20 @@ describe('ContentDetailPage', () => {
             });
         });
 
-        it('shows not found for an unresolvable id served by the SPA fallback', async () => {
+        it('shows a retryable failure for a non-JSON response', async () => {
             mockUseContentHierarchy.mockReturnValue(
                 errorHierarchy({
                     data: undefined,
                     isLoading: false,
-                    error: createApiError(200, 'Expected JSON response but received text/html'),
+                    error: new ApiError(200, 'Expected JSON response but received text/html'),
                     refetch: vi.fn(),
                 }),
             );
 
             renderWithRouter('movie');
             await waitFor(() => {
-                expect(screen.getByRole('heading', { name: /Content Not Found/i })).toBeInTheDocument();
-                expect(screen.getByText(/does not exist/i)).toBeInTheDocument();
+                expect(screen.getByRole('heading', { name: /Failed to Load Content/i })).toBeInTheDocument();
+                expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
             });
         });
 
@@ -2511,7 +2580,7 @@ describe('ContentDetailPage', () => {
                 errorHierarchy({
                     data: undefined,
                     isLoading: false,
-                    error: createApiError(500, 'Internal Server Error'),
+                    error: new ApiError(500, 'Internal Server Error'),
                     refetch: vi.fn(),
                 }),
             );
@@ -2529,7 +2598,7 @@ describe('ContentDetailPage', () => {
                 errorHierarchy({
                     data: undefined,
                     isLoading: false,
-                    error: createApiError(502, 'Bad Gateway'),
+                    error: new ApiError(502, 'Bad Gateway'),
                     refetch: mockRefetch,
                 }),
             );
@@ -2546,7 +2615,7 @@ describe('ContentDetailPage', () => {
         });
 
         it('shows a scoped metadata error beside the surviving page and retries the inspector query', async () => {
-            mockMetadataInspectorState.error = createApiError(500, 'Inspector failed');
+            mockMetadataInspectorState.error = new ApiError(500, 'Inspector failed');
 
             const user = userEvent.setup();
             renderWithRouter('content-1');

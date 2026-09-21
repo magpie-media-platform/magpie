@@ -53,7 +53,6 @@ export interface MatchIndexerReleaseVariables {
 }
 
 export const indexerSearchQueryKeys = {
-    all: ['indexer-search'] as const,
     run: (connectionIds: readonly string[], query: IndexerSearchQuery | null) =>
         ['indexer-search', connectionIds, query] as const,
 };

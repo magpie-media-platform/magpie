@@ -49,5 +49,9 @@ describe('isActivePath', () => {
         it('returns false when pathname is a prefix of path', () => {
             expect(isActivePath('/lib', '/library')).toBe(false);
         });
+
+        it('returns false when the path is a prefix of another route segment', () => {
+            expect(isActivePath('/library/content/books', '/library/content/book')).toBe(false);
+        });
     });
 });

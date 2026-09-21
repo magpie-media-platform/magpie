@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { resolve } from 'node:path';
 
 import { integrationEnvironment } from './environment';
+import { until } from './wait';
 
 export const FIXTURES_ROOT = resolve(integrationEnvironment.paths.fixtures);
 
@@ -51,6 +52,16 @@ export function slugify(value: string): string {
         .replace(/^-+|-+$/g, '');
 }
 
+export async function readActiveScenario(slug: string): Promise<string> {
+    const active = await readFile(resolve(pluginRoot(slug), '_active'), 'utf8').catch((error: unknown) => {
+        if (isNodeErrno(error) && error.code === 'ENOENT') {
+            return '';
+        }
+        throw error;
+    });
+    return active.trim() || 'default';
+}
+
 export async function setActiveScenario(slug: string, scenario: string): Promise<void> {
     const root = pluginRoot(slug);
     await mkdir(root, { recursive: true });
@@ -80,7 +91,25 @@ export async function writeLatencyMap(
 }
 
 export async function clearAuditRecords(slug: string): Promise<void> {
-    await rm(auditFolder(slug), { recursive: true, force: true });
+    const target = auditFolder(slug);
+    await waitForFolderToQuiesce(target);
+    await rm(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+}
+
+// The mock plugins append audit files with no product signal, so a quiet folder is the only end-of-write marker.
+async function waitForFolderToQuiesce(target: string): Promise<void> {
+    let previous: string | undefined;
+    await until(
+        `${target} to stop changing`,
+        async () => {
+            const current = (await readdir(target).catch(() => [])).sort().join(',');
+            const stable = current === previous;
+            previous = current;
+            return stable ? true : undefined;
+        },
+        5_000,
+        50,
+    );
 }
 
 export async function readAuditRecords<TRequest = unknown, TResponse = unknown>(

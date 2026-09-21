@@ -185,49 +185,16 @@ internal sealed class ContentMetadataProvider(
 
     private static bool TryKind(string contentType, string level, out EntityKind kind)
     {
-        kind = (contentType, level) switch
+        var resolved = (contentType, level) switch
         {
             (Constants.MovieContentType, Constants.MovieLevel) => EntityKind.Movie,
             (Constants.TvContentType, Constants.ShowLevel) => EntityKind.Show,
             (Constants.TvContentType, Constants.SeasonLevel) => EntityKind.Season,
             (Constants.TvContentType, Constants.EpisodeLevel) => EntityKind.Episode,
-            _ => default
+            _ => (EntityKind?)null
         };
-        return contentType == Constants.MovieContentType && level == Constants.MovieLevel ||
-            contentType == Constants.TvContentType &&
-            level is Constants.ShowLevel
-                or Constants.SeasonLevel
-                or Constants.EpisodeLevel;
-    }
-
-    private async Task<IReadOnlyDictionary<string, EntityDto>> GetSupportEntitiesAsync(
-        EntityDto entity,
-        RequestContext context,
-        CancellationToken cancellationToken)
-    {
-        var support = await cache.GetEntitiesAsync(
-            entity.RequiredSupportQids(),
-            context,
-            cancellationToken).ConfigureAwait(false);
-        var bodyQids = entity.RequiredAwardBodyQids(support);
-        if (bodyQids.Count == 0)
-        {
-            return support;
-        }
-
-        var bodies = await cache.GetEntitiesAsync(bodyQids, context, cancellationToken).ConfigureAwait(false);
-        var merged = new Dictionary<string, EntityDto>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pair in support)
-        {
-            merged[pair.Key] = pair.Value;
-        }
-
-        foreach (var pair in bodies)
-        {
-            merged[pair.Key] = pair.Value;
-        }
-
-        return merged;
+        kind = resolved.GetValueOrDefault();
+        return resolved.HasValue;
     }
 
     private async Task<IReadOnlyList<ChildHierarchyDefinition>> BuildChildrenAsync(
@@ -274,12 +241,42 @@ internal sealed class ContentMetadataProvider(
         if (hierarchy.Truncated)
         {
             logger.LogWarning(
-                "The Wikidata hierarchy for {Qid} exceeded the limit of {ChildLimit} children. " +
-                "The query executor dropped every child after this limit.",
+                "The Wikidata hierarchy for {Qid} exceeded the limit of {ChildLimit} children, so the " +
+                "query executor dropped the rest.",
                 qid,
                 SparqlQueryBuilder.HierarchyLimit);
         }
 
         return hierarchy.Rows.ToChildDefinitions(seasonNumber, utcNow);
+    }
+
+    private async Task<IReadOnlyDictionary<string, EntityDto>> GetSupportEntitiesAsync(
+        EntityDto entity,
+        RequestContext context,
+        CancellationToken cancellationToken)
+    {
+        var support = await cache.GetEntitiesAsync(
+            entity.RequiredSupportQids(),
+            context,
+            cancellationToken).ConfigureAwait(false);
+        var bodyQids = entity.RequiredAwardBodyQids(support);
+        if (bodyQids.Count == 0)
+        {
+            return support;
+        }
+
+        var bodies = await cache.GetEntitiesAsync(bodyQids, context, cancellationToken).ConfigureAwait(false);
+        var merged = new Dictionary<string, EntityDto>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in support)
+        {
+            merged[pair.Key] = pair.Value;
+        }
+
+        foreach (var pair in bodies)
+        {
+            merged[pair.Key] = pair.Value;
+        }
+
+        return merged;
     }
 }

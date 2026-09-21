@@ -25,9 +25,9 @@ internal sealed class IndexerConnectionRepository(
     ITransactionManager transactionManager,
     ILogger<IndexerConnectionRepository> logger,
     IDataProtectionService protector,
-    TimeProvider? timeProvider = null) : IIndexerConnectionRepository
+    TimeProvider timeProvider) : IIndexerConnectionRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     public async Task<IEnumerable<IndexerConnection>> ListAllAsync(CancellationToken cancellationToken)
     {
@@ -103,17 +103,29 @@ internal sealed class IndexerConnectionRepository(
 
             var totalCount = await connections.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(IndexerConnection).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(IndexerConnection.Id), nameof(IndexerConnection.IndexerId), nameof(IndexerConnection.Name),
+                nameof(IndexerConnection.Enabled),
+                nameof(IndexerConnection.Status),
+                nameof(IndexerConnection.LastChecked),
+                nameof(IndexerConnection.LastError),
+                nameof(IndexerConnection.ConsecutiveFailures),
+                nameof(IndexerConnection.CreatedAt),
+                nameof(IndexerConnection.CreatedByUserId),
+                nameof(IndexerConnection.ModifiedAt),
+                nameof(IndexerConnection.ModifiedByUserId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 connections = sort.Direction == SortDirection.Ascending
                     ? connections
-                        .OrderBy(c => EF.Property<IndexerConnection>(c, sortProperty))
+                        .OrderBy(c => EF.Property<object>(c, sortProperty))
                         .ThenBy(c => c.Id)
                     : connections
-                        .OrderByDescending(c => EF.Property<IndexerConnection>(c, sortProperty))
+                        .OrderByDescending(c => EF.Property<object>(c, sortProperty))
                         .ThenBy(c => c.Id);
             }
             else

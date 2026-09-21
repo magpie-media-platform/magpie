@@ -81,8 +81,13 @@ export function IntegrationRowActions({
                     )}
                 </button>
             </Tooltip>
-            <div className={`${prefix}__item-toggle`} title={enabled ? 'Disable' : 'Enable'}>
-                <PowerIcon weight="bold" className={`${prefix}__toggle-icon`} aria-hidden="true" />
+            <div className={`${prefix}__item-toggle card-actions__toggle`} title={enabled ? 'Disable' : 'Enable'}>
+                <PowerIcon
+                    weight="bold"
+                    className={`${prefix}__toggle-icon card-actions__toggle-icon`}
+                    aria-hidden="true"
+                />
+                <span className="card-actions__toggle-label">Enabled</span>
                 <Switch
                     checked={enabled}
                     onCheckedChange={onToggleEnabled}

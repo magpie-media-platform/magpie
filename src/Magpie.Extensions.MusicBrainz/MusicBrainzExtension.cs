@@ -51,24 +51,21 @@ public sealed class MusicBrainzExtension : IExtension
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
-        services.AddSingleton<IQueryCoordinator>(provider =>
-        {
-            using var scope = provider.CreateScope();
-            return ActivatorUtilities.CreateInstance<QueryCoordinator>(scope.ServiceProvider);
-        });
+        services.AddSingleton<IQueryCoordinator, QueryCoordinator>();
         services.AddSingleton<ICoverArtArchiveClient, CoverArtArchiveClient>();
         services.AddSingleton<IMusicBrainzClient, MusicBrainzClient>();
         services.AddScoped<ISettingsResolver, SettingsResolver>();
         services.AddScoped<IQueryPlanner, QueryPlanner>();
         services.AddScoped<IQueryExecutor, QueryExecutor>();
-        services.AddScoped<ISearchEngine, SearchEngine>();
 
         services.AddScoped<IContentHierarchyMetadataProvider, ContentMetadataProvider>();
         services.AddScoped<IContentHierarchyMetadataSearcher, ContentMetadataSearcher>();
         services.AddScoped<IContentFactProvider, ContentFactProvider>();
 
-        services.AddSingleton<IUIExtensionProvider, AdminUiProvider>();
-        services.AddSingleton<IAssetProvider, AdminUiProvider>();
-        services.AddSingleton<IExtensionSettingsSchemaProvider, AdminUiProvider>();
+        services.AddSingleton<AdminUiProvider>();
+        services.AddSingleton<IUIExtensionProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IAssetProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IExtensionSettingsSchemaProvider>(
+            provider => provider.GetRequiredService<AdminUiProvider>());
     }
 }

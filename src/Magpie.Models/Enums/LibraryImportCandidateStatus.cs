@@ -30,5 +30,10 @@ public enum LibraryImportCandidateStatus
     /// <summary>
     /// The import job hydrates the content and links the file.
     /// </summary>
-    Importing = 8
+    Importing = 8,
+
+    /// <summary>
+    /// The scan wrote the row and the match resolution job has not resolved it yet.
+    /// </summary>
+    MatchingPending = 9
 }

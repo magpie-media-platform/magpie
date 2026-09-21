@@ -1,9 +1,9 @@
-import { createElement, type ReactNode, useCallback, useMemo } from 'react';
+import { createElement, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useExtensions, useSlotExtensions } from '@/extensions/useExtensions';
 import type { UIExtension } from '@/extensions/types';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
-import { buildExtensionAttributes } from './buildExtensionAttributes';
+import { buildExtensionAttributes, type SlotContext } from './buildExtensionAttributes';
 
 import './Slot.css';
 
@@ -17,6 +17,8 @@ export interface SlotProps {
     entityId?: string;
 
     entityType?: string;
+
+    context?: SlotContext;
 }
 
 interface ExtensionComponentProps {
@@ -27,6 +29,7 @@ interface ExtensionComponentProps {
     role: string | null;
     entityId?: string;
     entityType?: string;
+    context?: SlotContext;
 }
 
 function ExtensionComponent({
@@ -37,6 +40,7 @@ function ExtensionComponent({
     role,
     entityId,
     entityType,
+    context,
 }: ExtensionComponentProps) {
     const attributes = buildExtensionAttributes({
         extension,
@@ -46,6 +50,7 @@ function ExtensionComponent({
         role,
         entityId,
         entityType,
+        context,
     });
 
     const mountId = [extension.id, entityId, entityType].filter(Boolean).join(':');
@@ -92,11 +97,36 @@ function groupByModifier(extensions: UIExtension[]): {
     return { before, after, replace };
 }
 
-export function Slot({ slot, children, className, entityId, entityType }: SlotProps) {
+export function Slot({ slot, children, className, entityId, entityType, context }: SlotProps) {
     const { apiBaseUrl, userId, username, role } = useExtensions();
-    const { extensions, isReady, isLoading } = useSlotExtensions(slot);
+    const { extensions, isReady, isLoading, isError } = useSlotExtensions(slot);
 
     const { before, after, replace } = useMemo(() => groupByModifier(extensions), [extensions]);
+
+    const replaceTagName = replace?.tagName;
+    const [definedTagName, setDefinedTagName] = useState<string | undefined>(() =>
+        replaceTagName && customElements.get(replaceTagName) ? replaceTagName : undefined,
+    );
+
+    useEffect(() => {
+        if (!replaceTagName || replaceTagName === definedTagName) {
+            return;
+        }
+
+        let cancelled = false;
+        customElements
+            .whenDefined(replaceTagName)
+            .then(() => {
+                if (!cancelled) {
+                    setDefinedTagName(replaceTagName);
+                }
+            })
+            .catch(() => undefined);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [replaceTagName, definedTagName]);
 
     const renderExtension = useCallback(
         (ext: UIExtension, i: number) => (
@@ -109,23 +139,24 @@ export function Slot({ slot, children, className, entityId, entityType }: SlotPr
                     role={role}
                     entityId={entityId}
                     entityType={entityType}
+                    context={context}
                 />
             </ErrorBoundary>
         ),
-        [apiBaseUrl, userId, username, role, entityId, entityType],
+        [apiBaseUrl, userId, username, role, entityId, entityType, context],
     );
 
     const classes = ['slot', className].filter(Boolean).join(' ');
 
-    if (isLoading || !isReady) {
+    if (isError || isLoading || !isReady) {
         return (
-            <div className={classes} data-slot={slot} data-slot-state="loading">
+            <div className={classes} data-slot={slot} data-slot-state={isError ? 'error' : 'loading'}>
                 {children}
             </div>
         );
     }
 
-    const defaultContent = replace ? renderExtension(replace, 0) : children;
+    const defaultContent = replace && replace.tagName === definedTagName ? renderExtension(replace, 0) : children;
 
     return (
         <div className={classes} data-slot={slot} data-slot-state="ready">

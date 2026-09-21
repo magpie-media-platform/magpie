@@ -26,6 +26,11 @@ public record ContentItem
     public FulfillmentStatus Fulfillment { get; set; }
 
     /// <summary>
+    /// The UTC time when the item most recently became fulfilled.
+    /// </summary>
+    public DateTime? FulfilledAt { get; set; }
+
+    /// <summary>
     /// The UTC time of the request.
     /// </summary>
     public DateTime? RequestedAt { get; set; }

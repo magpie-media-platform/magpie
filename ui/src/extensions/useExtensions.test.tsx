@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExtensionProvider } from './ExtensionProvider';
@@ -72,7 +72,8 @@ describe('useExtensions', () => {
     });
 
     function TestUseExtensions() {
-        const { state, isLoading, isReady, isError, error, apiBaseUrl, userId, username, role } = useExtensions();
+        const { state, isLoading, isReady, isError, error, retry, apiBaseUrl, userId, username, role } =
+            useExtensions();
 
         return (
             <div>
@@ -85,6 +86,9 @@ describe('useExtensions', () => {
                 <span data-testid="user-id">{userId ?? 'null'}</span>
                 <span data-testid="username">{username ?? 'null'}</span>
                 <span data-testid="role">{role ?? 'null'}</span>
+                <button data-testid="retry" onClick={() => retry()}>
+                    Retry
+                </button>
             </div>
         );
     }
@@ -134,7 +138,7 @@ describe('useExtensions', () => {
         expect(screen.getByTestId('is-error')).toHaveTextContent('false');
     });
 
-    it('returns error state on failure', async () => {
+    it('reads as loading while an automatic retry is still pending', async () => {
         mockFetch.mockResolvedValueOnce(mockErrorResponse(500, 'Internal Server Error'));
 
         render(
@@ -147,9 +151,9 @@ describe('useExtensions', () => {
             expect(screen.getByTestId('state')).toHaveTextContent('error');
         });
 
-        expect(screen.getByTestId('is-loading')).toHaveTextContent('false');
+        expect(screen.getByTestId('is-loading')).toHaveTextContent('true');
         expect(screen.getByTestId('is-ready')).toHaveTextContent('false');
-        expect(screen.getByTestId('is-error')).toHaveTextContent('true');
+        expect(screen.getByTestId('is-error')).toHaveTextContent('false');
         expect(screen.getByTestId('error').textContent).not.toBe('null');
     });
 
@@ -236,32 +240,23 @@ describe('useExtensions', () => {
         expect(screen.getByTestId('dashboard-ext-1')).toHaveTextContent('Dashboard Widget');
     });
 
-    it('provides retry function', async () => {
+    it('fetches the manifest again and becomes ready after retry', async () => {
         mockFetch.mockResolvedValueOnce(mockErrorResponse(503, 'Service Unavailable'));
-
-        function TestRetry() {
-            const { isError, retry } = useExtensions();
-            return (
-                <div>
-                    <span data-testid="is-error">{String(isError)}</span>
-                    <button data-testid="retry" onClick={() => retry()}>
-                        Retry
-                    </button>
-                </div>
-            );
-        }
 
         render(
             <ExtensionProvider userId="user-123">
-                <TestRetry />
+                <TestUseExtensions />
             </ExtensionProvider>,
         );
 
         await waitFor(() => {
-            expect(screen.getByTestId('is-error')).toHaveTextContent('true');
+            expect(screen.getByTestId('state')).toHaveTextContent('error');
         });
 
-        expect(screen.getByTestId('retry')).toBeInTheDocument();
+        mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+        fireEvent.click(screen.getByTestId('retry'));
+        await waitFor(() => expect(screen.getByTestId('is-ready')).toHaveTextContent('true'));
+        expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 });
 

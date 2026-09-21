@@ -5,6 +5,7 @@ import {
     formatDate,
     formatDateKey,
     getDayOfMonth,
+    getFirstDayOfWeek,
     getFulfillmentClass,
     getMonthDays,
     isToday,
@@ -18,14 +19,19 @@ interface MonthViewProps {
 }
 
 export function MonthView({ currentDate, getEventsForDate, onDayClick }: MonthViewProps) {
+    const firstDayOfWeek = getFirstDayOfWeek();
+
     return (
         <div className="calendar-page__month-view" data-component="month-view">
             <div className="calendar-page__weekday-header">
-                {WEEKDAY_NAMES.map((day) => (
-                    <div key={day} className="calendar-page__weekday-name">
-                        {day}
-                    </div>
-                ))}
+                {WEEKDAY_NAMES.map((_, offset) => {
+                    const name = WEEKDAY_NAMES[(firstDayOfWeek + offset) % 7];
+                    return (
+                        <div key={name} className="calendar-page__weekday-name">
+                            {name}
+                        </div>
+                    );
+                })}
             </div>
             <div className="calendar-page__month-grid">
                 {getMonthDays(currentDate.getFullYear(), currentDate.getMonth()).map((date, i) => {

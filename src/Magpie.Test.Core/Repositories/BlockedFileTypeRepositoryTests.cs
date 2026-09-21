@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -11,11 +12,11 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -24,7 +25,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class BlockedFileTypeRepositoryTests
+public sealed class BlockedFileTypeRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IBlockedFileTypeRepository _subject = null!;
@@ -59,7 +60,9 @@ public class BlockedFileTypeRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             NullLogger<AuditRecordRepository>.Instance,
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _publishedEvents = [];
         var eventBus = new Mock<IEventBus>();
@@ -73,7 +76,8 @@ public class BlockedFileTypeRepositoryTests
             auditRecordRepository,
             transactionManager,
             eventBus.Object,
-            NullLogger<BlockedFileTypeRepository>.Instance);
+            NullLogger<BlockedFileTypeRepository>.Instance,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -264,8 +268,8 @@ public class BlockedFileTypeRepositoryTests
                 _publishedEvents.Select(magpieEvent => magpieEvent.Name),
                 Is.EqualTo(
                 [
-                    MagpieEvents.Names.BlockedFileTypeCreated,
-                    MagpieEvents.Names.BlockedFileTypeDeleted
+                    "blockedFileType.created",
+                    "blockedFileType.deleted"
                 ]));
             Assert.That(
                 _publishedEvents,
@@ -305,7 +309,7 @@ public class BlockedFileTypeRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_Throws_OnDuplicatePatternAndType()
+    public async Task CreateAsync_Throws_WhenDuplicatePatternAndType()
     {
         // Arrange
         var first = new BlockedFileType

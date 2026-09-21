@@ -23,8 +23,6 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
 
     public const string DefaultBaseUrl = "https://api.themoviedb.org/";
 
-    public const string DefaultImageBaseUrl = "https://image.tmdb.org/t/p/";
-
     private const int MaximumRequestTargetBytes = 8 * 1024;
     private const int QueryResponseBytes = 8 * 1024 * 1024;
     private const int DetailResponseBytes = 16 * 1024 * 1024;

@@ -17,7 +17,7 @@ internal static class Telemetry
 
     internal static readonly KeyValuePair<string, object?> ProviderType = new(
         "provider_type",
-        JellyfinMediaServerIntegration.ProviderTypeName);
+        Constants.ProviderTypeName);
 
     internal static readonly Counter<long> DeepLinkLookups = Meter.CreateCounter<long>(
         "magpie.media_servers.deep_link_lookups");

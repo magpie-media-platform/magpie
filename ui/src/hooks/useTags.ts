@@ -15,10 +15,11 @@ interface TagsQueryParams {
     entityId?: string;
 }
 
+const NO_TAGS: ApiTag[] = [];
+
 export const tagQueryKeys = {
     all: ['tags'] as const,
     list: (params?: TagsQueryParams) => ['tags', 'list', params ?? {}] as const,
-    byPrefix: (prefix: string) => ['tags', 'prefix', prefix] as const,
     byEntity: (entityId: string) => ['tags', 'entity', entityId] as const,
 };
 
@@ -50,35 +51,13 @@ export function useTags(params?: TagsQueryParams) {
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 
-    const tags: ApiTag[] = query.data ?? [];
+    const tags: ApiTag[] = query.data ?? NO_TAGS;
 
     return {
         tags,
         isLoading: query.isLoading,
         error: queryErrorOrNull(query),
         refetch: query.refetch,
-    };
-}
-
-export function useTagsByPrefix(prefix: string, enabled = true) {
-    useInvalidateQueriesOnEvents(
-        enabled && prefix.length > 0 ? TAG_CHANGE_EVENTS : [],
-        [tagQueryKeys.byPrefix(prefix)],
-        { exact: true, owner: 'tags:prefix' },
-    );
-    const query = useQuery({
-        queryKey: tagQueryKeys.byPrefix(prefix),
-        queryFn: () => fetchTags({ prefix }),
-        enabled: enabled && prefix.length > 0,
-        staleTime: POLLING_INTERVALS.slow,
-    });
-
-    const tags: ApiTag[] = query.data ?? [];
-
-    return {
-        tags,
-        isLoading: query.isLoading,
-        error: queryErrorOrNull(query),
     };
 }
 
@@ -95,7 +74,7 @@ export function useTagsByEntity(entityId: string, enabled = true) {
         staleTime: POLLING_INTERVALS.slow,
     });
 
-    const tags: ApiTag[] = query.data ?? [];
+    const tags: ApiTag[] = query.data ?? NO_TAGS;
 
     return {
         tags,

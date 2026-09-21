@@ -10,10 +10,10 @@ public sealed record ExtensionListItem
     /// <summary>
     /// The installed extension.
     /// </summary>
-    public required Extension Extension { get; set; }
+    public required Extension Extension { get; init; }
 
     /// <summary>
     /// The update availability of the extension, or <see langword="null"/> when it was not evaluated.
     /// </summary>
-    public ExtensionUpdateInfo? UpdateInfo { get; set; }
+    public ExtensionUpdateInfo? UpdateInfo { get; init; }
 }

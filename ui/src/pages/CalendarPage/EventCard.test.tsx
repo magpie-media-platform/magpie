@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -127,13 +128,15 @@ describe('EventCard', () => {
     });
 
     it('resolves the contextual title for a nested event', async () => {
+        const queryClient = new QueryClient();
+        queryClient.setQueryData(['content-lineage', 'show'], { id: 'show', title: 'Breaking Bad' });
+
         render(
-            <ContentLineageProvider
-                contentTypes={[]}
-                loadQualifiedName={async () => ({ id: 'show', title: 'Breaking Bad' })}
-            >
-                <EventCard event={makeEvent({ parentId: 'show', title: 'Pilot' })} onClick={vi.fn()} />
-            </ContentLineageProvider>,
+            <QueryClientProvider client={queryClient}>
+                <ContentLineageProvider contentTypes={[]}>
+                    <EventCard event={makeEvent({ parentId: 'show', title: 'Pilot' })} onClick={vi.fn()} />
+                </ContentLineageProvider>
+            </QueryClientProvider>,
         );
 
         expect(await screen.findByTitle('Breaking Bad > Pilot')).toBeInTheDocument();

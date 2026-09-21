@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -31,83 +30,50 @@ namespace Magpie.Test.Extensions.Jellyfin;
 [TestFixture]
 public class JellyfinLibrariesEndpointGroupTests
 {
-    [Test]
-    public async Task GetAssetStreamAsync_OmitsBlankConnectionSettings_WhenLibraryAssetLoads()
-    {
-        // Arrange
-        var subject = new JellyfinAssetProvider();
-
-        // Act
-        using var stream = await subject.GetAssetStreamAsync("jellyfin-libraries.js", default)
-            .ConfigureAwait(false);
-        using var reader = new StreamReader(stream!);
-        var script = await reader.ReadToEndAsync(default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(stream, Is.Not.Null);
-            Assert.That(script, Does.Contain($"const hostKey = '{JellyfinSettings.HostKey}';"));
-            Assert.That(script, Does.Contain($"const apiKeyKey = '{JellyfinSettings.ApiKeyKey}';"));
-            Assert.That(
-                script,
-                Does.Contain("if (typeof state[hostKey] === 'string' && state[hostKey].trim())"));
-            Assert.That(script, Does.Contain("settings[hostKey] = state[hostKey];"));
-            Assert.That(
-                script,
-                Does.Contain("if (typeof state[apiKeyKey] === 'string' && state[apiKeyKey].trim())"));
-            Assert.That(script, Does.Contain("settings[apiKeyKey] = state[apiKeyKey];"));
-            Assert.That(script, Does.Not.Contain("Object.prototype.hasOwnProperty.call(state"));
-            Assert.That(
-                script,
-                Does.Contain("body: JSON.stringify({ mediaServerId: serverId, settings: settings || {} })"));
-        }
-    }
-
-    [Test]
-    public async Task ListLibrariesAsync_ReturnsOptions_WhenResolvedSettingsAuthenticate()
+    [TestCase("host", "edited-key")]
+    [TestCase("HOST", "replacement-key")]
+    public async Task ListLibrariesAsync_UsesEditedKeyAndStoredHost_WhenCallerOverridesSavedSettings(
+        string hostKey,
+        string apiKey)
     {
         // Arrange
         var mediaServerId = Guid.NewGuid();
         var overlay = new Dictionary<string, string>
         {
-            ["host"] = "http://jellyfin.local:8096",
-            ["apiKey"] = string.Empty,
+            [hostKey] = "http://attacker.test",
+            ["apiKey"] = apiKey,
         };
         var resolved = new Dictionary<string, string>
         {
             ["host"] = "http://jellyfin.local:8096",
-            ["apiKey"] = "stored-key",
+            ["apiKey"] = apiKey,
         };
         var mediaServerService = new Mock<IMediaServerService>();
         mediaServerService
             .Setup(service => service.ResolveSettingsAsync(
                 mediaServerId,
-                overlay,
+                It.Is<IReadOnlyDictionary<string, string>>(settings =>
+                    settings.Count == 1 && settings["apiKey"] == apiKey),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(resolved);
         var handler = new MockHttpMessageHandler();
         handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Library/VirtualFolders")
-            .WithHeaders("X-Emby-Token", "stored-key")
+            .WithHeaders("X-Emby-Token", apiKey)
             .Respond(
                 "application/json",
                 "[{\"Name\":\"Movies\",\"ItemId\":\"lib-1\",\"CollectionType\":\"movies\"}," +
                 "{\"Name\":null,\"ItemId\":\"lib-2\",\"CollectionType\":\"tvshows\"}," +
                 "{\"Name\":\"Missing id\",\"ItemId\":null}]");
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(JellyfinClient.HttpClientName))
-            .Returns(() => new HttpClient(handler, disposeHandler: false));
+        using var http = new HttpClient(handler, disposeHandler: false);
         var subject = new JellyfinLibrariesEndpointGroup();
         var request = new JellyfinLibrariesRequest { MediaServerId = mediaServerId, Settings = overlay };
 
         // Act
         var result = await subject.ListLibrariesAsync(
-            mediaServerService.Object,
-            new JellyfinClient(
-                httpClientFactory.Object.CreateClient(JellyfinClient.HttpClientName),
-                NullLogger<JellyfinClient>.Instance),
-            NullLogger<JellyfinLibrariesEndpointGroup>.Instance,
+            new JellyfinLibraryService(
+                mediaServerService.Object,
+                new JellyfinClient(http, NullLogger<JellyfinClient>.Instance),
+                NullLogger<JellyfinLibraryService>.Instance),
             request,
             default).ConfigureAwait(false);
 
@@ -127,7 +93,8 @@ public class JellyfinLibrariesEndpointGroupTests
         mediaServerService.Verify(
             service => service.ResolveSettingsAsync(
                 mediaServerId,
-                overlay,
+                It.Is<IReadOnlyDictionary<string, string>>(settings =>
+                    settings.Count == 1 && settings["apiKey"] == apiKey),
                 It.IsAny<CancellationToken>()),
             Times.Once);
         handler.VerifyNoOutstandingExpectation();
@@ -153,20 +120,16 @@ public class JellyfinLibrariesEndpointGroupTests
         var handler = new MockHttpMessageHandler();
         handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Library/VirtualFolders")
             .Respond(statusCode);
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(JellyfinClient.HttpClientName))
-            .Returns(() => new HttpClient(handler, disposeHandler: false));
+        using var http = new HttpClient(handler, disposeHandler: false);
         var subject = new JellyfinLibrariesEndpointGroup();
         var request = new JellyfinLibrariesRequest();
 
         // Act
         var result = await subject.ListLibrariesAsync(
-            mediaServerService.Object,
-            new JellyfinClient(
-                httpClientFactory.Object.CreateClient(JellyfinClient.HttpClientName),
-                NullLogger<JellyfinClient>.Instance),
-            NullLogger<JellyfinLibrariesEndpointGroup>.Instance,
+            new JellyfinLibraryService(
+                mediaServerService.Object,
+                new JellyfinClient(http, NullLogger<JellyfinClient>.Instance),
+                NullLogger<JellyfinLibraryService>.Instance),
             request,
             default).ConfigureAwait(false);
 
@@ -182,7 +145,7 @@ public class JellyfinLibrariesEndpointGroupTests
         // Arrange
         var resolved = new Dictionary<string, string>
         {
-            ["host"] = "http://127.0.0.1:1",
+            ["host"] = "http://jellyfin.local:8096",
             ["apiKey"] = "invalid-key",
         };
         var mediaServerService = new Mock<IMediaServerService>();
@@ -192,26 +155,26 @@ public class JellyfinLibrariesEndpointGroupTests
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(resolved);
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(JellyfinClient.HttpClientName))
-            .Returns(() => new HttpClient { Timeout = TimeSpan.FromSeconds(5) });
+        using var handler = new MockHttpMessageHandler();
+        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Library/VirtualFolders")
+            .Throw(new HttpRequestException());
+        using var http = new HttpClient(handler, disposeHandler: false);
         var subject = new JellyfinLibrariesEndpointGroup();
         var request = new JellyfinLibrariesRequest();
 
         // Act
         var result = await subject.ListLibrariesAsync(
-            mediaServerService.Object,
-            new JellyfinClient(
-                httpClientFactory.Object.CreateClient(JellyfinClient.HttpClientName),
-                NullLogger<JellyfinClient>.Instance),
-            NullLogger<JellyfinLibrariesEndpointGroup>.Instance,
+            new JellyfinLibraryService(
+                mediaServerService.Object,
+                new JellyfinClient(http, NullLogger<JellyfinClient>.Instance),
+                NullLogger<JellyfinLibraryService>.Instance),
             request,
             default).ConfigureAwait(false);
 
         // Assert
         var response = (IStatusCodeHttpResult)result;
         Assert.That(response.StatusCode, Is.EqualTo(StatusCodes.Status502BadGateway));
+        handler.VerifyNoOutstandingExpectation();
     }
 
     [Test]
@@ -233,20 +196,16 @@ public class JellyfinLibrariesEndpointGroupTests
         var handler = new MockHttpMessageHandler();
         handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Library/VirtualFolders")
             .Respond("application/json", "not-json");
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(JellyfinClient.HttpClientName))
-            .Returns(() => new HttpClient(handler, disposeHandler: false));
+        using var http = new HttpClient(handler, disposeHandler: false);
         var subject = new JellyfinLibrariesEndpointGroup();
         var request = new JellyfinLibrariesRequest();
 
         // Act
         var result = await subject.ListLibrariesAsync(
-            mediaServerService.Object,
-            new JellyfinClient(
-                httpClientFactory.Object.CreateClient(JellyfinClient.HttpClientName),
-                NullLogger<JellyfinClient>.Instance),
-            NullLogger<JellyfinLibrariesEndpointGroup>.Instance,
+            new JellyfinLibraryService(
+                mediaServerService.Object,
+                new JellyfinClient(http, NullLogger<JellyfinClient>.Instance),
+                NullLogger<JellyfinLibraryService>.Instance),
             request,
             default).ConfigureAwait(false);
 
@@ -257,7 +216,7 @@ public class JellyfinLibrariesEndpointGroupTests
     }
 
     [Test]
-    public async Task ListLibrariesAsync_ReturnsBadGateway_WhenHostIsInvalid()
+    public async Task ListLibrariesAsync_ReturnsBadRequest_WhenHostIsInvalid()
     {
         // Arrange
         var resolved = new Dictionary<string, string>
@@ -272,23 +231,22 @@ public class JellyfinLibrariesEndpointGroupTests
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(resolved);
-        var httpClientFactory = new Mock<IHttpClientFactory>();
+        using var http = new HttpClient();
         var subject = new JellyfinLibrariesEndpointGroup();
         var request = new JellyfinLibrariesRequest();
 
         // Act
         var result = await subject.ListLibrariesAsync(
-            mediaServerService.Object,
-            new JellyfinClient(
-                httpClientFactory.Object.CreateClient(JellyfinClient.HttpClientName),
-                NullLogger<JellyfinClient>.Instance),
-            NullLogger<JellyfinLibrariesEndpointGroup>.Instance,
+            new JellyfinLibraryService(
+                mediaServerService.Object,
+                new JellyfinClient(http, NullLogger<JellyfinClient>.Instance),
+                NullLogger<JellyfinLibraryService>.Instance),
             request,
             default).ConfigureAwait(false);
 
         // Assert
         var response = (IStatusCodeHttpResult)result;
-        Assert.That(response.StatusCode, Is.EqualTo(StatusCodes.Status502BadGateway));
+        Assert.That(response.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
     }
 
     [Test]
@@ -307,17 +265,16 @@ public class JellyfinLibrariesEndpointGroupTests
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(resolved);
-        var httpClientFactory = new Mock<IHttpClientFactory>();
+        using var http = new HttpClient();
         var subject = new JellyfinLibrariesEndpointGroup();
         var request = new JellyfinLibrariesRequest();
 
         // Act
         var result = await subject.ListLibrariesAsync(
-            mediaServerService.Object,
-            new JellyfinClient(
-                httpClientFactory.Object.CreateClient(JellyfinClient.HttpClientName),
-                NullLogger<JellyfinClient>.Instance),
-            NullLogger<JellyfinLibrariesEndpointGroup>.Instance,
+            new JellyfinLibraryService(
+                mediaServerService.Object,
+                new JellyfinClient(http, NullLogger<JellyfinClient>.Instance),
+                NullLogger<JellyfinLibraryService>.Instance),
             request,
             default).ConfigureAwait(false);
 
@@ -328,7 +285,7 @@ public class JellyfinLibrariesEndpointGroupTests
     }
 
     [Test]
-    public async Task ListLibrariesAsync_ReturnsEmpty_WhenJellyfinHasNoLibraries()
+    public async Task ListLibrariesAsync_UsesCallerSettings_WhenServerIsUnsaved()
     {
         // Arrange
         var resolved = new Dictionary<string, string>
@@ -340,26 +297,22 @@ public class JellyfinLibrariesEndpointGroupTests
         mediaServerService
             .Setup(service => service.ResolveSettingsAsync(
                 null,
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                resolved,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(resolved);
         var handler = new MockHttpMessageHandler();
         handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Library/VirtualFolders")
             .Respond("application/json", "[]");
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(JellyfinClient.HttpClientName))
-            .Returns(() => new HttpClient(handler, disposeHandler: false));
+        using var http = new HttpClient(handler, disposeHandler: false);
         var subject = new JellyfinLibrariesEndpointGroup();
-        var request = new JellyfinLibrariesRequest();
+        var request = new JellyfinLibrariesRequest { Settings = resolved };
 
         // Act
         var result = await subject.ListLibrariesAsync(
-            mediaServerService.Object,
-            new JellyfinClient(
-                httpClientFactory.Object.CreateClient(JellyfinClient.HttpClientName),
-                NullLogger<JellyfinClient>.Instance),
-            NullLogger<JellyfinLibrariesEndpointGroup>.Instance,
+            new JellyfinLibraryService(
+                mediaServerService.Object,
+                new JellyfinClient(http, NullLogger<JellyfinClient>.Instance),
+                NullLogger<JellyfinLibraryService>.Instance),
             request,
             default).ConfigureAwait(false);
 
@@ -367,6 +320,8 @@ public class JellyfinLibrariesEndpointGroupTests
         var response = (IValueHttpResult)result;
         var options = (IReadOnlyList<SettingSchemaOption>)response.Value!;
         Assert.That(options, Is.Empty);
+        mediaServerService.Verify(service => service.ResolveSettingsAsync(
+            null, resolved, It.IsAny<CancellationToken>()), Times.Once);
         handler.VerifyNoOutstandingExpectation();
     }
 

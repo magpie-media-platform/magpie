@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Models;
@@ -13,6 +14,8 @@ using Magpie.Models.Paging;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
+using Microsoft.Extensions.Logging.Abstractions;
+
 using Moq;
 
 using NUnit.Framework;
@@ -20,7 +23,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core;
 
 [TestFixture]
-public class AuditHistoryServiceTests
+public sealed class AuditHistoryServiceTests
 {
     private Mock<IJobExecutionRepository> _jobExecutions = null!;
     private Mock<IAuditRecordRepository> _auditRecords = null!;
@@ -60,7 +63,72 @@ public class AuditHistoryServiceTests
     }
 
     [Test]
-    public async Task QueryAsync_MergesJobsAndAudits_OrderedByTimestampDescending()
+    public async Task QueryAsync_ReadsOneBoundedSourcePage_WhenTheReachFitsThePagingLimit()
+    {
+        // Arrange
+        var audit = new AuditRecord
+        {
+            Category = "System",
+            Operation = "Update",
+            Timestamp = new DateTime(2024, 5, 6, 0, 0, 0, DateTimeKind.Utc)
+        };
+        _auditRecords.Setup(repository => repository.QueryAsync(
+                It.IsAny<AuditRecordQuery>(),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 50),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<AuditRecord>
+            {
+                Items = Enumerable.Repeat(audit, 50),
+                TotalItems = 1001
+            });
+
+        // Act
+        var result = await _subject.QueryAsync(new AuditHistoryQuery
+        {
+            Kind = AuditHistoryEntryKind.AuditRecord,
+            Paging = new PagingParameter { PageNumber = 2, PageSize = 25 }
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.TotalItems, Is.EqualTo(1001));
+            Assert.That(result.Items.Count(), Is.EqualTo(25));
+            _auditRecords.Verify(repository => repository.QueryAsync(
+                It.IsAny<AuditRecordQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [TestCase(2, 1000)]
+    [TestCase(int.MaxValue, 25)]
+    public void QueryAsync_Throws_WhenTheReachExceedsThePagingLimit(int pageNumber, int pageSize)
+    {
+        // Arrange
+        var query = new AuditHistoryQuery
+        {
+            Kind = AuditHistoryEntryKind.AuditRecord,
+            Paging = new PagingParameter { PageNumber = pageNumber, PageSize = pageSize }
+        };
+
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(async () => await _subject.QueryAsync(query).ConfigureAwait(false), Throws.ArgumentException);
+            _auditRecords.Verify(repository => repository.QueryAsync(
+                It.IsAny<AuditRecordQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_MergesJobsAndAuditsInTimestampOrder_WhenBothSourcesHaveRows()
     {
         // Arrange
         var baseline = DateTime.UtcNow;
@@ -114,10 +182,108 @@ public class AuditHistoryServiceTests
     }
 
     [Test]
+    public async Task QueryAsync_ReadsOnlyTheRowsThatReachThePage_WhenNoFilterIsGiven()
+    {
+        // Arrange
+        var baseline = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+        var job = new JobExecution
+        {
+            Id = Guid.NewGuid(),
+            JobType = "FirstJob",
+            Scope = JobScope.System,
+            Status = JobExecutionStatus.Completed,
+            CreatedAt = baseline.AddMinutes(-6),
+            CompletedAt = baseline
+        };
+        var laterJob = new JobExecution
+        {
+            Id = Guid.NewGuid(),
+            JobType = "SecondJob",
+            Scope = JobScope.System,
+            Status = JobExecutionStatus.Completed,
+            CreatedAt = baseline.AddMinutes(-6),
+            CompletedAt = baseline.AddMinutes(-2)
+        };
+        var audit = new AuditRecord
+        {
+            Id = Guid.NewGuid(),
+            Category = "Content",
+            Operation = "Update",
+            Timestamp = baseline.AddMinutes(-1)
+        };
+        var laterAudit = new AuditRecord
+        {
+            Id = Guid.NewGuid(),
+            Category = "Content",
+            Operation = "Update",
+            Timestamp = baseline.AddMinutes(-3)
+        };
+        _jobExecutions
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 2),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { Items = [job, laterJob], TotalItems = 900 });
+        _jobExecutions
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.Is<PagingParameter>(paging => paging.PageNumber > 1 || paging.PageSize > 2),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The service read past the requested page of job executions."));
+        _auditRecords
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<AuditRecordQuery>(),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 2),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<AuditRecord> { Items = [audit, laterAudit], TotalItems = 700 });
+        _auditRecords
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<AuditRecordQuery>(),
+                It.Is<PagingParameter>(paging => paging.PageNumber > 1 || paging.PageSize > 2),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The service read past the requested page of audit records."));
+
+        // Act
+        var page = await _subject.QueryAsync(new AuditHistoryQuery
+        {
+            Paging = new PagingParameter { PageNumber = 1, PageSize = 2 }
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(page.Items.Select(entry => entry.Id), Is.EqualTo([job.Id, audit.Id]));
+            Assert.That(page.TotalItems, Is.EqualTo(1600));
+        }
+
+        _jobExecutions.Verify(
+            repository => repository.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.Is<SortParameter?>(sort =>
+                    sort != null &&
+                    sort.PropertyName == "ExecutionTimestamp" &&
+                    sort.Direction == SortDirection.Descending),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _auditRecords.Verify(
+            repository => repository.QueryAsync(
+                It.IsAny<AuditRecordQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
     public async Task QueryAsync_ReturnsLaterEntries_WhenBothSourcesSpanPages()
     {
         // Arrange
-        var baseline = DateTime.UtcNow;
+        var baseline = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
         var from = baseline.AddDays(-1);
         var to = baseline.AddMinutes(1);
         var laterJob = new JobExecution
@@ -137,12 +303,12 @@ public class AuditHistoryServiceTests
             Timestamp = baseline.AddMinutes(-5)
         };
         _jobExecutions
-            .SetupSequence(repository => repository.QueryAsync(
+            .Setup(repository => repository.QueryAsync(
                 It.Is<JobExecutionQuery>(query =>
                     query.ExecutionTimestamp != null &&
                     query.ExecutionTimestamp.Min == from &&
                     query.ExecutionTimestamp.Max == to),
-                It.Is<PagingParameter>(paging => paging.PageSize == 2),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 6),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<JobExecution>
@@ -166,17 +332,18 @@ public class AuditHistoryServiceTests
                         Status = JobExecutionStatus.Completed,
                         CreatedAt = baseline.AddMinutes(-2),
                         CompletedAt = baseline.AddMinutes(-2)
-                    }
-                ]
-            })
-            .ReturnsAsync(new PagedList<JobExecution> { Items = [laterJob] });
+                    },
+                    laterJob
+                ],
+                TotalItems = 3
+            });
         _auditRecords
-            .SetupSequence(repository => repository.QueryAsync(
+            .Setup(repository => repository.QueryAsync(
                 It.Is<AuditRecordQuery>(query =>
                     query.Timestamp != null &&
                     query.Timestamp.Min == from &&
                     query.Timestamp.Max == to),
-                It.Is<PagingParameter>(paging => paging.PageSize == 2),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 6),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<AuditRecord>
@@ -196,10 +363,11 @@ public class AuditHistoryServiceTests
                         Category = "Content",
                         Operation = "Update",
                         Timestamp = baseline.AddMinutes(-3)
-                    }
-                ]
-            })
-            .ReturnsAsync(new PagedList<AuditRecord> { Items = [laterAudit] });
+                    },
+                    laterAudit
+                ],
+                TotalItems = 3
+            });
 
         // Act
         var page = await _subject.QueryAsync(new AuditHistoryQuery
@@ -219,21 +387,14 @@ public class AuditHistoryServiceTests
         _jobExecutions.Verify(
             repository => repository.QueryAsync(
                 It.IsAny<JobExecutionQuery>(),
-                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 2),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _jobExecutions.Verify(
-            repository => repository.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 2),
+                It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _auditRecords.Verify(
             repository => repository.QueryAsync(
                 It.IsAny<AuditRecordQuery>(),
-                It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 2),
+                It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -333,38 +494,17 @@ public class AuditHistoryServiceTests
     }
 
     [Test]
-    public async Task QueryAsync_KeepsJobsReferencingContent_WhenContentIdFiltered()
+    public async Task QueryAsync_ReturnsOnlyTheAuditsOfTheExecution_WhenJobExecutionIdFiltered()
     {
         // Arrange
-        var contentId = Guid.NewGuid();
-        var referencing = new JobExecution
+        var jobExecutionId = Guid.NewGuid();
+        var written = new AuditRecord
         {
             Id = Guid.NewGuid(),
-            JobType = "ReleaseSearchItem",
-            Scope = JobScope.Content,
-            Status = JobExecutionStatus.Completed,
-            Parameters = new() { ["contentItemId"] = contentId.ToString() },
-            CreatedAt = DateTime.UtcNow,
-            CompletedAt = DateTime.UtcNow
-        };
-        var unrelated = new JobExecution
-        {
-            Id = Guid.NewGuid(),
-            JobType = "SystemMaintenance",
-            Scope = JobScope.System,
-            Status = JobExecutionStatus.Completed,
-            CreatedAt = DateTime.UtcNow,
-            CompletedAt = DateTime.UtcNow
-        };
-        var substringValueMatch = new JobExecution
-        {
-            Id = Guid.NewGuid(),
-            JobType = "ReleaseSearchItem",
-            Scope = JobScope.Content,
-            Status = JobExecutionStatus.Completed,
-            Parameters = new() { ["contentItemId"] = $"prefix-{contentId:D}-suffix" },
-            CreatedAt = DateTime.UtcNow,
-            CompletedAt = DateTime.UtcNow
+            Category = "Content",
+            Operation = "Update",
+            JobExecutionId = jobExecutionId,
+            Timestamp = DateTime.UtcNow
         };
         _jobExecutions
             .Setup(r => r.QueryAsync(
@@ -374,15 +514,33 @@ public class AuditHistoryServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<JobExecution>
             {
-                Items = [referencing, unrelated, substringValueMatch],
-                TotalItems = 3
+                Items =
+                [
+                    new JobExecution
+                    {
+                        Id = jobExecutionId,
+                        JobType = "ReleaseSearchItem",
+                        Scope = JobScope.Content,
+                        Status = JobExecutionStatus.Completed,
+                        CreatedAt = DateTime.UtcNow,
+                        CompletedAt = DateTime.UtcNow
+                    }
+                ],
+                TotalItems = 1
             });
+        _auditRecords
+            .Setup(r => r.QueryAsync(
+                It.Is<AuditRecordQuery>(query => query.JobExecutionId == jobExecutionId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<AuditRecord> { Items = [written], TotalItems = 1 });
 
         // Act
         var page = await _subject.QueryAsync(new AuditHistoryQuery
         {
             Paging = new PagingParameter { PageNumber = 1, PageSize = 25 },
-            ContentId = contentId
+            JobExecutionId = jobExecutionId
         }).ConfigureAwait(false);
 
         // Assert
@@ -390,8 +548,18 @@ public class AuditHistoryServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(items, Has.Count.EqualTo(1));
-            Assert.That(items[0].Id, Is.EqualTo(referencing.Id));
+            Assert.That(items[0].Id, Is.EqualTo(written.Id));
+            Assert.That(items[0].Kind, Is.EqualTo(AuditHistoryEntryKind.AuditRecord));
+            Assert.That(items[0].JobExecutionId, Is.EqualTo(jobExecutionId));
         }
+
+        _jobExecutions.Verify(
+            repository => repository.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Test]
@@ -403,17 +571,7 @@ public class AuditHistoryServiceTests
         var firstUnrelatedDownloadId = Guid.NewGuid();
         var secondUnrelatedDownloadId = Guid.NewGuid();
         var baseline = DateTime.UtcNow;
-        var downloadIdEventContextKey = MagpieEvents.Keys.DownloadId.ToEventContextKey();
-        var contentJob = new JobExecution
-        {
-            Id = Guid.NewGuid(),
-            JobType = "ReleaseDownloadItem",
-            Scope = JobScope.Content,
-            Status = JobExecutionStatus.Completed,
-            Parameters = new() { ["contentHierarchyItemId"] = contentId.ToString("D") },
-            CreatedAt = baseline.AddMinutes(-3),
-            CompletedAt = baseline.AddMinutes(-3)
-        };
+        var downloadIdEventContextKey = "download.id".ToEventContextKey();
         var parameterImportJob = new JobExecution
         {
             Id = Guid.NewGuid(),
@@ -436,16 +594,6 @@ public class AuditHistoryServiceTests
             CreatedAt = baseline.AddMinutes(-1),
             CompletedAt = baseline.AddMinutes(-1),
             StatusMessage = "The output path does not exist."
-        };
-        var unrelatedJob = new JobExecution
-        {
-            Id = Guid.NewGuid(),
-            JobType = "DownloadImportItem",
-            Scope = JobScope.Content,
-            Status = JobExecutionStatus.Failed,
-            TriggerContext = new() { [downloadIdEventContextKey] = Guid.NewGuid().ToString("D") },
-            CreatedAt = baseline,
-            CompletedAt = baseline
         };
         var contentAudit = new AuditRecord
         {
@@ -512,20 +660,18 @@ public class AuditHistoryServiceTests
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((JobExecutionQuery _, PagingParameter paging, SortParameter? _, CancellationToken _) =>
-                paging.PageNumber switch
-                {
-                    1 => new PagedList<JobExecution> { Items = [eventTriggeredImportJob, unrelatedJob] },
-                    2 => new PagedList<JobExecution> { Items = [contentJob, parameterImportJob] },
-                    _ => new PagedList<JobExecution>()
-                });
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items = [eventTriggeredImportJob, parameterImportJob],
+                TotalItems = 3
+            });
         _auditRecords
             .Setup(r => r.QueryAsync(
                 It.IsAny<AuditRecordQuery>(),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<AuditRecord> { Items = [contentAudit] });
+            .ReturnsAsync(new PagedList<AuditRecord> { Items = [contentAudit], TotalItems = 1 });
 
         // Act
         var page = await _subject.QueryAsync(new AuditHistoryQuery
@@ -540,7 +686,6 @@ public class AuditHistoryServiceTests
         {
             Assert.That(entries.Select(entry => entry.Id), Does.Contain(parameterImportJob.Id));
             Assert.That(entries.Select(entry => entry.Id), Does.Contain(eventTriggeredImportJob.Id));
-            Assert.That(entries.Select(entry => entry.Id), Does.Not.Contain(unrelatedJob.Id));
             Assert.That(
                 entries.Single(entry => entry.Id == parameterImportJob.Id).EntityId,
                 Is.EqualTo(downloadId.ToString("D")));
@@ -607,7 +752,7 @@ public class AuditHistoryServiceTests
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<AuditRecord> { Items = [audit] });
+            .ReturnsAsync(new PagedList<AuditRecord> { Items = [audit], TotalItems = 1 });
 
         // Act
         var page = await _subject.QueryAsync(new AuditHistoryQuery
@@ -634,10 +779,10 @@ public class AuditHistoryServiceTests
     }
 
     [Test]
-    public async Task QueryAsync_ReturnsRequestedPage_WhenSourceEndsOnExactBoundary()
+    public async Task QueryAsync_ReturnsTheRequestedPage_WhenOnlyOneSourceIsIncluded()
     {
         // Arrange
-        var baseline = DateTime.UtcNow;
+        var baseline = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
         var first = new AuditRecord
         {
             Id = Guid.NewGuid(),
@@ -667,14 +812,16 @@ public class AuditHistoryServiceTests
             Timestamp = baseline.AddMinutes(-3)
         };
         _auditRecords
-            .SetupSequence(r => r.QueryAsync(
+            .Setup(r => r.QueryAsync(
                 It.IsAny<AuditRecordQuery>(),
-                It.IsAny<PagingParameter>(),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 4),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<AuditRecord> { Items = [first, second], TotalItems = 4 })
-            .ReturnsAsync(new PagedList<AuditRecord> { Items = [third, fourth], TotalItems = 4 })
-            .ReturnsAsync(new PagedList<AuditRecord> { TotalItems = 4 });
+            .ReturnsAsync(new PagedList<AuditRecord>
+            {
+                Items = [first, second, third, fourth],
+                TotalItems = 4
+            });
 
         // Act
         var page = await _subject.QueryAsync(new AuditHistoryQuery
@@ -693,44 +840,23 @@ public class AuditHistoryServiceTests
         _auditRecords.Verify(
             records => records.QueryAsync(
                 It.IsAny<AuditRecordQuery>(),
-                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 2),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _auditRecords.Verify(
-            records => records.QueryAsync(
-                It.IsAny<AuditRecordQuery>(),
-                It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 2),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _auditRecords.Verify(
-            records => records.QueryAsync(
-                It.IsAny<AuditRecordQuery>(),
-                It.Is<PagingParameter>(paging => paging.PageNumber == 3 && paging.PageSize == 2),
+                It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Test]
-    public async Task QueryAsync_FiltersResults_WhenTimestampRangeIsSpecified()
+    public async Task QueryAsync_PassesTheRangeToTheStore_WhenTimestampRangeIsSpecified()
     {
         // Arrange
-        var baseline = DateTime.UtcNow;
+        var baseline = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
         var inRange = new AuditRecord
         {
             Id = Guid.NewGuid(),
             Category = "Content",
             Operation = "Update",
             Timestamp = baseline.AddHours(-1)
-        };
-        var tooOld = new AuditRecord
-        {
-            Id = Guid.NewGuid(),
-            Category = "Content",
-            Operation = "Update",
-            Timestamp = baseline.AddDays(-10)
         };
         var from = baseline.AddDays(-1);
         var to = baseline.AddMinutes(1);
@@ -743,7 +869,7 @@ public class AuditHistoryServiceTests
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<AuditRecord> { Items = [inRange, tooOld], TotalItems = 2 });
+            .ReturnsAsync(new PagedList<AuditRecord> { Items = [inRange], TotalItems = 1 });
 
         // Act
         var page = await _subject.QueryAsync(new AuditHistoryQuery

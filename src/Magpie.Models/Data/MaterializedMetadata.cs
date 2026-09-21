@@ -134,7 +134,7 @@ public sealed record MaterializedMetadata
     public IEnumerable<Award>? Awards { get; init; }
 
     /// <summary>
-    /// The genres.
+    /// The genre classifications.
     /// </summary>
     public IEnumerable<Genre>? Genres { get; init; }
 }

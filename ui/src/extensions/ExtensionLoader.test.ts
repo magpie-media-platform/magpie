@@ -1,7 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExtensionLoader, isValidCustomElementName } from './ExtensionLoader';
@@ -13,8 +9,6 @@ let originalAppendChild: typeof document.head.appendChild;
 const mockFetch = vi.fn();
 const mockCreateObjectURL = vi.fn();
 const mockRevokeObjectURL = vi.fn();
-const testDirectory = dirname(fileURLToPath(import.meta.url));
-const tmdbAssetDirectory = resolve(testDirectory, '../../../src/Magpie.Extensions.Tmdb/Assets');
 
 interface ContextualScriptElement extends HTMLScriptElement {
     magpieExtensionContext?: ExtensionAssetContext;
@@ -276,95 +270,6 @@ describe('ExtensionLoader', () => {
             expect(script).toBeDefined();
             expect(script?.src).toBe('');
             expect(script?.textContent).toContain('__magpieAssetLoaded');
-        });
-
-        it('loads a protected provider template through the inline script context', async () => {
-            const extensionId = 'fe120126-efd7-4db1-a3a1-8b8a881e013a';
-            const runtimeSource = readFileSync(resolve(tmdbAssetDirectory, 'metadata-settings.js'), 'utf8');
-            const templateSource = readFileSync(resolve(tmdbAssetDirectory, 'metadata-settings.html'), 'utf8');
-            const settingsSource = readFileSync(resolve(tmdbAssetDirectory, 'tmdb-settings.js'), 'utf8');
-            const manifest: UIManifest = {
-                assets: [
-                    {
-                        id: 'runtime-asset',
-                        extensionId,
-                        name: 'metadata-settings',
-                        kind: 'Script',
-                        url: null,
-                        relativePath: 'metadata-settings.js',
-                        linkRel: null,
-                        integrity: null,
-                        priority: 90,
-                    },
-                    {
-                        id: 'settings-asset',
-                        extensionId,
-                        name: 'tmdb-settings',
-                        kind: 'Script',
-                        url: null,
-                        relativePath: 'tmdb-settings.js',
-                        linkRel: null,
-                        integrity: null,
-                        priority: 100,
-                    },
-                ],
-                extensions: [],
-            };
-            const observedContexts: ExtensionAssetContext[] = [];
-            const appendChild = document.head.appendChild.bind(document.head);
-            document.head.appendChild = <T extends Node>(node: T): T => {
-                if (node instanceof HTMLScriptElement) {
-                    const script = node as ContextualScriptElement;
-                    if (script.magpieExtensionContext) {
-                        observedContexts.push(script.magpieExtensionContext);
-                    }
-                }
-                return appendChild(node);
-            };
-
-            const runtimeUrl = `/api/ui/assets/${extensionId}/metadata-settings.js`;
-            const templateUrl = `/api/ui/assets/${extensionId}/metadata-settings.html`;
-            const settingsUrl = `/api/ui/assets/${extensionId}/tmdb-settings.js`;
-            mockFetch.mockImplementation((input: string) => {
-                const responses: Record<
-                    string,
-                    ReturnType<typeof mockJsonResponse> | ReturnType<typeof mockTextResponse>
-                > = {
-                    '/api/ui/manifest': mockJsonResponse(manifest),
-                    [runtimeUrl]: mockTextResponse(runtimeSource, 'text/javascript'),
-                    [templateUrl]: mockTextResponse(templateSource, 'text/html'),
-                    [settingsUrl]: mockTextResponse(settingsSource, 'text/javascript'),
-                };
-                return Promise.resolve(responses[input]);
-            });
-            localStorage.setItem('magpie_auth_token', 'test-token');
-
-            const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
-            await loader.init();
-            await vi.waitFor(() => expect(customElements.get('magpie-tmdb-settings')).toBeDefined());
-
-            const templateRequest = mockFetch.mock.calls.find(([url]) => url === templateUrl);
-            expect(templateRequest).toEqual([
-                templateUrl,
-                expect.objectContaining({
-                    credentials: 'include',
-                    headers: expect.any(Headers),
-                    method: 'GET',
-                }),
-            ]);
-            const templateRequestHeaders = templateRequest?.[1]?.headers as Headers;
-            expect(templateRequestHeaders.get('Authorization')).toBe('Bearer test-token');
-            expect(observedContexts).toHaveLength(2);
-            expect(observedContexts[0]).toMatchObject({ apiBaseUrl: '/api', extensionId });
-            expect(Object.isFrozen(observedContexts[0])).toBe(true);
-            expect(observedContexts[0]).not.toHaveProperty('token');
-            expect(window).not.toHaveProperty('magpieExtensionContext');
-
-            const scripts = injectedElements.filter(
-                (element): element is ContextualScriptElement => element instanceof HTMLScriptElement,
-            );
-            expect(scripts).toHaveLength(2);
-            expect(scripts.every((script) => script.magpieExtensionContext === undefined)).toBe(true);
         });
 
         it.each([

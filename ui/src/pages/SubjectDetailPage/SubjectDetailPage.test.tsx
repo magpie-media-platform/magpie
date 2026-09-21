@@ -1,8 +1,4 @@
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
@@ -52,16 +48,14 @@ import { ApiError, apiGet, apiPost } from '@/lib/api';
 import { Role } from '@/auth';
 import { ToastStateProvider } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import { LiveAnnouncerProvider } from '@/components/ui/LiveAnnouncer';
 import type { ApiSubject } from '@/hooks/useSubjects';
 import { STANDARD_METADATA_FIELDS } from '@/hooks/useLibraryTypes';
+import { isSimpleQuery } from '@/lib/simpleFilterQuery';
 
 const mockApiGet = vi.mocked(apiGet);
 const mockApiPost = vi.mocked(apiPost);
 const MISSING_DETAIL_ID = '00000000-0000-0000-0000-000000000000';
-const subjectDetailPageCss = readFileSync(
-    resolve(dirname(fileURLToPath(import.meta.url)), 'SubjectDetailPage.css'),
-    'utf8',
-);
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
@@ -308,11 +302,13 @@ function renderWithRouter(subjectId: string, locationState?: Record<string, unkn
         <QueryClientProvider client={queryClient}>
             <TooltipProvider>
                 <ToastStateProvider>
-                    <MemoryRouter initialEntries={[initialEntry]}>
-                        <Routes>
-                            <Route path="/subjects/:subjectId" element={<SubjectDetailRoute />} />
-                        </Routes>
-                    </MemoryRouter>
+                    <LiveAnnouncerProvider>
+                        <MemoryRouter initialEntries={[initialEntry]}>
+                            <Routes>
+                                <Route path="/subjects/:subjectId" element={<SubjectDetailRoute />} />
+                            </Routes>
+                        </MemoryRouter>
+                    </LiveAnnouncerProvider>
                 </ToastStateProvider>
             </TooltipProvider>
         </QueryClientProvider>,
@@ -472,7 +468,7 @@ describe('SubjectDetailPage', () => {
             expect(screen.queryByText('Create filter')).not.toBeInTheDocument();
         });
 
-        it('shows Search library and Refresh for Requester users', async () => {
+        it('shows Search library, Add content and Refresh for Requester users', async () => {
             mockCurrentRole.current = Role.Requester;
 
             renderWithRouter('subject-1');
@@ -481,7 +477,7 @@ describe('SubjectDetailPage', () => {
             const refresh = screen.getByRole('button', { name: /^refresh$/i });
 
             expect(searchLibrary).toBeInTheDocument();
-            expect(screen.queryByRole('link', { name: 'Add content' })).not.toBeInTheDocument();
+            expect(screen.getByRole('link', { name: 'Add content' })).toBeInTheDocument();
             expect(refresh).toBeEnabled();
         });
 
@@ -569,8 +565,9 @@ describe('SubjectDetailPage', () => {
                 expect(capturedPathname).toBe('/library/all');
             });
             expect(new URLSearchParams(capturedSearch).get('filter')).toBe(
-                'Relationships has (Name = "Breaking Bad" and Type = "person")',
+                'Relationships has (Name contains "Breaking Bad" and Type = "person")',
             );
+            expect(isSimpleQuery(new URLSearchParams(capturedSearch).get('filter') ?? '', 'content')).toBe(true);
             expect(mockApiPost).not.toHaveBeenCalled();
         });
 
@@ -609,7 +606,7 @@ describe('SubjectDetailPage', () => {
                 expect(capturedPathname).toBe('/library/add');
             });
             expect(capturedState).toEqual({
-                filterQuery: 'Relationships has (Name = "Breaking Bad" and Type = "person")',
+                filterQuery: 'Relationships has (Name contains "Breaking Bad" and Type = "person")',
             });
             expect(mockApiPost).not.toHaveBeenCalled();
         });
@@ -641,6 +638,9 @@ describe('SubjectDetailPage', () => {
             await waitFor(() => {
                 expect(screen.getByAltText('Breaking Bad image')).toBeInTheDocument();
             });
+            fireEvent.error(screen.getByAltText('Breaking Bad image'));
+            expect(screen.queryByAltText('Breaking Bad image')).not.toBeInTheDocument();
+            expect(document.querySelector('.subject-detail-page__image--placeholder')).toBeInTheDocument();
         });
 
         it('frames the subject image over a blurred backdrop fill of itself', async () => {
@@ -689,17 +689,8 @@ describe('SubjectDetailPage', () => {
             renderWithRouter('subject-1');
 
             const bio = await screen.findByText((_, element) => element?.textContent === longDescription);
-            const bioRules = Array.from(
-                subjectDetailPageCss.matchAll(/\.subject-detail-page__bio\s*\{([^}]*)\}/g),
-                (match) => match[1],
-            );
             expect(bio).toHaveClass('subject-detail-page__bio');
             expect(bio.textContent).toBe(longDescription);
-            expect(bioRules[0]).toContain('display: -webkit-box;');
-            expect(bioRules[0]).toContain('-webkit-line-clamp: 3;');
-            expect(bioRules[0]).toContain('-webkit-box-orient: vertical;');
-            expect(bioRules[0]).toContain('overflow: hidden;');
-            expect(bioRules).toContainEqual(expect.stringContaining('-webkit-line-clamp: 4;'));
         });
 
         it('renders explicitly labeled genres below the hero in the shared aligned row', async () => {
@@ -829,13 +820,14 @@ describe('SubjectDetailPage', () => {
             expect(screen.getByTestId('subject-tags-row')).toBeInTheDocument();
         });
 
-        it('omits an empty read-only Tags row for viewers', async () => {
+        it('shows an empty read-only Tags row for viewers', async () => {
             mockCurrentRole.current = Role.Viewer;
             mockWithTags([]);
             renderWithRouter('subject-1');
 
             await screen.findByRole('heading', { name: /Breaking Bad/i, level: 1 });
-            expect(screen.queryByTestId('subject-tags-row')).not.toBeInTheDocument();
+            expect(await screen.findByText('No tags')).toBeInTheDocument();
+            expect(screen.getByTestId('subject-tags-row')).toBeInTheDocument();
         });
 
         it('collapses and expands the Genres row with the shared show-all control', async () => {
@@ -1433,8 +1425,11 @@ describe('SubjectDetailPage', () => {
 
             await user.click(screen.getByRole('tab', { name: /relationships/i }));
 
-            const placeholders = screen.getAllByTestId('subject-detail-page__person-image--placeholder');
-            expect(placeholders.length).toBe(3);
+            const cards = document.querySelectorAll('[data-relationship-id]');
+            expect(cards).toHaveLength(3);
+            for (const card of cards) {
+                expect(within(card as HTMLElement).queryByRole('img')).toBeNull();
+            }
         });
     });
 

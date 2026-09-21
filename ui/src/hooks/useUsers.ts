@@ -1,12 +1,13 @@
+import type { ScalarPatch } from '@/types/patch';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
-import { roleFromApi, type Role } from '@/auth';
-import type { UserItem, UserCreate, UserUpdate, UserExternalCreate } from '@/types';
-import type { PagedList } from '@/types/paging';
+import { RoleName, roleFromApi, type Role } from '@/auth';
+import type { UserItem, UserCreate, UserUpdate } from '@/types';
+import type { PagedList, SortDirectionName } from '@/types/paging';
 
 function normalizeUser(user: UserItem): UserItem {
     return { ...user, role: roleFromApi(user.role) };
@@ -19,7 +20,7 @@ export interface UserQueryParams {
     pageNumber?: number;
     pageSize?: number;
     sortBy?: string;
-    sortDirection?: 0 | 1 | 2;
+    sortDirection?: SortDirectionName;
 }
 
 interface UseUsersOptions {
@@ -27,14 +28,13 @@ interface UseUsersOptions {
 }
 
 interface ApiUserPatch {
-    enabled?: { value: boolean };
-    role?: { value: Role };
+    enabled?: ScalarPatch<boolean>;
+    role?: ScalarPatch<string>;
 }
 
 export const userQueryKeys = {
     all: ['users'] as const,
     list: (params?: UserQueryParams) => ['users', 'list', params] as const,
-    detail: (id: string) => ['users', 'detail', id] as const,
     me: () => ['users', 'me'] as const,
 };
 
@@ -45,7 +45,7 @@ function buildUserQueryUrl(params?: UserQueryParams): string {
 
     return buildUrl('/users', {
         providerType: params.providerType,
-        role: params.role,
+        role: params.role === undefined ? undefined : RoleName[params.role],
         enabled: params.enabled,
         pageNumber: params.pageNumber,
         pageSize: params.pageSize,
@@ -64,16 +64,8 @@ async function fetchCurrentUser(): Promise<UserItem> {
     return normalizeUser(await apiGet<UserItem>('/users/my'));
 }
 
-async function fetchUser(id: string): Promise<UserItem> {
-    return normalizeUser(await apiGet<UserItem>(`/users/${id}`));
-}
-
 async function createUser(data: UserCreate): Promise<UserItem> {
-    return normalizeUser(await apiPost<UserItem>('/users', data));
-}
-
-async function createExternalUser(data: UserExternalCreate): Promise<UserItem> {
-    return normalizeUser(await apiPost<UserItem>('/users/external', data));
+    return normalizeUser(await apiPost<UserItem>('/users', { ...data, role: RoleName[data.role] }));
 }
 
 async function updateUser(id: string, data: ApiUserPatch): Promise<void> {
@@ -111,13 +103,6 @@ export function useUsers(params?: UserQueryParams, options?: UseUsersOptions) {
         },
     });
 
-    const createExternalMutation = useMutation({
-        mutationFn: (data: UserExternalCreate) => createExternalUser(data),
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
-        },
-    });
-
     const updateMutation = useMutation({
         mutationFn: async ({ id, data }: { id: string; data: UserUpdate }) => {
             const apiData: ApiUserPatch = {};
@@ -125,7 +110,7 @@ export function useUsers(params?: UserQueryParams, options?: UseUsersOptions) {
                 apiData.enabled = { value: data.enabled };
             }
             if (data.role !== undefined) {
-                apiData.role = { value: data.role };
+                apiData.role = { value: RoleName[data.role] };
             }
             return updateUser(id, apiData);
         },
@@ -178,9 +163,6 @@ export function useUsers(params?: UserQueryParams, options?: UseUsersOptions) {
         createUser: createMutation.mutateAsync,
         isCreating: createMutation.isPending,
 
-        createExternalUser: createExternalMutation.mutateAsync,
-        isCreatingExternal: createExternalMutation.isPending,
-
         updateUser: patchUser,
         isUpdating: updateMutation.isPending,
 
@@ -218,26 +200,5 @@ export function useCurrentUser() {
         isLoading: currentUserQuery.isLoading,
         error: queryErrorOrNull(currentUserQuery),
         refetch: currentUserQuery.refetch,
-    };
-}
-
-export function useUser(id: string | null) {
-    useInvalidateQueriesOnEvents(
-        ['user.created', 'user.updated', 'user.deleted', 'user.lockedOut', 'user.unlocked'],
-        [userQueryKeys.detail(id ?? '')],
-        { entityIds: id ? [id] : [], exact: true, owner: 'users:detail' },
-    );
-    const userQuery = useQuery({
-        queryKey: userQueryKeys.detail(id ?? ''),
-        queryFn: () => fetchUser(id!),
-        enabled: !!id,
-        staleTime: POLLING_INTERVALS.slow,
-    });
-
-    return {
-        user: userQuery.data ?? null,
-        isLoading: userQuery.isLoading,
-        error: queryErrorOrNull(userQuery),
-        refetch: userQuery.refetch,
     };
 }

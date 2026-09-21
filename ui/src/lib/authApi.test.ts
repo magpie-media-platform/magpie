@@ -8,10 +8,8 @@ import {
     isTokenExpired,
     hasStoredSession,
     getCurrentUserFromToken,
-    clearAuthStorage,
-    tokenExpirationStorage,
 } from './authApi';
-import { tokenStorage } from './api';
+import { clearAuthStorage, tokenExpirationStorage, tokenStorage } from './tokenStorage';
 import { Role } from '@/auth/types';
 
 const mockFetch = vi.fn();

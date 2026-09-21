@@ -147,14 +147,6 @@ describe('settingsQueryKeys', () => {
     it('should produce correct all key', () => {
         expect(settingsQueryKeys.all).toEqual(['settings']);
     });
-
-    it('should produce correct systemGroup key', () => {
-        expect(settingsQueryKeys.systemGroup('backups')).toEqual(['settings', 'system', 'backups']);
-    });
-
-    it('should produce correct extensionGroups key', () => {
-        expect(settingsQueryKeys.extensionGroups('ext-123')).toEqual(['settings', 'extension', 'ext-123']);
-    });
 });
 
 describe('useSystemSettingsGroup', () => {
@@ -166,6 +158,29 @@ describe('useSystemSettingsGroup', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('shares the group list across system names and extensions', async () => {
+        // Arrange
+        mockApiGet.mockResolvedValue([
+            { id: 'general', name: 'general', extensionId: null, settings: [], createdAt: '' },
+            { id: 'extension', name: 'general', extensionId: 'extension-a', settings: [], createdAt: '' },
+        ]);
+        // Act
+        const { result } = renderHook(
+            () => ({
+                system: useSystemSettingsGroup('general'),
+                missing: useSystemSettingsGroup('missing'),
+                extension: useExtensionSettingsGroups('extension-a'),
+            }),
+            { wrapper: createWrapper() },
+        );
+        await waitFor(() => expect(result.current.system.isLoading).toBe(false));
+        // Assert
+        expect(mockApiGet).toHaveBeenCalledTimes(1);
+        expect(result.current.system.group?.id).toBe('general');
+        expect(result.current.missing.group).toBeNull();
+        expect(result.current.extension.groups.map((group) => group.id)).toEqual(['extension']);
     });
 
     it('should read the named system group from the settings-group list', async () => {
@@ -451,6 +466,29 @@ describe('useExtensionSettingsGroups', () => {
             wrapper: createWrapper(),
         });
 
+        expect(result.current.groups).toEqual([]);
+        expect(mockApiGet).not.toHaveBeenCalled();
+    });
+
+    it.each([null, ''])('returns no groups for extensionId %s with a populated cache', (extensionId) => {
+        // Arrange
+        const queryClient = new QueryClient();
+        queryClient.setQueryData(settingsQueryKeys.groups, [
+            { id: 'system', name: 'general', extensionId: null, settings: [], createdAt: '' },
+            { id: 'extension', name: 'general', extensionId: 'ext-abc', settings: [], createdAt: '' },
+        ]);
+
+        // Act
+        const { result, rerender } = renderHook(({ id }) => useExtensionSettingsGroups(id), {
+            initialProps: { id: extensionId as string | null },
+            wrapper: ({ children }) => createElement(QueryClientProvider, { client: queryClient }, children),
+        });
+
+        // Assert
+        expect(result.current.groups).toEqual([]);
+        rerender({ id: 'ext-abc' });
+        expect(result.current.groups.map((group) => group.id)).toEqual(['extension']);
+        rerender({ id: extensionId });
         expect(result.current.groups).toEqual([]);
         expect(mockApiGet).not.toHaveBeenCalled();
     });

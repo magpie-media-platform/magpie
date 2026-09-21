@@ -7,9 +7,9 @@ import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 import { AuthProvider as ProductionAuthProvider } from './AuthContext';
 import { useAuth } from './useAuth';
 import { Role, type EffectivePermissions } from './types';
-import { clearAuthStorage, tokenExpirationStorage } from '@/lib/authApi';
+import { clearAuthStorage, tokenExpirationStorage, tokenStorage } from '@/lib/tokenStorage';
 import * as authApiModule from '@/lib/authApi';
-import { ApiError, tokenStorage } from '@/lib/api';
+import { ApiError } from '@/lib/api';
 import { ToastStateProvider, useToast } from '@/components/ui/Toast';
 
 vi.mock('@/lib/authApi', async (importOriginal) => {

@@ -16,22 +16,8 @@
             color: var(--accent-secondary, var(--text-secondary));
         }
 
-        &[data-tone='running'] {
-            border-color: var(--accent-primary);
-            color: var(--accent-primary);
-        }
-
-        &[data-tone='recently-completed'] {
-            border-color: var(--status-healthy);
-            color: var(--status-healthy);
-        }
-
         & svg {
             font-size: var(--text-base);
         }
-    }
-
-    .refresh-status-badge__spinner {
-        animation: spin var(--duration-spinner) linear infinite;
     }
 }

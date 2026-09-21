@@ -3,6 +3,7 @@ import { CaretDownIcon, CheckIcon, PlusIcon } from '@phosphor-icons/react';
 import { Link } from 'react-router-dom';
 
 import { DisabledTooltip } from '@/auth/DisabledTooltip';
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import {
@@ -129,21 +130,6 @@ export function RowActions({ candidate, ctx }: RowActionsProps) {
     );
 }
 
-function PosterCell({ candidate }: { candidate: AddableCandidate }) {
-    const image = candidate.thumbnailUrl ? (
-        <img
-            src={candidate.thumbnailUrl}
-            alt=""
-            className="library-add-page__poster"
-            loading="lazy"
-            data-testid="library-add-page__result-image"
-        />
-    ) : (
-        <div className="library-add-page__poster library-add-page__poster--placeholder" aria-hidden="true" />
-    );
-    return image;
-}
-
 export function TitleHeading({
     candidate,
     onPreview,
@@ -212,7 +198,7 @@ export function TypeCell({ candidate }: { candidate: AddableCandidate }) {
     );
 }
 
-const PUBLISHED_DATE_FORMAT = new Intl.DateTimeFormat('en-US', {
+const PUBLISHED_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -263,7 +249,16 @@ export function buildAddableColumns({ rowActionContext }: BuildAddableColumnsCon
             header: '',
             enableSorting: false,
             size: 64,
-            cell: ({ row }) => <PosterCell candidate={row.original} />,
+            cell: ({ row }) => (
+                <ContentPoster
+                    posterUrl={row.original.thumbnailUrl}
+                    alt=""
+                    className="library-add-page__poster"
+                    placeholderClassName="library-add-page__poster--placeholder"
+                    placeholder={null}
+                    data-testid="library-add-page__result-image"
+                />
+            ),
         },
         {
             id: 'title',

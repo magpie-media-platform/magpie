@@ -8,6 +8,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 
 using Microsoft.EntityFrameworkCore;
@@ -23,7 +24,7 @@ internal sealed class MediaFileRepository(
     {
         try
         {
-            var pathKey = GetPathKey(filePath);
+            var pathKey = ToMediaFilePathKey(filePath);
             return await context.MediaFiles
                 .AsNoTracking()
                 .FirstOrDefaultAsync(mediaFile => mediaFile.PathKey == pathKey, cancellationToken)
@@ -93,7 +94,14 @@ internal sealed class MediaFileRepository(
 
             if (query.FilePaths is { } filePaths)
             {
-                items = items.Where(item => filePaths.Contains(item.FilePath));
+                var pathKeys = filePaths.Select(ToMediaFilePathKey).ToList();
+                items = items.Where(item => pathKeys.Contains(item.PathKey));
+            }
+
+            if (query.FilePathPrefix is { } filePathPrefix)
+            {
+                var prefixKey = ToMediaFilePathKey(filePathPrefix);
+                items = items.Where(item => item.PathKey.StartsWith(prefixKey));
             }
 
             if (query.MediaInfoStaleBefore is { } staleCutoff)
@@ -102,11 +110,7 @@ internal sealed class MediaFileRepository(
                     item => item.MediaInfo == null || (item.ModifiedAt ?? item.CreatedAt) < staleCutoff);
             }
 
-            items = query.MediaInfoStaleBefore is null
-                ? items.OrderBy(item => item.CreatedAt).ThenBy(item => item.Id)
-                : items.OrderBy(item => item.MediaInfo == null ? 0 : 1)
-                    .ThenBy(item => item.CreatedAt)
-                    .ThenBy(item => item.Id);
+            items = ApplySort(items, sort, query.MediaInfoStaleBefore is not null);
             var totalItems = await items.CountAsync(cancellationToken).ConfigureAwait(false);
             items = items.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
@@ -132,7 +136,7 @@ internal sealed class MediaFileRepository(
     {
         try
         {
-            mediaFile.PathKey = GetPathKey(mediaFile.FilePath);
+            mediaFile.PathKey = ToMediaFilePathKey(mediaFile.FilePath);
             mediaFile.CreatedByUserId = createdByUserId;
             context.MediaFiles.Add(mediaFile);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -172,7 +176,7 @@ internal sealed class MediaFileRepository(
     {
         try
         {
-            var pathKey = GetPathKey(mediaFile.FilePath);
+            var pathKey = ToMediaFilePathKey(mediaFile.FilePath);
             var updated = await context.MediaFiles
                 .Where(item => item.Id == mediaFile.Id)
                 .ExecuteUpdateAsync(
@@ -197,6 +201,31 @@ internal sealed class MediaFileRepository(
         }
     }
 
-    private static string GetPathKey(string filePath) =>
+    private static string ToMediaFilePathKey(string filePath) =>
         OperatingSystem.IsWindows() ? filePath.ToUpperInvariant() : filePath;
+
+    private IQueryable<MediaFile> ApplySort(
+        IQueryable<MediaFile> items,
+        SortParameter? sort,
+        bool staleFirst)
+    {
+        var property = context.Model.FindEntityType(typeof(MediaFile))!.GetProperties()
+            .Where(candidate => !candidate.IsShadowProperty() &&
+                (candidate.ClrType.IsValueType || candidate.ClrType == typeof(string) ||
+                    candidate.ClrType == typeof(Uri)))
+            .Select(candidate => candidate.Name)
+            .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
+        if (sort is null || property is null)
+        {
+            return staleFirst
+                ? items.OrderBy(item => item.MediaInfo == null ? 0 : 1)
+                    .ThenBy(item => item.CreatedAt)
+                    .ThenBy(item => item.Id)
+                : items.OrderBy(item => item.CreatedAt).ThenBy(item => item.Id);
+        }
+
+        return sort.Direction == SortDirection.Ascending
+            ? items.OrderBy(item => EF.Property<object>(item, property)).ThenBy(item => item.Id)
+            : items.OrderByDescending(item => EF.Property<object>(item, property)).ThenBy(item => item.Id);
+    }
 }

@@ -32,6 +32,8 @@ internal sealed class WikidataClient(
 
     private const int EntitySearchLimit = 50;
 
+    private const int EntitySearchPageLimit = 10;
+
     private static readonly TimeSpan ActionTimeout = TimeSpan.FromSeconds(20);
 
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(10);
@@ -40,6 +42,8 @@ internal sealed class WikidataClient(
     {
         PropertyNameCaseInsensitive = true
     };
+
+    private readonly SemaphoreSlim _requestGate = new(2, 2);
 
     public async Task<IReadOnlyDictionary<string, EntityDto>> GetEntitiesAsync(
         IReadOnlyCollection<string> ids,
@@ -103,9 +107,18 @@ internal sealed class WikidataClient(
             ?? Settings.FallbackLanguage;
         var qids = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        int? continuation = null;
+        var continuation = default(int?);
+        var pages = 0;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(1));
         do
         {
+            timeout.Token.ThrowIfCancellationRequested();
+            if (pages++ == EntitySearchPageLimit)
+            {
+                throw new WikidataBudgetException("Wikidata entity search scanned too many pages without finishing.");
+            }
+
             var parameters = new List<(string Key, string Value)>
             {
                 ("action", "wbsearchentities"),
@@ -129,7 +142,7 @@ internal sealed class WikidataClient(
             var envelope = await GetActionJsonAsync<EntitySearchResponseDto>(
                 BuildUri(DefaultApiUrl, parameters),
                 context,
-                cancellationToken).ConfigureAwait(false);
+                timeout.Token).ConfigureAwait(false);
             if (envelope?.Search is null)
             {
                 throw new HttpRequestException("Wikidata returned no entity search result.");
@@ -137,13 +150,14 @@ internal sealed class WikidataClient(
 
             foreach (var value in envelope.Search)
             {
-                var qid = value.Id?.Trim().ToUpperInvariant();
-                if (qid is not null &&
-                    qid.Length > 1 &&
-                    qid[0] == 'Q' &&
-                    qid.Substring(1).All(character => character is >= '0' and <= '9') &&
-                    seen.Add(qid))
+                var qid = value.Id.ToQid();
+                if (qid is not null && seen.Add(qid))
                 {
+                    if (qids.Count == EntitySearchLimit * EntitySearchPageLimit)
+                    {
+                        throw new WikidataBudgetException("Wikidata entity search matched too many results.");
+                    }
+
                     qids.Add(qid);
                 }
             }
@@ -304,8 +318,16 @@ internal sealed class WikidataClient(
         HttpRequestMessage message,
         CancellationToken cancellationToken)
     {
-        using var client = httpClientFactory.CreateClient(HttpClientName);
-        return await client.SendAsync(message, cancellationToken).ConfigureAwait(false);
+        await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var client = httpClientFactory.CreateClient(HttpClientName);
+            return await client.SendAsync(message, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _requestGate.Release();
+        }
     }
 
     private async Task<T?> GetActionJsonAsync<T>(
@@ -336,7 +358,7 @@ internal sealed class WikidataClient(
             {
                 var lagDelay = ResolveMaxLagRetryDelay(response, timeProvider);
                 logger.LogWarning(
-                    "Wikidata Action API reported maxlag. The client will retry after {DelaySeconds}s.",
+                    "Wikidata Action API reported maxlag; the client retries after {DelaySeconds}s.",
                     lagDelay.TotalSeconds);
                 await Task.Delay(lagDelay, timeoutSource.Token).ConfigureAwait(false);
                 continue;

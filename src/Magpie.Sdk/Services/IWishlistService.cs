@@ -35,7 +35,7 @@ public interface IWishlistService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a wishlist by id when the caller can see it.
+    /// A wishlist by id when the caller can see it.
     /// </summary>
     /// <param name="wishlistId">The id of the wishlist to return</param>
     /// <param name="callerUserId">The id of the user that makes the request</param>
@@ -89,7 +89,7 @@ public interface IWishlistService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a page of the discovered ledger of a wishlist when the caller can see it.
+    /// A page of the discovered ledger of a wishlist when the caller can see it.
     /// </summary>
     /// <param name="wishlistId">The id of the wishlist to read</param>
     /// <param name="query">The filter criteria, page number, and page size for the ledger</param>

@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Data;
@@ -26,12 +25,20 @@ internal sealed class DownloadStuckDetectionJob(
     ILogger<DownloadStuckDetectionJob> logger,
     TimeProvider timeProvider,
     IDownloadService downloadService,
-    IDataProtectionService protector,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
+    private enum CurrentClientStatusResult
+    {
+        NotFound,
+        Refreshed,
+        VerificationFailed
+    }
+
+    private readonly record struct StuckDownloadThresholds(TimeSpan Fetching, TimeSpan Stalled);
+
     public static readonly JobSpec Spec = new()
     {
-        JobType = "DownloadStuckDetection",
+        JobType = MagpieJobs.Types.DownloadStuckDetection,
         DisplayName = "Download stuck detection",
         Description = "Marks downloads as stuck if they've stopped responding, allowing Magpie to try another release.",
         Category = "System",
@@ -44,13 +51,13 @@ internal sealed class DownloadStuckDetectionJob(
         Parameters =
         [
             new(
-                FetchingMinutesParameter,
+                MagpieJobs.Parameters.FetchingMinutes,
                 "Minutes before a fetching download is considered stuck.",
                 DataType.Number,
                 false,
                 "20"),
             new(
-                StalledMinutesParameter,
+                MagpieJobs.Parameters.StalledMinutes,
                 "Minutes before a stalled download is considered stuck.",
                 DataType.Number,
                 false,
@@ -60,23 +67,13 @@ internal sealed class DownloadStuckDetectionJob(
 
     private const int DefaultFetchingMinutes = 20;
     private const int DefaultStalledMinutes = 90;
-    private const string FetchingMinutesParameter = "fetchingMinutes";
-    private const string StalledMinutesParameter = "stalledMinutes";
-
-    private enum CurrentClientStatusResult
-    {
-        NotFound,
-        Refreshed,
-        VerificationFailed
-    }
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
         var userId = jobContext.ManualTriggerUserId;
         var correlationId = jobContext.CorrelationId;
-        var progress = progressReporter;
 
-        progress?.Report(0, "The detection will get the limits for stuck downloads.");
+        progressReporter.Report(0, "The detection will get the limits for stuck downloads.");
 
         var thresholds = ResolveThresholds(jobContext.Parameters);
         var now = timeProvider.GetUtcNow().UtcDateTime;
@@ -84,7 +81,7 @@ internal sealed class DownloadStuckDetectionJob(
         var fetchingCutoff = now - thresholds.Fetching;
         var stalledCutoff = now - thresholds.Stalled;
 
-        progress?.Report(null, "The detection will load the stuck downloads.");
+        progressReporter.Report(null, "The detection will load the stuck downloads.");
 
         var candidates = await downloadRepository
             .ListStuckCandidatesAsync(fetchingCutoff, stalledCutoff, cancellationToken)
@@ -92,7 +89,7 @@ internal sealed class DownloadStuckDetectionJob(
 
         if (candidates.Count == 0)
         {
-            progress?.Report(1, "The detection found no stuck downloads.");
+            progressReporter.Report(1, "The detection found no stuck downloads.");
             logger.LogInformation(
                 "Stuck detection found no stuck downloads (fetching threshold {FetchingThreshold}, " +
                 "stalled threshold {StalledThreshold})",
@@ -107,7 +104,7 @@ internal sealed class DownloadStuckDetectionJob(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var candidate = candidates[i];
-            progress?.ReportFraction(
+            progressReporter.ReportFraction(
                 i,
                 candidates.Count,
                 $"The detection will change the status of {candidates.Count} stuck downloads.");
@@ -162,7 +159,7 @@ internal sealed class DownloadStuckDetectionJob(
             }
         }
 
-        progress?.Report(1, "The stuck-download detection completed.");
+        progressReporter.Report(1, "The stuck-download detection completed.");
 
         logger.LogInformation(
             "Stuck detection refreshed {Refreshed} downloads and moved {Transitioned} of {Candidates} to " +
@@ -176,15 +173,15 @@ internal sealed class DownloadStuckDetectionJob(
 
     private StuckDownloadThresholds ResolveThresholds(IReadOnlyDictionary<string, string> parameters)
     {
-        var fetching = parameters.TryGetValue(FetchingMinutesParameter, out var rawFetching)
+        var fetching = parameters.TryGetValue(MagpieJobs.Parameters.FetchingMinutes, out var rawFetching)
             ? TimeSpan.FromMinutes(ReadPositiveMinutesParameter(
-                FetchingMinutesParameter,
+                MagpieJobs.Parameters.FetchingMinutes,
                 rawFetching,
                 DefaultFetchingMinutes))
             : TimeSpan.FromMinutes(DefaultFetchingMinutes);
-        var stalled = parameters.TryGetValue(StalledMinutesParameter, out var rawStalled)
+        var stalled = parameters.TryGetValue(MagpieJobs.Parameters.StalledMinutes, out var rawStalled)
             ? TimeSpan.FromMinutes(ReadPositiveMinutesParameter(
-                StalledMinutesParameter,
+                MagpieJobs.Parameters.StalledMinutes,
                 rawStalled,
                 DefaultStalledMinutes))
             : TimeSpan.FromMinutes(DefaultStalledMinutes);
@@ -200,7 +197,7 @@ internal sealed class DownloadStuckDetectionJob(
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Raw} is not a positive integer. The job will use the default {Default}",
+            "Parameter {Parameter} value {Raw} is not a positive integer, so the job will use the default {Default}",
             parameterName,
             raw,
             defaultMinutes);
@@ -225,18 +222,28 @@ internal sealed class DownloadStuckDetectionJob(
         if (integration is null)
         {
             logger.LogWarning(
-                "Stuck detection skipped the status check of download {DownloadId}." +
-                " No integration is registered for provider {ProviderType}",
+                "Stuck detection skipped the status check of download {DownloadId} because no integration is" +
+                " registered for provider {ProviderType}",
                 candidate.DownloadId,
                 candidate.ProviderType);
             return CurrentClientStatusResult.NotFound;
+        }
+
+        if (candidate.Settings is null)
+        {
+            logger.LogWarning(
+                "Client {DownloadClientName} has no settings, so stuck detection could not verify" +
+                " download {DownloadId}",
+                candidate.ClientName,
+                candidate.DownloadId);
+            return CurrentClientStatusResult.VerificationFailed;
         }
 
         BatchDownloadStatusResult batch;
         try
         {
             batch = await integration
-                .GetDownloadsAsync([candidate.ExternalId], protector.Unprotect(candidate.Settings), cancellationToken)
+                .GetDownloadsAsync([candidate.ExternalId], candidate.Settings, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -275,6 +282,4 @@ internal sealed class DownloadStuckDetectionJob(
 
         return applied ? CurrentClientStatusResult.Refreshed : CurrentClientStatusResult.NotFound;
     }
-
-    private readonly record struct StuckDownloadThresholds(TimeSpan Fetching, TimeSpan Stalled);
 }

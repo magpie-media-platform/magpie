@@ -45,7 +45,6 @@
         border: 1px solid var(--border-default);
         border-radius: var(--radius-md);
         padding: var(--space-md);
-        cursor: pointer;
         transition:
             border-color var(--duration-fast) var(--easing-default),
             background-color var(--duration-fast) var(--easing-default);
@@ -54,14 +53,9 @@
             border-color: var(--border-accent);
             background-color: color-mix(in srgb, var(--bg-secondary) 95%, var(--accent-primary));
         }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: var(--focus-ring-offset);
-        }
     }
 
-    .wishlists-page__item--unmonitored {
+    .wishlists-page__item--disabled {
         opacity: var(--opacity-muted);
     }
 
@@ -169,6 +163,16 @@
     }
 
     .wishlists-page__item-synced {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+
+        & svg {
+            font-size: var(--text-sm);
+        }
+    }
+
+    .wishlists-page__item-monitoring {
         display: inline-flex;
         align-items: center;
         gap: var(--space-xs);

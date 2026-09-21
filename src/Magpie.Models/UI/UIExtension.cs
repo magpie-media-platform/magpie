@@ -11,40 +11,40 @@ public sealed record UIExtension
     /// <summary>
     /// The id of this UI extension.
     /// </summary>
-    public required Guid Id { get; init; }
+    public required Guid Id { get; set; }
 
     /// <summary>
     /// The id of the extension that owns this UI extension.
     /// </summary>
-    public required Guid ExtensionId { get; init; }
+    public required Guid ExtensionId { get; set; }
 
     /// <summary>
     /// The display name of this UI extension.
     /// </summary>
-    public required string Name { get; init; }
+    public required string Name { get; set; }
 
     /// <summary>
     /// The id of the frontend slot that renders this component.
     /// </summary>
-    public required string Slot { get; init; }
+    public required string Slot { get; set; }
 
     /// <summary>
     /// How the component changes the slot.
     /// </summary>
-    public string Modifier { get; init; } = "After";
+    public string Modifier { get; set; } = "After";
 
     /// <summary>
     /// The tag name of the web component.
     /// </summary>
-    public required string TagName { get; init; }
+    public required string TagName { get; set; }
 
     /// <summary>
     /// The render order of the component. Lower values render first.
     /// </summary>
-    public int Priority { get; init; }
+    public int Priority { get; set; }
 
     /// <summary>
     /// The custom attributes for the web component, keyed by attribute name.
     /// </summary>
-    public IReadOnlyDictionary<string, string>? Attributes { get; init; }
+    public IReadOnlyDictionary<string, string>? Attributes { get; set; }
 }

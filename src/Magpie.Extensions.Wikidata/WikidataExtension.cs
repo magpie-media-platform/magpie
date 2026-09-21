@@ -52,8 +52,10 @@ public sealed class WikidataExtension : IExtension
 
         services.AddScoped<IContentHierarchyMetadataSearcher, ContentMetadataSearcher>();
 
-        services.AddSingleton<IUIExtensionProvider, AdminUiProvider>();
-        services.AddSingleton<IAssetProvider, AdminUiProvider>();
-        services.AddSingleton<IExtensionSettingsSchemaProvider, AdminUiProvider>();
+        services.AddSingleton<AdminUiProvider>();
+        services.AddSingleton<IUIExtensionProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IAssetProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IExtensionSettingsSchemaProvider>(
+            provider => provider.GetRequiredService<AdminUiProvider>());
     }
 }

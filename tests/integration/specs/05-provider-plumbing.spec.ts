@@ -482,7 +482,7 @@ test.describe.serial('Journey 05: wire up the plumbing', () => {
             await page.getByRole('button', { name: `Edit ${client.name}` }).click();
             form = page.getByRole('dialog', { name: 'Edit Download Client' });
             const replacement = form.locator('input[data-field="apiKey"]');
-            await form.getByRole('button', { name: 'Clear API Key' }).click();
+            await form.getByRole('button', { name: 'Replace API Key' }).click();
             await replacement.fill('journey-replacement-secret');
             await form.locator('[data-action="save"]').click();
             await expect(form).toBeHidden();

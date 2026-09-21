@@ -12,7 +12,7 @@ namespace Magpie.Sdk.Content;
 public interface ISubjectMetadataProvider
 {
     /// <summary>
-    /// The supported subject kinds.
+    /// The subject kinds that this provider supplies metadata for.
     /// </summary>
     IEnumerable<string> SupportedSubjectKinds { get; }
 

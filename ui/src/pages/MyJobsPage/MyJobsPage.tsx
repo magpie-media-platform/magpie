@@ -4,13 +4,15 @@ import { ClockCountdownIcon, ClockCounterClockwiseIcon, CalendarBlankIcon, Light
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { Button } from '@/components/ui/Button';
+import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { Switch } from '@/components/ui/Switch';
 import { JobExecutionFilters, type JobExecutionFilterState } from '@/components/ui/JobExecutionFilters';
 import { ExecutionRow } from '@/components/jobs/ExecutionRow';
-import { useAuth } from '@/auth';
+import { Role, useAuth } from '@/auth';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
 import {
@@ -39,10 +41,17 @@ const EXECUTIONS_PAGE_SIZE = 50;
 type MyJobsFilters = JobExecutionFilterState & {
     tab: string;
     rootsOnly: string;
+    correlationId: string;
     [key: string]: string;
 };
 
-const DEFAULT_FILTERS: MyJobsFilters = { tab: 'executions', template: '', status: '', rootsOnly: '1' };
+const DEFAULT_FILTERS: MyJobsFilters = {
+    tab: 'executions',
+    template: '',
+    status: '',
+    rootsOnly: '1',
+    correlationId: '',
+};
 
 function specsToTemplateOptions(specs: ReturnType<typeof useJobSpecs>['specs']): TemplateOption[] {
     return specs
@@ -62,7 +71,7 @@ function specsToTemplateOptions(specs: ReturnType<typeof useJobSpecs>['specs']):
 
 export function MyJobsPage() {
     useDocumentTitle('My Jobs');
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const linkedJobId = searchParams.get('job');
 
     const { filters, page, setFilters, setPage } = useUrlTableState<MyJobsFilters>({
@@ -73,6 +82,7 @@ export function MyJobsPage() {
 
     const activeTab = filters.tab;
     const rootsOnly = filters.rootsOnly !== '0';
+    const correlationId = filters.correlationId || undefined;
     const executionFilters: JobExecutionFilterState = useMemo(
         () => ({ template: filters.template, status: filters.status }),
         [filters.template, filters.status],
@@ -80,7 +90,7 @@ export function MyJobsPage() {
 
     const setActiveTab = useCallback(
         (tab: string) => {
-            setFilters(tab !== 'executions' ? { tab, template: '', status: '' } : { tab });
+            setFilters(tab !== 'executions' ? { tab, template: '', status: '', correlationId: '' } : { tab });
         },
         [setFilters],
     );
@@ -99,9 +109,13 @@ export function MyJobsPage() {
         [setFilters],
     );
 
-    const { hasPermission, user } = useAuth();
+    const clearCorrelationFilter = useCallback(() => {
+        setFilters({ correlationId: '' });
+    }, [setFilters]);
+
+    const { hasPermission, hasRole, user } = useAuth();
     const canManageTriggers = hasPermission('jobs.schedule');
-    const canViewAdminJobs = hasPermission('jobs.view');
+    const canViewAdminJobs = hasRole(Role.Admin);
 
     const [runDialogOpen, setRunDialogOpen] = useState(false);
 
@@ -119,13 +133,22 @@ export function MyJobsPage() {
         if (wireStatuses && wireStatuses.length > 0) {
             params.status = wireStatuses;
         }
+        if (correlationId) {
+            params.correlationId = correlationId;
+        }
         return params;
-    }, [rootsOnly, page, executionFilters.template, executionFilters.status]);
+    }, [rootsOnly, correlationId, page, executionFilters.template, executionFilters.status]);
 
-    const { jobs: userJobs, pagination, runJob, refetch: refetchJobs } = useJobs(executionQueryParams);
-    const linkedJobIsListed = linkedJobId !== null && userJobs.some((execution) => execution.id === linkedJobId);
-    const { job: linkedJob } = useJobExecution(linkedJobId ?? '', linkedJobId !== null && !linkedJobIsListed);
-    const displayedUserJobs = linkedJob && !linkedJobIsListed ? [linkedJob, ...userJobs] : userJobs;
+    const {
+        jobs: userJobs,
+        pagination,
+        isLoading: isLoadingJobs,
+        runJob,
+        refetch: refetchJobs,
+    } = useJobs(executionQueryParams);
+    const isSingleJob = linkedJobId !== null;
+    const { job: linkedJob, isLoading: isLoadingLinkedJob } = useJobExecution(linkedJobId ?? '', isSingleJob);
+    const displayedUserJobs = isSingleJob ? (linkedJob ? [linkedJob] : []) : userJobs;
 
     const schedCrud = useScheduleTriggerCrud({
         runJob,
@@ -162,7 +185,6 @@ export function MyJobsPage() {
         [manualSpecs, user?.role],
     );
     const hasRunnableJobs = runnableJobOptions.length > 0;
-    const canRunJobs = hasRunnableJobs;
 
     const userScheduleTriggers = schedCrud.triggers;
     const userEventTriggers = eventCrud.triggers;
@@ -171,20 +193,21 @@ export function MyJobsPage() {
     const totalEvents = userEventTriggers.length;
 
     const templateOptions: TemplateOption[] = useMemo(() => {
-        const seen = new Set<string>();
-        const options: TemplateOption[] = [];
+        const options = specsToTemplateOptions(manualSpecs);
+        const known = new Set(options.map((option) => option.id));
         for (const job of userJobs) {
-            if (!seen.has(job.jobType)) {
-                seen.add(job.jobType);
+            if (!known.has(job.jobType)) {
+                known.add(job.jobType);
                 options.push({ id: job.jobType, name: job.jobType });
             }
         }
         return options;
-    }, [userJobs]);
+    }, [manualSpecs, userJobs]);
 
     const totalExecutions = pagination?.totalItems ?? 0;
     const totalPages = Math.max(1, Math.ceil(totalExecutions / EXECUTIONS_PAGE_SIZE));
-    const hasActiveFilters = executionFilters.template !== '' || executionFilters.status !== '';
+    const hasActiveFilters =
+        executionFilters.template !== '' || executionFilters.status !== '' || Boolean(correlationId);
 
     const handleRefresh = useCallback(async () => {
         await Promise.all([refetchJobs(), schedCrud.refetch(), eventCrud.refetch()]);
@@ -194,7 +217,7 @@ export function MyJobsPage() {
     if (canViewAdminJobs) {
         executionsEmptyDescription += ' System and scheduled jobs appear under Admin > System Jobs.';
     }
-    if (canRunJobs) {
+    if (hasRunnableJobs) {
         executionsEmptyDescription += ' Run a job to see your execution history here.';
     }
 
@@ -225,21 +248,6 @@ export function MyJobsPage() {
                     </TabsList>
 
                     <TabsContent value="executions">
-                        {canRunJobs && (
-                            <div className="my-jobs-page__section-header">
-                                <Button
-                                    variant="primary"
-                                    size="sm"
-                                    onClick={() => setRunDialogOpen(true)}
-                                    disabled={!hasRunnableJobs}
-                                    data-action="run-job"
-                                >
-                                    <LightningIcon weight="bold" aria-hidden="true" />
-                                    <span>Run a job</span>
-                                </Button>
-                            </div>
-                        )}
-
                         <div className="my-jobs-page__executions-toolbar">
                             <JobExecutionFilters
                                 filters={executionFilters}
@@ -247,6 +255,19 @@ export function MyJobsPage() {
                                 statusOptions={statusFilterOptions}
                                 onChange={setExecutionFilters}
                             />
+                            {correlationId && (
+                                <div className="my-jobs-page__chain-filter" data-control="chain-filter">
+                                    <span className="my-jobs-page__chain-filter-label" title={correlationId}>
+                                        Chain:{' '}
+                                        {correlationId.length > 12 ? `${correlationId.slice(0, 8)}…` : correlationId}
+                                    </span>
+                                    <ClearFiltersButton
+                                        label="Clear chain filter"
+                                        onClick={clearCorrelationFilter}
+                                        data-action="clear-chain-filter"
+                                    />
+                                </div>
+                            )}
                             <label
                                 htmlFor="my-jobs-page-roots-only"
                                 className="my-jobs-page__roots-toggle"
@@ -262,29 +283,61 @@ export function MyJobsPage() {
                                 />
                                 <span>Show top level only</span>
                             </label>
+                            {hasRunnableJobs && (
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => setRunDialogOpen(true)}
+                                    data-action="run-job"
+                                >
+                                    <LightningIcon weight="bold" aria-hidden="true" />
+                                    <span>Run a job</span>
+                                </Button>
+                            )}
                         </div>
 
-                        <div className="my-jobs-page__list" role="list" aria-label="Job history">
-                            {displayedUserJobs.length === 0 ? (
-                                <EmptyState
-                                    icon={<ClockCounterClockwiseIcon weight="duotone" />}
-                                    title="No job history found"
-                                    description={
-                                        hasActiveFilters ? 'Try adjusting your filters' : executionsEmptyDescription
-                                    }
-                                />
-                            ) : (
-                                displayedUserJobs.map((execution) => (
+                        {isSingleJob && (
+                            <div className="my-jobs-page__single-bar">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        const next = new URLSearchParams(searchParams);
+                                        next.delete('job');
+                                        setSearchParams(next, { replace: true });
+                                    }}
+                                >
+                                    Back to jobs
+                                </Button>
+                            </div>
+                        )}
+                        {(isSingleJob ? isLoadingLinkedJob : isLoadingJobs) ? (
+                            <div className="my-jobs-page__loading" data-testid="my-jobs-page__loading">
+                                <Skeleton className="my-jobs-page__skeleton" />
+                                <Skeleton className="my-jobs-page__skeleton" />
+                                <Skeleton className="my-jobs-page__skeleton" />
+                            </div>
+                        ) : displayedUserJobs.length === 0 ? (
+                            <EmptyState
+                                icon={<ClockCounterClockwiseIcon weight="duotone" />}
+                                title="No job history found"
+                                description={
+                                    hasActiveFilters ? 'Try adjusting your filters' : executionsEmptyDescription
+                                }
+                            />
+                        ) : (
+                            <div className="my-jobs-page__list" role="list" aria-label="Job history">
+                                {displayedUserJobs.map((execution) => (
                                     <ExecutionRow
                                         key={execution.id}
                                         execution={execution}
                                         autoExpand={execution.id === linkedJobId}
                                     />
-                                ))
-                            )}
-                        </div>
+                                ))}
+                            </div>
+                        )}
 
-                        {totalExecutions > EXECUTIONS_PAGE_SIZE && (
+                        {!isSingleJob && totalExecutions > EXECUTIONS_PAGE_SIZE && (
                             <Pager
                                 className="my-jobs-page__pager"
                                 data-component="executions-pager"
@@ -329,7 +382,7 @@ export function MyJobsPage() {
                                 crud={schedCrud}
                                 templates={scheduleTemplateOptions}
                                 canManage={canManageTriggers}
-                                canRun={canRunJobs}
+                                canRun={hasRunnableJobs}
                             />
                         </div>
                     </TabsContent>

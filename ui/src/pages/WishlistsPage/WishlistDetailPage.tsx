@@ -32,8 +32,7 @@ import { canEditOwned } from '@/lib/ownership';
 import { getErrorMessage, isNotFoundError } from '@/lib/errors';
 import { EmptyState } from '@/components/ui/EmptyState';
 
-import type { WishlistFormValues } from '@/types';
-import { WishlistForm } from './WishlistForm';
+import { WishlistForm, type WishlistFormValues } from './WishlistForm';
 import { WishlistDiscoveredList } from './WishlistDiscoveredList';
 import { resolveFilterContentType } from './wishlistFormUtils';
 import { buildWishlistPatch } from './buildWishlistPatch';
@@ -44,7 +43,8 @@ interface WishlistDisplayItem {
     id: string;
     name: string;
     ownerId: string | null;
-    monitored: boolean;
+    enabled: boolean;
+    monitoring: boolean | null;
     ownerLock: boolean;
     lastSyncedAt: string | null;
     createdAt: string;
@@ -59,7 +59,8 @@ function mapApiWishlistToDisplayItem(apiWishlist: ApiWishlist): WishlistDisplayI
         id: apiWishlist.id,
         name: apiWishlist.name,
         ownerId: apiWishlist.ownerUserId ?? null,
-        monitored: apiWishlist.enabled,
+        enabled: apiWishlist.enabled,
+        monitoring: apiWishlist.monitoring ?? null,
         ownerLock: apiWishlist.ownerLock,
         lastSyncedAt: apiWishlist.lastSyncedAt ?? null,
         createdAt: apiWishlist.createdAt,
@@ -153,7 +154,7 @@ export function WishlistDetailPage() {
                     entityTags.map((t) => t.name),
                 );
 
-                await updateWishlist(wishlist.id, patch, isOwner);
+                await updateWishlist(wishlist.id, patch);
                 await refetch();
 
                 toast({
@@ -170,7 +171,7 @@ export function WishlistDetailPage() {
                 throw error;
             }
         },
-        [wishlist, isOwner, entityTags, updateWishlist, refetch, toast],
+        [wishlist, entityTags, updateWishlist, refetch, toast],
     );
 
     const getFormInitialValues = useCallback((): WishlistFormValues | null => {
@@ -188,7 +189,8 @@ export function WishlistDetailPage() {
             criteria: formCriteria,
             qualityTierListId: wishlist.qualityTierListId,
             rootFolderId: wishlist.rootFolderId,
-            monitored: wishlist.monitored,
+            enabled: wishlist.enabled,
+            monitoring: wishlist.monitoring,
             tagIds: entityTags.map((t) => t.name),
         };
     }, [wishlist, entityTags]);
@@ -294,16 +296,23 @@ export function WishlistDetailPage() {
                                     </span>
                                 </Tooltip>
                             )}
-                            {!wishlist.monitored && (
+                            {!wishlist.enabled && (
                                 <Badge variant="default" size="sm">
-                                    Unmonitored
+                                    Disabled
                                 </Badge>
                             )}
-                            {wishlist.monitored && (
+                            {wishlist.enabled && (
                                 <Badge variant="fulfilled" size="sm">
-                                    Monitored
+                                    Enabled
                                 </Badge>
                             )}
+                            <Badge variant="default" size="sm">
+                                {wishlist.monitoring === null
+                                    ? 'Inherit'
+                                    : wishlist.monitoring
+                                      ? 'Monitored'
+                                      : 'Not monitored'}
+                            </Badge>
                         </div>
                     </div>
                     <div className="wishlist-detail-page__header-actions">

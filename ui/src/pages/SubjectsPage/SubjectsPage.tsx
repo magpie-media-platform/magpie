@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
 import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { Pager } from '@/components/ui/Pager';
 
 import { SubjectList, type SubjectItem } from '@/components/ui/SubjectList';
 import { FilterBar } from '@/components/filters/FilterBar';
@@ -23,7 +24,7 @@ import { TABLE_LAYOUT_QUERY, useCardLayout } from '@/hooks/ui/useCardLayout';
 import { extractImageUrl, extractTitle } from '@/lib/metadata';
 import { getErrorMessage } from '@/lib/errors';
 import { useSubjects, type ApiSubject } from '@/hooks/useSubjects';
-import { formatSubjectKindLabel } from '@/types';
+import { resolveSubjectKindLabel } from '@/types';
 
 import './SubjectsPage.css';
 
@@ -126,7 +127,7 @@ function removeSubjectKindClauses(query: string): string {
 
 function transformSubject(subject: ApiSubject, subjectTypes: LibraryTypeDefinition[]): SubjectItem {
     const subjectType = subjectTypes.find((type) => type.slug === subject.kind);
-    const kindLabel = formatSubjectKindLabel(subject.kind, subjectType?.name);
+    const kindLabel = resolveSubjectKindLabel(subject.kind, subjectType?.name);
     const title = extractTitle(subject.metadataContainer) ?? `${kindLabel} ${subject.id.slice(0, 8)}`;
     const imageUrl = extractImageUrl(subject.metadataContainer);
 
@@ -209,6 +210,7 @@ export function SubjectsPage() {
     );
 
     const { subjects, totalItems, isLoading, error, refetch } = useSubjects(queryParams);
+    const pageCount = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
 
     const typeIconName = useTypeIconName();
 
@@ -371,6 +373,30 @@ export function SubjectsPage() {
                                                     </MobileMediaCard>
                                                 ))}
                                             </div>
+                                            {pageCount > 1 && (
+                                                <Pager
+                                                    page={pageNumber}
+                                                    pageCount={pageCount}
+                                                    onFirst={() =>
+                                                        handlePaginationChange({ ...pagination, pageIndex: 0 })
+                                                    }
+                                                    onPrevious={() =>
+                                                        handlePaginationChange({
+                                                            ...pagination,
+                                                            pageIndex: pageNumber - 2,
+                                                        })
+                                                    }
+                                                    onNext={() =>
+                                                        handlePaginationChange({ ...pagination, pageIndex: pageNumber })
+                                                    }
+                                                    onLast={() =>
+                                                        handlePaginationChange({
+                                                            ...pagination,
+                                                            pageIndex: pageCount - 1,
+                                                        })
+                                                    }
+                                                />
+                                            )}
                                         </>
                                     ) : (
                                         subjectsEmptyState

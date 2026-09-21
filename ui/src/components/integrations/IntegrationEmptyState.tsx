@@ -29,11 +29,10 @@ export function IntegrationEmptyState({
     size = 'md',
 }: IntegrationEmptyStateProps) {
     if (hasActiveFilters) {
-        const entityPlural = entity;
         return (
             <EmptyState
                 icon={icon}
-                title={`No ${entityPlural} match the active filters`}
+                title={`No ${entity} match the active filters`}
                 description="Adjust or clear the filters to see more."
                 action={
                     <Button variant="secondary" size="sm" onClick={onClearFilters}>

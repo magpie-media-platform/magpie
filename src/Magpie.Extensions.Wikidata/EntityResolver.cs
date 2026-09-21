@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,6 +14,11 @@ namespace Magpie.Extensions.Wikidata;
 
 internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator cache) : IEntityResolver
 {
+    private sealed record ExternalSource(string Source, string PropertyId);
+
+    private sealed record ItemCoordinates(int? SeasonNumber, int? EpisodeNumber);
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
     public async Task<EntityResolution> ResolveContentAsync(
         EntityKind kind,
         ContentHierarchyItem item,
@@ -23,7 +28,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
         CancellationToken cancellationToken)
     {
         var direct = FindExternalId(existingMetadata, Constants.ProviderType);
-        if (TryNormalizeQid(direct, out var qid))
+        if (direct.TryNormalizeQid(out var qid))
         {
             return Resolved(qid!);
         }
@@ -67,7 +72,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
     {
         var contributions = existingMetadata as IReadOnlyList<MetadataContribution> ?? [.. existingMetadata];
         var direct = FindExternalId(contributions, Constants.ProviderType);
-        if (TryNormalizeQid(direct, out var qid))
+        if (direct.TryNormalizeQid(out var qid))
         {
             return Resolved(qid!);
         }
@@ -165,7 +170,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
     {
         var qids = (
             from row in rows
-            let value = row.TryGetValue("item", out var binding) ? NormalizeQid(binding?.Value) : null
+            let value = row.TryGetValue("item", out var binding) ? binding?.Value.ToQid() : null
             where value is not null
             select value!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -242,45 +247,14 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
 
         foreach (var statement in candidates)
         {
-            var value = statement.Mainsnak?.DataValue?.Value;
-            if (value is { ValueKind: JsonValueKind.Object } element &&
-                element.TryGetProperty("id", out var id) &&
-                TryNormalizeQid(id.GetString(), out var qid))
+            var qid = statement.Mainsnak.EntityId();
+            if (qid is not null)
             {
                 return qid;
             }
         }
 
         return null;
-    }
-
-    private static string? NormalizeQid(string? value) => TryNormalizeQid(value, out var qid) ? qid : null;
-
-    private static bool TryNormalizeQid(string? value, out string? qid)
-    {
-        qid = null;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var trimmed = value!.Trim();
-        var slash = trimmed.LastIndexOf('/');
-        if (slash >= 0 && slash < trimmed.Length - 1)
-        {
-            trimmed = trimmed.Substring(slash + 1);
-        }
-
-        if (trimmed.Length < 2 ||
-            char.ToUpperInvariant(trimmed[0]) != 'Q' ||
-            trimmed[1] == '0' ||
-            !trimmed.Substring(1).All(char.IsDigit))
-        {
-            return false;
-        }
-
-        qid = "Q" + trimmed.Substring(1);
-        return true;
     }
 
     private static EntityResolution Resolved(string qid) => new() { Kind = EntityResolutionKind.Resolved, Qid = qid };
@@ -318,7 +292,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
             from contribution in ancestorMetadata
             from external in contribution.ExternalIds
             where string.Equals(external.Source, Constants.ProviderType, StringComparison.OrdinalIgnoreCase)
-            let value = NormalizeQid(external.Value)
+            let value = external.Value.ToQid()
             where value is not null
             select value!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -394,8 +368,4 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
             },
             cancellationToken).ConfigureAwait(false);
     }
-
-    private sealed record ExternalSource(string Source, string PropertyId);
-
-    private sealed record ItemCoordinates(int? SeasonNumber, int? EpisodeNumber);
 }

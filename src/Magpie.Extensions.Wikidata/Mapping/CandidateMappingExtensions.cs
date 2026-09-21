@@ -15,10 +15,10 @@ internal static class CandidateMappingExtensions
     public static SearchHit? ToSearchHit(
         this IReadOnlyDictionary<string, SparqlBindingDto> binding)
     {
-        var qid = ExtractQid(Read(binding, "item"));
-        var typeQid = ExtractQid(Read(binding, "type"));
+        var qid = Read(binding, "item").ToQid();
+        var typeQid = Read(binding, "type").ToQid();
         var label = Read(binding, "itemLabel");
-        if (!IsQid(qid) || !IsQid(typeQid) || string.IsNullOrWhiteSpace(label))
+        if (qid is null || typeQid is null || string.IsNullOrWhiteSpace(label))
         {
             return null;
         }
@@ -39,8 +39,7 @@ internal static class CandidateMappingExtensions
             PosterFilename = Read(binding, "posterFilename").ToCommonsFilename(),
             ImageFilename = Read(binding, "imageFilename").ToCommonsFilename(),
             Genres = ParseGenres(Read(binding, "genres")),
-            CandidateProjectionApplied = HasCandidateProjection(binding),
-            SearchOrdinal = ParseInt(Read(binding, "searchOrdinal"))
+            CandidateProjectionApplied = HasCandidateProjection(binding)
         };
     }
 
@@ -117,6 +116,19 @@ internal static class CandidateMappingExtensions
             from image in contribution.Images
             orderby image.IsPrimary descending, image.Ordinal
             select image.Url).FirstOrDefault();
+        var crossReferenceIds = contribution.ExternalIds
+            .Where(external => !string.Equals(
+                external.Source,
+                Constants.ProviderType,
+                StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(external.Source) &&
+                !string.IsNullOrWhiteSpace(external.Value))
+            .Select(external => new MetadataSearchCandidateExternalId
+            {
+                Source = external.Source!,
+                Value = external.Value
+            })
+            .ToList();
         return new MetadataSearchCandidate
         {
             ProviderType = Constants.ProviderType,
@@ -132,7 +144,15 @@ internal static class CandidateMappingExtensions
             Overview = string.IsNullOrWhiteSpace(contribution.Overview) ? seed.Overview : contribution.Overview,
             Language = string.IsNullOrWhiteSpace(contribution.Language) ? seed.Language : contribution.Language,
             ThumbnailUrl = thumbnail ?? seed.ThumbnailUrl,
-            SubjectReferences = seed.SubjectReferences
+            SubjectReferences = seed.SubjectReferences,
+            AdditionalExternalIds =
+            [
+                .. crossReferenceIds,
+                .. seed.AdditionalExternalIds.Where(existing => !crossReferenceIds.Any(id => string.Equals(
+                    id.Source,
+                    existing.Source,
+                    StringComparison.OrdinalIgnoreCase)))
+            ]
         };
     }
 
@@ -141,7 +161,7 @@ internal static class CandidateMappingExtensions
         var parts = value?.Split('|');
         if (parts is not { Length: 4 } ||
             !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var precision) ||
-            ExtractQid(parts[2]) != "Q1985727" ||
+            parts[2].ToQid() != EntityMappingExtensions.GregorianCalendarQid ||
             !int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var timezone) ||
             timezone != 0)
         {
@@ -214,44 +234,9 @@ internal static class CandidateMappingExtensions
             .Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
-    private static int? ParseInt(string? value)
-    {
-        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
-    }
-
     private static string? Read(IReadOnlyDictionary<string, SparqlBindingDto> binding, string key)
     {
         return binding.TryGetValue(key, out var value) ? value?.Value : null;
-    }
-
-    private static string? ExtractQid(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        var trimmed = value!.Trim();
-        var separator = trimmed.LastIndexOf('/');
-        return separator >= 0 && separator < trimmed.Length - 1 ? trimmed.Substring(separator + 1) : trimmed;
-    }
-
-    private static bool IsQid(string? value)
-    {
-        if (value is null || value.Length < 2 || value[0] != 'Q' || value[1] == '0')
-        {
-            return false;
-        }
-
-        for (var index = 1; index < value.Length; index++)
-        {
-            if (!char.IsDigit(value[index]))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value!.Trim();

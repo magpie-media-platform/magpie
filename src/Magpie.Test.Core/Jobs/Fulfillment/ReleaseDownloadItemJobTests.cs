@@ -19,6 +19,8 @@ namespace Magpie.Test.Core.Jobs.Fulfillment;
 [TestFixture]
 public sealed class ReleaseDownloadItemJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IReleaseService> _releaseService = null!;
     private Guid _userId;
     private Guid _releaseId;
@@ -60,7 +62,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["contentHierarchyItemId"] = _grabTargetId.ToString()
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
 
         // Act
         async Task Act() => await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -85,7 +87,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["contentHierarchyItemId"] = _grabTargetId.ToString()
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
 
         // Act
         async Task Act() => await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -109,7 +111,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["releaseId"] = _releaseId.ToString()
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
 
         // Act
         async Task Act() => await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -134,7 +136,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["contentHierarchyItemId"] = "not-a-guid"
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
 
         // Act
         async Task Act() => await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -144,7 +146,7 @@ public sealed class ReleaseDownloadItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_DelegatesToReleaseService_WithMappedContextAndFlags()
+    public async Task ExecuteAsync_DelegatesToReleaseService_WhenContextAndFlagsAreProvided()
     {
         // Arrange
         var executionId = Guid.NewGuid();
@@ -164,7 +166,7 @@ public sealed class ReleaseDownloadItemJobTests
             },
             Event: null,
             CorrelationId: correlationId);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
 
         // Act
         await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -199,7 +201,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["contentHierarchyItemId"] = _grabTargetId.ToString()
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
 
         // Act
         await subject.ExecuteAsync(context).ConfigureAwait(false);

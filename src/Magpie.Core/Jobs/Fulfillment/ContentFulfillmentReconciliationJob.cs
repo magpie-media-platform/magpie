@@ -28,11 +28,22 @@ internal sealed class ContentFulfillmentReconciliationJob(
     IReleaseEvaluationService releaseEvaluationService,
     TimeProvider timeProvider,
     ILogger<ContentFulfillmentReconciliationJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
+    private sealed record HierarchyNode
+    {
+        public required Guid Id { get; set; }
+
+        public Guid? ParentId { get; set; }
+
+        public Guid? EffectiveQualityTierListId { get; set; }
+
+        public ContentItem? ContentItem { get; set; }
+    }
+
     public static readonly JobSpec Spec = new()
     {
-        JobType = "ContentFulfillmentReconciliation",
+        JobType = MagpieJobs.Types.ContentFulfillmentReconciliation,
         DisplayName = "Content fulfillment reconciliation",
         Description = "Recalculates effective settings, completion status, and imported file quality.",
         Category = "System",
@@ -50,135 +61,94 @@ internal sealed class ContentFulfillmentReconciliationJob(
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
         var userId = jobContext.ManualTriggerUserId;
-        var correlationId = jobContext.CorrelationId;
-        var progress = progressReporter;
 
-        progress?.Report(0, "The reconciliation will load the content leaves.");
+        progressReporter.Report(0, "The reconciliation will load the content leaves.");
 
         await contentHierarchyItemRepository.RecomputeAllEffectiveValuesAsync(cancellationToken).ConfigureAwait(false);
 
-        var leafIds = await ListLeafHierarchyItemIdsAsync(cancellationToken).ConfigureAwait(false);
+        var nodes = await ListHierarchyNodesAsync(cancellationToken).ConfigureAwait(false);
+        var childIdsByParent = nodes
+            .Where(node => node.ParentId is not null)
+            .GroupBy(node => node.ParentId!.Value)
+            .ToDictionary(group => group.Key, group => group.Select(node => node.Id).ToList());
+        var leaves = nodes.Where(node => !childIdsByParent.ContainsKey(node.Id)).ToList();
 
-        if (leafIds.Count == 0)
+        if (leaves.Count == 0)
         {
-            progress?.Report(1, "The reconciliation stopped because the content hierarchy has no leaves.");
+            progressReporter.Report(1, "The reconciliation stopped because the content hierarchy has no leaves.");
             logger.LogInformation("Content fulfillment reconciliation found no content hierarchy leaves");
             return;
         }
 
-        var processed = 0;
-        foreach (var leafId in leafIds)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
+        var created = await CreateMissingContentItemsAsync(leaves, userId, cancellationToken).ConfigureAwait(false);
+        progressReporter.Report(0.4, "The reconciliation created the missing content items.");
 
-            await contentService
-                .GetOrCreateContentItemAsync(
-                    leafId,
-                    timeProvider.GetUtcNow().UtcDateTime,
-                    userId,
-                    cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-
-            await RecomputeQualityStatusAsync(leafId, userId, cancellationToken).ConfigureAwait(false);
-
-            await contentService
-                .MaterializeFulfillmentStatusAsync(leafId, userId, includeSelf: false, cancellationToken)
-                .ConfigureAwait(false);
-
-            processed++;
-            progress?.Report((double)processed / leafIds.Count, "The reconciliation updated fulfillment and quality.");
-        }
-
-        progress?.Report(1, "The content fulfillment reconciliation completed.");
-
-        logger.LogInformation("Reconciled {LeafCount} content leaves", leafIds.Count);
-    }
-
-    private async Task RecomputeQualityStatusAsync(Guid leafId, Guid? userId, CancellationToken cancellationToken)
-    {
-        var contentItems = await contentRepository.QueryAsync(
-            new() { ContentHierarchyItemId = leafId },
-            new() { PageNumber = 1, PageSize = 1 },
-            null,
-            cancellationToken).ConfigureAwait(false);
-
-        var contentItem = contentItems.Items.FirstOrDefault();
-        if (contentItem is null)
-        {
-            return;
-        }
-
-        var downloads = await downloadRepository.QueryAsync(
-            new DownloadQuery
-            {
-                ContentItemId = leafId,
-                Status = DownloadStatus.Imported
-            },
-            new PagingParameter { PageNumber = 1, PageSize = 1 },
-            new SortParameter
-            {
-                PropertyName = nameof(Download.DateCompleted),
-                Direction = SortDirection.Descending
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        var qualityStatus = await ResolveQualityStatusAsync(
-            downloads.Items.FirstOrDefault(),
-            leafId,
-            cancellationToken).ConfigureAwait(false);
-
-        var now = timeProvider.GetUtcNow().UtcDateTime;
-
-        contentItem.QualityStatus = qualityStatus;
-        contentItem.ModifiedAt = now;
-
-        await contentRepository.UpdateAsync(contentItem, userId, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<QualityStatus?> ResolveQualityStatusAsync(
-        Download? download,
-        Guid leafId,
-        CancellationToken cancellationToken)
-    {
-        if (download?.ReleaseId is not { } releaseId)
-        {
-            return null;
-        }
-
-        var release = await releaseRepository.GetByIdAsync(releaseId, cancellationToken).ConfigureAwait(false);
-        if (release is null)
-        {
-            return null;
-        }
-
-        var score = await releaseEvaluationService
-            .ScoreForContentAsync(release, leafId, currentQualityOrdinal: null, cancellationToken)
+        var qualityChanges = await ReconcileQualityStatusAsync(leaves, userId, cancellationToken)
             .ConfigureAwait(false);
-        if (score is null)
-        {
-            return null;
-        }
+        progressReporter.Report(0.7, "The reconciliation updated the imported file quality.");
 
-        if (score.IsAcceptable != true || score.IsCutoffMet == true)
-        {
-            return QualityStatus.Met;
-        }
-
-        var node = await contentHierarchyItemRepository
-            .GetByIdAsync(leafId, cancellationToken)
+        var rollups = await RollUpFulfillmentAsync(nodes, childIdsByParent, userId, cancellationToken)
             .ConfigureAwait(false);
-        var tierList = node?.EffectiveQualityTierListId is { } tierListId
-            ? await qualityService.GetTierListAsync(tierListId, cancellationToken).ConfigureAwait(false)
-            : null;
-        return tierList is not null && tierList.UpgradeAllowed
-            ? QualityStatus.UpgradeWanted
-            : QualityStatus.Met;
+
+        progressReporter.Report(1, "The content fulfillment reconciliation completed.");
+
+        logger.LogInformation(
+            "The reconciliation processed {LeafCount} content leaf(s), creating {CreatedCount} content " +
+            "item(s), changing quality on {QualityCount}, and rolling up fulfillment on {RollupCount}",
+            leaves.Count,
+            created,
+            qualityChanges,
+            rollups);
     }
 
-    private async Task<IReadOnlyList<Guid>> ListLeafHierarchyItemIdsAsync(CancellationToken cancellationToken)
+    private static FulfillmentStatus AggregateFulfillment(IReadOnlyCollection<FulfillmentStatus> childStatuses)
     {
-        var criteria = new ContentHierarchyItemCriteria { LeafOnly = true };
-        var ids = new List<Guid>();
+        if (childStatuses.Count == 0)
+        {
+            return FulfillmentStatus.Fulfilled;
+        }
+
+        var fullyCovered = childStatuses.Count(status =>
+            status is not FulfillmentStatus.Missing and not FulfillmentStatus.Partial);
+        if (fullyCovered == childStatuses.Count)
+        {
+            return childStatuses.Contains(FulfillmentStatus.Upgradable)
+                ? FulfillmentStatus.Upgradable
+                : FulfillmentStatus.Fulfilled;
+        }
+
+        return childStatuses.Any(status => status != FulfillmentStatus.Missing)
+            ? FulfillmentStatus.Partial
+            : FulfillmentStatus.Missing;
+    }
+
+    private static IReadOnlyList<IReadOnlyList<HierarchyNode>> OrderByLevel(
+        IReadOnlyList<HierarchyNode> nodes,
+        IReadOnlyDictionary<Guid, HierarchyNode> nodesById,
+        IReadOnlyDictionary<Guid, List<Guid>> childIdsByParent)
+    {
+        var levels = new List<IReadOnlyList<HierarchyNode>>();
+        var level = nodes
+            .Where(node => node.ParentId is null || !nodesById.ContainsKey(node.ParentId.Value))
+            .ToList();
+        var placed = level.Select(node => node.Id).ToHashSet();
+        while (level.Count > 0)
+        {
+            levels.Add(level);
+            level = level
+                .SelectMany(node => childIdsByParent.TryGetValue(node.Id, out var childIds) ? childIds : [])
+                .Where(placed.Add)
+                .Select(childId => nodesById[childId])
+                .ToList();
+        }
+
+        return levels;
+    }
+
+    private async Task<IReadOnlyList<HierarchyNode>> ListHierarchyNodesAsync(CancellationToken cancellationToken)
+    {
+        var criteria = new ContentHierarchyItemCriteria();
+        var nodes = new List<HierarchyNode>();
         var pageNumber = 1;
         while (true)
         {
@@ -190,8 +160,16 @@ internal sealed class ContentFulfillmentReconciliationJob(
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            ids.AddRange(page.Items.Select(item => item.Id));
-            if (ids.Count >= page.TotalItems || !page.Items.Any())
+            var pageItems = page.Items.ToList();
+            nodes.AddRange(pageItems.Select(item => new HierarchyNode
+            {
+                Id = item.Id,
+                ParentId = item.ParentId,
+                EffectiveQualityTierListId = item.EffectiveQualityTierListId,
+                ContentItem = item.ContentItem
+            }));
+
+            if (nodes.Count >= page.TotalItems || pageItems.Count == 0)
             {
                 break;
             }
@@ -199,6 +177,196 @@ internal sealed class ContentFulfillmentReconciliationJob(
             pageNumber++;
         }
 
-        return ids;
+        return nodes;
+    }
+
+    private async Task<int> CreateMissingContentItemsAsync(
+        IReadOnlyList<HierarchyNode> leaves,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var created = 0;
+        foreach (var leaf in leaves.Where(leaf => leaf.ContentItem is null))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            leaf.ContentItem = await contentService
+                .GetOrCreateContentItemAsync(
+                    leaf.Id,
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    userId,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            created++;
+        }
+
+        return created;
+    }
+
+    private async Task<int> ReconcileQualityStatusAsync(
+        IReadOnlyList<HierarchyNode> leaves,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var tierLists = new Dictionary<Guid, QualityTierList?>();
+        var changed = 0;
+        foreach (var leaf in leaves)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (leaf.ContentItem is not { } contentItem)
+            {
+                continue;
+            }
+
+            var imports = await downloadRepository.QueryAsync(
+                new DownloadQuery { ContentHierarchyItemIds = [leaf.Id], Status = DownloadStatus.Imported },
+                new PagingParameter { PageNumber = 1, PageSize = 1 },
+                new SortParameter
+                {
+                    PropertyName = nameof(Download.DateCompleted),
+                    Direction = SortDirection.Descending
+                },
+                cancellationToken).ConfigureAwait(false);
+            var qualityStatus = imports.Items.FirstOrDefault() is { } download
+                ? await ResolveQualityStatusAsync(download, leaf, tierLists, cancellationToken).ConfigureAwait(false)
+                : null;
+            if (qualityStatus == contentItem.QualityStatus)
+            {
+                continue;
+            }
+
+            var current = await contentRepository.GetByIdAsync(contentItem.Id, cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null || qualityStatus == current.QualityStatus)
+            {
+                continue;
+            }
+
+            current.QualityStatus = qualityStatus;
+            current.ModifiedAt = timeProvider.GetUtcNow().UtcDateTime;
+            leaf.ContentItem = current;
+
+            await contentRepository.UpdateAsync(current, userId, cancellationToken).ConfigureAwait(false);
+            changed++;
+        }
+
+        return changed;
+    }
+
+    private async Task<QualityStatus?> ResolveQualityStatusAsync(
+        Download download,
+        HierarchyNode leaf,
+        IDictionary<Guid, QualityTierList?> tierLists,
+        CancellationToken cancellationToken)
+    {
+        if (download.ReleaseId is not { } releaseId)
+        {
+            return null;
+        }
+
+        var release = await releaseRepository.GetByIdAsync(releaseId, cancellationToken).ConfigureAwait(false);
+        if (release is null)
+        {
+            return null;
+        }
+
+        var score = await releaseEvaluationService
+            .ScoreForContentAsync(release, leaf.Id, currentQualityOrdinal: null, cancellationToken)
+            .ConfigureAwait(false);
+        if (score is null)
+        {
+            return null;
+        }
+
+        if (score.IsAcceptable != true || score.IsCutoffMet == true)
+        {
+            return QualityStatus.Met;
+        }
+
+        if (leaf.EffectiveQualityTierListId is not { } tierListId)
+        {
+            return QualityStatus.Met;
+        }
+
+        if (!tierLists.TryGetValue(tierListId, out var tierList))
+        {
+            tierList = await qualityService.GetTierListAsync(tierListId, cancellationToken).ConfigureAwait(false);
+            tierLists[tierListId] = tierList;
+        }
+
+        return tierList is not null && tierList.UpgradeAllowed
+            ? QualityStatus.UpgradeWanted
+            : QualityStatus.Met;
+    }
+
+    private async Task<int> RollUpFulfillmentAsync(
+        IReadOnlyList<HierarchyNode> nodes,
+        IReadOnlyDictionary<Guid, List<Guid>> childIdsByParent,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var nodesById = nodes.ToDictionary(node => node.Id);
+        var levels = OrderByLevel(nodes, nodesById, childIdsByParent);
+        var computed = new Dictionary<Guid, FulfillmentStatus>();
+        var leafIdByNodeId = new Dictionary<Guid, Guid>();
+        var stale = new List<HierarchyNode>();
+
+        for (var level = levels.Count - 1; level >= 0; level--)
+        {
+            foreach (var node in levels[level])
+            {
+                if (!childIdsByParent.TryGetValue(node.Id, out var childIds))
+                {
+                    continue;
+                }
+
+                var childStatuses = childIds
+                    .Select(childId => computed.TryGetValue(childId, out var childStatus)
+                        ? childStatus
+                        : nodesById[childId].ContentItem?.Fulfillment ?? FulfillmentStatus.Missing)
+                    .ToList();
+                var aggregate = AggregateFulfillment(childStatuses);
+                computed[node.Id] = aggregate;
+                leafIdByNodeId[node.Id] = leafIdByNodeId.TryGetValue(childIds[0], out var leafId)
+                    ? leafId
+                    : childIds[0];
+                if (aggregate != (node.ContentItem?.Fulfillment ?? FulfillmentStatus.Missing))
+                {
+                    stale.Add(node);
+                }
+            }
+        }
+
+        var covered = new HashSet<Guid>();
+        var rollups = 0;
+        foreach (var node in stale)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (covered.Contains(node.Id))
+            {
+                continue;
+            }
+
+            await contentService
+                .MaterializeFulfillmentStatusAsync(
+                    leafIdByNodeId[node.Id],
+                    userId,
+                    includeSelf: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            rollups++;
+
+            for (var ancestor = node; ancestor is not null;)
+            {
+                covered.Add(ancestor.Id);
+                ancestor = ancestor.ParentId is { } parentId && nodesById.TryGetValue(parentId, out var parent)
+                    ? parent
+                    : null;
+            }
+        }
+
+        return rollups;
     }
 }

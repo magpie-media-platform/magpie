@@ -8,6 +8,9 @@ import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { DownloadState, DownloadStateCounts, ActiveDownloadItem } from '@/types/system';
 
+import { StatusRow as SharedStatusRow } from '../StatusRow';
+import { Skeleton } from '../Skeleton';
+
 import './DownloadQueueWidget.css';
 
 export type { DownloadState, DownloadStateCounts, ActiveDownloadItem };
@@ -51,40 +54,15 @@ interface StatusRowProps {
     url?: string;
 }
 
-const StatusRow = ({ state, count, url }: StatusRowProps) => {
-    const variant = state;
-    const label = stateLabelMap[state];
-    const isClickable = url !== undefined && count > 0;
-
-    const content = (
-        <>
-            <span className="download-queue-widget__indicator" aria-hidden="true" />
-            <span className="download-queue-widget__label">{label}</span>
-            <span className="download-queue-widget__count">{count}</span>
-        </>
-    );
-
-    if (isClickable && url) {
-        return (
-            <Link
-                to={url}
-                className={`download-queue-widget__row download-queue-widget__row--${variant} download-queue-widget__row--clickable`}
-                aria-label={`View ${count} ${label.toLowerCase()} items`}
-                data-status={state}
-                data-variant={variant}
-                data-clickable
-            >
-                {content}
-            </Link>
-        );
-    }
-
-    return (
-        <div className={`download-queue-widget__row download-queue-widget__row--${variant}`} data-status={state}>
-            {content}
-        </div>
-    );
-};
+const StatusRow = ({ state, count, url }: StatusRowProps) => (
+    <SharedStatusRow
+        pulse={state === 'downloading'}
+        status={state}
+        label={stateLabelMap[state]}
+        count={count}
+        url={url}
+    />
+);
 
 interface DownloadItemProps {
     download: ActiveDownloadItem;
@@ -109,7 +87,7 @@ const DownloadItem = ({ download, url }: DownloadItemProps) => {
             <div className="download-queue-widget__item-header">
                 <span className="download-queue-widget__item-title">
                     {download.contentId ? (
-                        <Link to={`/library/${download.contentId}`}>
+                        <Link to={`/library/${download.contentId}`} className="download-queue-widget__item-link">
                             <ContentLineageTitle
                                 qualifiedName={{
                                     id: download.contentId,
@@ -168,28 +146,6 @@ const DownloadItem = ({ download, url }: DownloadItemProps) => {
     );
 };
 
-const SkeletonRow = () => (
-    <div
-        className="download-queue-widget__row download-queue-widget__row--skeleton"
-        data-testid="download-queue-widget__row--skeleton"
-    >
-        <span className="download-queue-widget__indicator download-queue-widget__indicator--skeleton" />
-        <span className="download-queue-widget__label download-queue-widget__label--skeleton" />
-        <span className="download-queue-widget__count download-queue-widget__count--skeleton" />
-    </div>
-);
-
-const SkeletonItem = () => (
-    <div className="download-queue-widget__item download-queue-widget__item--skeleton">
-        <div className="download-queue-widget__item-header">
-            <span className="download-queue-widget__item-title download-queue-widget__item-title--skeleton" />
-        </div>
-        <div className="download-queue-widget__progress-bar download-queue-widget__progress-bar--skeleton">
-            <div className="download-queue-widget__progress-fill download-queue-widget__progress-fill--skeleton" />
-        </div>
-    </div>
-);
-
 const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetProps>(
     (
         {
@@ -231,10 +187,10 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
                 <div className="download-queue-widget__summary">
                     {loading ? (
                         <>
-                            <SkeletonRow />
-                            <SkeletonRow />
-                            <SkeletonRow />
-                            <SkeletonRow />
+                            <SharedStatusRow loading />
+                            <SharedStatusRow loading />
+                            <SharedStatusRow loading />
+                            <SharedStatusRow loading />
                         </>
                     ) : error ? (
                         <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
@@ -269,8 +225,8 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
                     <div className="download-queue-widget__items">
                         {loading ? (
                             <>
-                                <SkeletonItem />
-                                <SkeletonItem />
+                                <Skeleton className="download-queue-widget__item" height={48} />
+                                <Skeleton className="download-queue-widget__item" height={48} />
                             </>
                         ) : (
                             displayedDownloads.map((download) => (

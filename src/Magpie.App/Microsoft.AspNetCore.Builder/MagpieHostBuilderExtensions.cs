@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
@@ -10,25 +11,25 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
-using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Api;
 using Magpie.App;
+using Magpie.App.Hosting;
 using Magpie.Core.Config;
 using Magpie.Core.Extensions;
 using Magpie.Core.Jobs;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Data;
-using Magpie.Models.Enums;
 using Magpie.Sdk.Extensions;
-using Magpie.Sdk.Services;
 
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -87,9 +88,12 @@ public static class MagpieHostBuilderExtensions
     /// <param name="hostStatus">The current host status.</param>
     public static WebApplicationBuilder AddMagpieSystem(this WebApplicationBuilder builder, HostStatusInfo hostStatus)
     {
-        if (hostStatus.Mode == HostMode.WindowsService)
+        if (hostStatus.Mode == HostMode.WindowsService && OperatingSystem.IsWindows())
         {
             builder.Services.AddWindowsService();
+
+            builder.Services.RemoveAll<IHostLifetime>();
+            builder.Services.AddSingleton<IHostLifetime, RestartAwareWindowsServiceLifetime>();
         }
         else if (hostStatus.Mode == HostMode.Systemd)
         {
@@ -120,7 +124,7 @@ public static class MagpieHostBuilderExtensions
         return builder;
     }
 
-    internal static async Task MigrateMagpieDatabaseAsync(
+    internal static async Task PrepareMagpieDatabaseAsync(
         this IHostApplicationBuilder builder,
         CancellationToken cancellationToken = default)
     {
@@ -133,222 +137,73 @@ public static class MagpieHostBuilderExtensions
         var logger = loggerFactory.CreateLogger(nameof(MagpieHostBuilderExtensions));
 
         await PrepareDatabaseAsync(builder, logger, cancellationToken).ConfigureAwait(false);
-
-        var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
-        await using var contextHandle = context.ConfigureAwait(false);
-
-        await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task BackfillMediaFilePathKeysAsync(
-        IHostApplicationBuilder builder,
-        ILogger logger,
-        CancellationToken cancellationToken)
+    private static ForwardedHeadersOptions BuildForwardedHeadersOptions(IReadOnlyList<string> knownProxies)
     {
-        var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
-        await using var contextHandle = context.ConfigureAwait(false);
-        if (!await context.MediaFiles
-            .AnyAsync(mediaFile => mediaFile.PathKey.StartsWith("legacy:"), cancellationToken)
-            .ConfigureAwait(false))
+        var options = new ForwardedHeadersOptions
         {
-            return;
+            ForwardedHeaders = ForwardedHeaders.XForwardedProto
+        };
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+
+        foreach (var proxy in knownProxies)
+        {
+            if (System.Net.IPNetwork.TryParse(proxy, out var network))
+            {
+                options.KnownIPNetworks.Add(network);
+            }
+            else if (IPAddress.TryParse(proxy, out var address))
+            {
+                options.KnownProxies.Add(address);
+            }
+            else
+            {
+                throw new InvalidOperationException($"Known proxy {proxy} is not an address or a CIDR range.");
+            }
         }
 
-        var services = builder.Services.BuildServiceProvider();
-        await using var serviceHandle = services.ConfigureAwait(false);
-        var scope = services.CreateAsyncScope();
-        await using var scopeHandle = scope.ConfigureAwait(false);
-        var contentTypeRegistry = scope.ServiceProvider.GetRequiredService<IContentTypeRegistry>();
-        var fileSystem = scope.ServiceProvider.GetRequiredService<IFileSystem>();
-        var transaction = await context.Database
-            .BeginTransactionAsync(cancellationToken)
-            .ConfigureAwait(false);
-        await using var transactionHandle = transaction.ConfigureAwait(false);
-        var mediaFiles = await context.MediaFiles
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-        var duplicates = new List<MediaFile>();
-        foreach (var group in mediaFiles.GroupBy(
-            mediaFile => OperatingSystem.IsWindows()
-                ? mediaFile.FilePath.ToUpperInvariant()
-                : mediaFile.FilePath,
-            StringComparer.Ordinal))
-        {
-            var survivor = group
-                .OrderBy(mediaFile => mediaFile.PathKey.StartsWith("legacy:", StringComparison.Ordinal) ? 1 : 0)
-                .ThenBy(mediaFile => mediaFile.CreatedAt)
-                .ThenBy(mediaFile => mediaFile.Id)
-                .First();
-            survivor.PathKey = group.Key;
-            duplicates.AddRange(group.Where(mediaFile => mediaFile.Id != survivor.Id));
-        }
-
-        context.MediaFiles.RemoveRange(duplicates);
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        await ReconcileDuplicateFulfillmentAsync(
-            context,
-            mediaFiles,
-            duplicates,
-            contentTypeRegistry,
-            fileSystem,
-            cancellationToken)
-            .ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        if (duplicates.Count > 0)
-        {
-            logger.LogWarning(
-                "Removed {DuplicateCount} duplicate media file associations while normalizing path keys",
-                duplicates.Count);
-        }
+        return options;
     }
 
-    private static async Task ReconcileDuplicateFulfillmentAsync(
-        MagpieDbContext context,
-        IReadOnlyCollection<MediaFile> mediaFiles,
-        IReadOnlyCollection<MediaFile> duplicates,
-        IContentTypeRegistry contentTypeRegistry,
-        IFileSystem fileSystem,
-        CancellationToken cancellationToken)
+    internal static WebApplication UseMagpieRequestPipeline(this WebApplication app)
     {
-        var duplicateIds = duplicates.Select(mediaFile => mediaFile.Id).ToHashSet();
-        var affectedContentItemIds = duplicates
-            .Select(mediaFile => mediaFile.ContentItemId)
-            .ToHashSet();
-        if (affectedContentItemIds.Count == 0)
+        var hostStatus = app.Services.GetRequiredService<HostStatusInfo>();
+        var backgroundServices = app.Services.GetServices<IHostedService>().OfType<BackgroundService>().ToArray();
+        app.Lifetime.ApplicationStopping.Register(() =>
         {
-            return;
+            if (backgroundServices.Any(service => service.ExecuteTask is { IsFaulted: true } or { IsCanceled: true }))
+            {
+                hostStatus.ShutdownExitCode ??= MagpieExitCodes.StartupFailed;
+            }
+        });
+
+        var hostOptions = app.Services.GetRequiredService<MagpieHostOptions>();
+        if (hostOptions.KnownProxies.Count > 0)
+        {
+            app.UseForwardedHeaders(BuildForwardedHeadersOptions(hostOptions.KnownProxies));
         }
 
-        var contentItems = await context.ContentItems.ToListAsync(cancellationToken).ConfigureAwait(false);
-        var hierarchyItems = await context.ContentHierarchyItems
-            .AsNoTracking()
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-        var contentByHierarchyId = contentItems.ToDictionary(item => item.ContentHierarchyItemId);
-        var hierarchyById = hierarchyItems.ToDictionary(item => item.Id);
-        var retainedFilesByContentItemId = mediaFiles
-            .Where(mediaFile => !duplicateIds.Contains(mediaFile.Id))
-            .ToLookup(mediaFile => mediaFile.ContentItemId);
-        var now = DateTime.UtcNow;
-        var changedHierarchyIds = new HashSet<Guid>();
-        foreach (var contentItem in contentItems.Where(item => affectedContentItemIds.Contains(item.Id)))
+        app.UseExceptionHandler();
+        var allowedOrigins = hostOptions.AllowedOrigins;
+        if (allowedOrigins.Count > 0)
         {
-            if (contentItem.Fulfillment == FulfillmentStatus.FulfilledExternally)
-            {
-                continue;
-            }
-
-            var hierarchyItem = hierarchyById.GetValueOrDefault(contentItem.ContentHierarchyItemId);
-            var level = hierarchyItem is null
-                ? null
-                : contentTypeRegistry.GetDefinitionFor(hierarchyItem.ContentType)?.LevelDefinitions
-                    .FirstOrDefault(candidate => candidate.Slug == hierarchyItem.Level);
-            var acceptedFileTypes = level?.AcceptedFileTypes ?? [];
-            var acceptedSidecarTypes = level?.AcceptedSidecarTypes ?? [];
-            var hasPrimary = false;
-            foreach (var mediaFile in retainedFilesByContentItemId[contentItem.Id])
-            {
-                var matchesPrimary = acceptedFileTypes.Count > 0 && await fileSystem
-                    .MatchesAnyFileTypeAsync(mediaFile.FilePath, acceptedFileTypes, cancellationToken)
-                    .ConfigureAwait(false);
-                if (matchesPrimary || acceptedFileTypes.Count == 0 && !await fileSystem
-                        .MatchesAnyFileTypeAsync(mediaFile.FilePath, acceptedSidecarTypes, cancellationToken)
-                        .ConfigureAwait(false))
-                {
-                    hasPrimary = true;
-                    break;
-                }
-            }
-
-            var fulfillment = hasPrimary
-                ? contentItem.QualityStatus switch
-                {
-                    QualityStatus.UpgradeWanted => FulfillmentStatus.Upgradable,
-                    QualityStatus.Met => FulfillmentStatus.Fulfilled,
-                    _ when contentItem.Fulfillment == FulfillmentStatus.Missing => FulfillmentStatus.Fulfilled,
-                    _ => contentItem.Fulfillment
-                }
-                : FulfillmentStatus.Missing;
-            if (fulfillment == contentItem.Fulfillment)
-            {
-                continue;
-            }
-
-            contentItem.Fulfillment = fulfillment;
-            contentItem.ModifiedAt = now;
-            changedHierarchyIds.Add(contentItem.ContentHierarchyItemId);
+            app.UseCors(policy => policy
+                .WithOrigins([.. allowedOrigins])
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .AllowCredentials());
         }
 
-        var ancestorIds = new HashSet<Guid>();
-        foreach (var hierarchyItemId in changedHierarchyIds)
-        {
-            var parentId = hierarchyById.GetValueOrDefault(hierarchyItemId)?.ParentId;
-            while (parentId is { } id && ancestorIds.Add(id))
-            {
-                parentId = hierarchyById.GetValueOrDefault(id)?.ParentId;
-            }
-        }
-
-        var statuses = contentByHierarchyId.ToDictionary(entry => entry.Key, entry => entry.Value.Fulfillment);
-        foreach (var ancestorId in ancestorIds.OrderByDescending(id => GetHierarchyDepth(id, hierarchyById)))
-        {
-            var childStatuses = hierarchyItems
-                .Where(item => item.ParentId == ancestorId)
-                .Select(item => statuses.GetValueOrDefault(item.Id, FulfillmentStatus.Missing))
-                .ToArray();
-            var fulfillment = AggregateFulfillment(childStatuses);
-            statuses[ancestorId] = fulfillment;
-            if (contentByHierarchyId.TryGetValue(ancestorId, out var contentItem))
-            {
-                if (contentItem.Fulfillment != fulfillment)
-                {
-                    contentItem.Fulfillment = fulfillment;
-                    contentItem.ModifiedAt = now;
-                }
-            }
-            else if (fulfillment != FulfillmentStatus.Missing)
-            {
-                context.ContentItems.Add(new ContentItem
-                {
-                    Id = Guid.NewGuid(),
-                    ContentHierarchyItemId = ancestorId,
-                    Fulfillment = fulfillment,
-                    CreatedAt = now
-                });
-            }
-        }
-
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private static int GetHierarchyDepth(
-        Guid hierarchyItemId,
-        IReadOnlyDictionary<Guid, ContentHierarchyItem> hierarchyById)
-    {
-        var depth = 0;
-        var parentId = hierarchyById.GetValueOrDefault(hierarchyItemId)?.ParentId;
-        while (parentId is { } id)
-        {
-            depth++;
-            parentId = hierarchyById.GetValueOrDefault(id)?.ParentId;
-        }
-
-        return depth;
-    }
-
-    private static FulfillmentStatus AggregateFulfillment(IReadOnlyCollection<FulfillmentStatus> statuses)
-    {
-        if (statuses.Count == 0 ||
-            statuses.All(status => status is not FulfillmentStatus.Missing and not FulfillmentStatus.Partial))
-        {
-            return statuses.Contains(FulfillmentStatus.Upgradable)
-                ? FulfillmentStatus.Upgradable
-                : FulfillmentStatus.Fulfilled;
-        }
-
-        return statuses.Any(status => status != FulfillmentStatus.Missing)
-            ? FulfillmentStatus.Partial
-            : FulfillmentStatus.Missing;
+        app.UseMagpieDatabaseMigrationGate();
+        app.UseStaticFiles();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.UseMagpieSetupRedirect();
+        app.MapMagpieEndpoints();
+        app.MapFallbackToFile("index.html").AllowAnonymous();
+        return app;
     }
 
     private static async Task PrepareDatabaseAsync(
@@ -395,7 +250,7 @@ public static class MagpieHostBuilderExtensions
         return app;
     }
 
-    internal static async Task<IReadOnlyList<IExtension>> AddMagpieExtensionsAsync(
+    internal static async Task AddMagpieExtensionsAsync(
         this IHostApplicationBuilder builder,
         CancellationToken cancellationToken = default)
     {
@@ -417,96 +272,25 @@ public static class MagpieHostBuilderExtensions
 
         var loaded = builder.Services.AddMagpieExtensions(extensions, BuiltInExtensions, loggerFactory);
 
-        if (register)
-        {
-            await RegisterLoadedExtensionsAsync(
-                builder,
-                extensions,
-                loaded,
-                loggerFactory.CreateLogger(nameof(MagpieHostBuilderExtensions)),
-                cancellationToken).ConfigureAwait(false);
-        }
-
         builder.Services.AddDefaultProviders();
         builder.AddMagpieClusterBackplane();
-        await BackfillMediaFilePathKeysAsync(builder, logger, cancellationToken).ConfigureAwait(false);
-
-        return loaded;
-    }
-
-    internal static async Task DispatchLifecycleEventsAsync(
-        this WebApplication app,
-        CancellationToken cancellationToken = default)
-    {
-        using var scope = app.Services.CreateScope();
-        var activationGenerationRepository = scope.ServiceProvider
-            .GetRequiredService<IExtensionActivationGenerationRepository>();
-        var generation = await activationGenerationRepository.GetCurrentAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        try
-        {
-            await app.Services.GetRequiredService<IExtensionLifecycleManager>()
-                .DispatchStartupHooksAsync(cancellationToken).ConfigureAwait(false);
-            await RecordExtensionNodeStatusAsync(
-                scope.ServiceProvider,
-                generation,
-                ExtensionNodeHealth.CurrentHealthy,
-                "Extension activation succeeded.",
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            await RecordExtensionNodeStatusAsync(
-                scope.ServiceProvider,
-                generation,
-                ExtensionNodeHealth.ActivationFailed,
-                ex.Message,
-                cancellationToken).ConfigureAwait(false);
-            throw;
-        }
+        builder.Services.AddSingleton(new LoadedExtensionSet(register ? extensions : [], loaded));
+        builder.Services.AddSingleton<DatabaseStartupService>();
     }
 
     private static void AddMagpieClusterBackplane(this IHostApplicationBuilder builder)
     {
-        var connectionString = builder.Configuration[DatabaseConnectionStringKey];
-        if (string.IsNullOrWhiteSpace(connectionString))
+        var (provider, connectionString) = ResolveDatabaseConfiguration(
+            builder.Configuration, builder.Environment.ContentRootPath);
+        switch (provider)
         {
-            return;
-        }
-
-        switch (builder.Configuration[DatabaseProviderKey]?.ToLowerInvariant())
-        {
-            case "postgresql" or "postgres":
+            case "postgresql":
                 builder.Services.AddMagpieDataPostgreSqlClusterBackplane(connectionString);
                 break;
-            case "sqlserver" or "mssql":
+            case "sqlserver":
                 builder.Services.AddMagpieDataSqlServerClusterBackplane(connectionString);
                 break;
         }
-    }
-
-    private static async Task RecordExtensionNodeStatusAsync(
-        IServiceProvider serviceProvider,
-        long appliedGeneration,
-        ExtensionNodeHealth health,
-        string message,
-        CancellationToken cancellationToken)
-    {
-        var hostEnvironment = serviceProvider.GetRequiredService<MagpieHostEnvironment>();
-        var repository = serviceProvider.GetRequiredService<IExtensionNodeStatusRepository>();
-        var timeProvider = serviceProvider.GetRequiredService<TimeProvider>();
-        await repository.UpsertAsync(
-            new ExtensionNodeStatus
-            {
-                NodeId = hostEnvironment.NodeId,
-                AppliedGeneration = appliedGeneration,
-                ExtensionHealth = health,
-                SchedulerEligible = !hostEnvironment.IsClustered || health is ExtensionNodeHealth.CurrentHealthy,
-                LastSeenAt = timeProvider.GetUtcNow().UtcDateTime,
-                Message = message,
-            },
-            cancellationToken).ConfigureAwait(false);
     }
 
     private static string ResolveDataRoot(string? configuredPath, string contentRoot)
@@ -556,9 +340,12 @@ public static class MagpieHostBuilderExtensions
             ?? new();
         var jobRuntimeOptions = builder.Configuration.GetSection(JobRuntimeOptions.SectionName).Get<JobRuntimeOptions>()
             ?? new();
+        var searchOptions = builder.Configuration.GetSection(SearchOptions.SectionName).Get<SearchOptions>()
+            ?? new();
 
         builder.Services.AddSingleton(hostOptions);
         builder.Services.AddSingleton(jobRuntimeOptions);
+        builder.Services.AddSingleton(searchOptions);
 
         builder.Services.ConfigureHttpJsonOptions(o =>
         {
@@ -574,49 +361,37 @@ public static class MagpieHostBuilderExtensions
 
         builder.Services.AddMagpieCore(startHostedServices);
 
+        if (startHostedServices)
+        {
+            builder.Services.AddHostedService<DatabaseStartupBackgroundService>();
+        }
+
         builder.Services.AddMagpieAuth(builder.Configuration);
-        builder.Services.AddMagpieHttpResilience();
 
         AddMagpieObservability(builder, hostOptions);
 
-        var provider = builder.Configuration[DatabaseProviderKey];
-        var connectionString = builder.Configuration[DatabaseConnectionStringKey];
-
-        switch (provider?.ToLowerInvariant())
+        var (provider, connectionString) = ResolveDatabaseConfiguration(
+            builder.Configuration, builder.Environment.ContentRootPath);
+        switch (provider)
         {
-            case null or "sqlite":
+            case "sqlite":
                 builder.Services.AddMagpieDataSqlite(
-                    connectionString ??
-                    new SqliteConnectionStringBuilder
-                    {
-                        DataSource = Path.Combine(
-                            ResolveDataRoot(hostOptions.Data.Path, builder.Environment.ContentRootPath),
-                            "magpie.db"),
-                        Mode = SqliteOpenMode.ReadWriteCreate,
-                    }.ToString(),
+                    connectionString,
                     DefaultJobTriggerCatalog.ScheduleTriggers,
                     DefaultJobTriggerCatalog.EventTriggers);
                 break;
-            case "postgresql" or "postgres":
-                {
-                    builder.Services.AddMagpieDataPostgreSql(
-                        connectionString
-                        ?? throw new InvalidOperationException("A PostgreSQL connection string is required."),
-                        DefaultJobTriggerCatalog.ScheduleTriggers,
-                        DefaultJobTriggerCatalog.EventTriggers);
-                    break;
-                }
-            case "sqlserver" or "mssql":
-                {
-                    builder.Services.AddMagpieDataSqlServer(
-                        connectionString
-                        ?? throw new InvalidOperationException("A SQL Server connection string is required."),
-                        DefaultJobTriggerCatalog.ScheduleTriggers,
-                        DefaultJobTriggerCatalog.EventTriggers);
-                    break;
-                }
-            default:
-                throw new InvalidOperationException($"Unknown database provider {provider}");
+            case "postgresql":
+                builder.Services.AddMagpieDataPostgreSql(
+                    connectionString,
+                    DefaultJobTriggerCatalog.ScheduleTriggers,
+                    DefaultJobTriggerCatalog.EventTriggers);
+                break;
+            case "sqlserver":
+                builder.Services.AddMagpieDataSqlServer(
+                    connectionString,
+                    DefaultJobTriggerCatalog.ScheduleTriggers,
+                    DefaultJobTriggerCatalog.EventTriggers);
+                break;
         }
 
         return builder;
@@ -678,6 +453,12 @@ public static class MagpieHostBuilderExtensions
                             activity.SetTag("magpie.media_server.id", mediaServerId);
                         }
                     })
+                .AddEntityFrameworkCoreInstrumentation(options =>
+                    options.EnrichWithIDbCommand = static (activity, _) =>
+                    {
+                        activity.SetTag("db.query.text", null);
+                        activity.SetTag("db.statement", null);
+                    })
                 .AddOtlpExporter();
             })
             .WithMetrics(metrics => metrics
@@ -704,11 +485,27 @@ public static class MagpieHostBuilderExtensions
 
         await using var _ = context.ConfigureAwait(false);
 
+        if (!await HasSchemaAsync(context, cancellationToken).ConfigureAwait(false))
+        {
+            return [];
+        }
+
         return await (
             from extension in context.Extensions.AsNoTracking()
             where extension.Installed && extension.Enabled
             orderby extension.LoadOrder, extension.PackageId
-            select extension)
+            select new Extension
+            {
+                Id = extension.Id,
+                PackageId = extension.PackageId,
+                Name = extension.Name,
+                Version = extension.Version,
+                FilePath = extension.FilePath,
+                AssemblyName = extension.AssemblyName,
+                Installed = extension.Installed,
+                Enabled = extension.Enabled,
+                LoadOrder = extension.LoadOrder
+            })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
     }
@@ -729,7 +526,8 @@ public static class MagpieHostBuilderExtensions
         var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
         await using var contextHandle = context.ConfigureAwait(false);
 
-        if (await context.Extensions.AnyAsync(cancellationToken).ConfigureAwait(false))
+        if (await HasSchemaAsync(context, cancellationToken).ConfigureAwait(false) &&
+            await context.Extensions.AnyAsync(cancellationToken).ConfigureAwait(false))
         {
             return [];
         }
@@ -748,7 +546,9 @@ public static class MagpieHostBuilderExtensions
             var depsPath = Directory.EnumerateFiles(directory, "*.deps.json").FirstOrDefault();
             if (depsPath is null)
             {
-                logger.LogWarning("Extension directory {Directory} has no deps.json. The host skipped it", directory);
+                logger.LogWarning(
+                    "Extension directory {Directory} has no deps.json, so the host skipped it",
+                    directory);
                 continue;
             }
 
@@ -756,8 +556,9 @@ public static class MagpieHostBuilderExtensions
             var assemblyPath = Path.Combine(directory, assemblyName + ".dll");
             if (!File.Exists(assemblyPath))
             {
-                logger.LogWarning("Extension assembly {AssemblyPath} does not exist, so the host " +
-                    "skipped this extension directory and did not load the extension", assemblyPath);
+                logger.LogWarning(
+                    "Extension assembly {AssemblyPath} does not exist, so the host skipped the extension",
+                    assemblyPath);
                 continue;
             }
 
@@ -778,41 +579,6 @@ public static class MagpieHostBuilderExtensions
         return discovered;
     }
 
-    private static async Task RegisterLoadedExtensionsAsync(
-        IHostApplicationBuilder builder,
-        IReadOnlyList<Extension> extensions,
-        IReadOnlyList<IExtension> loaded,
-        ILogger logger,
-        CancellationToken cancellationToken)
-    {
-        foreach (var extension in extensions)
-        {
-            var match = loaded.FirstOrDefault(candidate =>
-                string.Equals(
-                    candidate.GetType().Assembly.GetName().Name,
-                    extension.AssemblyName,
-                    StringComparison.OrdinalIgnoreCase));
-
-            if (match is null)
-            {
-                continue;
-            }
-
-            extension.Name = match.Name;
-            extension.Version = match.Version.ToString();
-            extension.TargetABI = match.TargetABI;
-        }
-
-        var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
-        await using var contextHandle = context.ConfigureAwait(false);
-
-        context.Extensions.AddRange(extensions);
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-        logger.LogInformation("The host registered {ExtensionCount} bundled extensions on " +
-            "first start", extensions.Count);
-    }
-
     private static string ResolveExtensionsRoot(string? configuredPath, string contentRoot)
     {
         return string.IsNullOrWhiteSpace(configuredPath)
@@ -822,36 +588,62 @@ public static class MagpieHostBuilderExtensions
                 : Path.GetFullPath(Path.Combine(contentRoot, configuredPath));
     }
 
+    private static async Task<bool> HasSchemaAsync(MagpieDbContext context, CancellationToken cancellationToken)
+    {
+        return await context.Database.CanConnectAsync(cancellationToken).ConfigureAwait(false) &&
+            (await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false)).Any();
+    }
+
+    internal static (string Provider, string ConnectionString) ResolveDatabaseConfiguration(
+        IConfiguration configuration,
+        string contentRootPath)
+    {
+        var configuredProvider = configuration[DatabaseProviderKey];
+        var provider = configuredProvider?.ToLowerInvariant() switch
+        {
+            null or "sqlite" => "sqlite",
+            "postgresql" or "postgres" => "postgresql",
+            "sqlserver" or "mssql" => "sqlserver",
+            _ => throw new InvalidOperationException($"Unknown database provider {configuredProvider}.")
+        };
+        var connectionString = configuration[DatabaseConnectionStringKey];
+        if (connectionString is null && provider == "sqlite")
+        {
+            var options = configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
+                ?? new MagpieHostOptions();
+            connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(ResolveDataRoot(options.Data.Path, contentRootPath), "magpie.db"),
+                Mode = SqliteOpenMode.ReadWriteCreate
+            }.ToString();
+        }
+
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw new InvalidOperationException($"A {provider} connection string is required.");
+        }
+
+        return (provider, connectionString);
+    }
+
     private static MagpieDbContext CreateBootstrapDbContext(IConfiguration configuration, string contentRootPath)
     {
-        var provider = configuration[DatabaseProviderKey];
-        var connectionString = configuration[DatabaseConnectionStringKey];
-        var options = configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
-            ?? new MagpieHostOptions();
-
-        return provider?.ToLowerInvariant() switch
+        var (provider, connectionString) = ResolveDatabaseConfiguration(configuration, contentRootPath);
+        return provider switch
         {
-            "sqlite" or null => SqliteDbContextFactory.Create(
-                connectionString ??
-                new SqliteConnectionStringBuilder
-                {
-                    DataSource = Path.Combine(ResolveDataRoot(options.Data.Path, contentRootPath), "magpie.db"),
-                    Mode = SqliteOpenMode.ReadWriteCreate,
-                }.ToString(),
+            "sqlite" => SqliteDbContextFactory.Create(
+                connectionString,
                 DefaultJobTriggerCatalog.ScheduleTriggers,
                 DefaultJobTriggerCatalog.EventTriggers),
-            "postgresql" or "postgres" => PostgreSqlDbContextFactory.Create(
-                connectionString ??
-                throw new InvalidOperationException("A PostgreSQL connection string is required."),
+            "postgresql" => PostgreSqlDbContextFactory.Create(
+                connectionString,
                 DefaultJobTriggerCatalog.ScheduleTriggers,
                 DefaultJobTriggerCatalog.EventTriggers),
-            "sqlserver" or "mssql" => SqlServerDbContextFactory.Create(
-                connectionString ??
-                throw new InvalidOperationException("A SQL Server connection string is required."),
+            "sqlserver" => SqlServerDbContextFactory.Create(
+                connectionString,
                 DefaultJobTriggerCatalog.ScheduleTriggers,
                 DefaultJobTriggerCatalog.EventTriggers),
-            _ =>
-                throw new InvalidOperationException($"Unknown database provider {provider}."),
+            _ => throw new InvalidOperationException($"Unknown database provider {provider}.")
         };
     }
 }

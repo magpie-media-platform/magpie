@@ -22,12 +22,13 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Security;
 
 [TestFixture]
-public class UserServiceTests
+public sealed class UserServiceTests
 {
     private static readonly Guid CallerUserId = new("11111111-1111-1111-1111-111111111111");
 
     private Mock<IPasswordHasher> _passwordHasher = null!;
     private Mock<IUserRepository> _users = null!;
+    private Mock<IRefreshTokenRepository> _refreshTokens = null!;
     private IUserService _subject = null!;
 
     [SetUp]
@@ -59,11 +60,22 @@ public class UserServiceTests
                 Role = Role.Viewer
             });
 
+        _refreshTokens = new Mock<IRefreshTokenRepository>();
+
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<bool>> operation, CancellationToken token) => operation(token));
+
         _subject = new UserService(
             _users.Object,
+            _refreshTokens.Object,
             _passwordHasher.Object,
             new DefaultPasswordPolicy(),
             Mock.Of<IEventBus>(),
+            transactionManager.Object,
             TimeProvider.System);
     }
 
@@ -419,5 +431,152 @@ public class UserServiceTests
 
         // Assert
         Assert.That(result, Is.True);
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task PatchAsync_RevokesTheSessionsOfTheUser_WhenTheEnabledStateChanges(bool enabled)
+    {
+        // Arrange
+        var userId = new Guid("22222222-2222-2222-2222-222222222222");
+        _users
+            .Setup(repository => repository.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new User
+            {
+                Id = userId,
+                Username = "target",
+                ProviderType = "local",
+                Enabled = true,
+                Role = Role.Viewer
+            });
+        _users
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<UserPatch>(),
+                CallerUserId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject
+            .PatchAsync(userId, new UserPatch { Enabled = new() { Value = enabled } }, CallerUserId)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            _refreshTokens.Verify(
+                repository => repository.DeleteByUserAsync(userId, It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_RevokesTheSessionsOfTheUser_WhenTheRoleChanges()
+    {
+        // Arrange
+        var userId = new Guid("22222222-2222-2222-2222-222222222222");
+        _users
+            .Setup(repository => repository.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new User
+            {
+                Id = userId,
+                Username = "target",
+                ProviderType = "local",
+                Enabled = true,
+                Role = Role.Requester
+            });
+        _users
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<UserPatch>(),
+                CallerUserId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject
+            .PatchAsync(userId, new UserPatch { Role = new() { Value = Role.Viewer } }, CallerUserId)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            _refreshTokens.Verify(
+                repository => repository.DeleteByUserAsync(userId, It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_KeepsTheSessionsOfTheUser_WhenThePatchCarriesNoSecurityField()
+    {
+        // Arrange
+        var userId = new Guid("22222222-2222-2222-2222-222222222222");
+        _users
+            .Setup(repository => repository.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new User
+            {
+                Id = userId,
+                Username = "target",
+                ProviderType = "local",
+                Enabled = true,
+                Role = Role.Viewer
+            });
+        _users
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<UserPatch>(),
+                CallerUserId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject.PatchAsync(userId, new UserPatch(), CallerUserId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            _refreshTokens.Verify(
+                repository => repository.DeleteByUserAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_KeepsTheSessionsOfTheUser_WhenTheUserRepositoryPatchFails()
+    {
+        // Arrange
+        var userId = new Guid("22222222-2222-2222-2222-222222222222");
+        _users
+            .Setup(repository => repository.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new User
+            {
+                Id = userId,
+                Username = "target",
+                ProviderType = "local",
+                Enabled = true,
+                Role = Role.Viewer
+            });
+        _users
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<UserPatch>(),
+                CallerUserId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        // Act
+        var result = await _subject
+            .PatchAsync(userId, new UserPatch { Role = new() { Value = Role.Admin } }, CallerUserId)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            _refreshTokens.Verify(
+                repository => repository.DeleteByUserAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 }

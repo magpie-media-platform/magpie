@@ -5,7 +5,6 @@ using System.Threading.Tasks;
 
 using Magpie.Models;
 using Magpie.Models.Api;
-using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Storage;
 using Magpie.Sdk.Api;
@@ -18,7 +17,6 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-[MagpieCommandGroup("system", "system", "Inspect and control the host")]
 internal sealed class SystemEndpointGroup : IApiEndpointGroup
 {
     public string Name => "system";
@@ -38,6 +36,12 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
         builder.MapGet("health", GetSystemHealthAsync)
             .WithName(nameof(GetSystemHealthAsync))
             .Produces<SystemHealth>()
+            .AllowAnonymous();
+
+        builder.MapGet("ready", GetSystemReadiness)
+            .WithName(nameof(GetSystemReadiness))
+            .Produces(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
             .AllowAnonymous();
 
         builder.MapGet("files", BrowseFilesAsync)
@@ -104,6 +108,11 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
         var health = await magpieSystem.CheckHealthAsync(cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(health);
+    }
+
+    internal IResult GetSystemReadiness()
+    {
+        return Results.Ok();
     }
 
     internal async Task<IResult> BrowseFilesAsync(
@@ -179,7 +188,7 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
             .CreateAdministratorAsync(request.Username, request.Password, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Ok(CreateUserResponse(created));
+        return Results.Ok(created.ToResponse());
     }
 
     internal async Task<IResult> GetDatabaseSetupStatusAsync(
@@ -232,28 +241,5 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
         await magpieSystem.RequestShutdownAsync(user.Id, cancellationToken).ConfigureAwait(false);
 
         return Results.Accepted();
-    }
-
-    private UserResponse CreateUserResponse(User user)
-    {
-        return new()
-        {
-            Id = user.Id,
-            Username = user.Username,
-            Email = user.Email,
-            ExtensionId = user.ExtensionId,
-            ProviderType = user.ProviderType,
-            ExternalId = user.ExternalId,
-            Settings = user.Settings,
-            Enabled = user.Enabled,
-            Role = user.Role,
-            FailedLoginAttempts = user.FailedLoginAttempts,
-            LockedUntil = user.LockedUntil,
-            LastLoginAt = user.LastLoginAt,
-            CreatedAt = user.CreatedAt,
-            CreatedByUserId = user.CreatedByUserId,
-            ModifiedAt = user.ModifiedAt,
-            ModifiedByUserId = user.ModifiedByUserId,
-        };
     }
 }

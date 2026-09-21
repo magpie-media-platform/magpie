@@ -1,16 +1,11 @@
-import { apiFetch, tokenStorage, ApiError } from './api';
-import { Role, roleFromApi, type EffectivePermissions, type PermissionGrant } from '@/auth/types';
+import { apiFetch, ApiError, renewAccessToken, type AuthTokenResponse } from './api';
+import { clearAuthStorage, storeAuthTokens, tokenExpirationStorage, tokenStorage } from './tokenStorage';
+import { isRole, Role, roleFromApi, type EffectivePermissions, type PermissionGrant } from '@/auth/types';
 
 interface LoginRequest {
     username: string;
 
     password: string;
-}
-
-interface AuthTokenResponse {
-    accessToken: string;
-
-    accessTokenExpiresAt: string;
 }
 
 interface JwtUser {
@@ -20,41 +15,6 @@ interface JwtUser {
 
     role: Role;
 }
-
-const TOKEN_EXPIRES_KEY = 'magpie_token_expires';
-
-export const tokenExpirationStorage = {
-    storageKey: TOKEN_EXPIRES_KEY,
-
-    isStorageKey(key: string | null): boolean {
-        return key === TOKEN_EXPIRES_KEY;
-    },
-
-    get(): Date | null {
-        try {
-            const value = localStorage.getItem(TOKEN_EXPIRES_KEY);
-            return value ? new Date(value) : null;
-        } catch {
-            return null;
-        }
-    },
-
-    set(expiresAt: Date): void {
-        try {
-            localStorage.setItem(TOKEN_EXPIRES_KEY, expiresAt.toISOString());
-        } catch {
-            void 0;
-        }
-    },
-
-    remove(): void {
-        try {
-            localStorage.removeItem(TOKEN_EXPIRES_KEY);
-        } catch {
-            void 0;
-        }
-    },
-};
 
 export function decodeJwtUser(token: string): JwtUser | null {
     try {
@@ -85,14 +45,14 @@ export function decodeJwtUser(token: string): JwtUser | null {
 
         const numeric = parseInt(roleStr, 10);
         const role = isNaN(numeric) ? (Role as Record<string, number>)[roleStr] : numeric;
-        if (typeof role !== 'number' || isNaN(role) || role < 0 || role > 3) {
+        if (!isRole(role)) {
             return null;
         }
 
         return {
             id,
             username,
-            role: role as Role,
+            role,
         };
     } catch {
         return null;
@@ -106,8 +66,7 @@ export async function login(username: string, password: string): Promise<JwtUser
         skipAuth: true,
     });
 
-    tokenStorage.set(response.accessToken);
-    tokenExpirationStorage.set(new Date(response.accessTokenExpiresAt));
+    storeAuthTokens(response.accessToken, response.accessTokenExpiresAt);
 
     const user = decodeJwtUser(response.accessToken);
     if (!user) {
@@ -132,17 +91,11 @@ export async function logout(): Promise<void> {
     }
 }
 
-export async function refreshAccessToken(): Promise<JwtUser> {
+export async function refreshAccessToken(baseUrl?: string): Promise<JwtUser> {
     try {
-        const response = await apiFetch<AuthTokenResponse>('/auth/refresh', {
-            method: 'POST',
-            skipAuth: true,
-        });
+        const accessToken = await renewAccessToken(baseUrl);
 
-        tokenStorage.set(response.accessToken);
-        tokenExpirationStorage.set(new Date(response.accessTokenExpiresAt));
-
-        const user = decodeJwtUser(response.accessToken);
+        const user = decodeJwtUser(accessToken);
         if (!user) {
             throw new ApiError(500, 'Failed to decode user from token');
         }
@@ -201,9 +154,4 @@ export function getCurrentUserFromToken(): JwtUser | null {
         return null;
     }
     return decodeJwtUser(token);
-}
-
-export function clearAuthStorage(): void {
-    tokenStorage.remove();
-    tokenExpirationStorage.remove();
 }

@@ -78,7 +78,7 @@ internal sealed class ContentFiltersEndpointGroup : IApiEndpointGroup
         var created = await filterService.CreateContentFilterAsync(filter, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Created($"/api/{Name}/{created.Id}", created);
     }
 
     internal async Task<IResult> GetMyContentFiltersAsync(

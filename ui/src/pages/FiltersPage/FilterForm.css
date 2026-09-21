@@ -26,27 +26,6 @@
         gap: var(--space-xs);
     }
 
-    .filter-form__field--row {
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: var(--space-md);
-    }
-
-    .filter-form__field-label {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-xs);
-    }
-
-    .filter-form__field-hint {
-        margin: 0;
-        font-size: var(--text-xs);
-        color: var(--text-muted);
-        line-height: var(--leading-relaxed);
-    }
-
     .filter-form__readonly-notice {
         display: flex;
         align-items: center;
@@ -88,12 +67,6 @@
     @media (max-width: 480px) {
         .filter-form__body {
             padding: var(--space-md);
-        }
-
-        .filter-form__field--row {
-            flex-direction: column;
-            align-items: stretch;
-            gap: var(--space-sm);
         }
     }
 }

@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <InternalsVisibleTo Include="Magpie.Test.Core" />
   </ItemGroup>
 
   <ItemGroup>

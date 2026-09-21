@@ -27,6 +27,17 @@ const defaultProps = {
 };
 
 describe('MonthView', () => {
+    it('aligns the grid and headers with a Monday-first locale', () => {
+        // Arrange
+        const language = vi.spyOn(navigator, 'language', 'get').mockReturnValue('fr-FR');
+        // Act
+        const { container } = render(<MonthView {...defaultProps} currentDate={new Date(2024, 8, 15)} />);
+        // Assert
+        expect(container.querySelector('.calendar-page__weekday-name')).toHaveTextContent('Mon');
+        expect(container.querySelector('[data-date]')).toHaveAttribute('data-date', '2024-08-26');
+        language.mockRestore();
+    });
+
     it('renders weekday names header', () => {
         render(<MonthView {...defaultProps} />);
         expect(screen.getByText('Sun')).toBeInTheDocument();

@@ -101,22 +101,23 @@ public class ContentMetadataProviderTests
         {
             Assert.That(images.Select(image => image.Type), Is.EqualTo(["poster", "poster", "logo"]));
             Assert.That(images[1].Language, Is.EqualTo("en"));
-            _client.Verify(
-                subject => subject.GetAsync<MovieDetailDto>(
-                    new RequestContext { ApiKey = "key", Language = "en-US" },
-                    "3/movie/550",
-                    It.Is<IReadOnlyList<(string Key, string Value)>?>(parameters =>
-                        parameters!.Any(parameter =>
-                            parameter.Key == "append_to_response" &&
-                            parameter.Value ==
-                                "external_ids,credits,alternative_titles,release_dates,videos,images") &&
-                        parameters!.Any(parameter =>
-                            parameter.Key == "include_image_language" &&
-                            parameter.Value == "en,null")),
-                    ResponseProfile.Detail,
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
         }
+
+        _client.Verify(
+            subject => subject.GetAsync<MovieDetailDto>(
+                new RequestContext { ApiKey = "key", Language = "en-US" },
+                "3/movie/550",
+                It.Is<IReadOnlyList<(string Key, string Value)>?>(parameters =>
+                    parameters!.Any(parameter =>
+                        parameter.Key == "append_to_response" &&
+                        parameter.Value ==
+                            "external_ids,credits,alternative_titles,release_dates,videos,images") &&
+                    parameters!.Any(parameter =>
+                        parameter.Key == "include_image_language" &&
+                        parameter.Value == "en,null")),
+                ResponseProfile.Detail,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]

@@ -1,0 +1,34 @@
+@layer components {
+    .selection-circle-toggle {
+        all: unset;
+        box-sizing: border-box;
+        position: absolute;
+        top: var(--space-xs);
+        left: var(--space-xs);
+        z-index: var(--z-raised);
+        display: inline-flex;
+        align-items: flex-start;
+        justify-content: flex-start;
+        width: var(--touch-target-min);
+        height: var(--touch-target-min);
+        cursor: pointer;
+        color: var(--text-on-inverse);
+
+        & svg {
+            width: 1.5rem;
+            height: 1.5rem;
+            border-radius: var(--radius-full);
+            background-color: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+        }
+    }
+
+    .selection-circle-toggle:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: var(--focus-ring-offset);
+    }
+
+    .selection-circle-toggle--selected svg {
+        color: var(--accent-primary);
+        background-color: var(--bg-primary);
+    }
+}

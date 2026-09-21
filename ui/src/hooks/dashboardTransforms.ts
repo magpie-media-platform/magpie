@@ -1,6 +1,8 @@
 import { extractContentFields, type ApiContentItemWithMetadata } from '@/lib/contentMapping';
 import { formatElapsedDuration, formatRelativeTime } from '@/lib/formatTime';
 import { humanizeJobType } from '@/lib/jobExecution';
+import { toLocalDateKey } from '@/lib/dateFormatting';
+import { parseCalendarDate } from '@/lib/dateParsing';
 import { extractTitle } from '@/lib/metadata';
 import {
     mapFulfillmentStatus,
@@ -149,19 +151,6 @@ export function mapDownloadState(status: DownloadStatus): 'downloading' | 'queue
     }
 }
 
-export function calculateDownloadCounts(downloads: ApiDownload[]): DownloadCounts {
-    const counts: DownloadCounts = { downloading: 0, queued: 0, paused: 0, stalled: 0 };
-
-    for (const download of downloads) {
-        const state = mapDownloadState(download.status);
-        if (state) {
-            counts[state]++;
-        }
-    }
-
-    return counts;
-}
-
 export function mapDownloadStatusCounts(statusCounts: Partial<Record<DownloadStatusValue, number>>): DownloadCounts {
     return {
         downloading: statusCounts.Downloading ?? 0,
@@ -234,7 +223,7 @@ export function mapRecentContent(items: ApiContentHierarchyItem[], limit: number
 }
 
 export function mapUpcomingContent(items: ApiContentItemWithMetadata[]): UpcomingContentItem[] {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = toLocalDateKey(new Date());
 
     const result: UpcomingContentItem[] = [];
     for (const item of items) {
@@ -242,11 +231,11 @@ export function mapUpcomingContent(items: ApiContentItemWithMetadata[]): Upcomin
         if (!fields.date) {
             continue;
         }
-        const parsed = new Date(fields.date);
+        const parsed = parseCalendarDate(fields.date);
         if (isNaN(parsed.getTime())) {
             continue;
         }
-        if (parsed.toISOString().slice(0, 10) < today) {
+        if (toLocalDateKey(parsed) < today) {
             continue;
         }
         result.push({

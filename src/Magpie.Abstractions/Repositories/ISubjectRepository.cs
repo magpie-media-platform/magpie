@@ -11,4 +11,5 @@ namespace Magpie.Abstractions.Repositories;
 public interface ISubjectRepository :
     IQueryRepository<Subject, SubjectQuery>,
     ICrudRepository<Guid, Subject>,
-    IPatchRepository<Guid, Subject, TagsPatch>;
+    IPatchRepository<Guid, Subject, SubjectRowPatch>,
+    IBulkDeleteRepository<Subject, SubjectQuery>;

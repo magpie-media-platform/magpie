@@ -1,4 +1,4 @@
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { act, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -69,6 +69,7 @@ const mockApiWishlists: ApiWishlist[] = [
         ownerUserId: 'user-2',
         ownerLock: true,
         enabled: true,
+        monitoring: false,
         lastSyncedAt: '2024-01-14T18:00:00Z',
         createdAt: '2024-01-03T00:00:00Z',
         contentFilter: { id: 'filter-3', name: 'Provider I List' },
@@ -617,7 +618,7 @@ describe('WishlistsPage list items', () => {
         });
     });
 
-    it('does not render a monitored/unmonitored pill on the row', async () => {
+    it('renders an enabled or disabled pill on the row', async () => {
         render(
             <TestWrapper>
                 <WishlistsPage />
@@ -627,11 +628,11 @@ describe('WishlistsPage list items', () => {
         await waitFor(() => {
             expect(screen.getByText('My Movies')).toBeInTheDocument();
         });
-        expect(screen.queryByText('Unmonitored')).not.toBeInTheDocument();
-        expect(screen.queryByText('Monitored')).not.toBeInTheDocument();
+        expect(screen.getAllByText('Enabled').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Disabled').length).toBeGreaterThan(0);
     });
 
-    it('applies unmonitored class to unmonitored items', async () => {
+    it('applies disabled class to disabled items', async () => {
         render(
             <TestWrapper>
                 <WishlistsPage />
@@ -639,9 +640,23 @@ describe('WishlistsPage list items', () => {
         );
 
         await waitFor(() => {
-            const unmonitoredItem = screen.queryByTestId('wishlists-page__item--unmonitored');
-            expect(unmonitoredItem).toBeInTheDocument();
+            const disabledItem = screen.queryByTestId('wishlists-page__item--disabled');
+            expect(disabledItem).toBeInTheDocument();
         });
+    });
+
+    it('shows each wishlist row its own monitoring setting', async () => {
+        render(
+            <TestWrapper>
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('My Movies')).toBeInTheDocument();
+        });
+        expect(screen.getAllByText('Inherit').length).toBeGreaterThan(0);
+        expect(screen.getByText('Not monitored')).toBeInTheDocument();
     });
 });
 
@@ -874,7 +889,7 @@ describe('WishlistsPage Add Wishlist button', () => {
         });
     });
 
-    it('passes the monitored toggle when creating a wishlist', async () => {
+    it('passes enabled and monitoring when creating a wishlist', async () => {
         const user = userEvent.setup();
         mockApiPost.mockResolvedValue({
             id: 'wl-new',
@@ -898,7 +913,8 @@ describe('WishlistsPage Add Wishlist button', () => {
 
         const dialog = await screen.findByRole('dialog');
         await user.type(within(dialog).getByLabelText(/name/i), 'Unmonitored QA');
-        await user.click(within(dialog).getByLabelText(/monitored/i));
+        await user.click(within(dialog).getByLabelText(/enabled/i));
+        await user.click(within(dialog).getByRole('radio', { name: /^Do not monitor:/ }));
         await user.click(within(dialog).getByRole('button', { name: /save/i }));
 
         await waitFor(() => {
@@ -907,6 +923,7 @@ describe('WishlistsPage Add Wishlist button', () => {
                 expect.objectContaining({
                     name: 'Unmonitored QA',
                     enabled: false,
+                    monitoring: false,
                 }),
             );
         });
@@ -1554,7 +1571,12 @@ describe('WishlistsPage lock/unlock actions', () => {
 
     it('calls API when lock button is clicked', async () => {
         const user = userEvent.setup();
-        mockApiPatch.mockResolvedValue(undefined);
+        let completeUpdate!: () => void;
+        mockApiPatch.mockReturnValue(
+            new Promise<void>((resolve) => {
+                completeUpdate = resolve;
+            }),
+        );
 
         render(
             <TestWrapper userId="user-1">
@@ -1575,6 +1597,10 @@ describe('WishlistsPage lock/unlock actions', () => {
         await waitFor(() => {
             expect(mockApiPatch).toHaveBeenCalledWith('/wishlists/wl-1', { ownerLock: { value: true } });
         });
+        expect(lockButton).toBeDisabled();
+        expect(document.querySelector('[data-wishlist-id="wl-2"] [data-action="unlock"]')).toBeEnabled();
+        await act(async () => completeUpdate());
+        expect(lockButton).toBeEnabled();
     });
 });
 
@@ -1751,17 +1777,28 @@ describe('WishlistsPage navigation', () => {
         vi.restoreAllMocks();
     });
 
-    it('wishlist rows are focusable', async () => {
+    it('navigates from a wishlist row with the keyboard when the title link is focused', async () => {
+        // Arrange
+        const user = userEvent.setup();
         render(
             <TestWrapper>
-                <WishlistsPage />
+                <Routes>
+                    <Route path="/wishlists" element={<WishlistsPage />} />
+                    <Route path="/wishlists/wl-1" element={<h1>Wishlist detail</h1>} />
+                </Routes>
             </TestWrapper>,
         );
+        const link = await screen.findByRole('link', { name: 'My Movies' });
 
-        await waitFor(() => {
-            const firstItem = screen.getAllByTestId('wishlists-page__item')[0];
-            expect(firstItem).toHaveAttribute('tabindex', '0');
-        });
+        // Act
+        link.focus();
+
+        // Assert
+        expect(link).toHaveFocus();
+        expect(link).toHaveAttribute('href', '/wishlists/wl-1');
+        expect(link.closest('[role="listitem"]')).not.toHaveAttribute('tabindex');
+        await user.keyboard('{Enter}');
+        expect(await screen.findByRole('heading', { name: 'Wishlist detail' })).toBeInTheDocument();
     });
 });
 

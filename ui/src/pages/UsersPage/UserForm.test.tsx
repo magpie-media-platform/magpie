@@ -12,7 +12,7 @@ import { UserForm } from './UserForm';
 function TestWrapper({ children }: { children: ReactNode }) {
     return (
         <MemoryRouter>
-            <ProviderTypesWrapper seed={{ externalUsers: ['ldap'] }}>{children}</ProviderTypesWrapper>
+            <ProviderTypesWrapper>{children}</ProviderTypesWrapper>
         </MemoryRouter>
     );
 }
@@ -611,7 +611,6 @@ describe('UserForm external (non-local) users', () => {
                         role: Role.Viewer,
                         enabled: true,
                         providerType: 'ldap',
-                        externalId: 'jdoe',
                     }}
                     onSubmit={vi.fn()}
                 />
@@ -622,8 +621,7 @@ describe('UserForm external (non-local) users', () => {
         expect(screen.getByDisplayValue('ldap')).toBeInTheDocument();
     });
 
-    it('switches to the external id field when an external provider is chosen', async () => {
-        const user = userEvent.setup();
+    it('offers no external provider when creating a user', () => {
         render(
             <TestWrapper>
                 <UserForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />
@@ -631,83 +629,9 @@ describe('UserForm external (non-local) users', () => {
         );
 
         expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
-
-        const provider = document.querySelector('[data-field="provider"]') as HTMLElement;
-        await user.click(provider);
-        const externalOption = await screen.findByRole('option', { name: 'ldap' });
-        await user.click(externalOption);
-
-        expect(screen.queryByLabelText(/^password$/i)).not.toBeInTheDocument();
-        expect(screen.getByLabelText(/external id/i)).toBeInTheDocument();
-    });
-
-    it('hides the enabled switch when creating an external user', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <UserForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />
-            </TestWrapper>,
-        );
-
-        expect(screen.getByLabelText(/user enabled/i)).toBeInTheDocument();
-
-        const provider = document.querySelector('[data-field="provider"]') as HTMLElement;
-        await user.click(provider);
-        await user.click(await screen.findByRole('option', { name: 'ldap' }));
-
-        expect(screen.queryByLabelText(/user enabled/i)).not.toBeInTheDocument();
-    });
-
-    it('submits external user values without a password', async () => {
-        const user = userEvent.setup();
-        const onSubmit = vi.fn();
-        render(
-            <TestWrapper>
-                <UserForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />
-            </TestWrapper>,
-        );
-
-        await user.type(screen.getByLabelText(/username/i), 'jdoe');
-
-        const provider = document.querySelector('[data-field="provider"]') as HTMLElement;
-        await user.click(provider);
-        await user.click(await screen.findByRole('option', { name: 'ldap' }));
-
-        await user.type(screen.getByLabelText(/external id/i), 'jdoe-ext');
-
-        await user.click(screen.getByRole('button', { name: /create/i }));
-
-        expect(onSubmit).toHaveBeenCalledTimes(1);
-        expect(onSubmit).toHaveBeenCalledWith(
-            expect.objectContaining({
-                username: 'jdoe',
-                providerType: 'ldap',
-                externalId: 'jdoe-ext',
-            }),
-        );
-        expect(onSubmit.mock.calls[0][0].password).toBeFalsy();
-    });
-
-    it('requires an external id for an external user', async () => {
-        const user = userEvent.setup();
-        const onSubmit = vi.fn();
-        render(
-            <TestWrapper>
-                <UserForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />
-            </TestWrapper>,
-        );
-
-        await user.type(screen.getByLabelText(/username/i), 'jdoe');
-
-        const provider = document.querySelector('[data-field="provider"]') as HTMLElement;
-        await user.click(provider);
-        await user.click(await screen.findByRole('option', { name: 'ldap' }));
-
-        await user.click(screen.getByRole('button', { name: /create/i }));
-
-        const alerts = screen.getAllByRole('alert');
-        expect(alerts.some((el) => el.textContent?.includes('External id is required'))).toBe(true);
-        expect(onSubmit).not.toHaveBeenCalled();
+        expect(screen.queryByLabelText(/external id/i)).not.toBeInTheDocument();
+        expect(document.querySelector('[data-field="provider"]')).toBeDisabled();
+        expect(screen.getByText(/created by their authentication provider at first sign-in/i)).toBeInTheDocument();
     });
 });
 

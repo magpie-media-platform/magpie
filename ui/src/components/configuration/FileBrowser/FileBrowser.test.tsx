@@ -70,6 +70,24 @@ describe('FileBrowser', () => {
         onSelect: vi.fn(),
     };
 
+    it('opens folders with the keyboard in folder mode and exposes selection on buttons', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<FileBrowser {...defaultProps} mode="folder" />, { wrapper: createWrapper() });
+        const entry = await screen.findByRole('button', { name: 'home', pressed: false });
+
+        // Act
+        await user.click(entry);
+        expect(entry).toHaveAttribute('aria-pressed', 'true');
+        screen.getByRole('button', { name: 'Open home' }).focus();
+        await user.keyboard('{Enter}');
+
+        // Assert
+        expect(await screen.findByRole('button', { name: 'Open user' })).toBeInTheDocument();
+        expect(screen.getByRole('list', { name: 'Directory contents' })).toBeInTheDocument();
+        expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    });
+
     it('renders dialog when open', async () => {
         render(<FileBrowser {...defaultProps} />, { wrapper: createWrapper() });
 

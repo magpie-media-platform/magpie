@@ -1,4 +1,4 @@
-import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import { forwardRef, useRef, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import * as SelectPrimitive from '@radix-ui/react-select';
 
 import './Select.css';
@@ -7,6 +7,8 @@ export type SelectSize = 'sm' | 'md' | 'lg';
 
 export interface SelectProps extends ComponentPropsWithoutRef<typeof SelectPrimitive.Root> {
     size?: SelectSize;
+
+    onDismiss?: () => void;
 
     error?: boolean;
 
@@ -35,10 +37,32 @@ export type SelectLabelProps = ComponentPropsWithoutRef<typeof SelectPrimitive.L
 
 export type SelectSeparatorProps = ComponentPropsWithoutRef<typeof SelectPrimitive.Separator>;
 
-function SelectRoot({ value, onValueChange, ...props }: SelectProps) {
+function SelectRoot({ value, onValueChange, onOpenChange, onDismiss, ...props }: SelectProps) {
+    const pickedRef = useRef(false);
     const controlled = onValueChange !== undefined;
     const resolvedValue = controlled ? (value ?? '') : value;
-    return <SelectPrimitive.Root value={resolvedValue} onValueChange={onValueChange} {...props} />;
+    return (
+        <SelectPrimitive.Root
+            value={resolvedValue}
+            onValueChange={(next) => {
+                pickedRef.current = true;
+                onValueChange?.(next);
+            }}
+            onOpenChange={(open) => {
+                onOpenChange?.(open);
+                if (open) {
+                    pickedRef.current = false;
+                } else if (onDismiss) {
+                    queueMicrotask(() => {
+                        if (!pickedRef.current) {
+                            onDismiss();
+                        }
+                    });
+                }
+            }}
+            {...props}
+        />
+    );
 }
 
 SelectRoot.displayName = 'Select';

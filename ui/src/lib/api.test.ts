@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import {
-    tokenStorage,
     apiFetch,
     apiGet,
     apiPost,
@@ -13,7 +12,33 @@ import {
     AUTH_FAILURE_EVENT,
     ApiError,
 } from './api';
-import { tokenExpirationStorage, clearAuthStorage } from './authApi';
+import { clearAuthStorage, tokenExpirationStorage, tokenStorage } from './tokenStorage';
+
+describe('session failure on a 401', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+        clearAuthStorage();
+    });
+    it('reports session failure when refresh fails', async () => {
+        tokenStorage.set('expired-token');
+        const fetch = vi
+            .spyOn(globalThis, 'fetch')
+            .mockResolvedValueOnce(new Response(null, { status: 401 }))
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ status: 401, title: 'Invalid refresh token' }), {
+                    status: 401,
+                    headers: { 'Content-Type': 'application/problem+json' },
+                }),
+            );
+        const dispatch = vi.spyOn(window, 'dispatchEvent');
+        await expect(apiFetch('/upstream', { baseUrl: '/custom-api' })).rejects.toMatchObject({ status: 401 });
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(fetch.mock.calls[1][0]).toBe('/custom-api/auth/refresh');
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(dispatch.mock.calls[0][0].type).toBe('magpie:auth:failure');
+        expect(tokenStorage.get()).toBeNull();
+    });
+});
 
 describe('tokenStorage', () => {
     beforeEach(() => {
@@ -327,8 +352,41 @@ describe('apiFetch', () => {
 
         await expect(apiFetch('/notification-rules/x/test', { method: 'POST' })).rejects.toMatchObject({
             status: 502,
-            message: 'Notification test delivery failed',
+            message: 'Webhook delivery failed due to a transport error.',
             details: { detail: 'Webhook delivery failed due to a transport error.' },
+        });
+    });
+
+    it('prefers the ProblemDetails detail over the generic status title', async () => {
+        mockFetch.mockResolvedValue({
+            ok: false,
+            status: 400,
+            headers: new Headers({ 'content-type': 'application/problem+json' }),
+            json: () =>
+                Promise.resolve({
+                    title: 'Bad Request',
+                    status: 400,
+                    detail: 'The root folder path is not writable.',
+                }),
+        });
+
+        await expect(apiFetch('/library/roots', { method: 'POST', body: {} })).rejects.toMatchObject({
+            status: 400,
+            message: 'The root folder path is not writable.',
+        });
+    });
+
+    it('falls back to the generic message when the ProblemDetails detail is empty', async () => {
+        mockFetch.mockResolvedValue({
+            ok: false,
+            status: 500,
+            headers: new Headers({ 'content-type': 'application/problem+json' }),
+            json: () => Promise.resolve({ status: 500, detail: '' }),
+        });
+
+        await expect(apiFetch('/library/roots')).rejects.toMatchObject({
+            status: 500,
+            message: 'Request failed with status 500',
         });
     });
 
@@ -423,6 +481,22 @@ describe('apiFetch', () => {
         await apiFetch('https://external.api.com/data');
 
         expect(mockFetch).toHaveBeenCalledWith('https://external.api.com/data', expect.any(Object));
+    });
+
+    it('sends no token and no cookies to an absolute URL off the api origin', async () => {
+        tokenStorage.set('my-auth-token');
+        mockFetch.mockResolvedValue({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: () => Promise.resolve({}),
+        });
+
+        await apiFetch('https://external.api.com/data');
+
+        const init = mockFetch.mock.calls[0][1] as RequestInit;
+        expect((init.headers as Headers).has('Authorization')).toBe(false);
+        expect(init.credentials).toBe('omit');
     });
 
     it('handles error response with plain text', async () => {

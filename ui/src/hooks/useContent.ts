@@ -7,7 +7,7 @@ import { contentReleaseQueryKeys } from '@/hooks/useContentReleases';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { fetchRootFolders, rootFolderQueryKeys } from '@/hooks/useRootFolders';
 import { fetchQualityTierLists, qualityTierListQueryKeys } from '@/hooks/useQualityTierLists';
-import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
+import { apiGet, apiPost, apiPatch, buildUrl } from '@/lib/api';
 import { executeImmediateJobRequest, executeJobRequest, type JobActionDisposition } from '@/lib/jobActions';
 import { magpieEventNames } from '@/lib/magpieEventNames';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
@@ -21,7 +21,6 @@ import {
     mapToContentDetailItem,
 } from '@/types/content';
 import {
-    type AcquisitionEligibility,
     type BulkContentDeleteRequest,
     type BulkContentPatchRequest,
     type BulkResult,
@@ -31,7 +30,6 @@ import {
     type EffectiveRootFolder,
     type MediaServerDeepLink,
     type MetadataInspectorResponse,
-    type PendingRefreshResponse,
     type SearchContentReleasesParams,
     type SetContentRootFolderVariables,
     type SetQualityTierListVariables,
@@ -48,8 +46,6 @@ export const contentQueryKeys = {
     metadataInspector: (id: string) => ['content', 'metadata-inspector', id] as const,
     effectiveRootFolder: (id: string) => ['content', 'effective-root-folder', id] as const,
     effectiveQualityTierList: (id: string) => ['content', 'effective-quality-tier-list', id] as const,
-    acquisitionStatus: (id: string) => ['content', 'acquisition-status', id] as const,
-    pendingRefresh: (id: string) => ['content', 'pending-refresh', id] as const,
 };
 
 const CONTENT_CHANGE_EVENTS = [
@@ -80,18 +76,6 @@ function matchesScope(
         (!params?.fulfillment || value('fulfillment')?.toLowerCase() === params.fulfillment.toLowerCase())
     );
 }
-
-const ACQUISITION_CHANGE_EVENTS = [
-    ...CONTENT_CHANGE_EVENTS,
-    'download.created',
-    'download.updated',
-    'download.deleted',
-    magpieEventNames.downloadCompleted,
-    magpieEventNames.downloadFailed,
-    'download.stalled',
-    'releaseSearch.completed',
-    'releaseGrab.rejected',
-] as const;
 
 function useContentQueryEvents(
     queryKey: QueryKey,
@@ -130,21 +114,28 @@ function useContentQueryEvents(
     );
 }
 
-async function fetchAcquisitionStatus(id: string): Promise<AcquisitionEligibility> {
-    return apiGet<AcquisitionEligibility>(`/content/${id}/acquisition-status`);
-}
+const MAX_ANCESTOR_DEPTH = 32;
 
-export function useAcquisitionStatus(id: string | undefined, options?: { enabled?: boolean }) {
-    useContentQueryEvents(contentQueryKeys.acquisitionStatus(id ?? ''), ACQUISITION_CHANGE_EVENTS, {
-        enabled: (options?.enabled ?? true) && !!id,
-        entityIds: id ? [id] : [],
-    });
-    return useQuery({
-        queryKey: contentQueryKeys.acquisitionStatus(id ?? ''),
-        queryFn: () => fetchAcquisitionStatus(id!),
-        enabled: (options?.enabled ?? true) && !!id,
-        staleTime: POLLING_INTERVALS.slow,
-    });
+async function findResolvingAncestor(
+    queryClient: ReturnType<typeof useQueryClient>,
+    item: ApiContentHierarchyItem,
+    hasOwnValue: (ancestor: ApiContentHierarchyItem) => boolean,
+): Promise<ApiContentHierarchyItem | undefined> {
+    const seen = new Set<string>([item.id]);
+    let parentId = item.parentId;
+    while (parentId && !seen.has(parentId) && seen.size <= MAX_ANCESTOR_DEPTH) {
+        seen.add(parentId);
+        const parent = await queryClient.fetchQuery({
+            queryKey: contentQueryKeys.detail(parentId),
+            queryFn: () => fetchContentById(parentId!),
+            staleTime: 0,
+        });
+        if (hasOwnValue(parent)) {
+            return parent;
+        }
+        parentId = parent.parentId;
+    }
+    return undefined;
 }
 
 async function fetchEffectiveRootFolder(
@@ -186,24 +177,16 @@ async function fetchEffectiveRootFolder(
         };
     }
 
-    let parentId = item.parentId;
-    while (parentId) {
-        const parent = await queryClient.fetchQuery({
-            queryKey: contentQueryKeys.detail(parentId),
-            queryFn: () => fetchContentById(parentId!),
-            staleTime: 0,
-        });
-        if (parent.rootFolderId) {
-            return {
-                rootFolderId,
-                rootFolderName: rootFolder?.name,
-                rootFolderPath: rootFolder?.path,
-                source: 'Inherited',
-                resolvingHierarchyItemId: parent.id,
-                isOverriddenOnItem: false,
-            };
-        }
-        parentId = parent.parentId;
+    const resolvingAncestor = await findResolvingAncestor(queryClient, item, (ancestor) => !!ancestor.rootFolderId);
+    if (resolvingAncestor) {
+        return {
+            rootFolderId,
+            rootFolderName: rootFolder?.name,
+            rootFolderPath: rootFolder?.path,
+            source: 'Inherited',
+            resolvingHierarchyItemId: resolvingAncestor.id,
+            isOverriddenOnItem: false,
+        };
     }
 
     return {
@@ -317,24 +300,20 @@ async function fetchEffectiveQualityTierList(
         };
     }
 
-    let parentId = item.parentId;
-    while (parentId) {
-        const parent = await queryClient.fetchQuery({
-            queryKey: contentQueryKeys.detail(parentId),
-            queryFn: () => fetchContentById(parentId!),
-            staleTime: 0,
-        });
-        if (parent.qualityTierListId) {
-            return {
-                qualityTierListId: tierListId,
-                qualityTierListName: tierList?.name,
-                source: 'Inherited',
-                resolvingHierarchyItemId: parent.id,
-                resolvingHierarchyItemName: parent.name,
-                ownQualityTierListId: null,
-            };
-        }
-        parentId = parent.parentId;
+    const resolvingAncestor = await findResolvingAncestor(
+        queryClient,
+        item,
+        (ancestor) => !!ancestor.qualityTierListId,
+    );
+    if (resolvingAncestor) {
+        return {
+            qualityTierListId: tierListId,
+            qualityTierListName: tierList?.name,
+            source: 'Inherited',
+            resolvingHierarchyItemId: resolvingAncestor.id,
+            resolvingHierarchyItemName: resolvingAncestor.name,
+            ownQualityTierListId: null,
+        };
     }
 
     return {
@@ -622,12 +601,8 @@ function contentRelationshipsFromInspector(inspector: MetadataInspectorResponse 
         .sort((a, b) => a.ordinal - b.ordinal || a.kind.localeCompare(b.kind));
 }
 
-async function fetchPendingRefresh(id: string): Promise<PendingRefreshResponse> {
-    return apiGet<PendingRefreshResponse>(`/content/${id}/pending-refresh`);
-}
-
 export function usePendingRefresh(id: string | undefined, options?: { enabled?: boolean }) {
-    const queryKey = contentQueryKeys.pendingRefresh(id ?? '');
+    const queryKey = contentQueryKeys.detail(id ?? '');
     useInvalidateQueriesOnEvents(
         (options?.enabled ?? true) && id
             ? [
@@ -654,8 +629,10 @@ export function usePendingRefresh(id: string | undefined, options?: { enabled?: 
     );
     return useQuery({
         queryKey,
-        queryFn: () => fetchPendingRefresh(id!),
+        queryFn: () => fetchContentById(id!),
+        select: (item: ApiContentHierarchyItem) => item.pendingMetadataRefresh,
         enabled: (options?.enabled ?? true) && !!id,
+        staleTime: POLLING_INTERVALS.slow / 2,
     });
 }
 
@@ -694,13 +671,11 @@ export function useRefreshContent(options?: JobActionLifecycleOptions<string>) {
     return useJobAction<string>({
         mutationFn: refreshContent,
         onJobStarted: (disposition, id) => {
-            void queryClient.invalidateQueries({ queryKey: contentQueryKeys.pendingRefresh(id), exact: true });
             void queryClient.invalidateQueries({ queryKey: contentQueryKeys.detail(id) });
             void queryClient.invalidateQueries({ queryKey: contentQueryKeys.list() });
             options?.onJobStarted?.(disposition, id);
         },
         onJobExecutionSettled: (execution, id, disposition) => {
-            void queryClient.invalidateQueries({ queryKey: contentQueryKeys.pendingRefresh(id), exact: true });
             void queryClient.invalidateQueries({ queryKey: contentQueryKeys.detail(id), exact: true });
             options?.onJobExecutionSettled?.(execution, id, disposition);
         },
@@ -717,7 +692,6 @@ export function useSearchContentReleases(options?: JobActionLifecycleOptions<Sea
             const { id } = variables;
             void queryClient.invalidateQueries({ queryKey: contentQueryKeys.detail(id) });
             void queryClient.invalidateQueries({ queryKey: contentQueryKeys.list() });
-            void queryClient.invalidateQueries({ queryKey: contentQueryKeys.acquisitionStatus(id) });
             void queryClient.invalidateQueries({ queryKey: contentReleaseQueryKeys.forContent(id) });
             options?.onJobStarted?.(disposition, variables);
         },
@@ -733,7 +707,6 @@ export function useRescanContentMediaInfo(options?: JobActionLifecycleOptions<st
         mutationFn: rescanContentMediaInfo,
         onJobStarted: (disposition, id) => {
             void queryClient.invalidateQueries({ queryKey: contentQueryKeys.detail(id) });
-            void queryClient.invalidateQueries({ queryKey: contentQueryKeys.acquisitionStatus(id) });
             options?.onJobStarted?.(disposition, id);
         },
         onJobExecutionSettled: options?.onJobExecutionSettled,
@@ -770,10 +743,6 @@ async function updateContent(request: UpdateContentRequest): Promise<void> {
     return apiPatch<void>(`/content/${id}`, body);
 }
 
-async function deleteContent(id: string): Promise<void> {
-    return apiDelete(`/content/${id}`);
-}
-
 export function useUpdateContent() {
     const queryClient = useQueryClient();
 
@@ -793,22 +762,12 @@ const metadataInspectorHooks = createMetadataInspectorHooks({
     inspectorKey: (id) => contentQueryKeys.metadataInspector(id),
     detailKey: (id) => contentQueryKeys.detail(id),
     resolveSubjectRefs: relatedContentSubjectRefs,
+    entityEvents: ['content.hierarchyItem.updated', 'content.hierarchyItem.deleted', 'metadata.refreshed'],
 });
 
 export const useMetadataInspector = metadataInspectorHooks.useMetadataInspector;
 export const usePatchMetadataInspector = metadataInspectorHooks.usePatchMetadataInspector;
 export const useReorderMetadataContributions = metadataInspectorHooks.useReorderMetadataContributions;
-
-export function useDeleteContent() {
-    const queryClient = useQueryClient();
-
-    return useMutation({
-        mutationFn: deleteContent,
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: contentQueryKeys.list() });
-        },
-    });
-}
 
 async function bulkPatchContent(request: BulkContentPatchRequest): Promise<BulkResult> {
     return apiPatch<BulkResult>('/content/bulk', request);

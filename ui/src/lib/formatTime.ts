@@ -1,7 +1,7 @@
 import { parseUtcInstant } from './dateParsing';
 
 function formatRelativeFallbackDate(date: Date): string {
-    return date.toLocaleDateString('en-US', {
+    return date.toLocaleDateString(undefined, {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
@@ -126,9 +126,10 @@ export function formatTimeSpanDuration(duration: string | null | undefined): str
     const days = match[1] ? parseInt(match[1], 10) : 0;
     const hours = parseInt(match[2], 10) + days * 24;
     const minutes = parseInt(match[3], 10);
+    const seconds = parseInt(match[4], 10);
 
     if (hours === 0 && minutes === 0) {
-        return undefined;
+        return seconds > 0 ? `${seconds}s` : undefined;
     }
     if (hours === 0) {
         return `${minutes}m`;

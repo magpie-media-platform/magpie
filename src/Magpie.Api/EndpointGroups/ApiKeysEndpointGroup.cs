@@ -87,7 +87,7 @@ internal sealed class ApiKeysEndpointGroup : IApiEndpointGroup
                 .CreateForUserAsync(create, user.Id, username, cancellationToken)
                 .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.ApiKey.Id}", CreateResponse(created));
+        return Results.Created($"/api/{Name}/{created.ApiKey.Id}", CreateResponse(created));
     }
 
     internal async Task<IResult> GetMyApiKeysAsync(

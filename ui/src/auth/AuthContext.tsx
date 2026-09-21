@@ -18,11 +18,10 @@ import {
     getCurrentUserFromToken,
     hasStoredSession,
     isTokenExpired,
-    clearAuthStorage,
-    tokenExpirationStorage,
     fetchEffectivePermissions,
 } from '@/lib/authApi';
 import { AUTH_FAILURE_EVENT, isApiError } from '@/lib/api';
+import { clearAuthStorage, tokenExpirationStorage } from '@/lib/tokenStorage';
 import { ToastContext } from '@/components/ui/Toast';
 import { useEventStream } from '@/hooks/useEventStream';
 

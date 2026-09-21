@@ -1,5 +1,9 @@
+import type { ReactNode } from 'react';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+import { LiveAnnouncerProvider } from '@/components/ui/LiveAnnouncer';
 
 import { MetadataInspector } from './MetadataInspector';
 
@@ -139,6 +143,10 @@ function lastPatch(): Record<string, unknown> {
     return mockPatchMutate.mock.calls[0]?.[0] as Record<string, unknown>;
 }
 
+function wrapper({ children }: { children: ReactNode }) {
+    return <LiveAnnouncerProvider>{children}</LiveAnnouncerProvider>;
+}
+
 describe('MetadataInspector', () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -157,7 +165,7 @@ describe('MetadataInspector', () => {
     it('renders a skeleton while loading', () => {
         mockUseInspector.mockReturnValue({ data: undefined, isLoading: true, error: null });
 
-        const { container } = render(<MetadataInspector contentId="c1" />);
+        const { container } = render(<MetadataInspector contentId="c1" />, { wrapper });
 
         expect(container.querySelector('.metadata-inspector__skeleton')).not.toBeNull();
     });
@@ -165,7 +173,7 @@ describe('MetadataInspector', () => {
     it('renders the EmptyState on error', () => {
         mockUseInspector.mockReturnValue({ data: undefined, isLoading: false, error: new Error('boom') });
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         expect(screen.getByText('Metadata unavailable')).toBeInTheDocument();
     });
@@ -184,7 +192,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         expect(screen.getByText('Primary Title')).toBeInTheDocument();
         expect(screen.getByText('Provider Overview')).toBeInTheDocument();
@@ -196,7 +204,7 @@ describe('MetadataInspector', () => {
     it('marks an edited row unsaved with its overridden value and source', async () => {
         mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary Title' })]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
         fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
         await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
         fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Operator Title' } });
@@ -220,7 +228,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const title = document.querySelector('[data-field="Title"]') as HTMLElement;
         expect(title).not.toHaveAttribute('data-pending');
@@ -238,7 +246,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const rows = document.querySelectorAll('.metadata-inspector__stack-item');
         expect(rows[0]).toHaveAttribute('data-user-contribution', 'true');
@@ -251,7 +259,7 @@ describe('MetadataInspector', () => {
             inspectorData([userContribution({ genres: [{ id: 'g-user', name: 'Action' }] }), providerContribution()]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const userRow = document.querySelector('[data-user-contribution]') as HTMLElement;
         const providerRow = document.querySelector('[data-provider-type="provider-a"]') as HTMLElement;
@@ -264,7 +272,7 @@ describe('MetadataInspector', () => {
             inspectorData([userContribution({ genres: [{ id: 'g-user', name: 'Action' }] }), providerContribution()]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const userRow = document.querySelector('[data-user-contribution]') as HTMLElement;
         const providerRow = document.querySelector('[data-provider-type="provider-a"]') as HTMLElement;
@@ -277,7 +285,7 @@ describe('MetadataInspector', () => {
             inspectorData([userContribution({ genres: [{ id: 'g-user', name: 'Action' }] }), providerContribution()]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const userRow = document.querySelector('[data-user-contribution]') as HTMLElement;
         expect(userRow).not.toHaveAttribute('data-sortable-list-item-id');
@@ -300,7 +308,7 @@ describe('MetadataInspector', () => {
             setDragImage: vi.fn(),
         };
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const userRow = document.querySelector('[data-user-contribution]') as HTMLElement;
         const providerB = document.querySelector('[data-provider-type="provider-b"]') as HTMLElement;
@@ -331,7 +339,7 @@ describe('MetadataInspector', () => {
             setDragImage: vi.fn(),
         };
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const providerA = document.querySelector('[data-provider-type="provider-a"]') as HTMLElement;
         const providerB = document.querySelector('[data-provider-type="provider-b"]') as HTMLElement;
@@ -367,7 +375,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const providerA = document.querySelector('[data-provider-type="provider-a"]') as HTMLElement;
         const providerB = document.querySelector('[data-provider-type="provider-b"]') as HTMLElement;
@@ -412,7 +420,7 @@ describe('MetadataInspector', () => {
         });
         mockUseInspector.mockReturnValue(inspectorData([user, providerA, providerB]));
 
-        const { rerender } = render(<MetadataInspector contentId="c1" />);
+        const { rerender } = render(<MetadataInspector contentId="c1" />, { wrapper });
         fireEvent.click(screen.getByRole('button', { name: 'Expand provider-b contribution' }));
 
         fireEvent.click(screen.getByRole('button', { name: 'Move provider-b contribution up' }));
@@ -457,7 +465,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         fireEvent.click(screen.getByRole('button', { name: 'Move provider-b contribution up' }));
         let rows = document.querySelectorAll('.metadata-inspector__stack-item');
@@ -487,7 +495,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         expect(screen.queryAllByTestId('metadata-inspector__stack-drag-handle')).toHaveLength(0);
         expect(screen.queryByRole('button', { name: 'Move provider-b contribution up' })).toBeNull();
@@ -501,7 +509,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector owner={{ kind: 'subject', id: 's1' }} />);
+        render(<MetadataInspector owner={{ kind: 'subject', id: 's1' }} />, { wrapper });
 
         fireEvent.click(screen.getByRole('button', { name: 'Move provider-b contribution up' }));
 
@@ -512,7 +520,7 @@ describe('MetadataInspector', () => {
     it('starts clean with Save disabled and no unsaved-changes hint', () => {
         mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary' })]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         expect(screen.getByTestId('no-changes')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
@@ -522,7 +530,7 @@ describe('MetadataInspector', () => {
         const isoDate = '2025-11-21T00:00:00.0000000';
         mockUseInspector.mockReturnValue(inspectorData([providerContribution({ publishDate: isoDate })]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const field = document.querySelector('[data-field="PublishDate"]') as HTMLElement;
         expect(within(field).getByText('Nov 21, 2025')).toBeInTheDocument();
@@ -582,7 +590,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const titleRow = document.querySelector('[data-field="Title"]') as HTMLElement;
         expect(within(titleRow).getByText('Name')).toBeInTheDocument();
@@ -644,7 +652,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const genres = document.querySelector('[data-subsection="genres"]') as HTMLElement;
         expect(within(genres).getByText('Action')).toBeInTheDocument();
@@ -655,7 +663,7 @@ describe('MetadataInspector', () => {
     it('stages an override locally and issues a single patch on save', async () => {
         mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary Title' })]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
         fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
 
         await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
@@ -675,7 +683,7 @@ describe('MetadataInspector', () => {
     it('preserves a staged override when refreshed metadata arrives', async () => {
         mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary Title' })]));
 
-        const { rerender } = render(<MetadataInspector contentId="c1" />);
+        const { rerender } = render(<MetadataInspector contentId="c1" />, { wrapper });
         fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
         await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
         fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Operator Title' } });
@@ -694,7 +702,7 @@ describe('MetadataInspector', () => {
             inspectorData([userContribution({ genres: [{ id: 'g-user', name: 'Action' }] }), providerContribution()]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         fireEvent.click(screen.getByRole('button', { name: 'Clear user contribution' }));
 
@@ -711,7 +719,7 @@ describe('MetadataInspector', () => {
     it('reverts staged changes without issuing a patch', async () => {
         mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary Title' })]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
         fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
         await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
         fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Operator Title' } });
@@ -735,7 +743,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const genres = document.querySelector('[data-subsection="genres"]') as HTMLElement;
         expect(within(genres).getByText('Action')).toBeInTheDocument();
@@ -750,7 +758,7 @@ describe('MetadataInspector', () => {
     it('stages an added genre and includes it in the save patch', async () => {
         mockUseInspector.mockReturnValue(inspectorData([userContribution()]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const genres = document.querySelector('[data-subsection="genres"]') as HTMLElement;
         fireEvent.click(within(genres).getByRole('button', { name: /add genre/i }));
@@ -790,7 +798,7 @@ describe('MetadataInspector', () => {
         });
         mockUseInspector.mockReturnValue(inspectorData([userContribution()]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const section = document.querySelector('[data-subsection="relationships"]') as HTMLElement;
         fireEvent.click(within(section).getByRole('button', { name: /add relationship/i }));
@@ -798,7 +806,10 @@ describe('MetadataInspector', () => {
         await waitFor(() => expect(screen.getByText('Add relationship')).toBeInTheDocument());
 
         fireEvent.change(screen.getByLabelText(/Relationship kind/), { target: { value: 'cast' } });
-        fireEvent.click(screen.getByRole('option', { name: /Jane Doe/ }));
+        expect(screen.getByRole('list', { name: 'Subjects' })).toBeInTheDocument();
+        screen.getByRole('button', { name: /Jane Doe/, pressed: false }).focus();
+        await userEvent.keyboard('{Enter}');
+        expect(screen.getByRole('button', { name: /Jane Doe/, pressed: true })).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
 
         saveChanges();
@@ -810,7 +821,7 @@ describe('MetadataInspector', () => {
     it('stages a relationship via a newly created subject', async () => {
         mockUseInspector.mockReturnValue(inspectorData([userContribution()]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const section = document.querySelector('[data-subsection="relationships"]') as HTMLElement;
         fireEvent.click(within(section).getByRole('button', { name: /add relationship/i }));
@@ -840,7 +851,7 @@ describe('MetadataInspector', () => {
             inspectorData([userContribution({ genres: [{ id: 'g-user', name: 'Action' }] })]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const genres = document.querySelector('[data-subsection="genres"]') as HTMLElement;
         fireEvent.click(within(genres).getByRole('button', { name: /edit genre/i }));
@@ -863,7 +874,7 @@ describe('MetadataInspector', () => {
             inspectorData([userContribution({ genres: [{ id: 'g-user', name: 'Action' }] })]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const genres = document.querySelector('[data-subsection="genres"]') as HTMLElement;
         fireEvent.click(within(genres).getByRole('button', { name: /delete genre/i }));
@@ -911,7 +922,7 @@ describe('MetadataInspector', () => {
             ),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const section = document.querySelector('[data-subsection="relationships"]') as HTMLElement;
         fireEvent.click(within(section).getByRole('button', { name: /edit relationship/i }));
@@ -957,7 +968,7 @@ describe('MetadataInspector', () => {
             ),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const section = document.querySelector('[data-subsection="relationships"]') as HTMLElement;
         fireEvent.click(within(section).getByRole('button', { name: /edit relationship/i }));
@@ -994,7 +1005,7 @@ describe('MetadataInspector', () => {
             ),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const section = document.querySelector('[data-subsection="relationships"]') as HTMLElement;
         expect(within(section).getByText('Jane Doe (cast • Lead)')).toBeInTheDocument();
@@ -1019,7 +1030,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const section = document.querySelector('[data-subsection="relationships"]') as HTMLElement;
         expect(within(section).getByText('director • Producer')).toBeInTheDocument();
@@ -1034,7 +1045,7 @@ describe('MetadataInspector', () => {
             ]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         expect(screen.getByRole('button', { name: 'Edit Title' })).toBeDisabled();
         expect(screen.getByRole('button', { name: 'Clear user contribution' })).toBeDisabled();
@@ -1045,7 +1056,7 @@ describe('MetadataInspector', () => {
             inspectorData([providerContribution({ genres: [{ id: 'g-prov', name: 'Action' }] })]),
         );
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const genres = document.querySelector('[data-subsection="genres"]') as HTMLElement;
         expect(within(genres).queryByRole('button', { name: /edit genre/i })).toBeNull();
@@ -1057,7 +1068,7 @@ describe('MetadataInspector', () => {
         mockHasRole = () => false;
         mockUseInspector.mockReturnValue(inspectorData([userContribution()]));
 
-        render(<MetadataInspector contentId="c1" />);
+        render(<MetadataInspector contentId="c1" />, { wrapper });
 
         const genres = document.querySelector('[data-subsection="genres"]') as HTMLElement;
         expect(within(genres).getByRole('button', { name: /add genre/i })).toBeDisabled();

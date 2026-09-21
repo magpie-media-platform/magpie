@@ -21,7 +21,14 @@ export const Alert = forwardRef<HTMLDivElement, AlertProps>(
         const classes = ['alert', `alert--${variant}`, className].filter(Boolean).join(' ');
 
         return (
-            <div ref={ref} role="alert" className={classes} data-component="alert" data-variant={variant} {...props}>
+            <div
+                ref={ref}
+                role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}
+                {...props}
+                className={classes}
+                data-component="alert"
+                data-variant={variant}
+            >
                 {icon && (
                     <span className="alert__icon" aria-hidden="true">
                         {icon}

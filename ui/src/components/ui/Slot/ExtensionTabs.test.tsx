@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { ExtensionTabTriggers, ExtensionTabContents, useTabSlotExtensions } from './ExtensionTabs';
+import { ExtensionTabContents, useTabSlotExtensions } from './ExtensionTabs';
 
 import type { UIExtension } from '@/extensions/types';
 
@@ -44,92 +44,6 @@ function makeExtension(overrides: Partial<UIExtension> = {}): UIExtension {
         ...overrides,
     };
 }
-
-describe('ExtensionTabTriggers', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        mockUseExtensions.mockReturnValue(defaultContext);
-    });
-
-    it('renders nothing when no extensions are registered', () => {
-        mockUseSlotExtensions.mockReturnValue({
-            extensions: [],
-            isReady: true,
-            isLoading: false,
-        });
-
-        const { container } = renderInTabs(<ExtensionTabTriggers slot="content.details.tabs" />, null);
-
-        const triggers = container.querySelectorAll('[role="tab"]');
-        expect(triggers).toHaveLength(0);
-    });
-
-    it('renders a TabsTrigger for each After extension', () => {
-        mockUseSlotExtensions.mockReturnValue({
-            extensions: [
-                makeExtension({ id: 'ext-1', attributes: { 'tab-label': 'Reviews' } }),
-                makeExtension({ id: 'ext-2', name: 'Stats', attributes: { 'tab-label': 'Statistics' } }),
-            ],
-            isReady: true,
-            isLoading: false,
-        });
-
-        const { container } = renderInTabs(<ExtensionTabTriggers slot="content.details.tabs" />, null);
-
-        const triggers = container.querySelectorAll('[role="tab"]');
-        expect(triggers).toHaveLength(2);
-        expect(screen.getByText('Reviews')).toBeInTheDocument();
-        expect(screen.getByText('Statistics')).toBeInTheDocument();
-    });
-
-    it('uses extension name as fallback when tab-label is missing', () => {
-        mockUseSlotExtensions.mockReturnValue({
-            extensions: [makeExtension({ id: 'ext-1', name: 'My Widget', attributes: null })],
-            isReady: true,
-            isLoading: false,
-        });
-
-        renderInTabs(<ExtensionTabTriggers slot="content.details.tabs" />, null);
-
-        expect(screen.getByText('My Widget')).toBeInTheDocument();
-    });
-
-    it('ignores Before and Replace modifier extensions', () => {
-        mockUseSlotExtensions.mockReturnValue({
-            extensions: [
-                makeExtension({ id: 'ext-1', modifier: 'Before', attributes: { 'tab-label': 'Hidden1' } }),
-                makeExtension({ id: 'ext-2', modifier: 'Replace', attributes: { 'tab-label': 'Hidden2' } }),
-                makeExtension({ id: 'ext-3', modifier: 'After', attributes: { 'tab-label': 'Visible' } }),
-            ],
-            isReady: true,
-            isLoading: false,
-        });
-
-        const { container } = renderInTabs(<ExtensionTabTriggers slot="content.details.tabs" />, null);
-
-        const triggers = container.querySelectorAll('[role="tab"]');
-        expect(triggers).toHaveLength(1);
-        expect(screen.getByText('Visible')).toBeInTheDocument();
-        expect(screen.queryByText('Hidden1')).not.toBeInTheDocument();
-        expect(screen.queryByText('Hidden2')).not.toBeInTheDocument();
-    });
-
-    it('sets tab value using extension id', () => {
-        mockUseSlotExtensions.mockReturnValue({
-            extensions: [makeExtension({ id: 'abc-123' })],
-            isReady: true,
-            isLoading: false,
-        });
-
-        renderInTabs(
-            <ExtensionTabTriggers slot="content.details.tabs" />,
-            <ExtensionTabContents slot="content.details.tabs" />,
-            'ext-abc-123',
-        );
-
-        expect(screen.getByText('Reviews')).toBeInTheDocument();
-    });
-});
 
 describe('ExtensionTabContents', () => {
     beforeEach(() => {

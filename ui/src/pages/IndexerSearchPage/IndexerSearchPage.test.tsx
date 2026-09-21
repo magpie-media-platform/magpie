@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -203,7 +203,23 @@ describe('IndexerSearchPage', () => {
         expect(chip?.querySelector('.badge__dot')).toBeNull();
     });
 
-    it('explains that the indexers are incompatible when they share no query mode', async () => {
+    it('shows the empty state when no selected indexer supports search', async () => {
+        // Arrange
+        installApiGet([{ ...indexerA, supportsKeywordSearch: false, searchFacets: [] }], { 'idx-a': [connectionA] });
+
+        // Act
+        render(<IndexerSearchPage />, {
+            wrapper: ({ children }) => (
+                <TestWrapper url="/admin/indexers/search?connections=conn-a">{children}</TestWrapper>
+            ),
+        });
+
+        // Assert
+        expect(await screen.findByText('No search modes available')).toBeInTheDocument();
+        expect(screen.getByText('The selected indexers do not offer any search fields.')).toBeInTheDocument();
+    });
+
+    it('submits to all connections when only one supports the mode', async () => {
         installApiGet([indexerA, { ...indexerB, searchFacets: [['tvdbid']], supportsKeywordSearch: false }], {
             'idx-a': [connectionA],
             'idx-b': [connectionB],
@@ -215,7 +231,21 @@ describe('IndexerSearchPage', () => {
             ),
         });
 
-        expect(await screen.findByText('The selected indexers have no compatible search fields.')).toBeInTheDocument();
+        // Act
+        const user = userEvent.setup();
+        await user.type(await screen.findByLabelText('Search'), 'sample');
+        await user.click(screen.getByRole('button', { name: 'Search' }));
+
+        // Assert
+        await waitFor(() =>
+            expect(apiPost).toHaveBeenCalledWith(
+                '/indexer-search',
+                { connectionIds: ['conn-a', 'conn-b'], query: { title: 'sample', criteria: {} } },
+                expect.any(Object),
+            ),
+        );
+        await user.click(screen.getByRole('combobox', { name: 'Query mode' }));
+        expect(screen.getByRole('option', { name: 'TVDB' })).toBeInTheDocument();
     });
 
     it('shares query modes whose identifier spellings differ', async () => {
@@ -233,8 +263,8 @@ describe('IndexerSearchPage', () => {
             ),
         });
 
-        await waitFor(() => expect(screen.getByRole('combobox', { name: 'Query mode' })).toHaveTextContent('tvdb'));
-        expect(screen.queryByText('The selected indexers have no compatible search fields.')).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.getByRole('combobox', { name: 'Query mode' })).toHaveTextContent('TVDB'));
+        expect(screen.getByLabelText('TVDB')).toBeInTheDocument();
     });
 
     it('runs the search of the route state and shows the provenance of a coalesced release', async () => {
@@ -727,6 +757,17 @@ describe('IndexerSearchPage', () => {
 
     it('opens the content picker when the administrator matches a release', async () => {
         const user = userEvent.setup();
+        installApiGet([indexerA, indexerB], { 'idx-a': [connectionA], 'idx-b': [connectionB] }, [
+            {
+                id: 'content-1',
+                name: 'Sample',
+                level: 'entry',
+                contentType: 'catalog',
+                metadataContainer: {
+                    contributions: [{ ordinal: 0, images: [{ type: 'poster', url: '/broken.jpg' }] }],
+                },
+            },
+        ]);
         render(<IndexerSearchPage />, {
             wrapper: ({ children }) => (
                 <TestWrapper url="/admin/indexers/search?connections=conn-a,conn-b&mode=q&v_q=salt">
@@ -740,5 +781,10 @@ describe('IndexerSearchPage', () => {
 
         await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
         expect(screen.getByText('Select content')).toBeInTheDocument();
+        const dialog = screen.getByRole('dialog');
+        await waitFor(() => expect(dialog.querySelector('img.content-picker__poster')).toBeInTheDocument());
+        fireEvent.error(dialog.querySelector('img.content-picker__poster')!);
+        expect(dialog.querySelector('img.content-picker__poster')).not.toBeInTheDocument();
+        expect(dialog.querySelector('div.content-picker__poster')).toHaveAttribute('aria-hidden', 'true');
     });
 });

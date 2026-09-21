@@ -58,11 +58,11 @@ public sealed class ContentDefaultsDiagnosticTests
                     {
                         ["removed"] = new RootFolderDefault
                     {
-                            QualityTierListId = Guid.Parse("33333333-3333-3333-3333-333333333333"),
+                            QualityTierListId = Guid.NewGuid(),
                         },
                         ["book"] = new RootFolderDefault
                     {
-                            QualityTierListId = Guid.Parse("44444444-4444-4444-4444-444444444444"),
+                            QualityTierListId = Guid.NewGuid(),
                         },
                     },
                 },
@@ -92,7 +92,7 @@ public sealed class ContentDefaultsDiagnosticTests
     public async Task RunAsync_ReturnsNoFinding_WhenDefaultsAreValid()
     {
         // Arrange
-        var tierListId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var tierListId = Guid.NewGuid();
         var definition = new ContentTypeDefinition
         {
             Slug = "publication",
@@ -142,5 +142,32 @@ public sealed class ContentDefaultsDiagnosticTests
 
         // Assert
         Assert.That(findings, Is.Empty);
+    }
+
+    [TestCase(false, "Content type catalog has no default root folder")]
+    [TestCase(true, "Content type catalog has multiple default root folders")]
+    public async Task RunAsync_IdentifiesDefaultCount_WhenThereIsNoUniqueDefault(bool isDefault, string expectedTitle)
+    {
+        // Arrange
+        var repository = new Mock<IRootFolderRepository>();
+        repository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(
+        [
+            new() { Id = Guid.NewGuid(), Name = "First", Path = "/first", ContentType = "catalog", IsDefault =
+                isDefault },
+            new() { Id = Guid.NewGuid(), Name = "Second", Path = "/second", ContentType = "catalog", IsDefault =
+                isDefault },
+        ]);
+        var registry = new Mock<IContentTypeRegistry>();
+        registry.SetupGet(value => value.Definitions).Returns([]);
+        var quality = new Mock<IQualityService>();
+        quality.Setup(value => value.ListTierListsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var subject = new ContentDefaultsDiagnostic(registry.Object, repository.Object, quality.Object);
+
+        // Act
+        var findings = await subject.RunAsync(DiagnosticContext.Empty).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(findings.Single(value => value.AffectedEntity == "ContentType:catalog").Title,
+            Is.EqualTo(expectedTitle));
     }
 }

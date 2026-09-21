@@ -1,3 +1,5 @@
+import './SelectAllBanner.css';
+
 export interface SelectAllBannerProps {
     allPages: boolean;
 
@@ -25,18 +27,18 @@ export function SelectAllBanner({
     selectedCount,
     onSelectAllAcrossPages,
     onClear,
-    itemNounPlural = 'downloads',
+    itemNounPlural = 'items',
 }: SelectAllBannerProps) {
     return (
-        <div className="bulk-actions-toolbar__prompt" role="status" data-component="select-all-banner">
+        <div className="select-all-banner" role="status" data-component="select-all-banner">
             {allPages ? (
                 <>
-                    <span className="bulk-actions-toolbar__prompt-text">
+                    <span className="select-all-banner__text">
                         All {formatCount(selectedCount)} matching {itemNounPlural} across all pages are selected.
                     </span>
                     <button
                         type="button"
-                        className="bulk-actions-toolbar__prompt-action"
+                        className="select-all-banner__action"
                         onClick={onClear}
                         data-action="clear-across-pages"
                     >
@@ -45,12 +47,12 @@ export function SelectAllBanner({
                 </>
             ) : (
                 <>
-                    <span className="bulk-actions-toolbar__prompt-text">
+                    <span className="select-all-banner__text">
                         All {formatCount(pageSelectedCount)} on this page are selected.
                     </span>
                     <button
                         type="button"
-                        className="bulk-actions-toolbar__prompt-action"
+                        className="select-all-banner__action"
                         onClick={onSelectAllAcrossPages}
                         data-action="select-all-across-pages"
                     >

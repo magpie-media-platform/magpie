@@ -11,7 +11,6 @@ import { apiPost } from '@/lib/api';
 import {
     useTestDownloadClient,
     useTestDownloadClientSettings,
-    useTestIndexer,
     useTestMediaServer,
     useTestMediaServerSettings,
     type ConnectionTestResult,
@@ -88,32 +87,6 @@ describe('useTestConnection', () => {
             const { result } = renderHook(() => useTestDownloadClient(), { wrapper: createWrapper() });
 
             await expect(result.current.test('dc-1')).rejects.toThrow('boom');
-        });
-    });
-
-    describe('useTestIndexer', () => {
-        it('posts to /indexers/{id}/test', async () => {
-            mockApiPost.mockResolvedValue({ success: false, message: 'Bad creds' });
-
-            const { result } = renderHook(() => useTestIndexer(), { wrapper: createWrapper() });
-
-            await act(async () => {
-                await result.current.test('idx-1');
-            });
-
-            expect(mockApiPost).toHaveBeenCalledWith('/indexers/idx-1/test');
-        });
-
-        it('posts to /indexers/{id}/connections/{connectionId}/test for a targeted connection', async () => {
-            mockApiPost.mockResolvedValue({ success: true, message: 'Connected' });
-
-            const { result } = renderHook(() => useTestIndexer(), { wrapper: createWrapper() });
-
-            await act(async () => {
-                await result.current.test({ indexerId: 'idx-1', connectionId: 'idx-conn-1' });
-            });
-
-            expect(mockApiPost).toHaveBeenCalledWith('/indexers/idx-1/connections/idx-conn-1/test');
         });
     });
 

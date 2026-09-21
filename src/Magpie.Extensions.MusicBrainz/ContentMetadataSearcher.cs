@@ -10,6 +10,7 @@ using Magpie.Extensions.MusicBrainz.QueryEngine;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
 using Magpie.Sdk.Content;
 
@@ -19,7 +20,7 @@ namespace Magpie.Extensions.MusicBrainz;
 
 internal sealed class ContentMetadataSearcher(
     ISettingsResolver settingsResolver,
-    ISearchEngine queryEngine,
+    IQueryPlanner queryPlanner,
     IQueryExecutor queryExecutor,
     IQueryCoordinator cache,
     IMusicBrainzClient client,
@@ -46,7 +47,7 @@ internal sealed class ContentMetadataSearcher(
         }
 
         var settings = await settingsResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
-        var result = await queryEngine.SearchAsync(
+        var result = await ExecutePlanAsync(
             new QueryRequest
             {
                 Target = target.Value,
@@ -74,9 +75,19 @@ internal sealed class ContentMetadataSearcher(
             return MetadataSearchPage.NotSupported;
         }
 
-        var settings = await settingsResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
+        if (!MatchesScope(query.ContentType.And.ToArray(), contentType))
+        {
+            return EmptySupported();
+        }
+
         var metadata = query.MergeMetadata();
         var targets = ResolveTargets(query, metadata);
+        if (targets.Count == 0)
+        {
+            return EmptySupported();
+        }
+
+        var settings = await settingsResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
         return await SearchTargetsAsync(
             targets,
             metadata,
@@ -94,20 +105,6 @@ internal sealed class ContentMetadataSearcher(
         Settings settings,
         CancellationToken cancellationToken)
     {
-        if (targets.Count == 0)
-        {
-            return new MetadataSearchPage
-            {
-                Supported = false,
-                Matches = [],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = requestedPage, HasMore = false },
-                Warnings =
-                [
-                    "musicbrainz cannot route these external identifier criteria to an artist, album, or track search."
-                ]
-            };
-        }
-
         var results = new List<QueryResult>(targets.Count);
         var hits = new List<SearchHit>();
         var seen = new HashSet<(QueryTarget Target, string Mbid)>();
@@ -121,7 +118,7 @@ internal sealed class ContentMetadataSearcher(
                 break;
             }
 
-            var result = await queryEngine.SearchAsync(
+            var result = await ExecutePlanAsync(
                 new QueryRequest
                 {
                     Target = targets[index],
@@ -246,19 +243,10 @@ internal sealed class ContentMetadataSearcher(
         ContentHierarchyItemCriteria query,
         MetadataCriteria criteria)
     {
-        var targets = AllTargets().ToHashSet();
-        foreach (var criterion in query.Level.And.Where(criterion => !criterion.Negate &&
-            criterion.Operator is CriteriaValueOperator.Equals or CriteriaValueOperator.In))
-        {
-            var criterionTargets = (criterion.Values ?? [])
-                .Append(criterion.Value ?? string.Empty)
-                .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Select(ResolveTarget)
-                .Where(value => value is not null)
-                .Select(value => value!.Value)
-                .ToHashSet();
-            targets.IntersectWith(criterionTargets);
-        }
+        var levelCriteria = query.Level.And.ToArray();
+        var targets = AllTargets()
+            .Where(target => MatchesScope(levelCriteria, TargetLevel(target)))
+            .ToHashSet();
 
         var identityGroups = criteria.ExternalIds.Some.Where(group => group.Count > 0).ToArray();
         if (identityGroups.Length == 0)
@@ -273,6 +261,63 @@ internal sealed class ContentMetadataSearcher(
 
         return [.. targets.OrderBy(value => value)];
     }
+
+    private static string TargetLevel(QueryTarget target) => target switch
+    {
+        QueryTarget.Artist => Constants.ArtistLevelSlug,
+        QueryTarget.Album => Constants.AlbumLevelSlug,
+        QueryTarget.Track => Constants.TrackLevelSlug,
+        _ => string.Empty
+    };
+
+    private static MetadataSearchPage EmptySupported() => new()
+    {
+        Supported = true,
+        Matches = [],
+        PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false },
+        Warnings = []
+    };
+
+    private static bool MatchesScope(
+        IReadOnlyList<PropertyCriterion<string>> criteria,
+        string value)
+    {
+        foreach (var criterion in criteria)
+        {
+            var (operation, negate) = criterion.Operator switch
+            {
+                CriteriaValueOperator.NotEquals => (CriteriaValueOperator.Equals, true),
+                CriteriaValueOperator.NotIn => (CriteriaValueOperator.In, true),
+                CriteriaValueOperator.NotContainsString => (CriteriaValueOperator.ContainsString, true),
+                CriteriaValueOperator.NotStartsWithString => (CriteriaValueOperator.StartsWithString, true),
+                CriteriaValueOperator.NotEndsWithString => (CriteriaValueOperator.EndsWithString, true),
+                _ => (criterion.Operator, false)
+            };
+            var values = TextValues(criterion);
+            var supported = operation is CriteriaValueOperator.Equals or CriteriaValueOperator.In
+                or CriteriaValueOperator.ContainsString or CriteriaValueOperator.ContainsWord
+                or CriteriaValueOperator.StartsWithString or CriteriaValueOperator.EndsWithString
+                or CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull;
+            var needsValues = operation is not
+                (CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull);
+            var negated = negate ^ criterion.Negate;
+            if (!supported ||
+                (values.Length == 0 && needsValues) ||
+                operation.MatchesString(values, value) == negated)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string[] TextValues(PropertyCriterion<string> criterion) =>
+        [.. (criterion.Values ?? [])
+            .Append(criterion.Value ?? string.Empty)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
 
     private static IEnumerable<QueryTarget> IdentityTargets(ExternalIdCriteria criteria)
     {
@@ -365,5 +410,25 @@ internal sealed class ContentMetadataSearcher(
         }
 
         return null;
+    }
+
+    private async Task<QueryResult> ExecutePlanAsync(QueryRequest request, CancellationToken cancellationToken)
+    {
+        var plan = queryPlanner.Plan(request);
+        if (plan.TraceProvenance.Includes(QueryTraceProvenance.Disposition.Refused))
+        {
+            return new QueryResult
+            {
+                Supported = true,
+                Hits = [],
+                PageInfo = new ProviderSearchPageInfo
+                {
+                    RequestedPage = request.RequestedPage,
+                    HasMore = false
+                }
+            };
+        }
+
+        return await queryExecutor.ExecuteAsync(plan, cancellationToken).ConfigureAwait(false);
     }
 }

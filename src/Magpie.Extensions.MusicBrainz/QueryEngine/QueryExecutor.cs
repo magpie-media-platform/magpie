@@ -37,6 +37,15 @@ internal sealed class QueryExecutor(
     private static readonly string OversizedQueryWarning =
         "musicbrainz rejected a query larger than 8 KiB before transport.";
 
+    private static readonly HashSet<string> FailureWarnings =
+    [
+        FailureWarning(FetchOutcome.InvalidRequest),
+        FailureWarning(FetchOutcome.Timeout),
+        FailureWarning(FetchOutcome.Malformed),
+        FailureWarning(FetchOutcome.ResponseTooLarge),
+        FailureWarning(FetchOutcome.Unavailable)
+    ];
+
     private static readonly Regex SecretQueryValue = new(
         "([?&](?:api_?key|access_?token|token|secret|password|signature)=)[^&]*",
         RegexOptions.IgnoreCase);
@@ -152,6 +161,19 @@ internal sealed class QueryExecutor(
         return Success(release.LabelReferences());
     }
 
+    private static string FailureWarning(FetchOutcome outcome)
+    {
+        var diagnostic = outcome switch
+        {
+            FetchOutcome.InvalidRequest => "musicbrainz rejected a generated query.",
+            FetchOutcome.Timeout => "musicbrainz timed out.",
+            FetchOutcome.Malformed => "musicbrainz returned an invalid response.",
+            FetchOutcome.ResponseTooLarge => "musicbrainz returned a response above the 8 MiB limit.",
+            _ => "musicbrainz is unavailable."
+        };
+        return diagnostic;
+    }
+
     private IEnumerable<SearchHit> MapPage(QueryTarget target, SearchPage page)
     {
         return target switch
@@ -265,19 +287,6 @@ internal sealed class QueryExecutor(
             PageInfo = new ProviderSearchPageInfo { RequestedPage = plan.RequestedPage, HasMore = true },
             Warnings = [.. plan.Warnings, FailureWarning(outcome)]
         };
-    }
-
-    private string FailureWarning(FetchOutcome outcome)
-    {
-        var diagnostic = outcome switch
-        {
-            FetchOutcome.InvalidRequest => "musicbrainz rejected a generated query.",
-            FetchOutcome.Timeout => "musicbrainz timed out.",
-            FetchOutcome.Malformed => "musicbrainz returned an invalid response.",
-            FetchOutcome.ResponseTooLarge => "musicbrainz returned a response above the 8 MiB limit.",
-            _ => "musicbrainz is unavailable."
-        };
-        return diagnostic;
     }
 
     private ProviderSearchPageInfo BoundedPageInfo(int requestedPage, int count, int maxResults)
@@ -421,7 +430,7 @@ internal sealed class QueryExecutor(
             return "generated-request-invalid";
         }
 
-        if (result.Warnings.Any(IsFailureWarning))
+        if (result.Warnings.Any(FailureWarnings.Contains))
         {
             return "transport-failure";
         }
@@ -437,12 +446,6 @@ internal sealed class QueryExecutor(
     private bool PlannedEmpty(QueryPlan plan)
     {
         return plan.Root is null or UnionPlanNode { Children.Count: 0 };
-    }
-
-    private bool IsFailureWarning(string warning)
-    {
-        return warning.Contains("could not", StringComparison.OrdinalIgnoreCase) ||
-            warning.Contains("failed", StringComparison.OrdinalIgnoreCase);
     }
 
     private IReadOnlyList<QueryFilter>? ApplyResolvedRelationships(
@@ -1016,6 +1019,11 @@ internal sealed class QueryExecutor(
         return result;
     }
 
+    private bool Survives(IReadOnlyList<QueryFilter> filters, SearchHit hit)
+    {
+        return filters.All(filter => !filter.VerifyLocally || Matches(filter, hit));
+    }
+
     private bool Matches(QueryFilter filter, SearchHit hit)
     {
         var matches = filter.Kind switch
@@ -1198,13 +1206,14 @@ internal sealed class QueryExecutor(
     {
         return plan.Root is null
             ? Task.FromResult(Empty(plan))
-            : ExecuteNodeAsync(plan, plan.Root, new Dictionary<int, QueryResult>(), cancellationToken);
+            : ExecuteNodeAsync(plan, plan.Root, new Dictionary<int, QueryResult>(), bound: null, cancellationToken);
     }
 
     private async Task<QueryResult> ExecuteNodeAsync(
         QueryPlan plan,
         PlanNode node,
         Dictionary<int, QueryResult> outcomes,
+        RowBound? bound,
         CancellationToken cancellationToken)
     {
         if (outcomes.TryGetValue(node.Id, out var memoized))
@@ -1220,11 +1229,11 @@ internal sealed class QueryExecutor(
                 fetch,
                 outcomes,
                 filter: null,
-                maximumRows: null,
+                bound,
                 cancellationToken).ConfigureAwait(false),
             FilterPlanNode filter => await ExecuteFilterNodeAsync(plan, filter, outcomes, cancellationToken)
                 .ConfigureAwait(false),
-            UnionPlanNode union => await ExecuteUnionNodeAsync(plan, union, outcomes, cancellationToken)
+            UnionPlanNode union => await ExecuteUnionNodeAsync(plan, union, outcomes, bound, cancellationToken)
                 .ConfigureAwait(false),
             IntersectPlanNode intersect => await ExecuteIntersectNodeAsync(
                 plan,
@@ -1253,7 +1262,7 @@ internal sealed class QueryExecutor(
                 search,
                 filter,
                 outcomes,
-                maximumRows: null,
+                bound: null,
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -1267,15 +1276,22 @@ internal sealed class QueryExecutor(
                 cancellationToken).ConfigureAwait(false);
         }
 
+        var bound = filter.Residuals.Count > 0 || filter.Exclusions.Count > 0
+            ? null
+            : new RowBound
+            {
+                MaximumRows = (int)Math.Min((long)plan.RequestedPage * plan.MaxResults + 1, int.MaxValue),
+                Filters = filter.Filters
+            };
         var child = filter.Child is FetchPlanNode fetch
             ? await ExecuteFilteredFetchNodeAsync(
                 plan,
                 fetch,
                 filter,
                 outcomes,
-                maximumRows: (int)Math.Min((long)plan.RequestedPage * plan.MaxResults + 1, int.MaxValue),
+                bound,
                 cancellationToken).ConfigureAwait(false)
-            : await ExecuteNodeAsync(plan, filter.Child, outcomes, cancellationToken).ConfigureAwait(false);
+            : await ExecuteNodeAsync(plan, filter.Child, outcomes, bound, cancellationToken).ConfigureAwait(false);
         if (!child.Supported || child.Hits.Count == 0)
         {
             return child;
@@ -1285,7 +1301,8 @@ internal sealed class QueryExecutor(
         var warnings = new List<string>(child.Warnings);
         foreach (var exclusion in filter.Exclusions)
         {
-            var outcome = await ExecuteNodeAsync(plan, exclusion, outcomes, cancellationToken).ConfigureAwait(false);
+            var outcome = await ExecuteNodeAsync(plan, exclusion, outcomes, bound: null, cancellationToken)
+                .ConfigureAwait(false);
             warnings.AddRange(outcome.Warnings);
             excluded.UnionWith(outcome.Hits.Select(IdentityKey));
         }
@@ -1312,7 +1329,7 @@ internal sealed class QueryExecutor(
         FetchPlanNode fetch,
         FilterPlanNode filter,
         Dictionary<int, QueryResult> outcomes,
-        int? maximumRows,
+        RowBound? bound,
         CancellationToken cancellationToken)
     {
         if (outcomes.TryGetValue(fetch.Id, out var memoized))
@@ -1326,7 +1343,7 @@ internal sealed class QueryExecutor(
             fetch,
             outcomes,
             filter,
-            maximumRows,
+            bound,
             cancellationToken).ConfigureAwait(false);
         outcomes[fetch.Id] = result;
         activity?.SetTag("magpie.query.rows_out", result.Hits.Count);
@@ -1344,7 +1361,8 @@ internal sealed class QueryExecutor(
         var excludedMbids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var exclusion in filter.Exclusions)
         {
-            var result = await ExecuteNodeAsync(plan, exclusion, outcomes, cancellationToken).ConfigureAwait(false);
+            var result = await ExecuteNodeAsync(plan, exclusion, outcomes, bound: null, cancellationToken)
+                .ConfigureAwait(false);
             warnings.AddRange(result.Warnings);
             excludedMbids.UnionWith(result.Hits.Select(hit => hit.PrimaryMbid));
         }
@@ -1356,7 +1374,7 @@ internal sealed class QueryExecutor(
                 search,
                 filter,
                 outcomes,
-                maximumRows: null,
+                bound: null,
                 cancellationToken).ConfigureAwait(false);
             return result with
             { Warnings = [.. result.Warnings.Concat(warnings).Distinct()] };
@@ -1365,7 +1383,7 @@ internal sealed class QueryExecutor(
         QueryResult? anchor = null;
         if (search.AnchorSource is not null)
         {
-            anchor = await ExecuteNodeAsync(plan, search.AnchorSource, outcomes, cancellationToken)
+            anchor = await ExecuteNodeAsync(plan, search.AnchorSource, outcomes, bound: null, cancellationToken)
                 .ConfigureAwait(false);
             if (anchor.Hits.Count == 0)
             {
@@ -1398,13 +1416,14 @@ internal sealed class QueryExecutor(
         FetchPlanNode fetch,
         Dictionary<int, QueryResult> outcomes,
         FilterPlanNode? filter,
-        int? maximumRows,
+        RowBound? bound,
         CancellationToken cancellationToken)
     {
         var resolved = new Dictionary<int, QueryResult>();
         foreach (var resolver in fetch.Resolvers)
         {
-            var outcome = await ExecuteNodeAsync(plan, resolver, outcomes, cancellationToken).ConfigureAwait(false);
+            var outcome = await ExecuteNodeAsync(plan, resolver, outcomes, bound: null, cancellationToken)
+                .ConfigureAwait(false);
             resolved[resolver.Id] = outcome;
             if (!outcome.Supported || outcome is { Hits.Count: 0, PageInfo.HasMore: true })
             {
@@ -1415,7 +1434,7 @@ internal sealed class QueryExecutor(
         QueryResult? anchor = null;
         if (fetch.AnchorSource is not null)
         {
-            anchor = await ExecuteNodeAsync(plan, fetch.AnchorSource, outcomes, cancellationToken)
+            anchor = await ExecuteNodeAsync(plan, fetch.AnchorSource, outcomes, bound: null, cancellationToken)
                 .ConfigureAwait(false);
             if (!anchor.Supported)
             {
@@ -1448,6 +1467,9 @@ internal sealed class QueryExecutor(
                 .Concat(resolved.Values.SelectMany(outcome => outcome.Warnings))
                 .Distinct()]
         };
+
+        var boundFilters = bound is null ? null : ApplyResolvedRelationships(bound.Filters, fetch.Resolvers, resolved);
+        var executionBound = bound is null || boundFilters is null ? null : bound with { Filters = boundFilters };
         return executionFetch.AccessMode switch
         {
             AccessMode.Search when anchor is not null => await ExecuteAnchoredSearchAsync(
@@ -1476,7 +1498,7 @@ internal sealed class QueryExecutor(
                 executionFetch,
                 executionFilter,
                 resolved,
-                maximumRows,
+                executionBound,
                 cancellationToken).ConfigureAwait(false),
             _ => throw new ArgumentOutOfRangeException(nameof(fetch))
         };
@@ -1531,12 +1553,12 @@ internal sealed class QueryExecutor(
         FetchPlanNode fetch,
         FilterPlanNode? filter,
         IReadOnlyDictionary<int, QueryResult> resolved,
-        int? maximumRows,
+        RowBound? bound,
         CancellationToken cancellationToken)
     {
         if (fetch.BrowseComposition is null)
         {
-            return await ExecuteLinkedBrowseFetchAsync(plan, fetch, filter, resolved, maximumRows, cancellationToken)
+            return await ExecuteLinkedBrowseFetchAsync(plan, fetch, filter, resolved, bound, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -1587,7 +1609,7 @@ internal sealed class QueryExecutor(
         FetchPlanNode fetch,
         FilterPlanNode? filter,
         IReadOnlyDictionary<int, QueryResult> resolved,
-        int? maximumRows,
+        RowBound? bound,
         CancellationToken cancellationToken)
     {
         var artistMbids = new List<string>();
@@ -1626,13 +1648,13 @@ internal sealed class QueryExecutor(
                     if (seen.Add(IdentityKey(hit)))
                     {
                         hits.Add(hit);
-                        if (filters.All(filterCandidate => !filterCandidate.VerifyLocally ||
-                            Matches(filterCandidate, hit)))
+                        if (bound is null || !Survives(bound.Filters, hit))
                         {
-                            survivorCount++;
+                            continue;
                         }
 
-                        if (maximumRows is { } goal && survivorCount >= goal)
+                        survivorCount++;
+                        if (survivorCount >= bound.MaximumRows)
                         {
                             return RawCandidates(plan, hits);
                         }
@@ -1655,12 +1677,14 @@ internal sealed class QueryExecutor(
         QueryPlan plan,
         UnionPlanNode union,
         Dictionary<int, QueryResult> outcomes,
+        RowBound? bound,
         CancellationToken cancellationToken)
     {
         var results = new List<QueryResult>();
         foreach (var child in union.Children)
         {
-            results.Add(await ExecuteNodeAsync(plan, child, outcomes, cancellationToken).ConfigureAwait(false));
+            results.Add(await ExecuteNodeAsync(plan, child, outcomes, bound, cancellationToken)
+                .ConfigureAwait(false));
         }
 
         return MergeNodeResults(plan, results, intersect: false);
@@ -1679,6 +1703,7 @@ internal sealed class QueryExecutor(
                 plan,
                 intersect.Children[index],
                 outcomes,
+                bound: null,
                 cancellationToken).ConfigureAwait(false);
             results.Add(result);
             if (result.Hits.Count > 0 || result.PageInfo.HasMore)
@@ -2220,11 +2245,9 @@ internal sealed class QueryExecutor(
         CancellationToken cancellationToken)
     {
         var directValue = fetch.DirectValue!;
-        var target = string.Concat(
-            "isrc/",
-            Uri.EscapeDataString(directValue),
-            "?fmt=json&inc=artist-credits%2Bisrcs%2Bgenres");
-        using var activity = StartRequest("seed", target);
+        using var activity = StartRequest(
+            "seed",
+            "isrc/" + Uri.EscapeDataString(directValue) + "?fmt=json&inc=artist-credits");
         var loaded = false;
         var fetched = await cache.GetIsrcAsync(
             directValue,
@@ -3086,7 +3109,7 @@ internal sealed class QueryExecutor(
         if (aliases is not null)
         {
             aliasesEvaluated = true;
-            if (!AllMatch(aliasResiduals, residual => MatchAliases(residual, hit.Title, aliases)))
+            if (!aliasResiduals.All(residual => MatchAliases(residual, hit.Title, aliases)))
             {
                 return Result(accepted: false, warnings);
             }
@@ -3095,7 +3118,7 @@ internal sealed class QueryExecutor(
         if (relations is not null)
         {
             referencesEvaluated = true;
-            if (!AllMatch(referenceResiduals, residual => MatchReferences(residual, relations)))
+            if (!referenceResiduals.All(residual => MatchReferences(residual, relations)))
             {
                 return Result(accepted: false, warnings);
             }
@@ -3104,7 +3127,7 @@ internal sealed class QueryExecutor(
         if (genres is not null)
         {
             genresEvaluated = true;
-            if (!AllMatch(genreResiduals, residual => MatchGenres(residual, genres) == true))
+            if (!genreResiduals.All(residual => MatchGenres(residual, genres) == true))
             {
                 return Result(accepted: false, warnings);
             }
@@ -3225,7 +3248,7 @@ internal sealed class QueryExecutor(
         if (!aliasesEvaluated && aliases is not null)
         {
             aliasesEvaluated = true;
-            if (!AllMatch(aliasResiduals, residual => MatchAliases(residual, hit.Title, aliases)))
+            if (!aliasResiduals.All(residual => MatchAliases(residual, hit.Title, aliases)))
             {
                 return Result(accepted: false, warnings);
             }
@@ -3234,7 +3257,7 @@ internal sealed class QueryExecutor(
         if (!referencesEvaluated && relations is not null)
         {
             referencesEvaluated = true;
-            if (!AllMatch(referenceResiduals, residual => MatchReferences(residual, relations)))
+            if (!referenceResiduals.All(residual => MatchReferences(residual, relations)))
             {
                 return Result(accepted: false, warnings);
             }
@@ -3243,7 +3266,7 @@ internal sealed class QueryExecutor(
         if (!genresEvaluated && genres is not null)
         {
             genresEvaluated = true;
-            if (!AllMatch(genreResiduals, residual => MatchGenres(residual, genres) == true))
+            if (!genreResiduals.All(residual => MatchGenres(residual, genres) == true))
             {
                 return Result(accepted: false, warnings);
             }
@@ -3252,7 +3275,7 @@ internal sealed class QueryExecutor(
         if (!externalIdsEvaluated && externalIds is not null)
         {
             externalIdsEvaluated = true;
-            if (!AllMatch(externalIdResiduals, residual => MatchExternalIds(residual, externalIds)))
+            if (!externalIdResiduals.All(residual => MatchExternalIds(residual, externalIds)))
             {
                 return Result(accepted: false, warnings);
             }
@@ -3263,7 +3286,7 @@ internal sealed class QueryExecutor(
         if (labelResiduals.Count > 0)
         {
             if (labels is not null &&
-                !AllMatch(labelResiduals, residual => MatchLabels(residual, labels)))
+                !labelResiduals.All(residual => MatchLabels(residual, labels)))
             {
                 labelsEvaluated = true;
                 return Result(accepted: false, warnings);
@@ -3293,7 +3316,7 @@ internal sealed class QueryExecutor(
             }
 
             if (!labelsEvaluated && labels is not null &&
-                !AllMatch(labelResiduals, residual => MatchLabels(residual, labels)))
+                !labelResiduals.All(residual => MatchLabels(residual, labels)))
             {
                 labelsEvaluated = true;
                 return Result(accepted: false, warnings);
@@ -3320,9 +3343,7 @@ internal sealed class QueryExecutor(
             else
             {
                 evaluatedHit = evaluatedHit with { RepresentativeLanguage = value.Language };
-                if (!AllMatch(
-                    languageResiduals,
-                    residual => MatchLanguage(residual, value.Language)))
+                if (!languageResiduals.All(residual => MatchLanguage(residual, value.Language)))
                 {
                     return Result(accepted: false, warnings);
                 }
@@ -3343,9 +3364,7 @@ internal sealed class QueryExecutor(
             else
             {
                 evaluatedHit = evaluatedHit with { Duration = value.Duration };
-                if (!AllMatch(
-                    durationResiduals,
-                    residual => MatchDuration(residual, value.Duration)))
+                if (!durationResiduals.All(residual => MatchDuration(residual, value.Duration)))
                 {
                     return Result(accepted: false, warnings);
                 }
@@ -3369,7 +3388,7 @@ internal sealed class QueryExecutor(
             {
                 warnings.Add(UnverifiableWarning(ResidualKind.ImagePresence, "cover-art lookup failed"));
             }
-            else if (!AllMatch(coverResiduals, residual => MatchImage(residual, coverUrl)))
+            else if (!coverResiduals.All(residual => MatchImage(residual, coverUrl)))
             {
                 return Result(accepted: false, warnings);
             }
@@ -3546,24 +3565,6 @@ internal sealed class QueryExecutor(
         return diagnostic;
     }
 
-    private bool AllMatch(
-        IReadOnlyList<ResidualCriterion> residuals,
-        Func<ResidualCriterion, bool> match)
-    {
-        var accepted = true;
-        foreach (var residual in residuals)
-        {
-            if (!accepted)
-            {
-                continue;
-            }
-
-            accepted = match(residual);
-        }
-
-        return accepted;
-    }
-
     private sealed record ResolvedArtistComposition
     {
         public required FetchOutcome Outcome { get; init; }
@@ -3585,6 +3586,13 @@ internal sealed class QueryExecutor(
         public required FetchOutcome Outcome { get; init; }
 
         public IReadOnlyList<ArtistDto> Artists { get; init; } = [];
+    }
+
+    private sealed record RowBound
+    {
+        public required int MaximumRows { get; init; }
+
+        public required IReadOnlyList<QueryFilter> Filters { get; init; }
     }
 
     private sealed record ArtistCompositionQuery

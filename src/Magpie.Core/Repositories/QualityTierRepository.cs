@@ -21,9 +21,9 @@ internal sealed class QualityTierRepository(
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     ILogger<QualityTierRepository> logger,
-    TimeProvider? timeProvider = null) : IQualityTierRepository
+    TimeProvider timeProvider) : IQualityTierRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     public async Task<IEnumerable<QualityTier>> ListAllAsync(CancellationToken cancellationToken)
     {
@@ -164,6 +164,12 @@ internal sealed class QualityTierRepository(
                     if (model is null)
                     {
                         return false;
+                    }
+
+                    if (await context.QualityTierListRanks.AsNoTracking()
+                        .AnyAsync(rank => rank.QualityTierId == id, cancellationToken).ConfigureAwait(false))
+                    {
+                        throw new MagpieException("A quality tier ranked in a list cannot be deleted.");
                     }
 
                     var deleted = await context.QualityTiers

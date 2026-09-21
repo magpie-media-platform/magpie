@@ -15,6 +15,7 @@ import {
     StarIcon,
     MagnifyingGlassPlusIcon,
     DotsThreeVerticalIcon,
+    WarningCircleIcon,
 } from '@phosphor-icons/react';
 
 import { Badge } from '@/components/ui/Badge';
@@ -46,6 +47,7 @@ import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import { useUserMap } from '@/hooks/useUserMap';
 import { useWishlists } from '@/hooks/useWishlists';
 import { useAuth, Role } from '@/auth';
+import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { canEditOwned } from '@/lib/ownership';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
@@ -85,7 +87,7 @@ export function FiltersPage() {
     const { hasRole, user } = useAuth();
     const canManage = hasRole(Role.Manager);
 
-    const { filters: contentFilters, refetch } = useContentFilters();
+    const { filters: contentFilters, isLoading, error, refetch } = useContentFilters();
     const { wishlists, refetch: refetchWishlists } = useWishlists();
 
     const userMap = useUserMap();
@@ -232,10 +234,7 @@ export function FiltersPage() {
         setIsDeleting(true);
 
         try {
-            await deleteMutation.mutateAsync({
-                id: deletingFilter.id,
-                isShared: deletingFilter.ownerId === null,
-            });
+            await deleteMutation.mutateAsync({ id: deletingFilter.id });
             toast({
                 title: 'Filter Deleted',
                 description: `Magpie deleted "${deletingFilter.name}".`,
@@ -257,8 +256,8 @@ export function FiltersPage() {
         setDeletingFilter(null);
     }, []);
 
-    const handleLockFilter = useCallback(
-        async (id: string) => {
+    const handleSetOwnerLock = useCallback(
+        async (id: string, ownerLock: boolean) => {
             const filter = enrichedFilters.find((f) => f.id === id);
             if (!filter) {
                 return;
@@ -269,57 +268,20 @@ export function FiltersPage() {
             try {
                 await updateMutation.mutateAsync({
                     id: filter.id,
-                    isShared: filter.ownerId === null,
-                    ownerLock: { value: true },
+                    ownerLock: { value: ownerLock },
                 });
 
                 toast({
                     title: filter.name,
-                    description: 'Filter locked. Only you can edit it now.',
+                    description: ownerLock
+                        ? 'Filter locked. Only you can edit it now.'
+                        : 'Filter unlocked. Others with permission can now edit.',
                     variant: 'success',
                 });
             } catch {
                 toast({
                     title: filter.name,
-                    description: 'Failed to lock filter',
-                    variant: 'error',
-                });
-            } finally {
-                setLockingFilters((prev) => {
-                    const next = new Set(prev);
-                    next.delete(id);
-                    return next;
-                });
-            }
-        },
-        [enrichedFilters, updateMutation, toast],
-    );
-
-    const handleUnlockFilter = useCallback(
-        async (id: string) => {
-            const filter = enrichedFilters.find((f) => f.id === id);
-            if (!filter) {
-                return;
-            }
-
-            setLockingFilters((prev) => new Set([...prev, id]));
-
-            try {
-                await updateMutation.mutateAsync({
-                    id: filter.id,
-                    isShared: filter.ownerId === null,
-                    ownerLock: { value: false },
-                });
-
-                toast({
-                    title: filter.name,
-                    description: 'Filter unlocked. Others with permission can now edit.',
-                    variant: 'success',
-                });
-            } catch {
-                toast({
-                    title: filter.name,
-                    description: 'Failed to unlock filter',
+                    description: ownerLock ? 'Failed to lock filter' : 'Failed to unlock filter',
                     variant: 'error',
                 });
             } finally {
@@ -403,12 +365,10 @@ export function FiltersPage() {
                     await createMutation.mutateAsync({
                         name: values.name,
                         criteria: values.criteria,
-                        isShared: values.isShared,
                     });
                 } else {
                     await updateMutation.mutateAsync({
                         id: currentEditingFilter.id,
-                        isShared: currentEditingFilter.ownerId === null,
                         name: { value: values.name },
                         criteria: { value: values.criteria },
                     });
@@ -485,8 +445,26 @@ export function FiltersPage() {
                     <OwnershipToggle value={scope} onValueChange={handleScopeChange} aria-label="Filter by ownership" />
                 </div>
 
-                <div className="filters-page__list" role="list" aria-label="Content filters">
-                    {filteredFilters.length === 0 ? (
+                {error && (
+                    <EmptyState
+                        icon={<WarningCircleIcon weight="duotone" />}
+                        title="Failed to load filters"
+                        description={getErrorMessage(error)}
+                        action={
+                            <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                                Retry
+                            </Button>
+                        }
+                    />
+                )}
+                <div
+                    className="filters-page__list"
+                    role={filteredFilters.length > 0 ? 'list' : undefined}
+                    aria-label={filteredFilters.length > 0 ? 'Content filters' : undefined}
+                >
+                    {filteredFilters.length === 0 && isLoading ? (
+                        <EmptyState title="Loading filters..." size="sm" />
+                    ) : filteredFilters.length === 0 && !error ? (
                         <EmptyState
                             icon={<FunnelIcon weight="duotone" />}
                             title="No filters found"
@@ -509,8 +487,7 @@ export function FiltersPage() {
                                 onEdit={handleEditFilter}
                                 onDuplicate={handleDuplicateFilter}
                                 onDelete={handleDeleteFilter}
-                                onLock={handleLockFilter}
-                                onUnlock={handleUnlockFilter}
+                                onSetOwnerLock={handleSetOwnerLock}
                                 onViewInLibrary={handleViewInLibrary}
                                 onSearchProviders={handleSearchProviders}
                                 onConvertToWishlist={handleConvertToWishlist}
@@ -560,8 +537,7 @@ interface FilterRowProps {
     onEdit: (id: string) => void;
     onDuplicate: (id: string) => void;
     onDelete: (id: string) => void;
-    onLock: (id: string) => void;
-    onUnlock: (id: string) => void;
+    onSetOwnerLock: (id: string, ownerLock: boolean) => void;
     onViewInLibrary: (id: string) => void;
     onSearchProviders: (id: string) => void;
     onConvertToWishlist: (id: string) => void;
@@ -579,8 +555,7 @@ function FilterRow({
     onEdit,
     onDuplicate,
     onDelete,
-    onLock,
-    onUnlock,
+    onSetOwnerLock,
     onViewInLibrary,
     onSearchProviders,
     onConvertToWishlist,
@@ -758,7 +733,7 @@ function FilterRow({
                                 <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem
-                                        onSelect={() => (filter.ownerLock ? onUnlock(filter.id) : onLock(filter.id))}
+                                        onSelect={() => onSetOwnerLock(filter.id, !filter.ownerLock)}
                                         disabled={isLocking}
                                         data-action={filter.ownerLock ? 'unlock' : 'lock'}
                                         data-target={filter.id}

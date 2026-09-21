@@ -44,7 +44,7 @@
 
     .users-page__user-actions {
         display: flex;
-        justify-content: flex-end;
+        gap: var(--space-sm);
     }
 
     .users-page__list {
@@ -54,6 +54,7 @@
     }
 
     .users-page__item {
+        position: relative;
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-md);
@@ -62,6 +63,10 @@
 
         &:hover {
             border-color: var(--border-accent);
+        }
+
+        &:has(> .selection-circle-toggle) {
+            padding-inline-start: calc(var(--space-xs) + 44px + var(--space-sm));
         }
     }
 

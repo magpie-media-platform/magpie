@@ -3,7 +3,7 @@ import { Role, type EffectivePermissions, type Permission, type PermissionGrant 
 export const TEST_PERMISSION_CATALOG: Record<Permission, Role> = {
     'content.view': Role.Viewer,
     'content.edit': Role.Manager,
-    'content.add': Role.Manager,
+    'content.add': Role.Requester,
     'content.delete': Role.Manager,
     'content.request': Role.Requester,
 
@@ -19,38 +19,38 @@ export const TEST_PERMISSION_CATALOG: Record<Permission, Role> = {
     'servers.manage': Role.Admin,
     'folders.manage': Role.Admin,
 
-    'jobs.view': Role.Admin,
-    'jobs.run': Role.Manager,
+    'jobs.view': Role.Viewer,
+    'jobs.run': Role.Requester,
     'jobs.schedule': Role.Requester,
-    'jobs.manage': Role.Admin,
+    'jobs.manage': Role.Manager,
 
     'wishlists.view': Role.Viewer,
     'wishlists.own': Role.Requester,
-    'wishlists.manage': Role.Manager,
+    'wishlists.manage': Role.Requester,
 
-    'quality.view': Role.Admin,
+    'quality.view': Role.Viewer,
     'quality.manage': Role.Admin,
 
     'tags.view': Role.Viewer,
     'tags.manage': Role.Manager,
 
     'filters.view': Role.Viewer,
-    'filters.own': Role.Requester,
-    'filters.manage': Role.Manager,
+    'filters.own': Role.Viewer,
+    'filters.manage': Role.Viewer,
 
     'activity.view': Role.Viewer,
     'calendar.view': Role.Viewer,
 
-    'system.view': Role.Admin,
+    'system.view': Role.Viewer,
 
-    'settings.view': Role.Admin,
+    'settings.view': Role.Manager,
     'settings.edit': Role.Admin,
 
     'users.manage': Role.Admin,
     'extensions.manage': Role.Admin,
     'backups.manage': Role.Admin,
 
-    'files.browse': Role.Admin,
+    'files.browse': Role.Manager,
 };
 
 export function testHasPermission(role: Role, permission: Permission): boolean {

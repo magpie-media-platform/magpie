@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -71,7 +72,7 @@ describe('RelatedEventsChain', () => {
         expect(apiGet).not.toHaveBeenCalled();
     });
 
-    it('fetches and renders the execution tree chronologically when active', async () => {
+    it('fetches and renders the execution tree in real parent-child order, not chronologically', async () => {
         render(wrap(<RelatedEventsChain executionId={executionId} correlationId={correlationId} active />));
 
         await waitFor(() => {
@@ -79,9 +80,126 @@ describe('RelatedEventsChain', () => {
         });
 
         const steps = screen.getAllByRole('listitem');
-        expect(steps[0].textContent).toContain('First Step');
-        expect(steps[1].textContent).toContain('Second Step');
+        expect(steps).toHaveLength(2);
+        expect(steps[0].textContent).toContain('Second Step');
+        expect(steps[1].textContent).toContain('First Step');
         expect(apiGet).toHaveBeenCalledWith(`/jobs/${executionId}/execution-tree?include-siblings=true`);
+    });
+
+    it('draws an arrow only from the parent into its real child, nested under it', async () => {
+        render(wrap(<RelatedEventsChain executionId={executionId} correlationId={correlationId} active />));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('related-events__chain')).toBeInTheDocument();
+        });
+
+        const root = screen.getByText('Second Step').closest('[data-kind="job"]');
+        expect(root).not.toBeNull();
+        const connector = root!.querySelector(':scope > .related-events__connector');
+        expect(connector).not.toBeNull();
+        const child = root!.querySelector('.related-events__children [data-kind="job"]');
+        expect(child?.textContent).toContain('First Step');
+    });
+
+    it('renders a parent with several children as a branch, not a flat line', async () => {
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({ items: [], totalItems: 0, pageNumber: 1, pageSize: 1000 });
+            }
+            return Promise.resolve({
+                root: {
+                    id: 'parent',
+                    correlationId,
+                    jobType: 'Fanout',
+                    status: 'Completed',
+                    createdAt: '2024-05-01T09:00:00Z',
+                    children: [
+                        {
+                            id: 'kid-1',
+                            correlationId,
+                            jobType: 'KidOne',
+                            status: 'Completed',
+                            createdAt: '2024-05-01T09:05:00Z',
+                            children: [],
+                        },
+                        {
+                            id: 'kid-2',
+                            correlationId,
+                            jobType: 'KidTwo',
+                            status: 'Completed',
+                            createdAt: '2024-05-01T09:06:00Z',
+                            children: [],
+                        },
+                    ],
+                },
+                totalCount: 3,
+            });
+        });
+
+        render(wrap(<RelatedEventsChain executionId={executionId} correlationId={correlationId} active />));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('related-events__chain')).toBeInTheDocument();
+        });
+
+        const parent = screen.getByText('Fanout').closest('[data-kind="job"]');
+        const branch = parent!.querySelector(':scope > .related-events__children');
+        expect(branch).not.toBeNull();
+        const kids = within(branch as HTMLElement).getAllByRole('listitem');
+        expect(kids).toHaveLength(2);
+        expect(kids[0].textContent).toContain('Kid One');
+        expect(kids[1].textContent).toContain('Kid Two');
+    });
+
+    it.each([
+        ['parent', 'Page 1 of 26', 20],
+        ['child-499', 'Page 26 of 26', 1],
+    ])('bounds a fan-out tree and opens the page containing %s', async (selectedId, pageLabel, count) => {
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockResolvedValue({
+            root: {
+                id: 'parent',
+                correlationId,
+                jobType: 'Fanout',
+                status: 'Completed',
+                createdAt: '2024-05-01T09:00:00Z',
+                children: Array.from({ length: 500 }, (_, index) => ({
+                    id: `child-${index}`,
+                    correlationId,
+                    jobType: 'ChildJob',
+                    status: 'Completed',
+                    createdAt: '2024-05-01T09:05:00Z',
+                    children: [],
+                })),
+            },
+            totalCount: 501,
+        });
+        render(
+            wrap(
+                <RelatedEventsChain
+                    executionId={selectedId}
+                    selfEntry={{
+                        id: selectedId,
+                        kind: MagpieActivityEntryKind.JobExecution,
+                        timestamp: '2024-05-01T09:05:00Z',
+                        label: 'SelectedJob',
+                        category: 'Job',
+                    }}
+                />,
+            ),
+        );
+        await screen.findByText(pageLabel);
+        expect(screen.getAllByRole('listitem')).toHaveLength(count);
+        expect(screen.getByTestId('related-events__self-step')).toHaveTextContent('Selected Job');
+        const pager = within(screen.getByRole('navigation', { name: 'Job chain pagination' }));
+        await user.click(pager.getByRole('button', { name: 'Go to first page' }));
+        expect(screen.getAllByRole('listitem')).toHaveLength(20);
+        await user.click(pager.getByRole('button', { name: 'Go to next page' }));
+        expect(screen.getAllByRole('listitem')).toHaveLength(20);
+        expect(screen.getAllByText(/^Parent: /)).toHaveLength(20);
+        await user.click(pager.getByRole('button', { name: 'Go to last page' }));
+        expect(screen.getAllByRole('listitem')).toHaveLength(1);
+        expect(screen.getByText('Page 26 of 26')).toBeInTheDocument();
     });
 
     it('renders the empty message when the execution tree is empty', async () => {
@@ -89,11 +207,11 @@ describe('RelatedEventsChain', () => {
         render(wrap(<RelatedEventsChain executionId={executionId} correlationId={correlationId} active />));
 
         await waitFor(() => {
-            expect(screen.getByText('No related events for this chain.')).toBeInTheDocument();
+            expect(screen.getByText('No activity is related to this one.')).toBeInTheDocument();
         });
     });
 
-    it('does not show a capped notice for an execution tree', async () => {
+    it('does not show a capped notice for a complete execution tree', async () => {
         render(wrap(<RelatedEventsChain executionId={executionId} correlationId={correlationId} active />));
 
         await waitFor(() => {
@@ -102,7 +220,25 @@ describe('RelatedEventsChain', () => {
         expect(screen.queryByTestId('related-events-capped')).not.toBeInTheDocument();
     });
 
-    it('combines matching audit activity with the execution tree and deduplicates the selected activity', async () => {
+    it('says where the chain was truncated when the execution tree hit the node limit', async () => {
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({ items: [], totalItems: 0, pageNumber: 1, pageSize: 1000 });
+            }
+            return Promise.resolve({ ...mockExecutionTree, truncated: true });
+        });
+
+        render(wrap(<RelatedEventsChain executionId={executionId} correlationId={correlationId} active />));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('related-events-capped')).toBeInTheDocument();
+        });
+        expect(screen.getByTestId('related-events-capped').textContent).toContain(
+            'This chain is truncated at 2 activities.',
+        );
+    });
+
+    it('puts a same-correlation activity with no lineage edge in a distinct group, not the arrow chain', async () => {
         const selfEntry: MagpieActivityEntry = {
             id: 'audit-1',
             kind: MagpieActivityEntryKind.AuditRecord,
@@ -144,5 +280,51 @@ describe('RelatedEventsChain', () => {
         expect(screen.getAllByTestId('related-events__self-step')).toHaveLength(1);
         expect(screen.getByTestId('related-events__self-step')).toHaveTextContent('Grab Skipped');
         expect(screen.getByTestId('related-events__self-step')).toHaveTextContent('Recorded');
+
+        const also = screen.getByTestId('related-events__also');
+        expect(within(also).getByTestId('related-events__self-step')).toBeInTheDocument();
+        expect(also.querySelector('.related-events__connector')).toBeNull();
+    });
+
+    it('renders a lone activity with no relations sanely, with no arrows and no also section', async () => {
+        const selfEntry: MagpieActivityEntry = {
+            id: 'b',
+            kind: MagpieActivityEntryKind.JobExecution,
+            timestamp: '2024-05-01T11:00:00Z',
+            correlationId,
+            label: 'SecondStep',
+            category: 'Job',
+            status: 'Completed',
+            detail: null,
+        };
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({ items: [], totalItems: 0, pageNumber: 1, pageSize: 1000 });
+            }
+            return Promise.resolve({
+                root: {
+                    id: 'b',
+                    correlationId,
+                    jobType: 'SecondStep',
+                    status: 'Completed',
+                    createdAt: selfEntry.timestamp,
+                    children: [],
+                },
+                totalCount: 1,
+            });
+        });
+
+        const { container } = render(
+            wrap(<RelatedEventsChain executionId="b" correlationId={correlationId} selfEntry={selfEntry} active />),
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('related-events__chain')).toBeInTheDocument();
+        });
+        expect(screen.getAllByRole('listitem')).toHaveLength(1);
+        expect(screen.getByTestId('related-events__self-step')).toHaveTextContent('Second Step');
+        expect(screen.queryByTestId('related-events__also')).not.toBeInTheDocument();
+        expect(container.querySelector('.related-events__connector')).toBeNull();
+        expect(screen.getByText('No other activity is related to this one.')).toBeInTheDocument();
     });
 });

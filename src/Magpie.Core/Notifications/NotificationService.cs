@@ -22,54 +22,6 @@ internal sealed class NotificationService(
     IEnumerable<INotificationProvider> providers,
     ILogger<NotificationService> logger) : INotificationService
 {
-    private static void Apply(NotificationRulePatch patch, NotificationRule rule)
-    {
-        if (patch.Name is not null)
-        {
-            rule.Name = patch.Name.Value;
-        }
-
-        if (patch.EventFilter is not null)
-        {
-            rule.EventFilter = patch.EventFilter.Value;
-        }
-
-        if (patch.Enabled is not null)
-        {
-            rule.Enabled = patch.Enabled.Value;
-        }
-
-        if (patch.Settings is not null)
-        {
-            if (patch.Settings.Add is not null)
-            {
-                foreach (var (key, value) in patch.Settings.Add)
-                {
-                    rule.Settings[key] = value ?? string.Empty;
-                }
-            }
-
-            if (patch.Settings.Update is not null)
-            {
-                foreach (var (key, value) in patch.Settings.Update)
-                {
-                    if (rule.Settings.ContainsKey(key))
-                    {
-                        rule.Settings[key] = value ?? string.Empty;
-                    }
-                }
-            }
-
-            if (patch.Settings.Remove is not null)
-            {
-                foreach (var key in patch.Settings.Remove)
-                {
-                    rule.Settings.Remove(key);
-                }
-            }
-        }
-    }
-
     public async Task<IReadOnlyList<NotificationRule>> ListAsync(
         Guid callerUserId,
         bool callerIsAdmin,
@@ -133,9 +85,8 @@ internal sealed class NotificationService(
             return false;
         }
 
-        Apply(patch, rule);
-
-        return await rules.UpdateAsync(rule, callerUserId, cancellationToken).ConfigureAwait(false);
+        return await rules.PatchAsync(patch with { Id = id }, callerUserId, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<bool> DeleteAsync(
@@ -193,8 +144,8 @@ internal sealed class NotificationService(
         if (provider is null)
         {
             logger.LogWarning(
-                "The notification service refused the test for rule {NotificationRuleId}. " +
-                "Provider {ProviderType} is not registered",
+                "The notification service refused the test for rule {NotificationRuleId} because " +
+                "provider {ProviderType} is not registered",
                 rule.Id,
                 rule.ProviderType);
 
@@ -219,9 +170,9 @@ internal sealed class NotificationService(
         catch (Exception ex)
         {
             logger.LogWarning(
-                "The notification service failed to send the test message for rule {NotificationRuleId}. {Detail}",
-                rule.Id,
-                ex.Message);
+                ex,
+                "The notification service failed to send the test message for rule {NotificationRuleId}",
+                rule.Id);
 
             return new ConfigurationTestResult
             {

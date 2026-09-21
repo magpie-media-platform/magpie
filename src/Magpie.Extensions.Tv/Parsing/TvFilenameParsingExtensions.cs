@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
 
+using Magpie.Sdk.Content;
+
 namespace Magpie.Extensions.Tv.Parsing;
 
 internal static class TvFilenameParsingExtensions
@@ -26,45 +28,14 @@ internal static class TvFilenameParsingExtensions
 
     private static readonly HashSet<string> ReleaseTagTokens = new(StringComparer.OrdinalIgnoreCase)
     {
-        "2160p",
-        "1080p",
-        "720p",
-        "576p",
-        "480p",
-        "4k",
-        "uhd",
-        "BluRay",
-        "BDRip",
-        "BRRip",
-        "WEB-DL",
-        "WEBDL",
-        "WEBRip",
-        "WEB",
-        "HDRip",
-        "HDTV",
-        "DVDRip",
-        "DVD",
-        "REMUX",
-        "x264",
-        "x265",
-        "h264",
-        "h265",
-        "HEVC",
-        "AVC",
-        "DDP5",
-        "DDP5.1",
-        "DD5",
-        "AC3",
-        "AAC",
-        "DTS",
-        "TrueHD",
-        "Atmos",
-        "PROPER",
-        "REPACK",
-        "INTERNAL",
-        "LIMITED",
-        "MULTI",
-        "DUAL"
+        "480p", "540p", "576p", "720p", "1080p", "1080i", "2160p", "4320p", "4k", "8k", "uhd", "hd", "sd",
+        "bluray", "bdrip", "brrip", "bdremux", "remux", "web-dl", "webdl", "webrip", "hdrip",
+        "dvdrip", "dvd", "hdtv", "pdtv", "sdtv", "hdcam", "hdts", "telesync", "scr",
+        "x264", "x265", "h264", "h265", "hevc", "avc", "av1", "xvid", "divx", "vp9", "10bit", "8bit",
+        "hdr", "hdr10", "dolbyvision", "sdr",
+        "aac", "ac3", "eac3", "dts", "dtshd", "truehd", "atmos", "flac", "mp3", "ddp", "ddp5",
+        "dd5",
+        "repack", "rerip", "imax", "vostfr"
     };
 
     internal static ParsedTvFile? ParseTvFilename(this string filePath, out string? reason)
@@ -81,9 +52,9 @@ internal static class TvFilenameParsingExtensions
         var grandparentFolder =
             Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(filePath))) ?? string.Empty;
 
-        var normalisedStem = Normalise(stem);
-        var normalisedParent = Normalise(parentFolder);
-        var normalisedGrandparent = Normalise(grandparentFolder);
+        var normalisedStem = stem.NormalizeMediaFilename();
+        var normalisedParent = parentFolder.NormalizeMediaFilename();
+        var normalisedGrandparent = grandparentFolder.NormalizeMediaFilename();
 
         if (AnimeAbsoluteToken.IsMatch(stem))
         {
@@ -149,33 +120,6 @@ internal static class TvFilenameParsingExtensions
 
         reason = TvParsingMessages.NoSeasonEpisodeReason;
         return null;
-    }
-
-    private static string Normalise(string input)
-    {
-        if (string.IsNullOrEmpty(input))
-        {
-            return string.Empty;
-        }
-
-        var chars = new char[input.Length];
-        for (var i = 0; i < input.Length; i++)
-        {
-            var character = input[i];
-            chars[i] = character switch
-            {
-                '.' or '_' or '(' or ')' or '[' or ']' or '{' or '}' => ' ',
-                _ => character
-            };
-        }
-
-        var stage = new string(chars);
-        while (stage.Contains("  "))
-        {
-            stage = stage.Replace("  ", " ");
-        }
-
-        return stage.Trim();
     }
 
     private static ParsedTvFile? BuildResult(
@@ -254,9 +198,24 @@ internal static class TvFilenameParsingExtensions
 
         var tokens = working.Split([' '], StringSplitOptions.RemoveEmptyEntries);
         var keepLength = tokens.Length;
-        while (keepLength > 0 && ReleaseTagTokens.Contains(tokens[keepLength - 1]))
+        while (keepLength > 1)
         {
-            keepLength--;
+            if (ReleaseTagTokens.Contains(tokens[keepLength - 1]))
+            {
+                keepLength--;
+            }
+            else if (keepLength > 2 && tokens[keepLength - 1] == "1" &&
+                (string.Equals(tokens[keepLength - 2], "ddp5", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(tokens[keepLength - 2], "dd5", StringComparison.OrdinalIgnoreCase) ||
+                 (keepLength > 3 && tokens[keepLength - 2] is "5" or "7" &&
+                  ReleaseTagTokens.Contains(tokens[keepLength - 3]))))
+            {
+                keepLength -= 2;
+            }
+            else
+            {
+                break;
+            }
         }
 
         if (keepLength < tokens.Length)

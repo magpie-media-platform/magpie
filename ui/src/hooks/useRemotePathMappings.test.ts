@@ -232,16 +232,16 @@ describe('useRemotePathMappings', () => {
 
             await act(async () => {
                 await result.current.updateMapping('mapping-1', {
-                    host: 'renamed.local',
-                    remotePath: 'F:\\Transmission',
-                    localPath: '\\\\renamed.local\\f$\\Transmission',
+                    host: { value: 'renamed.local' },
+                    remotePath: { value: 'F:\\Transmission' },
+                    localPath: { value: '\\\\renamed.local\\f$\\Transmission' },
                 });
             });
 
             expect(mockApiPatch).toHaveBeenCalledWith('/remote-path-mappings/mapping-1', {
-                host: 'renamed.local',
-                remotePath: 'F:\\Transmission',
-                localPath: '\\\\renamed.local\\f$\\Transmission',
+                host: { value: 'renamed.local' },
+                remotePath: { value: 'F:\\Transmission' },
+                localPath: { value: '\\\\renamed.local\\f$\\Transmission' },
             });
         });
 
@@ -259,12 +259,12 @@ describe('useRemotePathMappings', () => {
 
             await act(async () => {
                 await result.current.updateMapping('mapping-1', {
-                    localPath: '/new/local/path',
+                    localPath: { value: '/new/local/path' },
                 });
             });
 
             expect(mockApiPatch).toHaveBeenCalledWith('/remote-path-mappings/mapping-1', {
-                localPath: '/new/local/path',
+                localPath: { value: '/new/local/path' },
             });
         });
 
@@ -287,7 +287,7 @@ describe('useRemotePathMappings', () => {
 
             act(() => {
                 void result.current.updateMapping('mapping-1', {
-                    host: 'updated.local',
+                    host: { value: 'updated.local' },
                 });
             });
 
@@ -469,14 +469,7 @@ describe('useRemotePathMappings', () => {
     describe('query keys', () => {
         it('should export query keys for external use', async () => {
             const { remotePathMappingQueryKeys } = await import('./useRemotePathMappings');
-
-            expect(remotePathMappingQueryKeys.all).toEqual(['remote-path-mappings']);
             expect(remotePathMappingQueryKeys.list()).toEqual(['remote-path-mappings', 'list']);
-            expect(remotePathMappingQueryKeys.detail('mapping-1')).toEqual([
-                'remote-path-mappings',
-                'detail',
-                'mapping-1',
-            ]);
         });
     });
 });

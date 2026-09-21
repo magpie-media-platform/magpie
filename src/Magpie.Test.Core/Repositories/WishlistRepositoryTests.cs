@@ -1,7 +1,9 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -10,18 +12,24 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class WishlistRepositoryTests
+public sealed class WishlistRepositoryTests
 {
+    private Mock<IEventBus> _updateEvents = null!;
+
     private MagpieDbContext _context = null!;
     private IWishlistRepository _subject = null!;
     private Guid _userId;
@@ -65,18 +73,22 @@ public class WishlistRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
+        _updateEvents = new Mock<IEventBus>();
         _subject = new WishlistRepository(
             _context,
             auditRecordRepository,
             transactionManager,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
-            loggerFactory.CreateLogger<WishlistRepository>());
+            _updateEvents.Object,
+            loggerFactory.CreateLogger<WishlistRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -448,6 +460,36 @@ public class WishlistRepositoryTests
     }
 
     [Test]
+    public async Task UpdateAsync_PublishesUpdatedEventWithChangedFields_WhenExists()
+    {
+        // Arrange
+        var wishlist = new Wishlist
+        {
+            Name = "OriginalWishlist",
+            ContentFilterId = _contentFilterId,
+            OwnerUserId = _userId,
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        wishlist.Name = "UpdatedWishlist";
+        wishlist.Enabled = false;
+
+        // Act
+        await _subject.UpdateAsync(wishlist, _userId).ConfigureAwait(false);
+
+        // Assert
+        _updateEvents.Verify(bus => bus.PublishAsync(
+            It.Is<MagpieEvent>(e =>
+                e.Name == "wishlist.updated" &&
+                e.Context.ContainsKey("wishlist.changedFields") &&
+                e.Context["wishlist.changedFields"] == "name,enabled"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
     public async Task UpdateAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
@@ -562,6 +604,38 @@ public class WishlistRepositoryTests
     }
 
     [Test]
+    public async Task PatchAsync_RemovesTag_WhenTagIsInRemoveSet()
+    {
+        // Arrange
+        var wishlist = new Wishlist
+        {
+            Name = "TaggedWishlist",
+            ContentFilterId = _contentFilterId,
+            OwnerUserId = _userId,
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        wishlist.Tags.Add(new Tag { Name = "keepMe" });
+        wishlist.Tags.Add(new Tag { Name = "removeMe" });
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        var patch = new WishlistPatch { Id = wishlist.Id, Tags = new() { Remove = ["removeMe"] } };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        var patched = await _subject.GetByIdAsync(wishlist.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(patched!.Tags.Select(t => t.Name), Is.EquivalentTo(["keepMe"]));
+        }
+    }
+
+    [Test]
     public async Task PatchAsync_UpdatesName_WhenNameIsProvided()
     {
         // Arrange
@@ -619,6 +693,37 @@ public class WishlistRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(patched, Has.Property(nameof(patched.Enabled)).False);
+            Assert.That(patched, Has.Property(nameof(patched.ModifiedByUserId)).EqualTo(_userId));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_ClearsMonitoring_WhenThePatchSetsMonitoringToNull()
+    {
+        // Arrange
+        var wishlist = new Wishlist
+        {
+            Name = "ToPatchMonitoring",
+            ContentFilterId = _contentFilterId,
+            OwnerUserId = _userId,
+            Enabled = true,
+            Monitoring = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var patch = new WishlistPatch { Id = wishlist.Id, Monitoring = new() { Value = null } };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        var patched = await _subject.GetByIdAsync(wishlist.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(patched, Has.Property(nameof(patched.Monitoring)).Null);
             Assert.That(patched, Has.Property(nameof(patched.ModifiedByUserId)).EqualTo(_userId));
         }
     }

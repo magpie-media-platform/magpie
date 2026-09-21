@@ -1,14 +1,14 @@
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { expect, test, type Request } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 import { type ApiClient } from '../helpers/api';
 import { createCheckpoint, restoreCheckpoint } from '../helpers/checkpoints';
 import { FIXTURES_ROOT } from '../helpers/fixtures';
 import { mocks } from '../helpers/mocks';
 import { buildRichLibrary } from '../helpers/rich-library';
-import { loginUi } from '../helpers/ui';
+import { expectScopedEventRefresh, loginUi } from '../helpers/ui';
 import { until } from '../helpers/wait';
 
 interface Paged<T> {
@@ -430,8 +430,8 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                 await page.goto('/');
                 const stats = page.locator('[data-component="content-stats-widget"]');
                 await expect(stats.locator('.content-stats-widget__total')).toHaveText('87');
-                await expect(stats.locator('.content-stats-widget__row[data-status="fulfilled"]')).toContainText('1');
-                await expect(stats.locator('.content-stats-widget__row[data-status="missing"]')).toContainText('79');
+                await expect(stats.locator('[data-component="status-row"][data-status="fulfilled"]')).toContainText('1');
+                await expect(stats.locator('[data-component="status-row"][data-status="missing"]')).toContainText('79');
                 await expect(page.locator('[data-component="upcoming-content-widget"]')).toContainText(
                     'Journey Catalog 26',
                 );
@@ -542,50 +542,7 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                 await expect(page.locator('[data-component="content-details-header"]')).toContainText(
                     'A feature with metadata, a main file, and a sidecar.',
                 );
-                await page.waitForTimeout(750);
-                const observed: string[] = [];
-                const record = (request: Request) => {
-                    const url = new URL(request.url());
-                    if (
-                        request.method() === 'GET' &&
-                        (url.pathname.startsWith('/api/content') || url.pathname.includes('/metadata'))
-                    ) {
-                        observed.push(`${url.pathname}${url.search}`);
-                    }
-                };
-                page.on('request', record);
-
-                const unrelated = await api.get<ContentItem>(`/api/content/${ids.upcoming}`);
-                const movie = await api.get<ContentItem>(`/api/content/${ids.movie}`);
-                try {
-                    await api.patch(`/api/content/${ids.upcoming}`, {
-                        monitoring: { value: !unrelated.effectiveMonitoring },
-                    });
-                    await page.waitForTimeout(750);
-                    expect(observed.filter((url) => url === `/api/content/${ids.upcoming}`)).toHaveLength(0);
-                    expect(observed.filter((url) => url === `/api/content/${ids.movie}`)).toHaveLength(0);
-
-                    await api.patch(`/api/content/${ids.movie}`, {
-                        monitoring: { value: !movie.effectiveMonitoring },
-                    });
-                    await until(
-                        'the visible movie to refresh once after its event',
-                        async () =>
-                            observed.filter((url) => url === `/api/content/${ids.movie}`).length || undefined,
-                        15_000,
-                        100,
-                    );
-                    await page.waitForTimeout(750);
-                    expect(observed.filter((url) => url === `/api/content/${ids.movie}`)).toHaveLength(1);
-                    const metadataRequests = observed.filter((url) => url.startsWith(`/api/content/${ids.movie}/metadata`));
-                    expect(new Set(metadataRequests).size).toBe(metadataRequests.length);
-                } finally {
-                    page.off('request', record);
-                    await Promise.all([
-                        api.patch(`/api/content/${ids.upcoming}`, { monitoring: { value: unrelated.monitoring } }),
-                        api.patch(`/api/content/${ids.movie}`, { monitoring: { value: movie.monitoring } }),
-                    ]);
-                }
+                await expectScopedEventRefresh(page, api, ids.movie, ids.upcoming);
             });
         } finally {
             const cleanupActions: Promise<unknown>[] = [

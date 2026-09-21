@@ -49,6 +49,8 @@ interface LibraryDialogsProps {
     bulkDeleteConfirmOpen: boolean;
     onConfirmBulkDelete: () => void;
     onCancelBulkDelete: () => void;
+    bulkDeleteFiles: boolean;
+    onBulkDeleteFilesChange: (checked: boolean) => void;
     isDeleting: boolean;
 }
 
@@ -84,6 +86,8 @@ export function LibraryDialogs({
     bulkDeleteConfirmOpen,
     onConfirmBulkDelete,
     onCancelBulkDelete,
+    bulkDeleteFiles,
+    onBulkDeleteFilesChange,
     isDeleting,
 }: LibraryDialogsProps) {
     const selectedItemsLabel = `${selectedCount} item${selectedCount === 1 ? '' : 's'}`;
@@ -169,6 +173,11 @@ export function LibraryDialogs({
                     </>
                 }
                 isDeleting={isDeleting}
+                extraToggle={{
+                    label: 'Also delete files from disk',
+                    checked: bulkDeleteFiles,
+                    onChange: onBulkDeleteFilesChange,
+                }}
             />
         </>
     );

@@ -488,6 +488,7 @@ describe('FiltersPage filters', () => {
 
         await waitFor(() => {
             expect(screen.getByText('No filters found')).toBeInTheDocument();
+            expect(screen.queryByRole('list', { name: 'Content filters' })).not.toBeInTheDocument();
             expect(
                 screen.getByText('Reusable filters can be applied in the library and wishlists.'),
             ).toBeInTheDocument();
@@ -1188,7 +1189,10 @@ describe('FiltersPage lock/unlock actions in overflow menu', () => {
         expect(unlockItem).not.toBeInTheDocument();
     });
 
-    it('shows toast notification after lock completes', async () => {
+    it.each([
+        ['filter-6', 'lock', true, 'Documentary 2024'],
+        ['filter-4', 'unlock', false, 'My Personal Filter'],
+    ])('shows toast notification after %s completes', async (id, action, ownerLock, title) => {
         const user = userEvent.setup();
 
         render(
@@ -1201,14 +1205,15 @@ describe('FiltersPage lock/unlock actions in overflow menu', () => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
 
-        await openOverflowMenu(user, 'filter-6');
+        await openOverflowMenu(user, id);
 
-        const lockItem = document.querySelector('[data-action="lock"]') as HTMLElement;
+        const lockItem = document.querySelector(`[data-action="${action}"]`) as HTMLElement;
         await user.click(lockItem);
 
         await waitFor(
             () => {
-                expect(screen.getByTestId('toast-title')).toHaveTextContent('Documentary 2024');
+                expect(screen.getByTestId('toast-title')).toHaveTextContent(title);
+                expect(apiPatch).toHaveBeenCalledWith(`/content-filters/${id}`, { ownerLock: { value: ownerLock } });
             },
             { timeout: 2000 },
         );
@@ -1292,6 +1297,7 @@ describe('FiltersPage empty state', () => {
         await user.click(screen.getByRole('radio', { name: 'Mine' }));
 
         expect(screen.getByText('No filters found')).toBeInTheDocument();
+        expect(screen.queryByRole('list', { name: 'Content filters' })).not.toBeInTheDocument();
         expect(screen.getByText('Try adjusting your filters')).toBeInTheDocument();
 
         expect(document.querySelector('[data-action="add-filter-empty"]')).not.toBeInTheDocument();
@@ -1416,14 +1422,14 @@ describe('FiltersPage query preview', () => {
 });
 
 describe('FiltersPage accessibility', () => {
-    it('filters list has accessible label', () => {
+    it('filters list has accessible label', async () => {
         render(
             <TestWrapper>
                 <FiltersPage />
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('list', { name: /content filters/i })).toBeInTheDocument();
+        expect(await screen.findByRole('list', { name: /content filters/i })).toBeInTheDocument();
     });
 
     it('ownership toggle has an accessible group label', () => {
@@ -1908,5 +1914,61 @@ describe('FiltersPage URL persistence', () => {
         const items = within(list).getAllByRole('listitem');
         expect(items.length).toBe(8);
         expect(screen.getByRole('radio', { name: 'All' })).toHaveAttribute('aria-checked', 'true');
+    });
+});
+
+describe('FiltersPage load states', () => {
+    it('shows the loading state while filters are pending', () => {
+        // Arrange
+        vi.mocked(apiGet).mockReturnValue(new Promise(() => {}));
+        // Act
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+        // Assert
+        expect(screen.getByText('Loading filters...')).toBeInTheDocument();
+        expect(screen.queryByText('No filters found')).not.toBeInTheDocument();
+        expect(screen.queryByRole('list', { name: 'Content filters' })).not.toBeInTheDocument();
+    });
+
+    it('loads filters on retry after the initial request fails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockRejectedValue(new Error('Filters unavailable'));
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+        expect(await screen.findByText('Failed to load filters')).toBeInTheDocument();
+        expect(screen.getByText('Filters unavailable')).toBeInTheDocument();
+        expect(screen.queryByText('No filters found')).not.toBeInTheDocument();
+        // Act
+        setupApiMocks();
+        await user.click(screen.getByRole('button', { name: 'Retry' }));
+        // Assert
+        expect(await screen.findByRole('list', { name: 'Content filters' })).toBeInTheDocument();
+        expect(screen.queryByText('Failed to load filters')).not.toBeInTheDocument();
+    });
+
+    it('preserves rows and recovers queries on retry after formatting fails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(formatMagpieQlCriteria).mockRejectedValue(new Error('Formatter unavailable'));
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+        expect(await screen.findByText('Formatter unavailable')).toBeInTheDocument();
+        expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        // Act
+        vi.mocked(formatMagpieQlCriteria).mockResolvedValue({ query: 'monitoring = true' });
+        await user.click(screen.getByRole('button', { name: 'Retry' }));
+        // Assert
+        await waitFor(() => expect(screen.queryByText('Failed to load filters')).not.toBeInTheDocument());
+        expect(screen.getAllByText('monitoring = true')).toHaveLength(8);
     });
 });

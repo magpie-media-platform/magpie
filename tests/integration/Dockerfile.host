@@ -14,9 +14,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY . .
-
+COPY ui/package.json ui/pnpm-lock.yaml ui/
 RUN cd ui && pnpm install --frozen-lockfile
+
+COPY . .
 RUN dotnet publish src/Magpie.App/Magpie.App.csproj -c Release -o /app/publish -nodeReuse:false
 RUN dotnet pack src/Magpie.Extensions.IntegrationTestShims/Magpie.Extensions.IntegrationTestShims.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
 RUN dotnet pack src/Magpie.Extensions.IntegrationTestShims/Magpie.Extensions.IntegrationTestShims.csproj -c Release -o /app/packages -p:PackageVersion=1.1.0 -nodeReuse:false
@@ -50,6 +51,27 @@ RUN mkdir -p \
     /app/feed/v3-flatcontainer/magpie.extensions.integrationtestshims/1.0.0/magpie.extensions.integrationtestshims.1.0.0.nupkg \
     && cp /app/packages/Magpie.Extensions.IntegrationTestShims.1.1.0.nupkg \
     /app/feed/v3-flatcontainer/magpie.extensions.integrationtestshims/1.1.0/magpie.extensions.integrationtestshims.1.1.0.nupkg
+RUN set -eu; \
+    for packagedir in /app/feed/v3-flatcontainer/*/; do \
+    id=$(basename "$packagedir"); \
+    mkdir -p "/app/feed/registration/$id"; \
+    items=''; \
+    versions=0; \
+    for versiondir in "$packagedir"*/; do \
+    version=$(basename "$versiondir"); \
+    versions=$((versions + 1)); \
+    content="https://package-feed:8081/v3-flatcontainer/$id/$version/$id.$version.nupkg"; \
+    entry="https://package-feed:8081/registration/$id/$version.json"; \
+    printf '{"@id":"%s","id":"%s","version":"%s","packageHashAlgorithm":"SHA512","packageHash":"%s","packageContent":"%s"}\n' \
+    "$entry" "$id" "$version" \
+    "$(openssl dgst -sha512 -binary "$versiondir$id.$version.nupkg" | base64 -w0)" "$content" \
+    > "/app/feed/registration/$id/$version.json"; \
+    items="$items${items:+,}{\"@id\":\"$entry\",\"catalogEntry\":{\"@id\":\"$entry\",\"id\":\"$id\",\"version\":\"$version\",\"packageContent\":\"$content\"},\"packageContent\":\"$content\"}"; \
+    done; \
+    printf '{"@id":"https://package-feed:8081/registration/%s/index.json","count":1,"items":[{"@id":"https://package-feed:8081/registration/%s/index.json#page","count":%s,"items":[%s]}]}\n' \
+    "$id" "$id" "$versions" "$items" > "/app/feed/registration/$id/index.json"; \
+    done
+
 RUN dotnet build-server shutdown
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_RUNTIME_VERSION} AS host
@@ -86,10 +108,15 @@ HEALTHCHECK --interval=2s --timeout=3s --start-period=30s --retries=45 \
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-FROM busybox:1.37.0 AS package-feed
+FROM nginx:1.27.5-alpine AS package-feed
+
+RUN apk add --no-cache openssl \
+    && openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=package-feed \
+    -addext subjectAltName=DNS:package-feed \
+    -keyout /etc/nginx/package-feed.key -out /etc/nginx/package-feed.crt
 
 COPY --from=sdk /app/feed /www
+RUN printf 'server {\n    listen 8081 ssl;\n    ssl_certificate /etc/nginx/package-feed.crt;\n    ssl_certificate_key /etc/nginx/package-feed.key;\n    root /www;\n}\n' \
+    > /etc/nginx/conf.d/default.conf
 
 EXPOSE 8081
-
-CMD ["httpd", "-f", "-p", "8081", "-h", "/www"]

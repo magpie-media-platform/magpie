@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } fro
 import { FloppyDiskIcon, XIcon } from '@phosphor-icons/react';
 
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { deepEqual } from '@/hooks/useFormDirty';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 
 import { Button } from '@/components/ui/Button';
@@ -45,6 +46,8 @@ interface RootFolderFormProps {
     initialValues?: RootFolderFormValues | null;
 
     contentTypes: LibraryTypeDefinition[];
+
+    contentTypesWithFolders: string[];
 
     qualityTierLists?: QualityTierListOption[];
 
@@ -185,6 +188,7 @@ export function RootFolderForm({
     onOpenChange,
     initialValues,
     contentTypes,
+    contentTypesWithFolders,
     qualityTierLists,
     onSubmit,
     isSubmitting = false,
@@ -213,7 +217,7 @@ export function RootFolderForm({
             values.defaultMonitoring !== cleanValuesRef.current.defaultMonitoring ||
             values.renameTemplate !== cleanValuesRef.current.renameTemplate ||
             values.upgradeFileHandling !== cleanValuesRef.current.upgradeFileHandling ||
-            JSON.stringify(values.defaults) !== JSON.stringify(cleanValuesRef.current.defaults) ||
+            !deepEqual(values.defaults, cleanValuesRef.current.defaults) ||
             renameEnabled !== cleanRenameEnabledRef.current,
         [values, renameEnabled],
     );
@@ -349,6 +353,9 @@ export function RootFolderForm({
         };
     }, [contentTypes, values.contentType]);
 
+    const mustBeDefault = !isEditing && !!values.contentType && !contentTypesWithFolders.includes(values.contentType);
+    const effectiveIsDefault = mustBeDefault || values.isDefault;
+
     const validate = useCallback((): boolean => {
         const newErrors: Record<string, string> = {};
 
@@ -383,13 +390,13 @@ export function RootFolderForm({
     const save = useCallback(async () => {
         beginOwnSave();
         try {
-            await Promise.resolve(onSubmit(values));
+            await Promise.resolve(onSubmit({ ...values, isDefault: effectiveIsDefault }));
             endOwnSave(true);
             setShowStaleSaveDialog(false);
         } catch {
             endOwnSave(false);
         }
-    }, [beginOwnSave, endOwnSave, onSubmit, values]);
+    }, [beginOwnSave, effectiveIsDefault, endOwnSave, onSubmit, values]);
 
     const handleSubmit = useCallback(
         (e: React.SubmitEvent) => {
@@ -544,6 +551,7 @@ export function RootFolderForm({
                                 className="root-folder-form__radio-group"
                                 role="radiogroup"
                                 aria-label="Default folder"
+                                aria-describedby="folder-default-help"
                                 data-field="is-default"
                             >
                                 <label className="root-folder-form__radio-option">
@@ -551,7 +559,7 @@ export function RootFolderForm({
                                         type="radio"
                                         name="root-folder-default"
                                         value="default"
-                                        checked={values.isDefault}
+                                        checked={effectiveIsDefault}
                                         onChange={() => handleIsDefaultChange(true)}
                                         disabled={isSubmitting}
                                     />
@@ -562,15 +570,17 @@ export function RootFolderForm({
                                         type="radio"
                                         name="root-folder-default"
                                         value="not-default"
-                                        checked={!values.isDefault}
+                                        checked={!effectiveIsDefault}
                                         onChange={() => handleIsDefaultChange(false)}
-                                        disabled={isSubmitting}
+                                        disabled={isSubmitting || mustBeDefault}
                                     />
                                     <span>Not the default</span>
                                 </label>
                             </div>
-                            <p className="root-folder-form__help">
-                                Selecting a default folder replaces the current default for this content type.
+                            <p id="folder-default-help" className="root-folder-form__help">
+                                {mustBeDefault
+                                    ? 'The first folder for a content type must be the default.'
+                                    : 'Selecting a default folder replaces the current default for this content type.'}
                             </p>
                         </fieldset>
 

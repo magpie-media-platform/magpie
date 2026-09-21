@@ -81,7 +81,7 @@ internal sealed class FileTypesEndpointGroup : IApiEndpointGroup
         var created = await fileSystem.CreateExclusionAsync(pattern.Trim(), user.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/exclusions/{created.Id}", created);
+        return Results.Created($"/api/{Name}/exclusions/{created.Id}", created);
     }
 
     internal async Task<IResult> DeleteExclusionAsync(

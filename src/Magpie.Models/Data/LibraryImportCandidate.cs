@@ -46,6 +46,16 @@ public record LibraryImportCandidate
     public Dictionary<string, List<string>> ParsedSignals { get; set; } = [];
 
     /// <summary>
+    /// The absolute path of the top-level directory the scan found this candidate under.
+    /// </summary>
+    public string? LayoutKey { get; set; }
+
+    /// <summary>
+    /// The key of the candidate group this candidate collapses into, derived by the repository on every write.
+    /// </summary>
+    public string? GroupKey { get; set; }
+
+    /// <summary>
     /// The metadata matches for this import candidate.
     /// </summary>
     public List<LibraryImportMatch> Matches { get; set; } = [];

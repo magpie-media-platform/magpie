@@ -1,3 +1,4 @@
+using Magpie.Data.Configuration;
 using Magpie.Models.Data;
 
 using Microsoft.EntityFrameworkCore;
@@ -15,5 +16,14 @@ internal sealed class SqliteModelCustomizer(ModelCustomizerDependencies dependen
             .HasIndex(e => new { e.Authority, e.Value })
             .IsUnique()
             .HasFilter("\"ReleaseId\" IS NOT NULL");
+        foreach (var (property, source, key) in JobExecutionReferenceColumns.All)
+        {
+            modelBuilder.Entity<JobExecution>()
+                .Property<string>(property)
+                .HasComputedColumnSql(
+                    $"lower(substr(json_extract(\"{source}\", '$.\"{key}\"'), 1, " +
+                    $"{JobExecutionReferenceColumns.MaxLength}))",
+                    stored: false);
+        }
     }
 }

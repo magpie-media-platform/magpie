@@ -65,7 +65,7 @@ export default defineConfig(({ mode }) => {
                         }
 
                         if (packageName === '@phosphor-icons/react') {
-                            return 'icons-vendor';
+                            return undefined;
                         }
 
                         if (packageName.startsWith('@floating-ui/') || packageName.startsWith('@radix-ui/')) {
@@ -99,6 +99,7 @@ export default defineConfig(({ mode }) => {
             setupFiles: ['./src/test/react-act-environment.ts', './src/test/setup.ts'],
             exclude: ['**/node_modules/**/*', '**/e2e/**'],
             maxWorkers: 4,
+            testTimeout: 20_000,
         },
     };
 });

@@ -139,43 +139,25 @@ export async function acquireContent(api: ApiClient, fixture: AcquisitionFixture
         );
     }
 
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-        const current = await api.get<AcquisitionResult['download']>(`/api/downloads/${queued.id}`);
-        if (current.status === 'Imported') {
-            break;
-        }
-        if (failureStatuses.has(current.status)) {
-            throw new Error(
-                `Download ${queued.id} ended as ${current.status}: ${current.statusReason ?? 'No status reason'}.`,
-            );
-        }
-
-        await drainDownloadRefresh(api);
-        const refreshed = await api.get<AcquisitionResult['download']>(`/api/downloads/${queued.id}`);
-        if (refreshed.status === 'Imported') {
-            break;
-        }
-        if (failureStatuses.has(refreshed.status)) {
-            throw new Error(
-                `Download ${queued.id} ended as ${refreshed.status}: ${refreshed.statusReason ?? 'No status reason'}.`,
-            );
-        }
-    }
-
     const imported = await until(
         `${fixture.downloadExternalId} import`,
         async () => {
             const current = await api.get<AcquisitionResult['download']>(`/api/downloads/${queued.id}`);
-            if (failureStatuses.has(current.status)) {
-                throw new Error(
-                    `Download ${queued.id} ended as ${current.status}: ${current.statusReason ?? 'No status reason'}.`,
-                );
+            if (current.status === 'Imported' || failureStatuses.has(current.status)) {
+                return current;
             }
-            return current.status === 'Imported' ? current : undefined;
+
+            await drainDownloadRefresh(api);
+            return undefined;
         },
         120_000,
         500,
     );
+    if (failureStatuses.has(imported.status)) {
+        throw new Error(
+            `Download ${queued.id} ended as ${imported.status}: ${imported.statusReason ?? 'No status reason'}.`,
+        );
+    }
     const importedContentId = fixture.importedContentId ?? fixture.contentId;
     let content = await until(
         `${fixture.searchTitle} imported files`,

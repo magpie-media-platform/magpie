@@ -65,7 +65,6 @@ interface WishlistDiscoveredLedger {
 }
 
 export const wishlistDiscoveredQueryKeys = {
-    all: ['wishlist-discovered'] as const,
     wishlist: (wishlistId: string) => ['wishlist-discovered', wishlistId] as const,
     list: (wishlistId: string, params?: WishlistDiscoveredQueryParams) =>
         ['wishlist-discovered', wishlistId, params ?? {}] as const,

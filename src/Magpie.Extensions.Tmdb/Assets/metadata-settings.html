@@ -1,36 +1,166 @@
 <template id="metadata-settings-template">
   <style>
-    :host { display: block; color: var(--text-primary, #111827); }
-    *, *::before, *::after { box-sizing: border-box; }
-    .panel { width: min(100%, 720px); margin-bottom: var(--space-xl, 24px); overflow: hidden; background: var(--bg-secondary, #f9fafb); border: 1px solid var(--border-default, #d1d5db); border-radius: var(--radius-md, 8px); }
-    .panel-header { display: flex; flex-direction: column; gap: var(--space-xs, 8px); padding: var(--space-md, 16px) var(--space-lg, 24px); border-bottom: 1px solid var(--border-default, #d1d5db); }
-    h2 { margin: 0; font-size: var(--text-base, 1rem); font-weight: var(--weight-semibold, 600); line-height: var(--leading-tight, 1.25); }
-    .description { margin: 0; color: var(--text-muted, #6b7280); font-size: var(--text-sm, 0.875rem); line-height: var(--leading-relaxed, 1.6); }
-    .surface, .fields { display: flex; flex-direction: column; gap: var(--space-md, 16px); }
-    .surface { padding: var(--space-lg, 24px); }
-    .field { display: flex; flex-direction: column; gap: var(--space-xs, 8px); font-size: var(--text-sm, 0.875rem); font-weight: var(--weight-medium, 500); }
-    .field-label { color: var(--text-primary, #111827); }
-    .field-help { color: var(--text-muted, #6b7280); font-size: var(--text-xs, 0.75rem); font-weight: var(--weight-normal, 400); line-height: var(--leading-relaxed, 1.6); }
-    .field-input { display: flex; align-items: center; background: var(--bg-primary, #fff); border: 1px solid var(--border-default, #d1d5db); border-radius: var(--radius-sm, 6px); }
-    .field-input:focus-within { outline: 2px solid var(--accent-primary, #2563eb); outline-offset: 1px; }
-    .field-input input { flex: 1; min-width: 0; min-height: 40px; padding: 0 var(--space-sm, 12px); color: var(--text-primary, #111827); background: transparent; border: none; font: inherit; outline: none; }
-    .field-input input:disabled { opacity: 0.75; cursor: not-allowed; }
-    .actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-sm, 12px); min-height: 40px; padding-top: var(--space-md, 16px); border-top: 1px solid var(--border-default, #d1d5db); }
-    button { min-height: 34px; padding: 0 var(--space-md, 16px); color: var(--button-primary-fg, #fff); background: var(--accent-primary, #2563eb); border: 1px solid transparent; border-radius: var(--radius-sm, 6px); font: inherit; font-weight: var(--weight-medium, 500); cursor: pointer; }
-    .clear-secret { flex-shrink: 0; margin-right: var(--space-xs, 8px); min-height: 28px; padding: 0 var(--space-sm, 12px); color: var(--text-muted, #6b7280); background: transparent; border: none; border-radius: var(--radius-sm, 6px); font: inherit; font-size: var(--text-xs, 0.75rem); font-weight: var(--weight-semibold, 600); cursor: pointer; }
-    .clear-secret:hover:not(:disabled) { color: var(--text-primary, #111827); }
-    button:disabled { cursor: not-allowed; opacity: 0.55; }
-    [data-status] { flex: 1; min-width: 0; font-size: var(--text-sm, 0.875rem); }
-    [data-kind="error"] { color: var(--status-unhealthy, #dc2626); }
-    [data-kind="success"] { color: var(--status-healthy, #15803d); }
-    [data-kind="info"] { color: var(--text-muted, #6b7280); }
-    .loading { color: var(--text-muted, #6b7280); font-size: var(--text-sm, 0.875rem); }
+    :host {
+      display: block;
+      color: var(--text-primary, #111827);
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    .panel {
+      width: min(100%, 720px);
+      margin-bottom: var(--space-xl, 24px);
+      overflow: hidden;
+      background: var(--bg-secondary, #f9fafb);
+      border: 1px solid var(--border-default, #d1d5db);
+      border-radius: var(--radius-md, 8px);
+    }
+    .panel-header {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs, 8px);
+      padding: var(--space-md, 16px) var(--space-lg, 24px);
+      border-bottom: 1px solid var(--border-default, #d1d5db);
+    }
+    h2 {
+      margin: 0;
+      font-size: var(--text-base, 1rem);
+      font-weight: var(--weight-semibold, 600);
+      line-height: var(--leading-tight, 1.25);
+    }
+    .description {
+      margin: 0;
+      color: var(--text-muted, #6b7280);
+      font-size: var(--text-sm, 0.875rem);
+      line-height: var(--leading-relaxed, 1.6);
+    }
+    .surface,
+    .fields {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-md, 16px);
+    }
+    .surface {
+      padding: var(--space-lg, 24px);
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs, 8px);
+      font-size: var(--text-sm, 0.875rem);
+      font-weight: var(--weight-medium, 500);
+    }
+    .field-label {
+      color: var(--text-primary, #111827);
+    }
+    .field-help {
+      color: var(--text-muted, #6b7280);
+      font-size: var(--text-xs, 0.75rem);
+      font-weight: var(--weight-normal, 400);
+      line-height: var(--leading-relaxed, 1.6);
+    }
+    .field-input {
+      display: flex;
+      align-items: center;
+      background: var(--bg-primary, #fff);
+      border: 1px solid var(--border-default, #d1d5db);
+      border-radius: var(--radius-sm, 6px);
+    }
+    .field-input:focus-within {
+      outline: 2px solid var(--accent-primary, #2563eb);
+      outline-offset: 1px;
+    }
+    .field-input input {
+      flex: 1;
+      min-width: 0;
+      min-height: 40px;
+      padding: 0 var(--space-sm, 12px);
+      color: var(--text-primary, #111827);
+      background: transparent;
+      border: none;
+      font: inherit;
+      outline: none;
+    }
+    .field-input input:disabled {
+      opacity: 0.75;
+      cursor: not-allowed;
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--space-sm, 12px);
+      min-height: 40px;
+      padding-top: var(--space-md, 16px);
+      border-top: 1px solid var(--border-default, #d1d5db);
+    }
+    button {
+      min-height: 34px;
+      padding: 0 var(--space-md, 16px);
+      color: var(--button-primary-fg, #fff);
+      background: var(--accent-primary, #2563eb);
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm, 6px);
+      font: inherit;
+      font-weight: var(--weight-medium, 500);
+      cursor: pointer;
+    }
+    .clear-secret {
+      flex-shrink: 0;
+      margin-right: var(--space-xs, 8px);
+      min-height: 28px;
+      padding: 0 var(--space-sm, 12px);
+      color: var(--text-muted, #6b7280);
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm, 6px);
+      font: inherit;
+      font-size: var(--text-xs, 0.75rem);
+      font-weight: var(--weight-semibold, 600);
+      cursor: pointer;
+    }
+    .clear-secret:hover:not(:disabled) {
+      color: var(--text-primary, #111827);
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+    [data-status] {
+      flex: 1;
+      min-width: 0;
+      font-size: var(--text-sm, 0.875rem);
+    }
+    [data-kind="error"] {
+      color: var(--status-unhealthy, #dc2626);
+    }
+    [data-kind="success"] {
+      color: var(--status-healthy, #15803d);
+    }
+    [data-kind="info"] {
+      color: var(--text-muted, #6b7280);
+    }
+    .loading {
+      color: var(--text-muted, #6b7280);
+      font-size: var(--text-sm, 0.875rem);
+    }
     @media (max-width: 480px) {
       .panel-header,
-      .surface { padding: var(--space-md, 16px); }
-      .actions { align-items: stretch; flex-direction: column; }
-      [data-status] { width: 100%; }
-      .actions > button { width: 100%; }
+      .surface {
+        padding: var(--space-md, 16px);
+      }
+      .actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      [data-status] {
+        width: 100%;
+      }
+      .actions > button {
+        width: 100%;
+      }
     }
   </style>
   <section class="panel">
@@ -41,7 +171,12 @@
     <form class="surface">
       <div class="fields" data-fields></div>
       <div class="actions">
-        <span data-status></span>
+        <span
+          data-status
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></span>
         <button type="submit"></button>
       </div>
     </form>

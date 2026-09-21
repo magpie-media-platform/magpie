@@ -1,3 +1,4 @@
+import type { ScalarPatch } from '@/types/patch';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
@@ -33,6 +34,8 @@ export interface ApiWishlist {
 
     enabled: boolean;
 
+    monitoring?: boolean | null;
+
     lastSyncedAt?: string | null;
 
     createdAt: string;
@@ -56,13 +59,14 @@ export interface ApiWishlist {
 }
 
 export interface WishlistPatch {
-    contentFilterId?: { value: string | null };
-    criteria?: { value: ContentFilterCriteria };
-    qualityTierListId?: { value: string | null };
-    rootFolderId?: { value: string | null };
-    name?: { value: string };
-    ownerLock?: { value: boolean };
-    enabled?: { value: boolean };
+    contentFilterId?: ScalarPatch<string | null>;
+    criteria?: ScalarPatch<ContentFilterCriteria>;
+    qualityTierListId?: ScalarPatch<string | null>;
+    rootFolderId?: ScalarPatch<string | null>;
+    name?: ScalarPatch<string>;
+    ownerLock?: ScalarPatch<boolean>;
+    enabled?: ScalarPatch<boolean>;
+    monitoring?: ScalarPatch<boolean | null>;
     tags?: {
         add?: string[];
         remove?: string[];
@@ -83,12 +87,12 @@ interface WishlistCreate {
     ownerLock?: boolean;
 
     enabled?: boolean;
+
+    monitoring?: boolean | null;
 }
 
 const wishlistQueryKeys = {
-    all: ['wishlists'] as const,
     list: () => ['wishlists', 'list'] as const,
-    myList: () => ['wishlists', 'my'] as const,
     detail: (id: string) => ['wishlists', 'detail', id] as const,
 };
 
@@ -104,11 +108,7 @@ async function createWishlist(data: WishlistCreate): Promise<ApiWishlist> {
     return apiPost<ApiWishlist>('/wishlists', data);
 }
 
-async function patchMyWishlist(id: string, patch: WishlistPatch): Promise<void> {
-    return apiPatch(`/wishlists/${id}`, patch);
-}
-
-async function patchSharedWishlist(id: string, patch: WishlistPatch): Promise<void> {
+async function patchWishlist(id: string, patch: WishlistPatch): Promise<void> {
     return apiPatch(`/wishlists/${id}`, patch);
 }
 
@@ -124,7 +124,7 @@ function deleteFilterQuery(deleteFilter: boolean): string {
     return deleteFilter ? '?deleteFilter=true' : '';
 }
 
-async function deleteMyWishlist(id: string, deleteFilter: boolean): Promise<void> {
+async function deleteWishlistById(id: string, deleteFilter: boolean): Promise<void> {
     return apiDelete(`/wishlists/${id}${deleteFilterQuery(deleteFilter)}`);
 }
 
@@ -133,10 +133,6 @@ async function refreshMyWishlist(id: string): Promise<JobActionDisposition> {
         jobType: 'WishlistRefreshItem',
         parameters: { wishlistId: id },
     });
-}
-
-async function deleteUserWishlist(id: string, deleteFilter: boolean): Promise<void> {
-    return apiDelete(`/wishlists/${id}${deleteFilterQuery(deleteFilter)}`);
 }
 
 export function useWishlists() {
@@ -156,22 +152,11 @@ export function useWishlists() {
         mutationFn: createWishlist,
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.list() });
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.myList() });
         },
     });
 
-    const patchMyMutation = useMutation({
-        mutationFn: ({ id, patch }: { id: string; patch: WishlistPatch }) => patchMyWishlist(id, patch),
-        onSuccess: (_data, { id }) => {
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.list() });
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.myList() });
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.detail(id) });
-            void queryClient.invalidateQueries({ queryKey: tagQueryKeys.all });
-        },
-    });
-
-    const patchSharedMutation = useMutation({
-        mutationFn: ({ id, patch }: { id: string; patch: WishlistPatch }) => patchSharedWishlist(id, patch),
+    const patchMutation = useMutation({
+        mutationFn: ({ id, patch }: { id: string; patch: WishlistPatch }) => patchWishlist(id, patch),
         onSuccess: (_data, { id }) => {
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.list() });
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.detail(id) });
@@ -183,7 +168,6 @@ export function useWishlists() {
         mutationFn: lockWishlist,
         onSuccess: (_data, id) => {
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.list() });
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.myList() });
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.detail(id) });
         },
     });
@@ -192,24 +176,13 @@ export function useWishlists() {
         mutationFn: unlockWishlist,
         onSuccess: (_data, id) => {
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.list() });
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.myList() });
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.detail(id) });
         },
     });
 
-    const deleteMyMutation = useMutation({
-        mutationFn: ({ id, deleteFilter }: { id: string; deleteFilter: boolean }) => deleteMyWishlist(id, deleteFilter),
-        onSuccess: (_data, { id }) => {
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.list() });
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.myList() });
-            void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.detail(id) });
-            void queryClient.invalidateQueries({ queryKey: contentFilterQueryKeys.all });
-        },
-    });
-
-    const deleteUserMutation = useMutation({
-        mutationFn: ({ userId: _userId, id, deleteFilter }: { userId: string; id: string; deleteFilter: boolean }) =>
-            deleteUserWishlist(id, deleteFilter),
+    const deleteMutation = useMutation({
+        mutationFn: ({ id, deleteFilter }: { id: string; deleteFilter: boolean }) =>
+            deleteWishlistById(id, deleteFilter),
         onSuccess: (_data, { id }) => {
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.list() });
             void queryClient.invalidateQueries({ queryKey: wishlistQueryKeys.detail(id) });
@@ -219,13 +192,8 @@ export function useWishlists() {
 
     const wishlists: ApiWishlist[] = wishlistsQuery.data ?? [];
 
-    const updateWishlist = async (id: string, patch: WishlistPatch, isOwner: boolean): Promise<void> => {
-        if (isOwner) {
-            await patchMyMutation.mutateAsync({ id, patch });
-        } else {
-            await patchSharedMutation.mutateAsync({ id, patch });
-        }
-    };
+    const updateWishlist = (id: string, patch: WishlistPatch): Promise<void> =>
+        patchMutation.mutateAsync({ id, patch });
 
     const toggleLock = async (id: string, lock: boolean): Promise<void> => {
         if (lock) {
@@ -235,18 +203,8 @@ export function useWishlists() {
         }
     };
 
-    const deleteWishlist = async (
-        id: string,
-        isOwner: boolean,
-        deleteFilter: boolean,
-        ownerUserId?: string | null,
-    ): Promise<void> => {
-        if (isOwner) {
-            await deleteMyMutation.mutateAsync({ id, deleteFilter });
-        } else if (ownerUserId) {
-            await deleteUserMutation.mutateAsync({ userId: ownerUserId, id, deleteFilter });
-        }
-    };
+    const deleteWishlist = (id: string, deleteFilter: boolean): Promise<void> =>
+        deleteMutation.mutateAsync({ id, deleteFilter });
 
     return {
         wishlists,
@@ -258,13 +216,13 @@ export function useWishlists() {
         isCreating: createMutation.isPending,
 
         updateWishlist,
-        isUpdating: patchMyMutation.isPending || patchSharedMutation.isPending,
+        isUpdating: patchMutation.isPending,
 
         toggleLock,
         isLocking: lockMutation.isPending || unlockMutation.isPending,
 
         deleteWishlist,
-        isDeleting: deleteMyMutation.isPending || deleteUserMutation.isPending,
+        isDeleting: deleteMutation.isPending,
 
         refetch: wishlistsQuery.refetch,
     };

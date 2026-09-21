@@ -1,8 +1,10 @@
 name: magpie-integration
 
+x-app-image: &app-image magpie-integration:latest
+
 services:
   magpie:
-    image: magpie-integration:latest
+    image: *app-image
     build:
       context: ../..
       dockerfile: tests/integration/Dockerfile.host
@@ -12,8 +14,7 @@ services:
     environment:
       Magpie__Database__Provider: "${MAGPIE_DATABASE_PROVIDER:-sqlite}"
       Magpie__Database__ConnectionString: "${MAGPIE_DATABASE_CONNECTION_STRING:-Data Source=/app/data/magpie.db}"
-      Magpie__Auth__RateLimit__LoginPermitLimit: "0"
-      Magpie__Auth__RateLimit__RefreshPermitLimit: "0"
+      Search__CoalescingWindow: "00:00:01"
       TZ: UTC
     init: true
     depends_on:
@@ -39,27 +40,26 @@ services:
       dockerfile: tests/integration/Dockerfile.host
       target: package-feed
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8081/index.json"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--no-check-certificate", "https://127.0.0.1:8081/index.json"]
       interval: 2s
       timeout: 3s
       retries: 15
     restart: "no"
 
   tests:
-    container_name: magpie-integration-tests
     image: magpie-integration-tests:latest
     build:
       context: ../..
       dockerfile: tests/integration/Dockerfile.tests
+      args:
+        APP_IMAGE: *app-image
     depends_on:
       magpie:
         condition: service_healthy
     environment:
       MAGPIE_BASE_URL: http://magpie:8080
       MAGPIE_SKIP_BOOT: "true"
-      MAGPIE_INTEGRATION_PROFILE: "${MAGPIE_INTEGRATION_PROFILE:-sqlite-single-node}"
-      # Remote mode prevents the tests process from opening the host's writable SQLite file concurrently.
-      MAGPIE_CLI_MODE: "${MAGPIE_CLI_MODE:-remote}"
+      # The CLI runs against the host over HTTP so that this container never opens the writable SQLite file.
       MAGPIE_CLI_URL: http://magpie:8080
       MAGPIE_CLI_APPHOST: /app/Magpie.App
       Magpie__Database__Provider: "${MAGPIE_DATABASE_PROVIDER:-sqlite}"

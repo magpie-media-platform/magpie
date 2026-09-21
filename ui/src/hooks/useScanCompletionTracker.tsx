@@ -10,7 +10,7 @@ import { useQueryClient } from '@tanstack/react-query';
 interface TrackedScan {
     executionId: string;
     rootFolderName: string;
-    beforeCount: number;
+    beforeCount: number | null;
 }
 
 export interface ScanBatchInfo {
@@ -28,7 +28,7 @@ const ScanCompletionTrackerContext = createContext<ScanCompletionTrackerValue | 
 
 export function ScanCompletionTrackerProvider({ children }: { children: ReactNode }) {
     const [scans, setScans] = useState<TrackedScan[]>([]);
-    const batchBaselineRef = useRef<Map<string, number>>(new Map());
+    const batchBaselineRef = useRef<Map<string, number | null>>(new Map());
 
     const removeScan = useCallback((executionId: string) => {
         setScans((prev) => prev.filter((s) => s.executionId !== executionId));
@@ -42,9 +42,10 @@ export function ScanCompletionTrackerProvider({ children }: { children: ReactNod
             if (batch && batch.index < batch.total) {
                 return;
             }
-            const beforeCount = batch
-                ? (batchBaselineRef.current.get(batch.id) ?? (await fetchCurrentPendingCount()))
-                : await fetchCurrentPendingCount();
+            const beforeCount =
+                batch && batchBaselineRef.current.has(batch.id)
+                    ? (batchBaselineRef.current.get(batch.id) ?? null)
+                    : await fetchCurrentPendingCount();
             if (batch) {
                 batchBaselineRef.current.delete(batch.id);
             }
@@ -84,20 +85,20 @@ export function useScanCompletionTracker(): ScanCompletionTrackerValue {
     return ctx;
 }
 
-async function fetchCurrentPendingCount(): Promise<number> {
+async function fetchCurrentPendingCount(): Promise<number | null> {
     try {
         const url = buildUrl('/import/candidates', { pageSize: 1 });
         const response = await apiGet<PagedLibraryImportCandidates>(url);
         return response.totalItems;
     } catch {
-        return 0;
+        return null;
     }
 }
 
 interface ScanWatcherProps {
     executionId: string;
     rootFolderName: string;
-    beforeCount: number;
+    beforeCount: number | null;
     onSettled: () => void;
 }
 
@@ -144,7 +145,7 @@ function ScanWatcher({ executionId, rootFolderName, beforeCount, onSettled }: Sc
 
 interface EmitCompletionToastArgs {
     rootFolderName: string;
-    beforeCount: number;
+    beforeCount: number | null;
     toast: ReturnType<typeof useToast>['toast'];
     navigate: ReturnType<typeof useNavigate>;
     queryClient: ReturnType<typeof useQueryClient>;
@@ -158,9 +159,26 @@ async function emitCompletionToast({
     queryClient,
 }: EmitCompletionToastArgs): Promise<void> {
     const afterCount = await fetchCurrentPendingCount();
-    const queued = Math.max(0, afterCount - beforeCount);
 
     await queryClient.invalidateQueries({ queryKey: libraryImportCandidateQueryKeys.all });
+
+    if (beforeCount === null || afterCount === null) {
+        toast({
+            title: 'Scan complete',
+            description: `"${rootFolderName}" finished, but Magpie could not read the import queue.`,
+            variant: 'info',
+            action: {
+                label: 'Open import',
+                altText: 'Open the library import page',
+                onClick: () => {
+                    void navigate('/library/import');
+                },
+            },
+        });
+        return;
+    }
+
+    const queued = Math.max(0, afterCount - beforeCount);
 
     if (queued === 0) {
         toast({

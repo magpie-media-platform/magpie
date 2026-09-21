@@ -23,6 +23,8 @@ internal sealed class ContentMetadataProvider(
     private const string SeasonLevel = "season";
     private const string EpisodeLevel = "episode";
 
+    private static readonly string[] ShowEmbeds = ["episodes", "images", "akas", "seasons"];
+
     public string ProviderType => Constants.ProviderType;
 
     public IEnumerable<string> SupportedContentTypes => [TvContentType];
@@ -39,7 +41,8 @@ internal sealed class ContentMetadataProvider(
             return null;
         }
 
-        return await client.GetShowAsync(matched.Id, cancellationToken).ConfigureAwait(false);
+        return await client.GetShowWithEmbedsAsync(matched.Id, ShowEmbeds, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<ContentHierarchyMetadataResult?> TryGetMetadataAsync(
@@ -128,7 +131,8 @@ internal sealed class ContentMetadataProvider(
             return [];
         }
 
-        var show = await client.GetShowWithCreditsAsync(showId, cancellationToken).ConfigureAwait(false);
+        var show = await client.GetShowWithEmbedsAsync(showId, ["cast", "crew"], cancellationToken)
+            .ConfigureAwait(false);
         if (show is null || show.Id <= 0)
         {
             return [];
@@ -194,7 +198,8 @@ internal sealed class ContentMetadataProvider(
             int.TryParse(tvmazeId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var showId) &&
             showId > 0)
         {
-            var byId = await client.GetShowAsync(showId, cancellationToken).ConfigureAwait(false);
+            var byId = await client.GetShowWithEmbedsAsync(showId, ShowEmbeds, cancellationToken)
+                .ConfigureAwait(false);
             if (byId is not null)
             {
                 return byId;

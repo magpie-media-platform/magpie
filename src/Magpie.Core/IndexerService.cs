@@ -9,7 +9,6 @@ using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Core.Observability;
-using Magpie.Core.Releases;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
@@ -20,7 +19,6 @@ using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core;
@@ -38,25 +36,75 @@ internal sealed class IndexerService(
     ISettingsService settingsService,
     ITransactionManager transactionManager,
     IEventBus eventBus,
-    IServiceProvider serviceProvider,
+    IReleaseSearchQueryExecutor releaseSearchQueryExecutor,
     TimeProvider timeProvider,
     ILogger<IndexerService> logger) : IIndexerService
 {
     private const string DefaultConnectionName = "Default";
-    private const int UnhealthyFailureThreshold = 3;
-
     private readonly Dictionary<string, IIndexerFeedProvider> _feedProviders = BuildFeedProviderMap(feedProviders);
 
-    private static int ResolveConsecutiveFailures(int currentFailures, ConfigurationTestResult result)
-        => result.Success ? 0 : Math.Max(0, currentFailures) + 1;
+    private static int NextConsecutiveFailures(ConfigurationTestResult result, int currentFailures) =>
+        result.Success ? 0 : Math.Max(0, currentFailures) + 1;
 
-    private static IntegrationHealthStatus ResolveFailureStatus(ConfigurationFailureKind failureKind, int failures)
+    private static IntegrationHealthStatus ToHealthStatus(ConfigurationFailureKind failureKind, int failures)
     {
-        var unhealthy = failures >= UnhealthyFailureThreshold ||
+        const int unhealthyFailureThreshold = 3;
+        var unhealthy = failures >= unhealthyFailureThreshold ||
             failureKind is ConfigurationFailureKind.Auth
                 or ConfigurationFailureKind.Fatal
                 or ConfigurationFailureKind.NotFound;
         return unhealthy ? IntegrationHealthStatus.Unhealthy : IntegrationHealthStatus.Degraded;
+    }
+
+    private static async Task<ConfigurationTestResult> WithConnectionTimeoutAsync(
+        Func<CancellationToken, Task<ConfigurationTestResult>> test,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutSource = timeout is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource?.CancelAfter(timeout.GetValueOrDefault());
+
+        try
+        {
+            var pending = test(timeoutSource?.Token ?? cancellationToken);
+            return timeout is { } limit
+                ? await pending.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
+                : await pending.ConfigureAwait(false);
+        }
+        catch (TimeoutException) when (timeout is not null)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "Connection test timed out.",
+                FailureKind = ConfigurationFailureKind.Transient
+            };
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
+            timeoutSource is { IsCancellationRequested: true })
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "Connection test timed out.",
+                FailureKind = ConfigurationFailureKind.Transient
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = ex.Message,
+                FailureKind = ConfigurationFailureKind.Fatal
+            };
+        }
     }
 
     private static Dictionary<string, IIndexerFeedProvider> BuildFeedProviderMap(
@@ -106,6 +154,29 @@ internal sealed class IndexerService(
             Message = string.Join("; ", failures.Select(result => result.Message)),
             FailureKind = failures[0].FailureKind,
         };
+    }
+
+    private IIndexerIntegration? ResolveIntegration(Indexer? indexer)
+    {
+        if (indexer is null)
+        {
+            return null;
+        }
+
+        var native = indexerIntegrations.LastOrDefault(integration =>
+            string.Equals(integration.ProviderType, indexer.ProviderType, StringComparison.Ordinal));
+        if (native is not null)
+        {
+            return native;
+        }
+
+        if (string.IsNullOrWhiteSpace(indexer.DefinitionType) || string.IsNullOrWhiteSpace(indexer.SchemaData))
+        {
+            return null;
+        }
+
+        return runtimeIndexerIntegrationFactories.LastOrDefault(factory =>
+            string.Equals(factory.DefinitionType, indexer.DefinitionType, StringComparison.Ordinal))?.Create(indexer);
     }
 
     public async Task<IReadOnlyList<Indexer>> ListAsync(CancellationToken cancellationToken = default)
@@ -166,23 +237,21 @@ internal sealed class IndexerService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(patch);
-
         var indexer = await indexerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
         if (indexer is null)
         {
             return false;
         }
 
-        if (patch.Name is not null && string.IsNullOrWhiteSpace(patch.Name))
+        if (patch.Name is not null && string.IsNullOrWhiteSpace(patch.Name.Value))
         {
             throw new ArgumentException("Name is required.");
         }
 
         if (patch.ProviderType is not null &&
-            !string.Equals(patch.ProviderType, indexer.ProviderType, StringComparison.Ordinal))
+            !string.Equals(patch.ProviderType.Value, indexer.ProviderType, StringComparison.Ordinal))
         {
-            var candidate = indexer with { ProviderType = patch.ProviderType };
+            var candidate = indexer with { ProviderType = patch.ProviderType.Value };
             if (string.IsNullOrWhiteSpace(candidate.ProviderType))
             {
                 throw new ArgumentException("Provider type is required.");
@@ -195,36 +264,9 @@ internal sealed class IndexerService(
                 throw new ArgumentException(
                     $"No indexer integration is available for provider type {candidate.ProviderType}.");
             }
-
-            indexer.ProviderType = patch.ProviderType;
         }
 
-        if (patch.Name is not null)
-        {
-            indexer.Name = patch.Name;
-        }
-
-        if (patch.Description is not null)
-        {
-            indexer.Description = patch.Description;
-        }
-
-        if (patch.Availability is { } availability)
-        {
-            indexer.Availability = availability;
-        }
-
-        if (patch.Categories is not null)
-        {
-            indexer.Categories = patch.Categories;
-        }
-
-        if (patch.Languages is not null)
-        {
-            indexer.Languages = patch.Languages;
-        }
-
-        return await indexerRepository.UpdateAsync(indexer, actingUserId, cancellationToken)
+        return await indexerRepository.PatchAsync(patch with { Id = id }, actingUserId, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -233,25 +275,9 @@ internal sealed class IndexerService(
         var deleted = await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
-                const int pageSize = 500;
-                var connections = new List<IndexerConnection>();
-                var pageNumber = 1;
-                while (true)
-                {
-                    var page = await indexerConnectionRepository.QueryAsync(
-                        new IndexerConnectionQuery { IndexerId = id },
-                        new() { PageNumber = pageNumber, PageSize = pageSize },
-                        null,
-                        ct).ConfigureAwait(false);
-                    var pageItems = page.Items.ToList();
-                    connections.AddRange(pageItems);
-                    if (pageItems.Count < pageSize)
-                    {
-                        break;
-                    }
-
-                    pageNumber++;
-                }
+                var connections = await indexerConnectionRepository.QueryAllAsync(
+                    new IndexerConnectionQuery { IndexerId = id },
+                    cancellationToken: ct).ConfigureAwait(false);
 
                 foreach (var connection in connections)
                 {
@@ -271,7 +297,7 @@ internal sealed class IndexerService(
         CancellationToken cancellationToken = default)
     {
         var indexer = await indexerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        var integration = indexer is null ? null : ResolveIntegration(indexer);
+        var integration = ResolveIntegration(indexer);
 
         return integration?.SettingsSchema ?? [];
     }
@@ -282,12 +308,11 @@ internal sealed class IndexerService(
         IReadOnlyDictionary<string, string> settings,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(settings);
-
         IIndexerIntegration? integration = null;
         if (!string.IsNullOrWhiteSpace(providerType))
         {
-            integration = ResolveIntegration(new Indexer { ProviderType = providerType, Name = string.Empty });
+            integration = ResolveIntegration(
+                new Indexer { ProviderType = providerType, Name = string.Empty });
         }
 
         Indexer? indexer = null;
@@ -295,7 +320,7 @@ internal sealed class IndexerService(
         if (id is { } indexerId)
         {
             indexer = await indexerRepository.GetByIdAsync(indexerId, cancellationToken).ConfigureAwait(false);
-            integration ??= indexer is null ? null : ResolveIntegration(indexer);
+            integration ??= ResolveIntegration(indexer);
 
             var connections = await indexerConnectionRepository
                 .QueryAsync(
@@ -366,25 +391,9 @@ internal sealed class IndexerService(
             return Failure("The indexer was not found.", ConfigurationFailureKind.NotFound);
         }
 
-        const int pageSize = 500;
-        var connections = new List<IndexerConnection>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await indexerConnectionRepository.QueryAsync(
-                new IndexerConnectionQuery { IndexerId = id },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            connections.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var connections = await indexerConnectionRepository.QueryAllAsync(
+            new IndexerConnectionQuery { IndexerId = id },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var targets = connectionId is { } cid
             ? connections.Where(connection => connection.Id == cid).ToList()
@@ -414,30 +423,11 @@ internal sealed class IndexerService(
         Guid indexerId,
         CancellationToken cancellationToken = default)
     {
-        const int pageSize = 500;
-        var connections = new List<IndexerConnection>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await indexerConnectionRepository.QueryAsync(
-                new IndexerConnectionQuery { IndexerId = indexerId },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            connections.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        return connections;
+        return await indexerConnectionRepository.QueryAllAsync(
+            new IndexerConnectionQuery { IndexerId = indexerId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
-    /// <inheritdoc />
     public async Task<IReadOnlyList<IndexerSearchCapabilities>> ListCapabilitiesAsync(
         CancellationToken cancellationToken = default)
     {
@@ -464,13 +454,10 @@ internal sealed class IndexerService(
         return capabilities;
     }
 
-    /// <inheritdoc />
     public async Task<IndexerSearchResponse?> SearchAsync(
         IndexerSearchRequest request,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-
         var selectedIds = request.ConnectionIds.ToHashSet();
         var connections = (await indexerConnectionRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
             .Where(connection => selectedIds.Contains(connection.Id))
@@ -486,7 +473,7 @@ internal sealed class IndexerService(
             .Select(connection => connection.IndexerId)
             .Distinct()
             .ToHashSet();
-        var phases = await serviceProvider.GetRequiredService<IReleaseSearchQueryExecutor>().ExecuteAsync(
+        var phases = await releaseSearchQueryExecutor.ExecuteAsync(
             [new ReleaseSearchPhase { Request = request.Query, ReleaseFacts = [] }],
             [],
             indexerIds,
@@ -512,12 +499,6 @@ internal sealed class IndexerService(
             });
         }
 
-        if (results.Count > 0 &&
-            results.All(result => result.SkippedReason == ReleaseSearchQueryExecutor.RequestNotSupportedReason))
-        {
-            return null;
-        }
-
         return new IndexerSearchResponse
         {
             Candidates =
@@ -539,14 +520,12 @@ internal sealed class IndexerService(
         };
     }
 
-    /// <inheritdoc />
     public async Task<Guid?> MatchAsync(
         Guid contentHierarchyItemId,
         Release release,
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(release);
         ArgumentException.ThrowIfNullOrWhiteSpace(release.Title);
 
         var item = await contentHierarchyItemRepository
@@ -583,8 +562,6 @@ internal sealed class IndexerService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(create);
-
         var indexer = await indexerRepository.GetByIdAsync(indexerId, cancellationToken).ConfigureAwait(false);
 
         var connection = new IndexerConnection
@@ -610,8 +587,6 @@ internal sealed class IndexerService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(patch);
-
         var connection = await indexerConnectionRepository.GetByIdAsync(connectionId, cancellationToken)
             .ConfigureAwait(false);
         if (connection is null || connection.IndexerId != indexerId)
@@ -706,8 +681,6 @@ internal sealed class IndexerService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(feed);
-
         return await indexerFeedRepository.CreateAsync(feed, actingUserId, cancellationToken)
             .ConfigureAwait(false);
     }
@@ -718,40 +691,7 @@ internal sealed class IndexerService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(patch);
-
-        var feed = await indexerFeedRepository.GetByIdAsync(feedId, cancellationToken).ConfigureAwait(false);
-        if (feed is null)
-        {
-            return false;
-        }
-
-        if (patch.ProviderType is not null)
-        {
-            feed.ProviderType = patch.ProviderType;
-        }
-
-        if (patch.Name is not null)
-        {
-            feed.Name = patch.Name;
-        }
-
-        if (patch.Description is not null)
-        {
-            feed.Description = patch.Description;
-        }
-
-        if (patch.Settings is not null)
-        {
-            feed.Settings = patch.Settings;
-        }
-
-        if (patch.Enabled is { } enabled)
-        {
-            feed.Enabled = enabled;
-        }
-
-        return await indexerFeedRepository.UpdateAsync(feed, actingUserId, cancellationToken)
+        return await indexerFeedRepository.PatchAsync(patch with { Id = feedId }, actingUserId, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -763,25 +703,9 @@ internal sealed class IndexerService(
         return await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
-                const int pageSize = 500;
-                var indexers = new List<Indexer>();
-                var pageNumber = 1;
-                while (true)
-                {
-                    var page = await indexerRepository.QueryAsync(
-                        new IndexerQuery { FeedId = feedId },
-                        new() { PageNumber = pageNumber, PageSize = pageSize },
-                        null,
-                        ct).ConfigureAwait(false);
-                    var pageItems = page.Items.ToList();
-                    indexers.AddRange(pageItems);
-                    if (pageItems.Count < pageSize)
-                    {
-                        break;
-                    }
-
-                    pageNumber++;
-                }
+                var indexers = await indexerRepository.QueryAllAsync(
+                    new IndexerQuery { FeedId = feedId },
+                    cancellationToken: ct).ConfigureAwait(false);
 
                 foreach (var indexer in indexers)
                 {
@@ -799,8 +723,6 @@ internal sealed class IndexerService(
         IReadOnlyDictionary<string, string> settings,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(settings);
-
         var provider = ResolveFeedProvider(providerType);
 
         IndexerFeed? feed = null;
@@ -869,8 +791,10 @@ internal sealed class IndexerService(
         Guid? userId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(feed);
-        ArgumentNullException.ThrowIfNull(discovered);
+        if (discovered.Count == 0)
+        {
+            return;
+        }
 
         await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
@@ -880,6 +804,10 @@ internal sealed class IndexerService(
                 var adoptsOrphans = feeds.All(other => other.Id == feed.Id);
 
                 var stored = await indexerRepository.ListAllAsync(ct).ConfigureAwait(false);
+                var owned = stored
+                    .Where(indexer => indexer.FeedId == feed.Id)
+                    .Select(indexer => indexer.Id)
+                    .ToHashSet();
                 var candidates = stored
                     .Where(indexer => indexer.FeedId == feed.Id ||
                         (adoptsOrphans && indexer.FeedId is null && indexer.DefinitionType is not null))
@@ -931,7 +859,7 @@ internal sealed class IndexerService(
                 }
 
                 var obsolete = candidates
-                    .Where(indexer => !retainedIds.Contains(indexer.Id))
+                    .Where(indexer => owned.Contains(indexer.Id) && !retainedIds.Contains(indexer.Id))
                     .ToArray();
 
                 foreach (var indexer in obsolete)
@@ -939,8 +867,8 @@ internal sealed class IndexerService(
                     ct.ThrowIfCancellationRequested();
 
                     logger.LogInformation(
-                        "The indexer service removed indexer {IndexerName} ({ProviderType}) from feed {FeedName}. " +
-                        "A successful non-empty sync did not retain this definition",
+                        "The indexer service removed indexer {IndexerName} ({ProviderType}) from feed " +
+                        "{FeedName} because a non-empty sync did not retain it",
                         indexer.Name,
                         indexer.ProviderType,
                         feed.Name);
@@ -994,10 +922,10 @@ internal sealed class IndexerService(
         var result = await TestIndexerConnectionCoreAsync(indexer, connection, timeout, cancellationToken)
             .ConfigureAwait(false);
 
-        var failures = ResolveConsecutiveFailures(connection.ConsecutiveFailures, result);
+        var failures = NextConsecutiveFailures(result, connection.ConsecutiveFailures);
         var status = result.Success
             ? IntegrationHealthStatus.Healthy
-            : ResolveFailureStatus(result.FailureKind, failures);
+            : ToHealthStatus(result.FailureKind, failures);
 
         await indexerConnectionRepository.PatchAsync(
             new IndexerConnectionPatch
@@ -1096,69 +1024,8 @@ internal sealed class IndexerService(
             };
         }
 
-        using var timeoutSource = timeout is null
-            ? null
-            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource?.CancelAfter(timeout.GetValueOrDefault());
-        var testCancellationToken = timeoutSource?.Token ?? cancellationToken;
-
-        try
-        {
-            var test = integration.TestConnectionAsync(connection.Settings, testCancellationToken);
-            return timeout is { } limit
-                ? await test.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
-                : await test.ConfigureAwait(false);
-        }
-        catch (TimeoutException) when (timeout is not null)
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
-            timeoutSource is { IsCancellationRequested: true })
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = ex.Message,
-                FailureKind = ConfigurationFailureKind.Fatal
-            };
-        }
-    }
-
-    private IIndexerIntegration? ResolveIntegration(Indexer indexer)
-    {
-        var native = indexerIntegrations.LastOrDefault(integration =>
-            string.Equals(integration.ProviderType, indexer.ProviderType, StringComparison.Ordinal));
-        if (native is not null)
-        {
-            return native;
-        }
-
-        if (string.IsNullOrWhiteSpace(indexer.DefinitionType) || string.IsNullOrWhiteSpace(indexer.SchemaData))
-        {
-            return null;
-        }
-
-        return runtimeIndexerIntegrationFactories.LastOrDefault(factory =>
-            string.Equals(factory.DefinitionType, indexer.DefinitionType, StringComparison.Ordinal))?.Create(indexer);
+        var test = (CancellationToken ct) => integration.TestConnectionAsync(connection.Settings, ct);
+        return await WithConnectionTimeoutAsync(test, timeout, cancellationToken).ConfigureAwait(false);
     }
 
     private IIndexerFeedProvider? ResolveFeedProvider(string? providerType)

@@ -1,3 +1,4 @@
+import type { ScalarPatch } from '@/types/patch';
 import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
@@ -36,8 +37,6 @@ interface CreatePackageSourceInput {
     secret?: string | null;
     secretReference?: string | null;
 }
-
-type ScalarPatch<T> = { value: T };
 
 interface PatchPackageSourceInput {
     name?: ScalarPatch<string>;

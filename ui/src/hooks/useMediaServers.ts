@@ -1,3 +1,4 @@
+import type { ScalarPatch, DictionaryPatch } from '@/types/patch';
 import { buildQueryKeys, useCrudResource } from './useCrudResource';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { healthStatusLabels, healthStatusVariants } from '@/types/healthStatus';
@@ -35,13 +36,9 @@ export interface ApiMediaServer {
 }
 
 interface MediaServerPatch {
-    name?: { value: string };
-    enabled?: { value: boolean };
-    settings?: {
-        add?: Record<string, string>;
-        remove?: string[];
-        update?: Record<string, string>;
-    };
+    name?: ScalarPatch<string>;
+    enabled?: ScalarPatch<boolean>;
+    settings?: DictionaryPatch<string, string>;
     tags?: {
         add?: string[];
         remove?: string[];

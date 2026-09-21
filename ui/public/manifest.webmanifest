@@ -1,0 +1,22 @@
+{
+    "name": "Magpie",
+    "short_name": "Magpie",
+    "description": "Media acquisition and library management.",
+    "id": "/",
+    "start_url": "./",
+    "scope": "./",
+    "display": "standalone",
+    "display_override": ["standalone", "minimal-ui"],
+    "background_color": "#1a1b26",
+    "theme_color": "#1a1b26",
+    "icons": [
+        { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+        { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+        { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    ],
+    "shortcuts": [
+        { "name": "Downloads", "url": "./downloads" },
+        { "name": "Wanted", "url": "./wanted" },
+        { "name": "Add content", "url": "./library/add" }
+    ]
+}

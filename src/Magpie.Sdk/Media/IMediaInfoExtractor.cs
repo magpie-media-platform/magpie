@@ -14,7 +14,7 @@ public interface IMediaInfoExtractor
     /// Extracts media info from a media file.
     /// </summary>
     /// <param name="filePath">The path of the media file</param>
-    /// <param name="cancellationToken">The cancellation token</param>
-    /// <returns>The media info, or <c>null</c> when it cannot be extracted</returns>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The media info, or <see langword="null"/> when it cannot be extracted</returns>
     Task<MediaInfo?> ExtractAsync(string filePath, CancellationToken cancellationToken = default);
 }

@@ -1,6 +1,1 @@
-export {
-    CdnPhosphorIcon,
-    buildPhosphorIconUrl,
-    normalizePhosphorIconName,
-    type CdnPhosphorIconProps,
-} from './CdnPhosphorIcon';
+export { CdnPhosphorIcon, type CdnPhosphorIconProps } from './CdnPhosphorIcon';

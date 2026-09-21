@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/Badge';
 import { ContentFulfillmentBadge } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
+import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
 import type { ContentListItem } from '@/types';
 
@@ -17,11 +18,15 @@ interface LibraryMobileCardProps {
 }
 
 export function LibraryMobileCard({ item, selectionMode, selected, onToggle, onLongPress }: LibraryMobileCardProps) {
+    const { contentTypes } = useLibraryTypes();
     const monitored = item.effectiveMonitoring;
     const monitoringLabel = monitored ? 'Monitored' : 'Not monitored';
     const monitoringTitle = item.monitoring === null ? `${monitoringLabel} (inherited)` : monitoringLabel;
     const MonitoringIcon = monitored ? EyeIcon : EyeSlashIcon;
-    const kindLabel = resolveContentTypeLabel({ levelLabel: item.levelLabel, contentType: item.contentType });
+    const kindLabel = resolveContentTypeLabel(
+        { level: item.level, levelLabel: item.levelLabel, contentType: item.contentType },
+        contentTypes,
+    );
 
     return (
         <MobileMediaCard

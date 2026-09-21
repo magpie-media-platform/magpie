@@ -1,41 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-import { queryClient, retryUnlessNotFound, POLLING_INTERVALS } from './queryClient';
+import { ApiError } from './api';
+import { retryUnlessNotFound } from './queryClient';
 
-describe('queryClient', () => {
-    it('exports a QueryClient instance', () => {
-        expect(queryClient).toBeDefined();
-        expect(queryClient.getDefaultOptions).toBeDefined();
+describe('retryUnlessNotFound', () => {
+    it('retries the first failure of a server error', () => {
+        expect(retryUnlessNotFound(0, new ApiError(500, 'The server request failed.'))).toBe(true);
     });
 
-    it('configures default query options', () => {
-        const defaults = queryClient.getDefaultOptions();
-        const queries = defaults.queries;
-
-        expect(queries).toBeDefined();
-        expect(queries?.staleTime).toBeGreaterThan(0);
-        expect(queries?.gcTime).toBeGreaterThan(0);
-        expect(queries?.gcTime).toBeGreaterThan((queries?.staleTime as number) ?? 0);
-        expect(queries?.retry).toBe(retryUnlessNotFound);
-        expect(queries?.refetchOnWindowFocus).toBe(true);
-    });
-});
-
-describe('POLLING_INTERVALS', () => {
-    it('defines all expected speed tiers', () => {
-        expect(POLLING_INTERVALS).toHaveProperty('fast');
-        expect(POLLING_INTERVALS).toHaveProperty('normal');
-        expect(POLLING_INTERVALS).toHaveProperty('slow');
+    it('stops retrying after the first retry', () => {
+        expect(retryUnlessNotFound(1, new ApiError(500, 'The server request failed.'))).toBe(false);
     });
 
-    it('has intervals in ascending order', () => {
-        expect(POLLING_INTERVALS.fast).toBeLessThan(POLLING_INTERVALS.normal);
-        expect(POLLING_INTERVALS.normal).toBeLessThan(POLLING_INTERVALS.slow);
+    it('does not retry a not-found error', () => {
+        expect(retryUnlessNotFound(0, new ApiError(404, 'The requested resource does not exist.'))).toBe(false);
     });
 
-    it('uses positive intervals', () => {
-        expect(POLLING_INTERVALS.fast).toBeGreaterThan(0);
-        expect(POLLING_INTERVALS.normal).toBeGreaterThan(0);
-        expect(POLLING_INTERVALS.slow).toBeGreaterThan(0);
+    it('retries an error that is not an api error', () => {
+        expect(retryUnlessNotFound(0, new Error('Failed to fetch'))).toBe(true);
     });
 });

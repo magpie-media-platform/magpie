@@ -22,6 +22,14 @@ internal sealed class FileSystem(
     ICacheFactory cacheFactory,
     ILogger<FileSystem> logger) : IFileSystem
 {
+    private static readonly EnumerationOptions RecursiveEnumerationOptions = new()
+    {
+        RecurseSubdirectories = true,
+        MatchType = MatchType.Win32,
+        AttributesToSkip = 0,
+        IgnoreInaccessible = true,
+    };
+
     private readonly ICache _cache = cacheFactory.GetOrCreate(
         "mime-type",
         () => new CachePolicy
@@ -130,7 +138,7 @@ internal sealed class FileSystem(
 
     public IEnumerable<string> EnumerateFiles(string path)
     {
-        return Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories);
+        return Directory.EnumerateFiles(path, "*", RecursiveEnumerationOptions);
     }
 
     public void Copy(string sourcePath, string destinationPath)

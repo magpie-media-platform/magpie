@@ -3,7 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { apiGet, buildUrl } from '@/lib/api';
 import { extractContentFields, type ApiContentItemWithMetadata } from '@/lib/contentMapping';
+import { MAX_PAGE_FETCHES } from '@/lib/paging';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { escapeQueryString } from '@/lib/simpleFilterQuery';
 import { queryErrorOrNull } from '@/lib/utils';
 import type { CalendarEvent, CalendarQueryParams } from '@/types/calendar';
 import type { PagedList } from '@/types/paging';
@@ -34,30 +36,29 @@ function mapToCalendarEvent(item: ApiContentItemWithMetadata): CalendarEvent | n
 }
 
 const calendarQueryKeys = {
-    all: ['calendar'] as const,
     events: (params?: CalendarQueryParams) => ['calendar', 'events', params] as const,
 };
 
 function buildDateFilter(startDate?: string, endDate?: string): string | undefined {
     const clauses: string[] = [];
     if (startDate) {
-        clauses.push(`publishDate >= "${startDate}"`);
+        clauses.push(`publishDate >= "${escapeQueryString(startDate)}"`);
     }
     if (endDate) {
         const exclusiveEnd = new Date(`${endDate}T00:00:00.000Z`);
         exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
-        clauses.push(`publishDate < "${exclusiveEnd.toISOString().slice(0, 10)}"`);
+        clauses.push(`publishDate < "${escapeQueryString(exclusiveEnd.toISOString().slice(0, 10))}"`);
     }
     return clauses.length > 0 ? clauses.join(' and ') : undefined;
 }
 
-async function fetchCalendarEvents(params?: CalendarQueryParams): Promise<CalendarEvent[]> {
+async function fetchCalendarEvents(params?: CalendarQueryParams) {
     const filter = buildDateFilter(params?.startDate, params?.endDate);
     const events: CalendarEvent[] = [];
-    let pageNumber = 1;
     let loadedItems = 0;
+    let totalItems = 0;
 
-    while (true) {
+    for (let pageNumber = 1; pageNumber <= MAX_PAGE_FETCHES; pageNumber += 1) {
         const url = buildUrl('/content', {
             contentType: params?.contentType,
             filter,
@@ -67,6 +68,7 @@ async function fetchCalendarEvents(params?: CalendarQueryParams): Promise<Calend
 
         const response = await apiGet<PagedList<ApiContentItemWithMetadata>>(url);
         loadedItems += response.items.length;
+        totalItems = response.totalItems;
         events.push(
             ...response.items.map(mapToCalendarEvent).filter((event): event is CalendarEvent => event !== null),
         );
@@ -76,17 +78,17 @@ async function fetchCalendarEvents(params?: CalendarQueryParams): Promise<Calend
             response.items.length < CALENDAR_PAGE_SIZE ||
             loadedItems >= response.totalItems
         ) {
-            return events;
+            break;
         }
-
-        pageNumber += 1;
     }
+    return { events, truncated: loadedItems < totalItems };
 }
 
 interface CalendarResult {
     events: CalendarEvent[];
     isLoading: boolean;
     isFetching: boolean;
+    isTruncated: boolean;
     error: Error | null;
     refetch: () => Promise<void>;
 }
@@ -111,9 +113,11 @@ export function useCalendar(params?: CalendarQueryParams): CalendarResult {
             maxWaitMs: 1200,
             owner: 'calendar-page',
             predicate: (event) => {
-                const current = queryClient.getQueryData<CalendarEvent[]>(calendarQueryKeys.events(params));
+                const current = queryClient.getQueryData<Awaited<ReturnType<typeof fetchCalendarEvents>>>(
+                    calendarQueryKeys.events(params),
+                );
                 if (
-                    current?.some(
+                    current?.events.some(
                         (calendarEvent) => calendarEvent.contentId === event.context['content.hierarchyItemId'],
                     )
                 ) {
@@ -140,7 +144,8 @@ export function useCalendar(params?: CalendarQueryParams): CalendarResult {
     };
 
     return {
-        events: query.data ?? [],
+        events: query.data?.events ?? [],
+        isTruncated: query.data?.truncated ?? false,
         isLoading: query.isLoading,
         isFetching: query.isFetching,
         error: queryErrorOrNull(query),

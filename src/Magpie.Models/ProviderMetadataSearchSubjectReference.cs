@@ -10,25 +10,25 @@ public sealed record ProviderMetadataSearchSubjectReference
     /// <summary>
     /// The kind slug of the subject.
     /// </summary>
-    public required string SubjectKind { get; init; }
+    public required string SubjectKind { get; set; }
 
     /// <summary>
     /// The display name of the subject.
     /// </summary>
-    public required string DisplayName { get; init; }
+    public required string DisplayName { get; set; }
 
     /// <summary>
     /// The kind of the relationship to the subject.
     /// </summary>
-    public string? RelationshipKind { get; init; }
+    public string? RelationshipKind { get; set; }
 
     /// <summary>
     /// The qualifier of the relationship to the subject.
     /// </summary>
-    public string? RelationshipQualifier { get; init; }
+    public string? RelationshipQualifier { get; set; }
 
     /// <summary>
     /// The external identifiers of the subject, keyed by source.
     /// </summary>
-    public IReadOnlyDictionary<string, string> ExternalIds { get; init; } = new Dictionary<string, string>();
+    public IReadOnlyDictionary<string, string> ExternalIds { get; set; } = new Dictionary<string, string>();
 }

@@ -2,24 +2,31 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class QualityTierRepositoryTests
+public sealed class QualityTierRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IQualityTierRepository _subject = null!;
@@ -53,9 +60,11 @@ public class QualityTierRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
@@ -63,7 +72,8 @@ public class QualityTierRepositoryTests
             _context,
             auditRecordRepository,
             transactionManager,
-            loggerFactory.CreateLogger<QualityTierRepository>());
+            loggerFactory.CreateLogger<QualityTierRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -528,5 +538,27 @@ public class QualityTierRepositoryTests
         var patched = await _subject.GetByIdAsync(qualityTier.Id).ConfigureAwait(false);
         var values = patched!.Criteria.And.Single().Items["resolution"].Values;
         Assert.That(values, Is.EqualTo(["720p QA"]));
+    }
+
+    [Test]
+    public async Task DeleteAsync_RejectsReferencedTier_WhenListRanksIt()
+    {
+        // Arrange
+        var tier = new QualityTier { Name = "Ranked tier", Criteria = new() };
+        var list = new QualityTierList { Name = "Test list" };
+        list.QualityTierRanks.Add(new() { QualityTier = tier });
+        _context.QualityTierLists.Add(list);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        Assert.ThrowsAsync<MagpieException>(() => _subject.DeleteAsync(tier.Id, _userId));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await _context.QualityTiers.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(await _context.QualityTierListRanks.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(await _context.AuditRecords.CountAsync().ConfigureAwait(false), Is.Zero);
+        }
     }
 }

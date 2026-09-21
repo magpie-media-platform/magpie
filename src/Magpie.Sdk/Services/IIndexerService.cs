@@ -22,7 +22,7 @@ public interface IIndexerService
     Task<IReadOnlyList<Indexer>> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets an indexer by id.
+    /// An indexer by id.
     /// </summary>
     /// <param name="id">The id of the indexer to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -118,9 +118,7 @@ public interface IIndexerService
     /// </summary>
     /// <param name="request">The selected connection ids and the query to run</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>
-    /// The candidates and connection outcomes, or <see langword="null"/> when the query fits no shared query mode
-    /// </returns>
+    /// <returns>The candidates and connection outcomes</returns>
     Task<IndexerSearchResponse?> SearchAsync(
         IndexerSearchRequest request,
         CancellationToken cancellationToken = default);

@@ -10,10 +10,11 @@ namespace Magpie.Models;
 /// </summary>
 public static class MagpieEventExtensions
 {
-    private const string EventContextPrefix = "event.context.";
+    private const string EventKeyPrefix = "event.";
+    private const string EventContextPrefix = EventKeyPrefix + "context.";
 
     /// <summary>
-    /// Gets the trigger-context key for an event context entry.
+    /// Builds the trigger-context key for an event context entry.
     /// </summary>
     /// <param name="contextKey">The name of the event context entry</param>
     public static string ToEventContextKey(this string contextKey)
@@ -43,6 +44,24 @@ public static class MagpieEventExtensions
         if (magpieEvent.JobExecutionId is { } jobExecutionId)
         {
             context["event.jobExecutionId"] = jobExecutionId.ToString("D");
+        }
+
+        if (magpieEvent.CorrelationId is { } correlationId)
+        {
+            context["event.correlationId"] = correlationId.ToString("D");
+        }
+
+        if (magpieEvent.TraceContext is { } traceContext)
+        {
+            foreach (var (key, value) in traceContext)
+            {
+                if (key.StartsWith(EventKeyPrefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                context[key] = value;
+            }
         }
 
         foreach (var (key, value) in magpieEvent.Context)
@@ -84,6 +103,11 @@ public static class MagpieEventExtensions
                 ? parsedJobExecutionId
                 : default(Guid?);
 
+        var correlationId = triggerContext.TryGetValue("event.correlationId", out var correlationIdRaw) &&
+            Guid.TryParse(correlationIdRaw, out var parsedCorrelationId)
+                ? parsedCorrelationId
+                : default(Guid?);
+
         return new(
             id,
             name,
@@ -92,7 +116,8 @@ public static class MagpieEventExtensions
             publishedAt,
             string.IsNullOrWhiteSpace(nodeId) ? null : nodeId)
         {
-            JobExecutionId = jobExecutionId
+            JobExecutionId = jobExecutionId,
+            CorrelationId = correlationId
         };
     }
 }

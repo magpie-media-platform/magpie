@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -37,13 +38,23 @@ internal sealed class ContentSearchEndpointGroup : IApiEndpointGroup
     {
         if (string.IsNullOrWhiteSpace(query))
         {
-            return Results.BadRequest("A query is required.");
+            return Results.Problem(
+                detail: "A query is required.",
+                statusCode: StatusCodes.Status400BadRequest);
         }
 
         var parseResult = filterService.ParseContentCriteria(query);
         if (!parseResult.IsSuccess)
         {
-            return Results.BadRequest(parseResult.Error);
+            var error = parseResult.Error!;
+            return Results.Problem(
+                detail: error.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["position"] = error.Position,
+                    ["expected"] = error.Expected,
+                });
         }
 
         var result = await metadataSearchService

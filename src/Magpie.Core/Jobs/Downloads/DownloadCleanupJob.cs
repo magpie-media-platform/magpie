@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -19,14 +18,13 @@ namespace Magpie.Core.Jobs.Downloads;
 internal sealed class DownloadCleanupJob(
     IEnumerable<IDownloadClientIntegration> downloadClientIntegrations,
     IDownloadRepository downloadRepository,
-    IDataProtectionService protector,
     ILogger<DownloadCleanupJob> logger,
     TimeProvider timeProvider,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "DownloadCleanup",
+        JobType = MagpieJobs.Types.DownloadCleanup,
         DisplayName = "Download cleanup",
         Description =
             "Removes completed or failed downloads from the download client when cleanup settings allow it. " +
@@ -83,15 +81,14 @@ internal sealed class DownloadCleanupJob(
     {
         var userId = jobContext.ManualTriggerUserId;
         var correlationId = jobContext.CorrelationId;
-        var progress = progressReporter;
 
-        progress?.Report(null, "The cleanup will load matching downloads.");
+        progressReporter.Report(null, "The cleanup will load matching downloads.");
 
         var candidates = await downloadRepository.ListCleanupCandidatesAsync(cancellationToken).ConfigureAwait(false);
 
         if (candidates.Count == 0)
         {
-            progress?.Report(1, "The cleanup stopped because no download matched.");
+            progressReporter.Report(1, "The cleanup stopped because no download matched.");
             logger.LogInformation("Download cleanup found no matches");
             return;
         }
@@ -103,7 +100,7 @@ internal sealed class DownloadCleanupJob(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var candidate = candidates[i];
-            progress?.ReportFraction(
+            progressReporter.ReportFraction(
                 i,
                 candidates.Count,
                 $"The cleanup will evaluate {candidates.Count} downloads.");
@@ -112,8 +109,17 @@ internal sealed class DownloadCleanupJob(
             {
                 if (candidate.Status == DownloadStatus.Imported)
                 {
-                    if (!TryReadSettings(candidate, out var noClientEntrySettings) ||
-                        ResolveTrigger(candidate, noClientEntrySettings) is null)
+                    if (candidate.Settings is null)
+                    {
+                        logger.LogWarning(
+                            "Client {ClientName} has no settings, so download {DownloadId} will stay for a later" +
+                            " cleanup",
+                            candidate.ClientName,
+                            candidate.DownloadId);
+                        continue;
+                    }
+
+                    if (ResolveTrigger(candidate, candidate.Settings) is null)
                     {
                         continue;
                     }
@@ -130,19 +136,24 @@ internal sealed class DownloadCleanupJob(
             if (integration is null)
             {
                 logger.LogWarning(
-                    "Download cleanup found no integration for provider {ProviderType} (client {ClientName})." +
-                    " Download {DownloadId} will stay for a later cleanup",
+                    "Download cleanup found no integration for provider {ProviderType} (client {ClientName})," +
+                    " so download {DownloadId} will stay for a later cleanup",
                     candidate.ProviderType,
                     candidate.ClientName,
                     candidate.DownloadId);
                 continue;
             }
 
-            if (!TryReadSettings(candidate, out var settings))
+            if (candidate.Settings is null)
             {
+                logger.LogWarning(
+                    "Client {ClientName} has no settings, so download {DownloadId} will stay for a later cleanup",
+                    candidate.ClientName,
+                    candidate.DownloadId);
                 continue;
             }
 
+            var settings = candidate.Settings;
             var trigger = ResolveTrigger(candidate, settings);
             if (trigger is null)
             {
@@ -168,8 +179,8 @@ internal sealed class DownloadCleanupJob(
             {
                 logger.LogWarning(
                     ex,
-                    "The removal of download {DownloadId} ({ExternalId}) from client {ClientName} failed." +
-                    " The download will stay unstamped for the next cleanup",
+                    "The removal of download {DownloadId} ({ExternalId}) from client {ClientName} failed, so" +
+                    " the download will stay unstamped for the next cleanup",
                     candidate.DownloadId,
                     candidate.ExternalId,
                     candidate.ClientName);
@@ -179,8 +190,8 @@ internal sealed class DownloadCleanupJob(
             if (!clientConfirmed)
             {
                 logger.LogWarning(
-                    "Download client {ClientName} did not confirm removal of download {DownloadId} ({ExternalId})." +
-                    " The download will stay unstamped for the next cleanup",
+                    "Download client {ClientName} did not confirm removal of download {DownloadId} ({ExternalId})," +
+                    " so the download will stay unstamped for the next cleanup",
                     candidate.ClientName,
                     candidate.DownloadId,
                     candidate.ExternalId);
@@ -192,32 +203,12 @@ internal sealed class DownloadCleanupJob(
             removed++;
         }
 
-        progress?.Report(1, "The download cleanup completed.");
+        progressReporter.Report(1, "The download cleanup completed.");
 
         logger.LogInformation(
             "Download cleanup removed {Removed} of {Candidates} client entries",
             removed,
             candidates.Count);
-    }
-
-    private bool TryReadSettings(DownloadCleanupCandidate candidate, out Dictionary<string, string> settings)
-    {
-        try
-        {
-            settings = protector.Unprotect(candidate.Settings);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            settings = [];
-            logger.LogWarning(
-                ex,
-                "Download cleanup failed to read the settings for client {ClientName}," +
-                " so download {DownloadId} will stay for a later cleanup",
-                candidate.ClientName,
-                candidate.DownloadId);
-            return false;
-        }
     }
 
     private async Task StampRemovedAsync(
@@ -249,8 +240,8 @@ internal sealed class DownloadCleanupJob(
         {
             logger.LogWarning(
                 ex,
-                "The download client removed download {DownloadId}, but the ClientRemovedAt stamp failed." +
-                " The next cleanup will retry the stamp",
+                "The download client removed download {DownloadId}, but the ClientRemovedAt stamp failed, so" +
+                " the next cleanup will retry the stamp",
                 candidate.DownloadId);
         }
     }

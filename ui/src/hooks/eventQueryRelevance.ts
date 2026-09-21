@@ -2,6 +2,7 @@ import type { QueryKey } from '@tanstack/react-query';
 
 import { readContentEventImpact } from './contentEventImpact';
 import { impactIntersectsSnapshot, type ContentRelevanceSnapshot } from './contentRelevanceSnapshot';
+import { ENTITY_ID_CONTEXT_KEYS } from './entityIdContextKeys';
 import type { EventStreamPayload } from './useEventStream';
 
 type EventRelevanceDecision = 'irrelevant' | 'relevant';
@@ -23,47 +24,7 @@ interface EventRelevanceResult {
     reason: string;
 }
 
-const ID_CONTEXT_KEYS = new Set([
-    'apiKey.id',
-    'audit.entityId',
-    'audit.recordId',
-    'backup.id',
-    'blockedFileType.id',
-    'contentFilter.id',
-    'content.hierarchyItemId',
-    'content.itemId',
-    'diagnostic.findingId',
-    'downloadClient.id',
-    'download.id',
-    'download.releaseId',
-    'eventTrigger.id',
-    'execution.id',
-    'execution.parentId',
-    'extension.id',
-    'extensionPackageSource.id',
-    'indexer.id',
-    'indexerConnection.id',
-    'indexerFeed.id',
-    'integration.id',
-    'libraryImportCandidate.id',
-    'mediaServer.id',
-    'mimeMapping.extension',
-    'notificationRule.id',
-    'qualityTier.id',
-    'qualityTierList.id',
-    'release.id',
-    'release.indexerId',
-    'remotePathMapping.id',
-    'rootFolder.id',
-    'rule.id',
-    'scheduleTrigger.id',
-    'settingsGroup.extensionId',
-    'subject.id',
-    'subjectFilter.id',
-    'user.id',
-    'wishlist.id',
-    'wishlist.itemId',
-]);
+const ID_CONTEXT_KEYS: ReadonlySet<string> = new Set(ENTITY_ID_CONTEXT_KEYS);
 
 const PRIMARY_EVENT_IDENTITIES: readonly {
     contextKey: string;
@@ -126,9 +87,6 @@ function predicateMatches(
     return !predicate || predicate(event);
 }
 
-/**
- * Whether a plain (non-content) event context names one of the given entity ids.
- */
 function eventContextMatchesEntityIds(event: EventStreamPayload, entityIds: ReadonlySet<string>): boolean {
     return Object.entries(event.context).some(
         ([key, value]) => ID_CONTEXT_KEYS.has(key) && value.split(',').some((id) => entityIds.has(id)),
@@ -140,9 +98,7 @@ export function eventFingerprint(event: EventStreamPayload): string {
     return JSON.stringify([event.name, context]);
 }
 
-/**
- * Decides, synchronously and without any network access, whether an event affects a query scope.
- */
+/** Decides, synchronously and without any network access, whether an event affects a query scope. */
 export function evaluateEventQueryRelevance(
     event: EventStreamPayload,
     scope: EventQueryRelevanceScope,

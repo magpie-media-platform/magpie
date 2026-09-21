@@ -6,25 +6,7 @@ import type { ReactNode } from 'react';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 
 import { CriteriaEditor, type Criterion } from './CriteriaEditor';
-import { isNumericField, operatorsForField } from './criterionOperators';
-
-const mockUseQualityFields = vi.fn();
-
-vi.mock('@/hooks/useQualityFields', () => ({
-    useQualityFields: () => mockUseQualityFields(),
-}));
-
-const defaultQualityFields = {
-    universalFields: [
-        { name: 'Title', label: 'Title', isNumeric: false },
-        { name: 'Protocol', label: 'Protocol', isNumeric: false },
-        { name: 'Size', label: 'Size', isNumeric: true },
-        { name: 'Age', label: 'Age', isNumeric: true },
-        { name: 'Language', label: 'Language', isNumeric: false },
-    ],
-    isLoading: false,
-    error: null,
-};
+import { CRITERION_OPERATORS } from './criterionOperators';
 
 function TestWrapper({ children }: { children: ReactNode }) {
     return <TooltipProvider>{children}</TooltipProvider>;
@@ -40,15 +22,9 @@ function createMockCriterion(overrides: Partial<Criterion> = {}): Criterion {
     };
 }
 
-function fieldSuggestionValues(): string[] {
-    const datalist = screen.getByTestId('criteria-editor__field-suggestions');
-    return Array.from(datalist.querySelectorAll('option')).map((option) => option.value);
-}
-
 describe('CriteriaEditor', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockUseQualityFields.mockReturnValue(defaultQualityFields);
     });
 
     it('renders the component with data-component attribute', () => {
@@ -128,7 +104,7 @@ describe('CriteriaEditor', () => {
         expect(onChange).toHaveBeenCalledTimes(1);
         expect(onChange).toHaveBeenCalledWith([
             expect.objectContaining({
-                field: 'Title',
+                field: '',
                 operator: 'Equals',
                 value: '',
             }),
@@ -152,7 +128,7 @@ describe('CriteriaEditor', () => {
         expect(onChange).toHaveBeenCalledWith([
             existingCriteria[0],
             expect.objectContaining({
-                field: 'Title',
+                field: '',
                 operator: 'Equals',
                 value: '',
             }),
@@ -277,15 +253,7 @@ describe('CriteriaEditor', () => {
         expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ id: 'c1', field: 'ReleaseName' })]);
     });
 
-    it('keeps a stored field value even when the current vocabulary does not include it', () => {
-        mockUseQualityFields.mockReturnValue({
-            ...defaultQualityFields,
-            universalFields: [
-                { name: 'Title', label: 'Title', isNumeric: false },
-                { name: 'Size', label: 'Size', isNumeric: true },
-            ],
-        });
-
+    it('keeps a stored field value as typed', () => {
         render(
             <TestWrapper>
                 <CriteriaEditor criteria={[createMockCriterion({ id: 'c1', field: 'source' })]} onChange={vi.fn()} />
@@ -401,55 +369,31 @@ describe('CriteriaEditor', () => {
     });
 });
 
-describe('CriteriaEditor field-type gating', () => {
+describe('CriteriaEditor operator vocabulary', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockUseQualityFields.mockReturnValue(defaultQualityFields);
     });
 
-    it('classifies size and age as numeric fields', () => {
-        expect(isNumericField('size')).toBe(true);
-        expect(isNumericField('age')).toBe(true);
-    });
-
-    it('classifies string fields as non-numeric', () => {
-        expect(isNumericField('source')).toBe(false);
-        expect(isNumericField('language')).toBe(false);
-        expect(isNumericField('custom')).toBe(false);
-    });
-
-    it('offers the four numeric operators (plus equality) for numeric fields', () => {
-        const values = operatorsForField('size').map((o) => o.value);
+    it('offers every string and numeric operator for any field', () => {
+        const values = CRITERION_OPERATORS.map((o) => o.value);
         expect(values).toEqual([
             'Equals',
             'NotEquals',
+            'In',
+            'NotIn',
+            'Contains',
+            'NotContains',
+            'StartsWith',
+            'NotStartsWith',
+            'EndsWith',
+            'NotEndsWith',
+            'ContainsWord',
+            'Regex',
             'GreaterThan',
             'GreaterThanOrEqual',
             'LessThan',
             'LessThanOrEqual',
         ]);
-    });
-
-    it('does not offer numeric operators for string fields', () => {
-        const values = operatorsForField('source').map((o) => o.value);
-        expect(values).not.toContain('GreaterThan');
-        expect(values).not.toContain('LessThanOrEqual');
-        expect(values).toContain('Contains');
-        expect(values).toContain('StartsWith');
-    });
-
-    it('offers the set, regex and ends-with string operators', () => {
-        const values = operatorsForField('source').map((o) => o.value);
-        expect(values).toContain('In');
-        expect(values).toContain('NotIn');
-        expect(values).toContain('Regex');
-        expect(values).toContain('EndsWith');
-        expect(values).toContain('NotEndsWith');
-    });
-
-    it('offers ContainsWord as a selectable string operator', () => {
-        const values = operatorsForField('source').map((o) => o.value);
-        expect(values).toContain('ContainsWord');
     });
 
     it('renders the Contains Word option in a string field dropdown', async () => {
@@ -518,17 +462,17 @@ describe('CriteriaEditor field-type gating', () => {
         expect(valueInput).toHaveValue('a, b');
     });
 
-    it('suggests declared fields without constraining the input', () => {
+    it('renders no field-suggestion list', () => {
         render(
             <TestWrapper>
                 <CriteriaEditor criteria={[createMockCriterion({ id: 'c1' })]} onChange={vi.fn()} />
             </TestWrapper>,
         );
 
-        expect(fieldSuggestionValues()).toContain('Title');
+        expect(screen.queryByTestId('criteria-editor__field-suggestions')).not.toBeInTheDocument();
     });
 
-    it('shows numeric operators in the operator dropdown for a numeric field', async () => {
+    it('shows both numeric and string operators in the operator dropdown', async () => {
         const user = userEvent.setup();
         render(
             <TestWrapper>
@@ -540,28 +484,16 @@ describe('CriteriaEditor field-type gating', () => {
         );
 
         await user.click(screen.getByLabelText(/criterion 1 operator/i));
-        expect(screen.getByRole('option', { name: /greater than/i })).toBeInTheDocument();
-        expect(screen.getByRole('option', { name: /at least/i })).toBeInTheDocument();
-        expect(screen.queryByRole('option', { name: /contains/i })).not.toBeInTheDocument();
+        const optionLabels = screen
+            .getAllByRole('option')
+            .map((option) => option.querySelector('.criteria-editor__operator-label')?.textContent ?? '');
+        expect(optionLabels).toContain('Greater Than');
+        expect(optionLabels).toContain('At Least');
+        expect(optionLabels).toContain('Contains');
+        expect(optionLabels).toContain('Starts With');
     });
 
-    it('does not show numeric operators for a string field', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <CriteriaEditor criteria={[createMockCriterion({ id: 'c1', field: 'source' })]} onChange={vi.fn()} />
-            </TestWrapper>,
-        );
-
-        await user.click(screen.getByLabelText(/criterion 1 operator/i));
-        const optionNames = screen.getAllByRole('option').map((o) => o.textContent ?? '');
-        expect(optionNames.some((n) => /contains/i.test(n))).toBe(true);
-        expect(optionNames.some((n) => /starts with/i.test(n))).toBe(true);
-        expect(optionNames.some((n) => /greater than/i.test(n))).toBe(false);
-        expect(optionNames.some((n) => /at least/i.test(n))).toBe(false);
-    });
-
-    it('resets a numeric operator to Equals when switching to a string field', () => {
+    it('keeps a numeric operator when the field changes', () => {
         const onChange = vi.fn();
         render(
             <TestWrapper>
@@ -575,7 +507,7 @@ describe('CriteriaEditor field-type gating', () => {
         fireEvent.change(screen.getByLabelText(/criterion 1 field/i), { target: { value: 'Source' } });
 
         expect(onChange).toHaveBeenCalledWith([
-            expect.objectContaining({ id: 'c1', field: 'Source', operator: 'Equals' }),
+            expect.objectContaining({ id: 'c1', field: 'Source', operator: 'GreaterThan' }),
         ]);
     });
 
@@ -601,7 +533,6 @@ describe('CriteriaEditor field-type gating', () => {
 describe('CriteriaEditor field suggestions', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockUseQualityFields.mockReturnValue(defaultQualityFields);
     });
 
     it('does not render a per-rule content type context selector', () => {
@@ -628,27 +559,23 @@ describe('CriteriaEditor field suggestions', () => {
         expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ id: 'c1', field: 'CustomField' })]);
     });
 
-    it('uses numeric operators for registry-known numeric fields', async () => {
-        const user = userEvent.setup();
+    it('adds a criterion with an empty field', () => {
+        const onChange = vi.fn();
         render(
             <TestWrapper>
-                <CriteriaEditor
-                    criteria={[createMockCriterion({ id: 'c1', field: 'Size', value: '100' })]}
-                    onChange={vi.fn()}
-                />
+                <CriteriaEditor criteria={[]} onChange={onChange} />
             </TestWrapper>,
         );
 
-        await user.click(screen.getByLabelText(/criterion 1 operator/i));
-        expect(screen.getByRole('option', { name: /greater than/i })).toBeInTheDocument();
-        expect(screen.queryByRole('option', { name: /contains/i })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /add/i }));
+
+        expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ field: '', operator: 'Equals', value: '' })]);
     });
 });
 
 describe('CriteriaEditor accessibility', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockUseQualityFields.mockReturnValue(defaultQualityFields);
     });
 
     it('has proper aria-label on field selector', () => {

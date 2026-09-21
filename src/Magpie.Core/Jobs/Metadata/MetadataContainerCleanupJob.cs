@@ -15,7 +15,7 @@ internal sealed class MetadataContainerCleanupJob(
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "MetadataContainerCleanup",
+        JobType = MagpieJobs.Types.MetadataContainerCleanup,
         DisplayName = "Metadata container cleanup",
         Description = "Removes metadata records that are no longer linked to content or subjects.",
         Category = "Metadata",

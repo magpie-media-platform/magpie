@@ -78,7 +78,7 @@ internal sealed class SubjectFiltersEndpointGroup : IApiEndpointGroup
         var created = await filterService.CreateSubjectFilterAsync(filter, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Created($"/api/{Name}/{created.Id}", created);
     }
 
     internal async Task<IResult> GetMySubjectFiltersAsync(

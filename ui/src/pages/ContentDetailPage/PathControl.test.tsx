@@ -53,6 +53,7 @@ describe('PathControl', () => {
         render(<PathControl contentHierarchyItemId="content-1" rawPath={null} />);
 
         expect(screen.getByTestId('path-control__value')).toHaveTextContent(/^\/media\/library$/);
+        expect(screen.getByTestId('path-control__value')).toHaveAttribute('title', '/media/library');
         expect(screen.queryByText('Owned path')).not.toBeInTheDocument();
         expect(screen.queryByText('Inherited path')).not.toBeInTheDocument();
         expect(screen.queryByText('No explicit location')).not.toBeInTheDocument();
@@ -62,6 +63,7 @@ describe('PathControl', () => {
         render(<PathControl contentHierarchyItemId="content-1" rawPath="/media/explicit" />);
 
         expect(screen.getByTestId('path-control__value')).toHaveTextContent(/^\/media\/explicit$/);
+        expect(screen.getByTestId('path-control__value')).toHaveAttribute('title', '/media/explicit');
         expect(screen.queryByText('Owned path')).not.toBeInTheDocument();
         expect(screen.queryByText('Inherited path')).not.toBeInTheDocument();
     });

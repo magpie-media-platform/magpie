@@ -1,26 +1,35 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class SubjectFilterRepositoryTests
+public sealed class SubjectFilterRepositoryTests
 {
+    private Mock<IEventBus> _updateEvents = null!;
+
     private MagpieDbContext _context = null!;
     private ISubjectFilterRepository _subject = null!;
     private Guid _userId;
@@ -50,17 +59,21 @@ public class SubjectFilterRepositoryTests
         var loggerFactory = NullLoggerFactory.Instance;
         var auditRepo = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
+        _updateEvents = new Mock<IEventBus>();
         _subject = new SubjectFilterRepository(
             _context,
             auditRepo,
             transactionManager,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
-            loggerFactory.CreateLogger<SubjectFilterRepository>());
+            _updateEvents.Object,
+            loggerFactory.CreateLogger<SubjectFilterRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -455,6 +468,33 @@ public class SubjectFilterRepositoryTests
     }
 
     [Test]
+    public async Task UpdateAsync_PublishesUpdatedEventWithChangedFields_WhenFilterExists()
+    {
+        // Arrange
+        var filter = new SubjectFilter
+        {
+            Name = "OriginalName",
+            Criteria = new SubjectFilterCriteria { Kind = new() },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.SubjectFilters.Add(filter);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        filter.Name = "UpdatedName";
+
+        // Act
+        await _subject.UpdateAsync(filter, _userId).ConfigureAwait(false);
+
+        // Assert
+        _updateEvents.Verify(bus => bus.PublishAsync(
+            It.Is<MagpieEvent>(e =>
+                e.Name == "subjectFilter.updated" &&
+                e.Context.ContainsKey("subjectFilter.changedFields") &&
+                e.Context["subjectFilter.changedFields"] == "name"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
     public async Task UpdateAsync_ReturnsFalse_WhenNotFound()
     {
         // Arrange
@@ -598,7 +638,7 @@ public class SubjectFilterRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesTags_AddOnly()
+    public async Task PatchAsync_PatchesTags_WhenTagsAreAdded()
     {
         // Arrange
         foreach (var tagName in new[] { "existing", "newTag1", "newTag2" })
@@ -647,7 +687,7 @@ public class SubjectFilterRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesTags_RemoveOnly()
+    public async Task PatchAsync_PatchesTags_WhenTagsAreRemoved()
     {
         // Arrange
         foreach (var tagName in new[] { "keepMe", "removeMe" })
@@ -672,6 +712,7 @@ public class SubjectFilterRepositoryTests
         removeTag.SubjectFilters.Add(filter);
         _context.SubjectFilters.Add(filter);
         await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
 
         var patch = new SubjectFilterPatch
         {
@@ -697,7 +738,7 @@ public class SubjectFilterRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesTags_AddAndRemove()
+    public async Task PatchAsync_PatchesTags_WhenTagsAreAddedAndRemoved()
     {
         // Arrange
         foreach (var tagName in new[] { "existing", "toRemove", "toAdd" })
@@ -722,6 +763,7 @@ public class SubjectFilterRepositoryTests
         removeTag.SubjectFilters.Add(filter);
         _context.SubjectFilters.Add(filter);
         await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
 
         var patch = new SubjectFilterPatch
         {

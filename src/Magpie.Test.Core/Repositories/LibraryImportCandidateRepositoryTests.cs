@@ -4,22 +4,27 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Data.SQLite;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -75,7 +80,9 @@ public sealed class LibraryImportCandidateRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _publishedEvents = [];
         var eventBus = new Mock<IEventBus>();
@@ -89,7 +96,8 @@ public sealed class LibraryImportCandidateRepositoryTests
             auditRecordRepository,
             transactionManager,
             eventBus.Object,
-            loggerFactory.CreateLogger<LibraryImportCandidateRepository>());
+            loggerFactory.CreateLogger<LibraryImportCandidateRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -100,7 +108,72 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_PersistsRow_AndWritesAudit()
+    public async Task Migrate_PreservesLayoutKeys_WhenTheSchemaIsCreated()
+    {
+        // Arrange
+        using var migratedContext = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
+        try
+        {
+            await migratedContext.Database.OpenConnectionAsync().ConfigureAwait(false);
+            await migratedContext.Database.MigrateAsync().ConfigureAwait(false);
+
+            var rootFolder = new RootFolder
+            {
+                Name = "TV",
+                Path = "/media/tv",
+                ContentType = "type-a",
+                CreatedAt = DateTime.UtcNow
+            };
+            migratedContext.RootFolders.Add(rootFolder);
+            await migratedContext.SaveChangesAsync().ConfigureAwait(false);
+
+            var loggerFactory = NullLoggerFactory.Instance;
+            var transactionManager = new TransactionManager(migratedContext, NullLogger<TransactionManager>.Instance);
+            var auditRecordRepository = new AuditRecordRepository(
+                migratedContext,
+                Mock.Of<IEventBus>(),
+                loggerFactory.CreateLogger<AuditRecordRepository>(),
+                transactionManager,
+                Mock.Of<IJobExecutionScopeFactory>(),
+                timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            ILibraryImportCandidateRepository subject = new LibraryImportCandidateRepository(
+                migratedContext,
+                auditRecordRepository,
+                transactionManager,
+                Mock.Of<IEventBus>(),
+                loggerFactory.CreateLogger<LibraryImportCandidateRepository>(),
+                timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+
+            // Act
+            await subject.CreateAsync(
+                new LibraryImportCandidate
+                {
+                    RootFolderId = rootFolder.Id,
+                    ScanRunId = Guid.NewGuid(),
+                    FilePath = "/media/tv/Show/S01E01.mkv",
+                    ContentType = "type-a",
+                    Status = LibraryImportCandidateStatus.MatchingPending,
+                    LayoutKey = "/media/tv/Show"
+                },
+                _userId).ConfigureAwait(false);
+
+            // Assert
+            var entity = await migratedContext.LibraryImportCandidates.AsNoTracking().FirstAsync()
+                .ConfigureAwait(false);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(entity.LayoutKey, Is.EqualTo("/media/tv/Show"));
+                Assert.That(entity.GroupKey, Is.EqualTo("/media/tv/Show"));
+            }
+        }
+        finally
+        {
+            await migratedContext.Database.CloseConnectionAsync().ConfigureAwait(false);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_PersistsRowAndAudit_WhenTheCandidateIsValid()
     {
         // Arrange
         var model = new LibraryImportCandidate
@@ -145,7 +218,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_StampsMatchCount_FromCandidates()
+    public async Task CreateAsync_StampsMatchCount_WhenMatchesAreProvided()
     {
         // Arrange
         var model = new LibraryImportCandidate
@@ -190,7 +263,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task UpdateAsync_KeepsMatchCount_InSyncWithCandidates()
+    public async Task UpdateAsync_KeepsMatchCount_WhenMatchesChange()
     {
         // Arrange
         var model = new LibraryImportCandidate
@@ -242,6 +315,176 @@ public sealed class LibraryImportCandidateRepositoryTests
         var cleared = await _context.LibraryImportCandidates.AsNoTracking().FirstAsync(m => m.Id == model.Id)
             .ConfigureAwait(false);
         Assert.That(cleared.MatchCount, Is.Zero);
+    }
+
+    [Test]
+    public async Task QueryGroupsAsync_ReturnsOnePageOfGroups_WhenMoreGroupsExistThanThePageSize()
+    {
+        // Arrange
+        foreach (var show in new[] { "Show A", "Show B", "Show C" })
+        {
+            await _subject.CreateAsync(
+                new LibraryImportCandidate
+                {
+                    RootFolderId = _rootFolderId,
+                    ScanRunId = Guid.NewGuid(),
+                    FilePath = $"/media/tv/{show}/S01E01.mkv",
+                    ContentType = "type-a",
+                    Status = LibraryImportCandidateStatus.Pending,
+                    LayoutKey = $"/media/tv/{show}"
+                },
+                _userId).ConfigureAwait(false);
+            await _subject.CreateAsync(
+                new LibraryImportCandidate
+                {
+                    RootFolderId = _rootFolderId,
+                    ScanRunId = Guid.NewGuid(),
+                    FilePath = $"/media/tv/{show}/S01E02.mkv",
+                    ContentType = "type-a",
+                    Status = LibraryImportCandidateStatus.Failed,
+                    LayoutKey = $"/media/tv/{show}"
+                },
+                _userId).ConfigureAwait(false);
+        }
+
+        // Act
+        var page = await _subject.QueryGroupsAsync(
+            new LibraryImportCandidateQuery(),
+            new PagingParameter { PageNumber = 1, PageSize = 2 },
+            CancellationToken.None).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(page.TotalItems, Is.EqualTo(3));
+            Assert.That(page.Items.Select(item => item.GroupKey), Is.EqualTo(
+                ["/media/tv/Show A", "/media/tv/Show B"]));
+            Assert.That(page.Items.First().StatusCounts[LibraryImportCandidateStatus.Pending], Is.EqualTo(1));
+            Assert.That(page.Items.First().StatusCounts[LibraryImportCandidateStatus.Failed], Is.EqualTo(1));
+            Assert.That(page.Items.First().Representative.LayoutKey, Is.EqualTo("/media/tv/Show A"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsOnlyTheGroupMembers_WhenTheQueryNamesAGroupKey()
+    {
+        // Arrange
+        await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/tv/Show A/S01E01.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending,
+                LayoutKey = "/media/tv/Show A"
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/tv/Show B/S01E01.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending,
+                LayoutKey = "/media/tv/Show B"
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var members = await _subject.QueryAsync(
+            new LibraryImportCandidateQuery { GroupKey = "/media/tv/Show A" },
+            paging: new() { PageNumber = 1, PageSize = 100 },
+            sort: null).ConfigureAwait(false);
+        var remainder = await _subject.QueryAsync(
+            new LibraryImportCandidateQuery { ExcludeGroupKeys = ["/media/tv/Show A"] },
+            paging: new() { PageNumber = 1, PageSize = 100 },
+            sort: null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(members.Items.Select(item => item.FilePath), Is.EqualTo(
+                ["/media/tv/Show A/S01E01.mkv"]));
+            Assert.That(remainder.Items.Select(item => item.FilePath), Is.EqualTo(
+                ["/media/tv/Show B/S01E01.mkv"]));
+        }
+    }
+
+    [TestCase(null, "/media/tv/Show", "/media/tv/Show")]
+    [TestCase("550", null, "match:type-a:provider-a:provider-a.type-a:550")]
+    [TestCase(null, null, "query:type-a:s01e01")]
+    public async Task CreateAsync_DerivesTheGroupKey_WhenGroupIdentityFieldsVary(
+        string? externalId,
+        string? layoutKey,
+        string expectedGroupKey)
+    {
+        // Arrange
+        var model = new LibraryImportCandidate
+        {
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/tv/Show/S01E01.mkv",
+            ContentType = "type-a",
+            Status = LibraryImportCandidateStatus.Pending,
+            LayoutKey = layoutKey,
+            Matches = externalId is null
+                ?
+                []
+                :
+                [
+                    new()
+                    {
+                        Confidence = 0.9,
+                        ProviderType = "provider-a",
+                        ExternalIdKey = "provider-a.type-a",
+                        ExternalId = externalId,
+                        Title = "Show"
+                    }
+                ]
+        };
+
+        // Act
+        await _subject.CreateAsync(model, _userId).ConfigureAwait(false);
+
+        // Assert
+        var entity = await _context.LibraryImportCandidates.AsNoTracking().FirstAsync().ConfigureAwait(false);
+        Assert.That(entity.GroupKey, Is.EqualTo(expectedGroupKey));
+    }
+
+    [Test]
+    public async Task UpdateAsync_RederivesTheGroupKey_WhenTheCandidateGainsAMatch()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/tv/Show/S01E01.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        created.Matches =
+        [
+            new()
+            {
+                Confidence = 1,
+                ProviderType = "provider-a",
+                ExternalIdKey = "provider-a.type-a",
+                ExternalId = "550",
+                Title = "Fight Club"
+            }
+        ];
+
+        // Act
+        await _subject.UpdateAsync(created, _userId, CancellationToken.None).ConfigureAwait(false);
+
+        // Assert
+        var entity = await _context.LibraryImportCandidates.AsNoTracking().FirstAsync().ConfigureAwait(false);
+        Assert.That(entity.GroupKey, Is.EqualTo("match:type-a:provider-a:provider-a.type-a:550"));
     }
 
     [Test]
@@ -434,14 +677,22 @@ public sealed class LibraryImportCandidateRepositoryTests
     public async Task QueryAsync_ReturnsPageAndTotal_WhenPagingIsSet()
     {
         // Arrange
-        for (var i = 0; i < 5; i++)
+        foreach (var id in new[]
+        {
+            Guid.Parse("62e41376-1d58-4058-a915-e6aa280e44f8"),
+            Guid.Parse("6308fc94-9c53-40fa-a8fa-8520d851ca15"),
+            Guid.Parse("786caae1-03a8-4d3c-9ba2-047d42b26764"),
+            Guid.Parse("db98f071-8b6d-4c16-adbd-79b73b622334"),
+            Guid.Parse("fe719867-e291-49ff-bd78-3936f61f9a96")
+        })
         {
             await _subject.CreateAsync(
                 new LibraryImportCandidate
                 {
+                    Id = id,
                     RootFolderId = _rootFolderId,
                     ScanRunId = Guid.NewGuid(),
-                    FilePath = $"/m/{i}.mkv",
+                    FilePath = "/m/" + id.ToString("D") + ".mkv",
                     ContentType = "type-a",
                     Status = LibraryImportCandidateStatus.Pending,
                     Matches = []
@@ -454,21 +705,18 @@ public sealed class LibraryImportCandidateRepositoryTests
             new LibraryImportCandidateQuery(),
             new PagingParameter { PageNumber = 2, PageSize = 2 },
             sort: null).ConfigureAwait(false);
-        var repeatedPage = await _subject.QueryAsync(
-            new LibraryImportCandidateQuery(),
-            new PagingParameter { PageNumber = 2, PageSize = 2 },
-            sort: null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(page.TotalItems, Is.EqualTo(5));
-            Assert.That(page.Items.Count(), Is.EqualTo(2));
             Assert.That(page.PageNumber, Is.EqualTo(2));
             Assert.That(page.PageSize, Is.EqualTo(2));
-            Assert.That(
-                repeatedPage.Items.Select(candidate => candidate.Id),
-                Is.EqualTo(page.Items.Select(candidate => candidate.Id)));
+            Assert.That(page.Items.Select(candidate => candidate.Id), Is.EqualTo(
+            [
+                Guid.Parse("786caae1-03a8-4d3c-9ba2-047d42b26764"),
+                Guid.Parse("db98f071-8b6d-4c16-adbd-79b73b622334")
+            ]));
         }
     }
 
@@ -505,7 +753,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task UpdateAsync_WritesNewValues_AndAudit()
+    public async Task UpdateAsync_PersistsValuesAndAudit_WhenTheCandidateExists()
     {
         // Arrange
         var model = new LibraryImportCandidate
@@ -561,7 +809,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task DeleteAsync_RemovesRow_AndWritesAudit()
+    public async Task DeleteAsync_RemovesRowAndAudits_WhenTheCandidateExists()
     {
         // Arrange
         var model = new LibraryImportCandidate
@@ -627,7 +875,7 @@ public sealed class LibraryImportCandidateRepositoryTests
             Assert.That(_publishedEvents, Has.Count.EqualTo(2));
             Assert.That(
                 _publishedEvents,
-                Has.All.Property(nameof(MagpieEvent.Name)).EqualTo(MagpieEvents.Names.LibraryImportCandidateUpdated));
+                Has.All.Property(nameof(MagpieEvent.Name)).EqualTo("library.importCandidate.updated"));
             Assert.That(
                 _publishedEvents,
                 Has.All.Matches<MagpieEvent>(magpieEvent =>
@@ -636,7 +884,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task DeleteByRootFolderAsync_RemovesOnlyThatRootFoldersRows_AndWritesAudit()
+    public async Task DeleteByRootFolderAsync_DeletesAndAuditsMatchingRows_WhenFoldersDiffer()
     {
         // Arrange
         var otherRootFolder = new RootFolder
@@ -781,7 +1029,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByScanRunId_AndStatus()
+    public async Task QueryAsync_FiltersByScanRunIdAndStatus_WhenBothFiltersAreSet()
     {
         // Arrange
         var scanA = Guid.NewGuid();
@@ -834,7 +1082,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task TryClaimForImportAsync_TransitionsPendingToQueued_AndReportsWinner()
+    public async Task TryClaimForImportAsync_ReportsOneWinner_WhenTheCandidateIsPending()
     {
         // Arrange
         var candidate = await _subject.CreateAsync(
@@ -859,6 +1107,60 @@ public sealed class LibraryImportCandidateRepositoryTests
             Assert.That(claimed, Is.True);
             Assert.That(stored.Status, Is.EqualTo(LibraryImportCandidateStatus.Queued));
         }
+    }
+
+    [Test]
+    public async Task TryClaimForImportAsync_ClearsNoteAndQueues_WhenTheCandidateFailed()
+    {
+        // Arrange
+        var candidate = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/failed.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Failed,
+                Notes = "provider offline"
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var claimed = await _subject.TryClaimForImportAsync(candidate.Id, _userId, default).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .FirstAsync(m => m.Id == candidate.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(claimed, Is.True);
+            Assert.That(stored.Status, Is.EqualTo(LibraryImportCandidateStatus.Queued));
+            Assert.That(stored.Notes, Is.Null);
+        }
+    }
+
+    [TestCase(LibraryImportCandidateStatus.Queued)]
+    [TestCase(LibraryImportCandidateStatus.Importing)]
+    public async Task TryClaimForImportAsync_ReturnsFalse_WhenCandidateIsInFlight(
+        LibraryImportCandidateStatus status)
+    {
+        // Arrange
+        var candidate = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/in-flight.mkv",
+                ContentType = "type-a",
+                Status = status
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var claimed = await _subject.TryClaimForImportAsync(candidate.Id, _userId, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(claimed, Is.False);
     }
 
     [Test]
@@ -889,7 +1191,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task TryBeginImportAsync_TransitionsQueuedToImporting_AndRejectsNonQueued()
+    public async Task TryBeginImportAsync_ImportsOnlyQueuedCandidates_WhenStatusVaries()
     {
         // Arrange
         var candidate = await _subject.CreateAsync(
@@ -920,7 +1222,7 @@ public sealed class LibraryImportCandidateRepositoryTests
     }
 
     [Test]
-    public async Task MarkImportFailedAsync_TransitionsImportingToFailed_WithReason()
+    public async Task MarkImportFailedAsync_TransitionsImportingToFailed_WhenReasonIsProvided()
     {
         // Arrange
         var candidate = await _subject.CreateAsync(
@@ -1006,6 +1308,77 @@ public sealed class LibraryImportCandidateRepositoryTests
                     LibraryImportCandidateStatus.Queued,
                     LibraryImportCandidateStatus.Importing
                 ]));
+        }
+    }
+
+    [Test]
+    public async Task BulkPatchAsync_MovesEveryMemberAndWritesOneAuditRecord_WhenAGroupIsMatched()
+    {
+        // Arrange
+        var scanRunId = Guid.NewGuid();
+        var first = await _subject.CreateAsync(
+            new()
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = scanRunId,
+                FilePath = "/media/movies/Bluey S01E01.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        var second = await _subject.CreateAsync(
+            new()
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = scanRunId,
+                FilePath = "/media/movies/Bluey S01E02.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.BulkPatchAsync(
+            new()
+            {
+                Ids = [first.Id, second.Id],
+                Patch = new()
+                {
+                    Matches = new()
+                    {
+                        Value =
+                        [
+                            new LibraryImportMatch
+                            {
+                                Confidence = 1.0,
+                                ProviderType = "tvmaze",
+                                ExternalIdKey = "tvmaze",
+                                ExternalId = "44796",
+                                Title = "Bluey"
+                            }
+                        ]
+                    }
+                }
+            },
+            _userId,
+            default).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .OrderBy(candidate => candidate.FilePath)
+            .ToListAsync().ConfigureAwait(false);
+        var updateAudits = await _context.AuditRecords.AsNoTracking()
+            .Where(record => record.EntityType == "LibraryImportCandidate" && record.Operation == "Update")
+            .CountAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Count, Is.EqualTo(2));
+            Assert.That(
+                stored.Select(candidate => candidate.GroupKey),
+                Is.All.EqualTo("match:type-a:tvmaze:tvmaze:44796"));
+            Assert.That(stored.Select(candidate => candidate.MatchCount), Is.All.EqualTo(1));
+            Assert.That(stored[0].Matches[0].ExternalId, Is.EqualTo("44796"));
+            Assert.That(updateAudits, Is.EqualTo(1));
         }
     }
 }

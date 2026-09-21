@@ -3,13 +3,30 @@ import { CheckCircleIcon, InfoIcon, WarningIcon, XCircleIcon } from '@phosphor-i
 
 import { Toast, ToastClose, ToastTitle, ToastDescription, type ToastVariant } from './Toast';
 import { useToast, type ToastData } from '@/hooks/ui/useToast';
+import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 
 function getToastRole(variant?: ToastVariant): 'alert' | 'status' {
     return variant === 'error' || variant === 'warning' ? 'alert' : 'status';
 }
 
-function ToastItem({ data, dismiss }: { data: ToastData; dismiss: (id: string) => void }) {
+/** How many of the newest toasts stay visible in the mobile phone-notification stack. */
+const MAX_MOBILE_STACK_DEPTH = 3;
+
+/** Matches the breakpoint where `Toast.css` hides a stacked toast with `display: none`. */
+const MOBILE_STACK_QUERY = '(max-width: 640px)';
+
+interface ToastItemProps {
+    data: ToastData;
+    dismiss: (id: string) => void;
+    isFront: boolean;
+    isStacked: boolean;
+    isStackHidden: boolean;
+}
+
+function ToastItem({ data, dismiss, isFront, isStacked, isStackHidden }: ToastItemProps) {
     const { id, duration } = data;
+    const isMobileStack = useMediaQuery(MOBILE_STACK_QUERY);
+    const isHidden = isStackHidden && isMobileStack;
     const remainingRef = useRef(duration ?? 0);
     const startedAtRef = useRef(0);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -33,11 +50,6 @@ function ToastItem({ data, dismiss }: { data: ToastData; dismiss: (id: string) =
         [clearTimer, dismiss, id],
     );
 
-    useEffect(() => {
-        armTimer(remainingRef.current);
-        return clearTimer;
-    }, [armTimer, clearTimer]);
-
     const handlePause = useCallback(() => {
         if (timerRef.current === null) {
             return;
@@ -47,8 +59,19 @@ function ToastItem({ data, dismiss }: { data: ToastData; dismiss: (id: string) =
     }, [clearTimer]);
 
     const handleResume = useCallback(() => {
-        armTimer(remainingRef.current);
-    }, [armTimer]);
+        if (!isHidden) {
+            armTimer(remainingRef.current);
+        }
+    }, [armTimer, isHidden]);
+
+    useEffect(() => {
+        if (isHidden) {
+            handlePause();
+        } else {
+            handleResume();
+        }
+        return handlePause;
+    }, [isHidden, handlePause, handleResume]);
 
     return (
         <Toast
@@ -59,6 +82,9 @@ function ToastItem({ data, dismiss }: { data: ToastData; dismiss: (id: string) =
             onPause={handlePause}
             onResume={handleResume}
             onOpenChange={(open) => !open && dismiss(id)}
+            data-stack-front={isFront}
+            data-stack-peek={isFront && isStacked}
+            data-stack-hidden={isStackHidden}
         >
             <div className="toast-list__content">
                 {data.variant === 'success' && (
@@ -97,12 +123,24 @@ function ToastItem({ data, dismiss }: { data: ToastData; dismiss: (id: string) =
 
 export function ToastList() {
     const { toasts, dismiss } = useToast();
+    const frontId = toasts[toasts.length - 1]?.id;
+    const isStacked = toasts.length > 1;
 
     return (
         <>
-            {toasts.map((t) => (
-                <ToastItem key={t.id} data={t} dismiss={dismiss} />
-            ))}
+            {toasts.map((t, index) => {
+                const stackDepth = toasts.length - 1 - index;
+                return (
+                    <ToastItem
+                        key={t.id}
+                        data={t}
+                        dismiss={dismiss}
+                        isFront={t.id === frontId}
+                        isStacked={isStacked}
+                        isStackHidden={stackDepth >= MAX_MOBILE_STACK_DEPTH}
+                    />
+                );
+            })}
         </>
     );
 }

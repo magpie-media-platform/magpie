@@ -429,6 +429,8 @@ public sealed class ContentMetadataProviderRelationshipTests
     [Test]
     public async Task GetRelationshipsAsync_ReturnsEmptyWithoutResolving_WhenItemIsNotBookLevel()
     {
+        // Arrange
+
         // Act
         var definitions = await _subject.GetRelationshipsAsync(
             new MetadataRelationshipRequest
@@ -447,5 +449,111 @@ public sealed class ContentMetadataProviderRelationshipTests
 
         // Assert
         Assert.That(definitions, Is.Empty);
+    }
+
+    [TestCase("Harper / Collins", "https://openlibrary.org/publishers/Harper_%2F_Collins")]
+    [TestCase("Why? Books", "https://openlibrary.org/publishers/Why%3F_Books")]
+    [TestCase("Books #1", "https://openlibrary.org/publishers/Books_%231")]
+    [TestCase("100% Books", "https://openlibrary.org/publishers/100%25_Books")]
+    public async Task GetRelationshipsAsync_EncodedCanonicalUrl_WhenPublisherContainsReservedCharacters(
+        string publisher,
+        string expectedUrl)
+    {
+        // Arrange
+        var hit = new WorkHit { WorkOlid = "OL1W", Title = "Dune", Authors = [], Publishers = [publisher] };
+        _searchEngine
+            .Setup(value => value.ResolveWorkAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorkResolution { Kind = WorkResolutionKind.Resolved, Hit = hit });
+        _searchEngine
+            .Setup(value => value.GetRepresentativeEditionAsync(hit, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((EditionDto?)null);
+
+        // Act
+        var definitions = await _subject.GetRelationshipsAsync(new MetadataRelationshipRequest
+        {
+            Item = new ContentHierarchyItem { ContentType = "books", Level = "book", Slug = "dune", Name = "Dune" },
+            Contribution = _contribution,
+            ExistingMetadata = []
+        }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            definitions.Single().InitialSubjectContribution!.References.Single().Url.AbsoluteUri,
+            Is.EqualTo(expectedUrl));
+    }
+
+    [Test]
+    public async Task GetRelationshipsAsync_MatchesSearchReferences_WhenSubjectsExceedCaps()
+    {
+        // Arrange
+        var facets = new SubjectFacetPair[]
+        {
+            new("!!!", null),
+            new("First Person", " first_key "), new("Second Person", null), new("Three", null),
+            new("Four", null), new("Five", null), new("Six", null), new("Seven", null),
+            new("Eight", null), new("Nine", null), new("Ten", null), new("Eleven", null),
+            new("Twelve", null), new("Thirteen", null)
+        };
+        var hit = new WorkHit
+        {
+            WorkOlid = "OL1W",
+            Title = "Dune",
+            Authors = [],
+            Publishers =
+            [
+                "!!!", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven",
+                "Twelve", "Thirteen"
+            ],
+            Persons = facets,
+            Places = facets,
+            Times = facets
+        };
+        _searchEngine
+            .Setup(value => value.ResolveWorkAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorkResolution { Kind = WorkResolutionKind.Resolved, Hit = hit });
+        _searchEngine
+            .Setup(value => value.GetRepresentativeEditionAsync(hit, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((EditionDto?)null);
+
+        // Act
+        var candidate = hit.ToMetadataSearchCandidate(
+            new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" }, "");
+        var definitions = await _subject.GetRelationshipsAsync(new MetadataRelationshipRequest
+        {
+            Item = new ContentHierarchyItem { ContentType = "books", Level = "book", Slug = "dune", Name = "Dune" },
+            Contribution = _contribution,
+            ExistingMetadata = []
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(candidate.SubjectReferences, Has.Count.EqualTo(48));
+            Assert.That(definitions, Has.Count.EqualTo(48));
+            Assert.That(candidate.SubjectReferences.Take(12).Select(reference => reference.ExternalIds["openlibrary"]),
+                Is.EqualTo([
+                    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "eleven", "twelve"]));
+            Assert.That(definitions.Take(12).Select(definition => definition.SubjectExternalIds["openlibrary"]),
+                Is.EqualTo([
+                    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "eleven", "twelve"]));
+            Assert.That(candidate.SubjectReferences.Skip(12).Select(reference => reference.ExternalIds["openlibrary"]),
+                Is.EqualTo([
+                    "first_key", "second_person", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "eleven", "twelve",
+                    "first_key", "second_person", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "eleven", "twelve",
+                    "first_key", "second_person", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "eleven", "twelve"]));
+            Assert.That(definitions.Skip(12).Select(definition => definition.SubjectExternalIds["openlibrary"]),
+                Is.EqualTo([
+                    "first_key", "second_person", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "eleven", "twelve",
+                    "first_key", "second_person", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "eleven", "twelve",
+                    "first_key", "second_person", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "eleven", "twelve"]));
+        }
     }
 }

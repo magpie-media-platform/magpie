@@ -12,7 +12,6 @@ import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import { Switch } from '@/components/ui/Switch';
 import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
-import { useExternalUserProviderTypes } from '@/hooks/useProviderTypes';
 import { Role, RoleName } from '@/auth';
 
 import './UserForm.css';
@@ -24,15 +23,10 @@ export interface UserFormValues {
     enabled: boolean;
     password?: string;
     providerType?: string;
-    externalId?: string;
     email?: string;
 }
 
 const LOCAL_PROVIDER_TYPE = 'local';
-
-function isLocalProvider(providerType: string | undefined): boolean {
-    return !providerType || providerType === LOCAL_PROVIDER_TYPE;
-}
 
 interface UserFormProps {
     open: boolean;
@@ -60,8 +54,6 @@ export function UserForm({
     const isEditing = Boolean(initialValues?.id);
     const title = isEditing ? 'Edit User' : 'Add User';
 
-    const { types: externalProviders } = useExternalUserProviderTypes();
-
     const [values, setValues] = useState<UserFormValues>(initialValues ?? defaultValues);
     const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -76,8 +68,7 @@ export function UserForm({
             values.role !== cleanValuesRef.current.role ||
             values.enabled !== cleanValuesRef.current.enabled ||
             values.password !== cleanValuesRef.current.password ||
-            values.providerType !== cleanValuesRef.current.providerType ||
-            values.externalId !== cleanValuesRef.current.externalId,
+            values.providerType !== cleanValuesRef.current.providerType,
         [values],
     );
     const isDirtyRef = useRef(isDirty);
@@ -100,8 +91,6 @@ export function UserForm({
         setShowUnsavedDialog(false);
         setShowStaleSaveConfirmation(false);
     }, [open, initialValues]);
-
-    const isExternal = !isLocalProvider(values.providerType);
 
     const conflict = useExternalChangeConflict({
         dirty: isDirty,
@@ -161,19 +150,13 @@ export function UserForm({
             newErrors.username = 'Username is required';
         }
 
-        if (!isEditing) {
-            if (isExternal) {
-                if (!values.externalId?.trim()) {
-                    newErrors.externalId = 'External id is required';
-                }
-            } else if (!values.password || values.password.length < 8) {
-                newErrors.password = 'Password must be at least 8 characters';
-            }
+        if (!isEditing && (!values.password || values.password.length < 8)) {
+            newErrors.password = 'Password must be at least 8 characters';
         }
 
         setErrors(newErrors);
         return Object.keys(newErrors).length === 0;
-    }, [values, isEditing, isExternal]);
+    }, [values, isEditing]);
 
     const save = useCallback(async () => {
         conflict.beginOwnSave();
@@ -250,43 +233,22 @@ export function UserForm({
                             )}
                         </div>
 
-                        {!isEditing && (
-                            <div className="user-form__field">
-                                <Label htmlFor="user-provider">Provider</Label>
-                                <Select
-                                    value={isExternal ? (values.providerType ?? '') : LOCAL_PROVIDER_TYPE}
-                                    onValueChange={(v) => handleChange('providerType', v)}
-                                    disabled={isSubmitting}
-                                >
-                                    <SelectTrigger id="user-provider" data-field="provider">
-                                        {isExternal ? values.providerType : 'Local (password)'}
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value={LOCAL_PROVIDER_TYPE}>Local (password)</SelectItem>
-                                        {externalProviders.map((provider) => (
-                                            <SelectItem key={provider} value={provider}>
-                                                {provider}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        )}
-
-                        {isEditing && (
-                            <div className="user-form__field">
-                                <Label htmlFor="user-provider">Provider</Label>
-                                <Input
-                                    id="user-provider"
-                                    type="text"
-                                    value={values.providerType ?? LOCAL_PROVIDER_TYPE}
-                                    readOnly
-                                    disabled
-                                    data-field="provider"
-                                />
-                                <p className="user-form__help">The authentication provider cannot be changed.</p>
-                            </div>
-                        )}
+                        <div className="user-form__field">
+                            <Label htmlFor="user-provider">Provider</Label>
+                            <Input
+                                id="user-provider"
+                                type="text"
+                                value={values.providerType ?? LOCAL_PROVIDER_TYPE}
+                                readOnly
+                                disabled
+                                data-field="provider"
+                            />
+                            <p className="user-form__help">
+                                {isEditing
+                                    ? 'The authentication provider cannot be changed.'
+                                    : 'Magpie creates local users here. External users are created by their authentication provider at first sign-in.'}
+                            </p>
+                        </div>
 
                         <div className="user-form__field">
                             <Label htmlFor="user-role">Role</Label>
@@ -307,20 +269,18 @@ export function UserForm({
                             </Select>
                         </div>
 
-                        {(isEditing || !isExternal) && (
-                            <div className="user-form__field user-form__field--inline">
-                                <Label htmlFor="user-enabled">Enabled</Label>
-                                <Switch
-                                    id="user-enabled"
-                                    checked={values.enabled}
-                                    onCheckedChange={(checked) => handleChange('enabled', checked)}
-                                    aria-label="User enabled"
-                                    disabled={isSubmitting}
-                                />
-                            </div>
-                        )}
+                        <div className="user-form__field user-form__field--inline">
+                            <Label htmlFor="user-enabled">Enabled</Label>
+                            <Switch
+                                id="user-enabled"
+                                checked={values.enabled}
+                                onCheckedChange={(checked) => handleChange('enabled', checked)}
+                                aria-label="User enabled"
+                                disabled={isSubmitting}
+                            />
+                        </div>
 
-                        {!isEditing && !isExternal && (
+                        {!isEditing && (
                             <div className="user-form__field">
                                 <Label htmlFor="user-password" error={!!errors.password}>
                                     Password
@@ -338,28 +298,6 @@ export function UserForm({
                                     data-field="password"
                                 />
                                 <p className="user-form__help">Minimum 8 characters</p>
-                            </div>
-                        )}
-
-                        {!isEditing && isExternal && (
-                            <div className="user-form__field">
-                                <Label htmlFor="user-external-id" error={!!errors.externalId} required>
-                                    External id
-                                </Label>
-                                <Input
-                                    id="user-external-id"
-                                    type="text"
-                                    value={values.externalId ?? ''}
-                                    onChange={(e) => handleChange('externalId', e.target.value)}
-                                    placeholder="Identifier used by the authentication provider"
-                                    error={!!errors.externalId}
-                                    errorMessage={errors.externalId || undefined}
-                                    disabled={isSubmitting}
-                                    data-field="external-id"
-                                />
-                                <p className="user-form__help">
-                                    The provider account this user maps to. No password is stored.
-                                </p>
                             </div>
                         )}
                     </div>

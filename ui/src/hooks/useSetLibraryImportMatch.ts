@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { apiPost } from '@/lib/api';
+import { libraryImportCandidateGroupQueryKeys } from '@/hooks/useLibraryImportCandidateGroups';
 import { libraryImportCandidateQueryKeys, type LibraryImportCandidate } from '@/hooks/useLibraryImportCandidates';
+import { apiPost, isApiError } from '@/lib/api';
 
 interface SetLibraryImportMatchVariables {
     id: string;
@@ -32,6 +33,13 @@ export function useSetLibraryImportMatch() {
         mutationFn: setLibraryImportMatch,
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: libraryImportCandidateQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: libraryImportCandidateGroupQueryKeys.all });
+        },
+        onError: (error) => {
+            if (isApiError(error) && error.status === 404) {
+                void queryClient.invalidateQueries({ queryKey: libraryImportCandidateQueryKeys.all });
+                void queryClient.invalidateQueries({ queryKey: libraryImportCandidateGroupQueryKeys.all });
+            }
         },
     });
 }

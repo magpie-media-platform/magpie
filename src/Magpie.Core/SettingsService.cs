@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Api;
@@ -23,10 +24,12 @@ namespace Magpie.Core;
 
 internal sealed class SettingsService(
     ISettingsRepository settingsRepository,
+    IContentHierarchyItemRepository contentHierarchyItemRepository,
+    ITransactionManager transactionManager,
     IEnumerable<IExtensionSettingsSchemaProvider> schemaProviders,
     IEnumerable<IExtensionConfigurationTester> configurationTesters,
     ILogger<SettingsService> logger,
-    IExtensionRepository? extensionRepository = null) : ISettingsService
+    IExtensionRepository extensionRepository) : ISettingsService
 {
     private static readonly IReadOnlyList<string> SystemSettingsGroupNames = [MonitoringGroupName, SetupGroupName];
     private const string MonitoringGroupName = "monitoring";
@@ -339,7 +342,6 @@ internal sealed class SettingsService(
         var binding = await FindExtensionSettingsGroupBindingAsync(extensionId, name, cancellationToken)
             .ConfigureAwait(false);
         var settingsExtensionId = binding?.LoadedExtensionId ?? extensionId;
-        var responseExtensionId = binding?.LoadedExtensionId ?? extensionId;
         var schema = binding?.Definition.SettingsSchema;
 
         var group = await settingsRepository
@@ -356,7 +358,7 @@ internal sealed class SettingsService(
         return BuildDetail(
             name,
             settings,
-            responseExtensionId,
+            settingsExtensionId,
             schema,
             schemaResolved: schema is not null,
             canTest: configurationTesters.Any(tester =>
@@ -474,19 +476,34 @@ internal sealed class SettingsService(
             return false;
         }
 
-        return await settingsRepository.PatchAsync(
-            new SettingsGroupPatch
+        return await transactionManager.ExecuteWithTransactionAsync(
+            async _ =>
             {
-                ExtensionId = extensionId,
-                Name = name,
-                Settings = new DictionaryPatch<string, string, string>
+                var patched = await settingsRepository.PatchAsync(
+                    new SettingsGroupPatch
+                    {
+                        ExtensionId = extensionId,
+                        Name = name,
+                        Settings = new DictionaryPatch<string, string, string>
+                        {
+                            Add = add.Count > 0 ? add : null,
+                            Remove = remove.Length > 0 ? remove : null,
+                            Update = update.Count > 0 ? update : null
+                        }
+                    },
+                    callerUserId,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (patched && extensionId is null && name == MonitoringGroupName &&
+                    (add.ContainsKey("system-default") || update.ContainsKey("system-default") ||
+                        remove.Contains("system-default", StringComparer.Ordinal)))
                 {
-                    Add = add.Count > 0 ? add : null,
-                    Remove = remove.Length > 0 ? remove : null,
-                    Update = update.Count > 0 ? update : null
+                    await contentHierarchyItemRepository.RecomputeAllEffectiveValuesAsync(cancellationToken)
+                        .ConfigureAwait(false);
                 }
+
+                return patched;
             },
-            callerUserId,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -504,15 +521,6 @@ internal sealed class SettingsService(
     private async Task<IReadOnlyList<ExtensionSettingsGroupBinding>> GetExtensionSettingsGroupBindingsAsync(
         CancellationToken cancellationToken)
     {
-        if (extensionRepository is null)
-        {
-            return
-            [
-                .. schemaProviders.SelectMany(provider => provider.GetSettingsGroups())
-                    .Select(definition => new ExtensionSettingsGroupBinding(definition, definition.ExtensionId))
-            ];
-        }
-
         var extensions = await extensionRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
         var extensionsByAssemblyName = extensions
             .ToLookup(extension => extension.AssemblyName, StringComparer.OrdinalIgnoreCase);

@@ -45,6 +45,14 @@ public interface IRefreshTokenRepository : IRepository
     Task<RefreshToken?> ConsumeAsync(string tokenHash, DateTime now, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Deletes all the refresh tokens of a user.
+    /// </summary>
+    /// <param name="userId">The id of the user whose tokens the operation deletes</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The count of the deleted tokens</returns>
+    Task<int> DeleteByUserAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Deletes a refresh token by its hash.
     /// </summary>
     /// <param name="tokenHash">The hash of the refresh token to delete</param>

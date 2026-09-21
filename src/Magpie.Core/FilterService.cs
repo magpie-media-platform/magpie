@@ -27,6 +27,13 @@ internal sealed class FilterService(
         return callerIsAdmin || ownerUserId == callerUserId;
     }
 
+    private static bool CanModify(ContentFilter filter, Guid callerUserId, bool callerIsAdmin)
+    {
+        return filter.OwnerUserId is null
+            ? callerIsAdmin
+            : filter.OwnerUserId == callerUserId || (callerIsAdmin && filter.OwnerLock != true);
+    }
+
     private static MagpieQlParseResult<T> ToParseResult<T>(ParseResult<T> result)
         where T : class
     {
@@ -51,44 +58,12 @@ internal sealed class FilterService(
         Guid callerUserId,
         CancellationToken cancellationToken = default)
     {
-        const int pageSize = 500;
-        var sharedItems = new List<ContentFilter>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await contentFilters.QueryAsync(
-                new ContentFilterQuery { Tag = tag, SharedOnly = true },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            sharedItems.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        var ownItems = new List<ContentFilter>();
-        pageNumber = 1;
-        while (true)
-        {
-            var page = await contentFilters.QueryAsync(
-                new ContentFilterQuery { Tag = tag, OwnerUserId = callerUserId },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            ownItems.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var sharedItems = await contentFilters.QueryAllAsync(
+            new ContentFilterQuery { Tag = tag, SharedOnly = true },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var ownItems = await contentFilters.QueryAllAsync(
+            new ContentFilterQuery { Tag = tag, OwnerUserId = callerUserId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var combined = sharedItems.Concat(ownItems);
         if (!string.IsNullOrWhiteSpace(name))
@@ -103,27 +78,9 @@ internal sealed class FilterService(
         Guid ownerUserId,
         CancellationToken cancellationToken = default)
     {
-        const int pageSize = 500;
-        var items = new List<ContentFilter>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await contentFilters.QueryAsync(
-                new ContentFilterQuery { OwnerUserId = ownerUserId },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            items.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        return items;
+        return await contentFilters.QueryAllAsync(
+            new ContentFilterQuery { OwnerUserId = ownerUserId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<ContentFilter?> GetContentFilterAsync(
@@ -159,7 +116,7 @@ internal sealed class FilterService(
         CancellationToken cancellationToken = default)
     {
         var filter = await contentFilters.GetByIdAsync(contentFilterId, cancellationToken).ConfigureAwait(false);
-        if (filter is null || !CanModify(filter.OwnerUserId, callerUserId, callerIsAdmin))
+        if (filter is null || !CanModify(filter, callerUserId, callerIsAdmin))
         {
             return false;
         }
@@ -176,7 +133,7 @@ internal sealed class FilterService(
         CancellationToken cancellationToken = default)
     {
         var filter = await contentFilters.GetByIdAsync(contentFilterId, cancellationToken).ConfigureAwait(false);
-        if (filter is null || !CanModify(filter.OwnerUserId, callerUserId, callerIsAdmin))
+        if (filter is null || !CanModify(filter, callerUserId, callerIsAdmin))
         {
             return false;
         }
@@ -191,44 +148,12 @@ internal sealed class FilterService(
         Guid callerUserId,
         CancellationToken cancellationToken = default)
     {
-        const int pageSize = 500;
-        var shared = new List<SubjectFilter>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await subjectFilters.QueryAsync(
-                new SubjectFilterQuery { Tag = tag, SharedOnly = true },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            shared.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        var own = new List<SubjectFilter>();
-        pageNumber = 1;
-        while (true)
-        {
-            var page = await subjectFilters.QueryAsync(
-                new SubjectFilterQuery { Tag = tag, OwnerUserId = callerUserId },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            own.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var shared = await subjectFilters.QueryAllAsync(
+            new SubjectFilterQuery { Tag = tag, SharedOnly = true },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var own = await subjectFilters.QueryAllAsync(
+            new SubjectFilterQuery { Tag = tag, OwnerUserId = callerUserId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var combined = shared.Concat(own);
         if (!string.IsNullOrWhiteSpace(name))
@@ -243,27 +168,9 @@ internal sealed class FilterService(
         Guid ownerUserId,
         CancellationToken cancellationToken = default)
     {
-        const int pageSize = 500;
-        var items = new List<SubjectFilter>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await subjectFilters.QueryAsync(
-                new SubjectFilterQuery { OwnerUserId = ownerUserId },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            items.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        return items;
+        return await subjectFilters.QueryAllAsync(
+            new SubjectFilterQuery { OwnerUserId = ownerUserId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<SubjectFilter?> GetSubjectFilterAsync(

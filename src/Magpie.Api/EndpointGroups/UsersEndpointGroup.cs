@@ -123,7 +123,7 @@ internal sealed class UsersEndpointGroup : IApiEndpointGroup
             ? Results.Problem(
                 detail: $"A user with the username '{create.Username.Trim()}' already exists.",
                 statusCode: StatusCodes.Status409Conflict)
-            : Results.Created($"api/{Name}/{created.Id}", CreateUserResponse(created));
+            : Results.Created($"/api/{Name}/{created.Id}", created.ToResponse());
     }
 
     internal async Task<IResult> GetMyUserAsync(
@@ -132,7 +132,7 @@ internal sealed class UsersEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         return await userService.GetProfileAsync(user.Id, cancellationToken).ConfigureAwait(false) is { } userProfile
-            ? Results.Ok(CreateUserResponse(userProfile))
+            ? Results.Ok(userProfile.ToResponse())
             : Results.NotFound();
     }
 
@@ -154,7 +154,7 @@ internal sealed class UsersEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         return await userService.GetAsync(id, cancellationToken).ConfigureAwait(false) is { } user
-            ? Results.Ok(CreateUserResponse(user))
+            ? Results.Ok(user.ToResponse())
             : Results.NotFound();
     }
 
@@ -230,33 +230,12 @@ internal sealed class UsersEndpointGroup : IApiEndpointGroup
     {
         return new()
         {
-            Items = [.. users.Items.Select(CreateUserResponse)],
+            Items = [.. users.Items.Select(UserExtensions.ToResponse)],
             PageNumber = users.PageNumber,
             PageSize = users.PageSize,
             TotalItems = users.TotalItems,
         };
     }
-
-    private static UserResponse CreateUserResponse(User user) =>
-        new()
-        {
-            Id = user.Id,
-            Username = user.Username,
-            Email = user.Email,
-            ExtensionId = user.ExtensionId,
-            ProviderType = user.ProviderType,
-            ExternalId = user.ExternalId,
-            Settings = user.Settings,
-            Enabled = user.Enabled,
-            Role = user.Role,
-            FailedLoginAttempts = user.FailedLoginAttempts,
-            LockedUntil = user.LockedUntil,
-            LastLoginAt = user.LastLoginAt,
-            CreatedAt = user.CreatedAt,
-            CreatedByUserId = user.CreatedByUserId,
-            ModifiedAt = user.ModifiedAt,
-            ModifiedByUserId = user.ModifiedByUserId,
-        };
 
     private static IReadOnlyList<ApiKeyResponse> CreateApiKeysResponse(IReadOnlyList<ApiKey> apiKeys)
     {

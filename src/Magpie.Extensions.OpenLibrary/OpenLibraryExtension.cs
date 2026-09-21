@@ -50,9 +50,11 @@ public sealed class OpenLibraryExtension : IExtension
         services.AddScoped<IContentHierarchyMetadataProvider, ContentMetadataProvider>();
         services.AddScoped<ISubjectMetadataProvider, AuthorSubjectMetadataProvider>();
 
-        services.AddSingleton<IUIExtensionProvider, AdminUiProvider>();
-        services.AddSingleton<IAssetProvider, AdminUiProvider>();
-        services.AddSingleton<IExtensionSettingsSchemaProvider, AdminUiProvider>();
+        services.AddSingleton<AdminUiProvider>();
+        services.AddSingleton<IUIExtensionProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IAssetProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IExtensionSettingsSchemaProvider>(
+            provider => provider.GetRequiredService<AdminUiProvider>());
         services.AddScoped<IExtensionConfigurationTester, ConfigurationTester>();
     }
 }

@@ -393,7 +393,7 @@ public class MusicBrainzContentMetadataProviderTests
             Assert.That(result!.Contribution!.Title, Is.EqualTo("Fetched album"));
             Assert.That(
                 result.Contribution.ExternalIds.Select(identifier => identifier.Source),
-                Is.EqualTo([Constants.ProviderType]));
+                Is.EqualTo(["musicbrainz"]));
             Assert.That(result.Children, Is.Empty);
         }
     }
@@ -466,5 +466,81 @@ public class MusicBrainzContentMetadataProviderTests
                 It.IsAny<Settings>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Test]
+    public void TryGetMetadataAsync_Throws_WhenTheRecordingLookupCouldNotAnswer()
+    {
+        // Arrange
+        const string recordingMbid = "550e8400-e29b-41d4-a716-446655440000";
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key => key.Kind == EntityKind.Recording),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto> { Outcome = FetchOutcome.Unavailable });
+        var existing = new MetadataContribution { ProviderType = Constants.ProviderType };
+        existing.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = recordingMbid,
+            Ordinal = 0
+        });
+        var request = new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "music",
+                Level = "track",
+                Slug = recordingMbid,
+                Name = "Bohemian Rhapsody"
+            },
+            ExistingMetadata = [existing],
+            DefaultLanguagePreference = "en"
+        };
+
+        // Act
+        // Assert
+        Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await _subject.TryGetMetadataAsync(request, default).ConfigureAwait(false));
+    }
+
+    [Test]
+    public async Task TryGetMetadataAsync_ReturnsNull_WhenTheRecordingIsNotFound()
+    {
+        // Arrange
+        const string recordingMbid = "550e8400-e29b-41d4-a716-446655440000";
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key => key.Kind == EntityKind.Recording),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto> { Outcome = FetchOutcome.NotFound });
+        var existing = new MetadataContribution { ProviderType = Constants.ProviderType };
+        existing.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = recordingMbid,
+            Ordinal = 0
+        });
+
+        // Act
+        var result = await _subject.TryGetMetadataAsync(
+            new MetadataFetchRequest
+            {
+                Item = new ContentHierarchyItem
+                {
+                    Id = Guid.NewGuid(),
+                    ContentType = "music",
+                    Level = "track",
+                    Slug = recordingMbid,
+                    Name = "Bohemian Rhapsody"
+                },
+                ExistingMetadata = [existing],
+                DefaultLanguagePreference = "en"
+            },
+            default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.Null);
     }
 }

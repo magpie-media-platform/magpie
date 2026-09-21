@@ -8,6 +8,9 @@ using System.Threading.Tasks;
 using Magpie.Extensions.Wikidata;
 using Magpie.Extensions.Wikidata.Mapping;
 using Magpie.Extensions.Wikidata.QueryEngine;
+using Magpie.Sdk.Caching;
+
+using Microsoft.Extensions.DependencyInjection;
 
 using Moq;
 
@@ -18,11 +21,106 @@ namespace Magpie.Test.Extensions.Wikidata;
 [TestFixture]
 internal sealed class QueryCoordinatorTests
 {
+    private Mock<ICacheFactory> _cacheFactory = null!;
+
+    private IServiceScopeFactory _scopeFactory = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _cacheFactory = new Mock<ICacheFactory>();
+        _cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns(() =>
+            {
+                var values = new Dictionary<string, object>();
+                var cache = new Mock<ICache>();
+                cache.Setup(value => value.Set(It.IsAny<string>(), It.IsAny<It.IsAnyType>()))
+                    .Callback(new InvocationAction(invocation =>
+                        values[(string)invocation.Arguments[0]] = invocation.Arguments[1]));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<It.IsAnyType?>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value;
+                        return found;
+                    }));
+                return cache.Object;
+            });
+        var provider = new Mock<IServiceProvider>();
+        provider.Setup(value => value.GetService(typeof(ICacheFactory))).Returns(() => _cacheFactory.Object);
+        var scope = new Mock<IServiceScope>();
+        scope.Setup(value => value.ServiceProvider).Returns(provider.Object);
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(value => value.CreateScope()).Returns(scope.Object);
+        _scopeFactory = scopeFactory.Object;
+    }
+
     [Test]
-    public async Task GetIdentityAsync_ConcurrentMisses_Coalesce()
+    public async Task GetEntitiesAsync_CompletesEveryBatch_WhenPendingIdsExceedCacheCapacity()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var client = new Mock<IWikidataClient>();
+        client.Setup(value => value.GetEntitiesAsync(
+            It.IsAny<IReadOnlyCollection<string>>(),
+            It.IsAny<RequestContext>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, EntityDto>());
+        var subject = new QueryCoordinator(client.Object, _scopeFactory);
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+        var ids = Enumerable.Range(1, 1025).Select(value => "Q" + value).ToArray();
+
+        // Act
+        var result = await subject.GetEntitiesAsync(ids, context, default)
+            .WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.Empty);
+        client.Verify(value => value.GetEntitiesAsync(
+            It.IsAny<IReadOnlyCollection<string>>(),
+            context,
+            It.IsAny<CancellationToken>()), Times.Exactly(21));
+    }
+
+    [Test]
+    public async Task GetSearchAsync_ReturnsToEveryWaiter_WhenCacheDoesNotRetainValues()
+    {
+        // Arrange
+        _cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns(Mock.Of<ICache>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
+        var source = new TaskCompletionSource<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var owner = subject.GetSearchAsync("key", _ => source.Task, default);
+        var follower = subject.GetSearchAsync("key", _ => source.Task, default);
+
+        // Act
+        source.SetResult([]);
+        var results = await Task.WhenAll(owner, follower).WaitAsync(TimeSpan.FromSeconds(5))
+            .ConfigureAwait(false);
+        var next = await subject.GetSearchAsync("key", _ => source.Task, default)
+            .WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(results[0].Rows, Is.Empty);
+            Assert.That(results[1].Rows, Is.Empty);
+            Assert.That(results[0].Provenance, Is.EqualTo(SearchCacheProvenance.Remote));
+            Assert.That(results[1].Provenance, Is.EqualTo(SearchCacheProvenance.InFlight));
+            Assert.That(next.Provenance, Is.EqualTo(SearchCacheProvenance.Remote));
+        }
+    }
+
+    [Test]
+    public async Task GetIdentityAsync_Coalesce_WhenConcurrentMisses()
+    {
+        // Arrange
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         var gate = new TaskCompletionSource<EntityResolution>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
@@ -60,10 +158,10 @@ internal sealed class QueryCoordinatorTests
     }
 
     [Test]
-    public async Task GetIdentityAsync_CancelledWaiter_DoesNotCancelSharedWork()
+    public async Task GetIdentityAsync_DoesNotCancelSharedWork_WhenCancelledWaiter()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         var gate = new TaskCompletionSource<EntityResolution>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = new CancellationTokenSource();
@@ -87,10 +185,10 @@ internal sealed class QueryCoordinatorTests
     }
 
     [Test]
-    public void GetSearchAsync_AlreadyCancelledOwner_DoesNotLaunchFill()
+    public void GetSearchAsync_DoesNotLaunchFill_WhenAlreadyCancelledOwner()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         var calls = 0;
@@ -114,10 +212,10 @@ internal sealed class QueryCoordinatorTests
     }
 
     [Test]
-    public async Task GetSearchAsync_CancelledOnlyOwner_CancelsFillAndDoesNotCacheCompletion()
+    public async Task GetSearchAsync_CancelsFillAndDoesNotCacheCompletion_WhenCancelledOnlyOwner()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         using var cancellation = new CancellationTokenSource();
         var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var fillCancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -157,10 +255,10 @@ internal sealed class QueryCoordinatorTests
     }
 
     [Test]
-    public async Task GetSearchAsync_OwnerAndJoiner_CancelsFillOnlyAfterBothCancel()
+    public async Task GetSearchAsync_CancelsFillOnlyAfterBothCancel_WhenOwnerAndJoiner()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         using var ownerCancellation = new CancellationTokenSource();
         using var joinerCancellation = new CancellationTokenSource();
         var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -197,10 +295,10 @@ internal sealed class QueryCoordinatorTests
     }
 
     [Test]
-    public void GetSearchAsync_Failure_IsNotCached()
+    public void GetSearchAsync_IsNotCached_WhenFailure()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         var calls = 0;
 
         // Act
@@ -236,7 +334,7 @@ internal sealed class QueryCoordinatorTests
     public async Task GetSearchAsync_ReturnsRemoteProvenanceAndFactoryRows_WhenOwner()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         IReadOnlyList<Dictionary<string, SparqlBindingDto>> rows =
         [
             new Dictionary<string, SparqlBindingDto>
@@ -261,7 +359,7 @@ internal sealed class QueryCoordinatorTests
     public async Task GetSearchAsync_ReturnsCacheProvenanceAndFactoryRows_WhenCompletedEntry()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         var calls = 0;
         IReadOnlyList<Dictionary<string, SparqlBindingDto>> rows =
         [
@@ -302,7 +400,7 @@ internal sealed class QueryCoordinatorTests
     public async Task GetSearchAsync_ReturnsInFlightProvenanceAndFactoryRows_WhenPendingEntry()
     {
         // Arrange
-        IQueryCoordinator subject = new QueryCoordinator(Mock.Of<IWikidataClient>());
+        var subject = new QueryCoordinator(Mock.Of<IWikidataClient>(), _scopeFactory);
         var gate = new TaskCompletionSource<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
@@ -351,7 +449,7 @@ internal sealed class QueryCoordinatorTests
     }
 
     [Test]
-    public async Task GetEntitiesAsync_FiftyOneIds_ChunksAndCachesConfirmedMissing()
+    public async Task GetEntitiesAsync_ChunksAndCachesConfirmedMissing_WhenFiftyOneIds()
     {
         // Arrange
         var context = new RequestContext
@@ -377,7 +475,7 @@ internal sealed class QueryCoordinatorTests
             });
         var ids = Enumerable.Range(1, 51).Select(value => "Q" + value).ToArray();
 
-        IQueryCoordinator subject = new QueryCoordinator(client.Object);
+        var subject = new QueryCoordinator(client.Object, _scopeFactory);
 
         // Act
         var first = await subject.GetEntitiesAsync(ids, context, default).ConfigureAwait(false);
@@ -395,7 +493,7 @@ internal sealed class QueryCoordinatorTests
     }
 
     [Test]
-    public async Task GetEntitiesAsync_LaterBatchFails_KeepsEarlierCompletedEntries()
+    public async Task GetEntitiesAsync_KeepsEarlierCompletedEntries_WhenLaterBatchFails()
     {
         // Arrange
         var context = new RequestContext
@@ -421,7 +519,7 @@ internal sealed class QueryCoordinatorTests
             });
         var ids = Enumerable.Range(1, 51).Select(value => "Q" + value).ToArray();
 
-        IQueryCoordinator subject = new QueryCoordinator(client.Object);
+        var subject = new QueryCoordinator(client.Object, _scopeFactory);
 
         // Act
         var failure = Assert.CatchAsync<HttpRequestException>(async () =>
@@ -439,7 +537,7 @@ internal sealed class QueryCoordinatorTests
     }
 
     [Test]
-    public async Task GetEntitiesAsync_DifferentLanguageScopes_FillsSeparateCacheEntries()
+    public async Task GetEntitiesAsync_FillsSeparateCacheEntries_WhenDifferentLanguageScopes()
     {
         // Arrange
         var calls = 0;
@@ -458,7 +556,7 @@ internal sealed class QueryCoordinatorTests
                     });
             });
 
-        IQueryCoordinator subject = new QueryCoordinator(client.Object);
+        var subject = new QueryCoordinator(client.Object, _scopeFactory);
 
         // Act
         await subject.GetEntitiesAsync(
@@ -510,7 +608,7 @@ internal sealed class QueryCoordinatorTests
                     });
             });
 
-        IQueryCoordinator subject = new QueryCoordinator(client.Object);
+        var subject = new QueryCoordinator(client.Object, _scopeFactory);
 
         // Act
         var first = await subject.GetEntitiesAsync(["Q59431323"], context, default)

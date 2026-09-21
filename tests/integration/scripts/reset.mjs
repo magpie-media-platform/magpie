@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const integrationRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export const suiteLockPath = resolve(tmpdir(), 'magpie-integration-suite.lock');
 const generatedDirectories = ['checkpoints', 'db', 'downloads', 'library', 'test-fixtures'];
 
 export async function reset() {
@@ -56,4 +58,5 @@ async function run(command, args, options = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     await reset();
+    await rm(suiteLockPath, { force: true });
 }

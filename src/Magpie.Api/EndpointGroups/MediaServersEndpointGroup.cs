@@ -88,7 +88,7 @@ internal sealed class MediaServersEndpointGroup : IApiEndpointGroup
 
         var response = await RedactSecretsAsync(mediaServerService, created, cancellationToken).ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", response);
+        return Results.Created($"/api/{Name}/{created.Id}", response);
     }
 
     [MagpieCommand("test-settings", "POST", "test", "Test media server settings")]

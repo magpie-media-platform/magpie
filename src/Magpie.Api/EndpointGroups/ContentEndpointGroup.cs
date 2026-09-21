@@ -78,9 +78,8 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
 
         builder.MapPost("from-external-id", HydrateExternalContentAsync)
             .WithName(nameof(HydrateExternalContentAsync))
-            .Produces<Guid>(StatusCodes.Status201Created)
             .Produces<Guid>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireRequester();
 
         builder.MapPost("preview-by-external-id", PreviewByExternalIdAsync)
@@ -168,7 +167,7 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
         var (parsed, error) = ParseFilter(filterService, filter);
         if (error is not null)
         {
-            return Results.BadRequest(error);
+            return FilterParseProblem(error);
         }
 
         var query = new ContentQuery
@@ -285,7 +284,7 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
         var (filterCriteria, error) = ParseFilter(filterService, request.Filter);
         if (error is not null)
         {
-            return Results.BadRequest(error);
+            return FilterParseProblem(error);
         }
 
         var patch = new BulkPatch<ContentFilterCriteria, ContentHierarchyItemPatch>
@@ -312,7 +311,7 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
         var (filterCriteria, error) = ParseFilter(filterService, request.Filter);
         if (error is not null)
         {
-            return Results.BadRequest(error);
+            return FilterParseProblem(error);
         }
 
         var action = new BulkAction<ContentFilterCriteria>
@@ -321,7 +320,11 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             Filter = filterCriteria
         };
 
-        var result = await contentService.BulkDeleteAsync(action, user.Id, cancellationToken)
+        var result = await contentService.BulkDeleteAsync(
+            action,
+            request.DeleteFromLibrary,
+            user.Id,
+            cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);
@@ -500,6 +503,18 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return releases is null ? Results.NotFound() : Results.Ok(releases);
+    }
+
+    private static IResult FilterParseProblem(MagpieQlParseError error)
+    {
+        return Results.Problem(
+            detail: error.Message,
+            statusCode: StatusCodes.Status400BadRequest,
+            extensions: new Dictionary<string, object?>
+            {
+                ["position"] = error.Position,
+                ["expected"] = error.Expected,
+            });
     }
 
     private static (ContentFilterCriteria? Criteria, MagpieQlParseError? Error) ParseFilter(

@@ -8,6 +8,10 @@ internal static class Constants
 
     public const string ProviderType = "openlibrary";
 
+    public const int PublisherCap = 12;
+
+    public const int SubjectFacetCap = 12;
+
     public const string AuthorRelationshipKind = "author";
 
     public const string IsbnSource = "isbn";

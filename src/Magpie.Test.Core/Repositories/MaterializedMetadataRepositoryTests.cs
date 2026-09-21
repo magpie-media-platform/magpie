@@ -20,8 +20,36 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class MaterializedMetadataRepositoryTests
+public sealed class MaterializedMetadataRepositoryTests
 {
+    private static readonly MetadataCriteria[] ShadowedCollectionCriteria =
+    [
+        new()
+        {
+            ExternalIds = new() { Some = [[new() { Value = new() { And = [new() { Value = "obsolete" }] } }]] }
+        },
+        new()
+        {
+            ContentRatings = new() { Some = [[new() { Rating = new() { And = [new() { Value = "R" }] } }]] }
+        },
+        new()
+        {
+            Images = new() { Some = [[new() { Source = new() { And = [new() { Value = "obsolete" }] } }]] }
+        },
+        new()
+        {
+            Previews = new() { Some = [[new() { Title = new() { And = [new() { Value = "obsolete" }] } }]] }
+        },
+        new()
+        {
+            References = new() { Some = [[new() { DisplayName = new() { And = [new() { Value = "obsolete" }] } }]] }
+        },
+        new()
+        {
+            Awards = new() { Some = [[new() { Status = new() { And = [new() { Value = "obsolete" }] } }]] }
+        }
+    ];
+
     private MagpieDbContext _context = null!;
     private IMaterializedMetadataRepository _subject = null!;
 
@@ -155,7 +183,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesScalarFields_FromHighestPriorityContribution()
+    public async Task ListAllAsync_MaterializesScalarFields_WhenHighestPriorityContributionIsProvided()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -310,7 +338,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_LowestOrdinalWins_PerScalarField()
+    public async Task ListAllAsync_LowestOrdinalWins_WhenScalarContributionsConflict()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -379,7 +407,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_Resolution_IsDeterministicAcrossRuns()
+    public async Task ListAllAsync_ReturnsTheSameMetadata_WhenRepeated()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -432,7 +460,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_LowestOrdinalWins_GenresCollection()
+    public async Task ListAllAsync_LowestOrdinalWins_WhenGenreContributionsConflict()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -467,7 +495,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_LowestOrdinalWins_ExternalIdsCollection()
+    public async Task ListAllAsync_LowestOrdinalWins_WhenExternalIdContributionsConflict()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -500,7 +528,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_LowestOrdinalWins_ImagesCollection()
+    public async Task ListAllAsync_LowestOrdinalWins_WhenImageContributionsConflict()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -533,7 +561,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesGenres_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesGenres_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -567,7 +595,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesGenres_ByNameCaseInsensitive()
+    public async Task ListAllAsync_DeduplicatesGenres_WhenNameCaseInsensitiveMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -601,7 +629,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesExternalIds_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesExternalIds_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -715,7 +743,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesExternalIds_BySourceCaseInsensitive()
+    public async Task ListAllAsync_DeduplicatesExternalIds_WhenSourceCaseInsensitiveMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -755,7 +783,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesContentRatings_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesContentRatings_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -788,7 +816,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesContentRatings_ByRatingsBody()
+    public async Task ListAllAsync_DeduplicatesContentRatings_WhenRatingsBodyMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -828,7 +856,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesAwards_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesAwards_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -875,7 +903,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesAwards_ByBodyNameYearCategory()
+    public async Task ListAllAsync_DeduplicatesAwards_WhenBodyNameYearCategoryMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -928,7 +956,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesAlternateTexts_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesAlternateTexts_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -973,7 +1001,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesAlternateTexts_ByKindLanguageText()
+    public async Task ListAllAsync_DeduplicatesAlternateTexts_WhenKindLanguageTextMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1018,7 +1046,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesReferences_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesReferences_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1063,7 +1091,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesReferences_BySourceKindLanguage()
+    public async Task ListAllAsync_DeduplicatesReferences_WhenSourceKindLanguageMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1118,7 +1146,54 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesRelationships_FromMultipleContributions()
+    public async Task ListAllAsync_DeduplicatesReferences_WhenLanguagesAreNull()
+    {
+        // Arrange
+        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var primary = new MetadataContribution
+        {
+            ProviderType = "primary",
+            Ordinal = 0,
+            CreatedAt = DateTime.UtcNow
+        };
+        primary.References.Add(new()
+        {
+            Ordinal = 0,
+            Source = "Wikipedia",
+            Kind = "homepage",
+            Url = new("https://example.com/primary")
+        });
+        var secondary = new MetadataContribution
+        {
+            ProviderType = "secondary",
+            Ordinal = 1,
+            CreatedAt = DateTime.UtcNow
+        };
+        secondary.References.Add(new()
+        {
+            Ordinal = 0,
+            Source = "WIKIPEDIA",
+            Kind = "HOMEPAGE",
+            Url = new("https://example.com/secondary")
+        });
+        container.Contributions.Add(primary);
+        container.Contributions.Add(secondary);
+        _context.MetadataContainers.Add(container);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = (await _subject.ListAllAsync().ConfigureAwait(false)).Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.References, Has.Exactly(1).Items);
+            Assert.That(result.References!.Single().Url.AbsoluteUri, Is.EqualTo("https://example.com/primary"));
+        }
+    }
+
+    [Test]
+    public async Task ListAllAsync_MaterializesRelationships_WhenMultipleContributionsExist()
     {
         // Arrange
         var relatedContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1167,7 +1242,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesRelationships_ByKindRelatedIdQualifier()
+    public async Task ListAllAsync_DeduplicatesRelationships_WhenKindRelatedIdQualifierMatches()
     {
         // Arrange
         var relatedContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1279,7 +1354,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesImages_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesImages_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1355,7 +1430,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesImages_ByKind()
+    public async Task ListAllAsync_DeduplicatesImages_WhenKindMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1406,7 +1481,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesPreviews_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesPreviews_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1449,7 +1524,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesPreviews_ByKind()
+    public async Task ListAllAsync_DeduplicatesPreviews_WhenKindMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1500,7 +1575,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_MaterializesCustomMetadata_FromMultipleContributions()
+    public async Task ListAllAsync_MaterializesCustomMetadata_WhenMultipleContributionsExist()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1533,7 +1608,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_DeduplicatesCustomMetadata_ByKeyCaseInsensitive()
+    public async Task ListAllAsync_DeduplicatesCustomMetadata_WhenKeyCaseInsensitiveMatches()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1573,7 +1648,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_WithLanguagePreference_PrioritizesMatchingLanguage()
+    public async Task QueryAsync_PrioritizesMatchingLanguage_WhenLanguagePreferenceIsProvided()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1648,7 +1723,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_WithNullLanguagePreference_UsesOrdinalOnly()
+    public async Task QueryAsync_UsesOrdinalOnly_WhenNullLanguagePreferenceIsProvided()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1682,7 +1757,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersContainerIds_BeforeCountSortAndPage()
+    public async Task QueryAsync_ReturnsOnlyTheNamedContainers_WhenContainerIdsAreGiven()
     {
         // Arrange
         var bravo = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -2212,7 +2287,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_ReturnsCorrectTotalItems_AfterFiltering()
+    public async Task QueryAsync_ReturnsCorrectTotalItems_WhenFiltersExcludeRows()
     {
         // Arrange
         for (var i = 0; i < 20; i++)
@@ -2251,7 +2326,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FallsBackToDefaultOrder_ForInvalidSortProperty()
+    public async Task QueryAsync_FallsBackToDefaultOrder_WhenInvalidSortPropertyIsRequested()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -2277,7 +2352,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByMultipleAwardCriteria_UsingOrSemantics()
+    public async Task QueryAsync_FiltersByMultipleAwardCriteria_WhenMultipleAwardAlternativesExist()
     {
         // Arrange
         var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -2512,6 +2587,135 @@ public class MaterializedMetadataRepositoryTests
                 result,
                 Has.Property(nameof(result.Items))
                     .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Action Movie"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsNoItems_WhenTheCriterionNamesAShadowedValue(
+        [ValueSource(nameof(ShadowedCollectionCriteria))] MetadataCriteria criteria)
+    {
+        // Arrange
+        var container = new MetadataContainer();
+        var primary = new MetadataContribution
+        {
+            Id = Guid.NewGuid(),
+            ProviderType = "primary",
+            Ordinal = 0,
+            Title = "Movie"
+        };
+        primary.ExternalIds.Add(new() { Source = "IMDB", Value = "current" });
+        primary.ContentRatings.Add(new() { Body = "MPAA", Rating = "PG" });
+        primary.Images.Add(new() { Type = "POSTER", Source = "current", Url = new("https://example.com/current") });
+        primary.Previews.Add(new() { Kind = "TRAILER", Title = "current", Url = new("https://example.com/current") });
+        primary.References.Add(new()
+        {
+            Kind = "HOME",
+            Source = "SITE",
+            DisplayName = "current",
+            Url = new("https://example.com/current"),
+        });
+        primary.Awards.Add(new() { Body = "ACADEMY", Name = "ACTOR", Status = "current" });
+        var secondary = new MetadataContribution
+        {
+            Id = Guid.NewGuid(),
+            ProviderType = "secondary",
+            Ordinal = 1,
+            Title = "Movie"
+        };
+        secondary.ExternalIds.Add(new() { Source = "imdb", Value = "obsolete" });
+        secondary.ContentRatings.Add(new() { Body = "mpaa", Rating = "R" });
+        secondary.Images.Add(new() { Type = "poster", Source = "obsolete", Url = new("https://example.com/obsolete") });
+        secondary.Previews.Add(new()
+        {
+            Kind = "trailer",
+            Title = "obsolete",
+            Url = new("https://example.com/obsolete"),
+        });
+        secondary.References.Add(new()
+        {
+            Kind = "home",
+            Source = "site",
+            DisplayName = "obsolete",
+            Url = new("https://example.com/obsolete"),
+        });
+        secondary.Awards.Add(new() { Body = "academy", Name = "actor", Status = "obsolete" });
+        container.Contributions.Add(primary);
+        container.Contributions.Add(secondary);
+        _context.MetadataContainers.Add(container);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(criteria, new() { PageNumber = 1, PageSize = 25 }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items, Is.Empty);
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsTheEffectiveExternalId_WhenLaterContributionsAreShadowed()
+    {
+        // Arrange
+        var container = new MetadataContainer();
+        var primary = new MetadataContribution
+        {
+            Id = Guid.NewGuid(),
+            ProviderType = "primary",
+            Ordinal = 0,
+            Title = "Movie"
+        };
+        primary.ExternalIds.Add(new() { Source = "IMDB", Value = "current" });
+        primary.ContentRatings.Add(new() { Body = "MPAA", Rating = "PG" });
+        primary.Images.Add(new() { Type = "POSTER", Source = "current", Url = new("https://example.com/current") });
+        primary.Previews.Add(new() { Kind = "TRAILER", Title = "current", Url = new("https://example.com/current") });
+        primary.References.Add(new()
+        {
+            Kind = "HOME",
+            Source = "SITE",
+            DisplayName = "current",
+            Url = new("https://example.com/current"),
+        });
+        primary.Awards.Add(new() { Body = "ACADEMY", Name = "ACTOR", Status = "current" });
+        var secondary = new MetadataContribution
+        {
+            Id = Guid.NewGuid(),
+            ProviderType = "secondary",
+            Ordinal = 1,
+            Title = "Movie"
+        };
+        secondary.ExternalIds.Add(new() { Source = "imdb", Value = "obsolete" });
+        secondary.ContentRatings.Add(new() { Body = "mpaa", Rating = "R" });
+        secondary.Images.Add(new() { Type = "poster", Source = "obsolete", Url = new("https://example.com/obsolete") });
+        secondary.Previews.Add(new()
+        {
+            Kind = "trailer",
+            Title = "obsolete",
+            Url = new("https://example.com/obsolete"),
+        });
+        secondary.References.Add(new()
+        {
+            Kind = "home",
+            Source = "site",
+            DisplayName = "obsolete",
+            Url = new("https://example.com/obsolete"),
+        });
+        secondary.Awards.Add(new() { Body = "academy", Name = "actor", Status = "obsolete" });
+        container.Contributions.Add(primary);
+        container.Contributions.Add(secondary);
+        _context.MetadataContainers.Add(container);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(new()
+        {
+            ExternalIds = new() { None = [new() { Value = new() { And = [new() { Value = "obsolete" }] } }] }
+        }, new() { PageNumber = 1, PageSize = 25 }, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Items, Has.Exactly(1).Items);
+            Assert.That(result.Items.Single().ExternalIds!.Single().Value, Is.EqualTo("current"));
         }
     }
 
@@ -2918,7 +3122,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByRelationships_KindCaseInsensitively()
+    public async Task QueryAsync_FiltersByRelationships_WhenRelationshipKindCaseDiffers()
     {
         // Arrange
         var relatedContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -2986,7 +3190,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByRelationships_BySubjectTitle()
+    public async Task QueryAsync_FiltersByRelationships_WhenFilteringBySubjectTitle()
     {
         // Arrange
         var delphineSubject = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -3019,7 +3223,7 @@ public class MaterializedMetadataRepositoryTests
         delphineContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = delphineSubject.Id
         });
         delphineMovie.Contributions.Add(delphineContribution);
@@ -3035,7 +3239,7 @@ public class MaterializedMetadataRepositoryTests
         marloweContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = marloweSubject.Id
         });
         marloweMovie.Contributions.Add(marloweContribution);
@@ -3105,7 +3309,7 @@ public class MaterializedMetadataRepositoryTests
         kerrMovieContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = kerrSubject.Id
         });
         kerrMovie.Contributions.Add(kerrMovieContribution);
@@ -3121,7 +3325,7 @@ public class MaterializedMetadataRepositoryTests
         otherMovieContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = otherSubject.Id
         });
         otherMovie.Contributions.Add(otherMovieContribution);
@@ -3249,7 +3453,7 @@ public class MaterializedMetadataRepositoryTests
         bobMovieContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = bobSubject.Id
         });
         bobMovie.Contributions.Add(bobMovieContribution);
@@ -3265,7 +3469,7 @@ public class MaterializedMetadataRepositoryTests
         marloweMovieContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = marloweSubject.Id
         });
         marloweMovie.Contributions.Add(marloweMovieContribution);
@@ -3329,7 +3533,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByRelationships_ByTypePersonSubject()
+    public async Task QueryAsync_FiltersByRelationships_WhenFilteringByTypePersonSubject()
     {
         // Arrange
         var personSubject = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -3352,7 +3556,7 @@ public class MaterializedMetadataRepositoryTests
         personContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = personSubject.Id
         });
         personMovie.Contributions.Add(personContribution);
@@ -3368,7 +3572,7 @@ public class MaterializedMetadataRepositoryTests
         studioContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "studio",
+            Kind = "publisher",
             RelatedMetadataContainerId = studioSubject.Id
         });
         studioMovie.Contributions.Add(studioContribution);
@@ -3402,21 +3606,21 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByRelationships_ByTypeContentLevel()
+    public async Task QueryAsync_FiltersByRelationships_WhenFilteringByTypeContentLevel()
     {
         // Arrange
-        var sceneTarget = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var levelTarget = new MetadataContainer { CreatedAt = DateTime.UtcNow };
         var personTarget = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.AddRange(sceneTarget, personTarget);
+        _context.MetadataContainers.AddRange(levelTarget, personTarget);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         _context.ContentHierarchyItems.Add(new ContentHierarchyItem
         {
-            MetadataContainerId = sceneTarget.Id,
+            MetadataContainerId = levelTarget.Id,
             ContentType = "type-e",
-            Level = "type-e-scene",
-            Slug = "scene-target",
-            Name = "Scene Target",
+            Level = "type-e-level",
+            Slug = "level-target",
+            Name = "Level Target",
             Monitoring = true,
             CreatedAt = DateTime.UtcNow
         });
@@ -3427,21 +3631,21 @@ public class MaterializedMetadataRepositoryTests
             CreatedAt = DateTime.UtcNow
         });
 
-        var sceneMovie = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        var sceneContribution = new MetadataContribution
+        var linkedMovie = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var linkedContribution = new MetadataContribution
         {
             ProviderType = "test",
             Ordinal = 0,
-            Title = "Scene Movie",
+            Title = "Linked Movie",
             CreatedAt = DateTime.UtcNow
         };
-        sceneContribution.Relationships.Add(new()
+        linkedContribution.Relationships.Add(new()
         {
             Ordinal = 0,
             Kind = "related",
-            RelatedMetadataContainerId = sceneTarget.Id
+            RelatedMetadataContainerId = levelTarget.Id
         });
-        sceneMovie.Contributions.Add(sceneContribution);
+        linkedMovie.Contributions.Add(linkedContribution);
 
         var personMovie = new MetadataContainer { CreatedAt = DateTime.UtcNow };
         var personContribution = new MetadataContribution
@@ -3454,12 +3658,12 @@ public class MaterializedMetadataRepositoryTests
         personContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = personTarget.Id
         });
         personMovie.Contributions.Add(personContribution);
 
-        _context.MetadataContainers.AddRange(sceneMovie, personMovie);
+        _context.MetadataContainers.AddRange(linkedMovie, personMovie);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var criteria = new MetadataCriteria
@@ -3467,7 +3671,7 @@ public class MaterializedMetadataRepositoryTests
             Relationships = new()
             {
                 Some =
-[[new() { Type = new() { And = [new() { Operator = CriteriaValueOperator.Equals, Value = "type-e-scene" }] } }]]
+[[new() { Type = new() { And = [new() { Operator = CriteriaValueOperator.Equals, Value = "type-e-level" }] } }]]
             }
         };
 
@@ -3483,12 +3687,12 @@ public class MaterializedMetadataRepositoryTests
             Assert.That(
                 result,
                 Has.Property(nameof(result.Items))
-                    .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Scene Movie"));
+                    .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Linked Movie"));
         }
     }
 
     [Test]
-    public async Task QueryAsync_ExcludesByRelationships_ByTypeNone()
+    public async Task QueryAsync_ExcludesByRelationships_WhenFilteringByTypeNone()
     {
         // Arrange
         var personSubject = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -3511,7 +3715,7 @@ public class MaterializedMetadataRepositoryTests
         personContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = personSubject.Id
         });
         personMovie.Contributions.Add(personContribution);
@@ -3527,7 +3731,7 @@ public class MaterializedMetadataRepositoryTests
         studioContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "studio",
+            Kind = "publisher",
             RelatedMetadataContainerId = studioSubject.Id
         });
         studioMovie.Contributions.Add(studioContribution);
@@ -3564,7 +3768,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByRelationships_ByTypeNotEquals()
+    public async Task QueryAsync_FiltersByRelationships_WhenFilteringByTypeNotEquals()
     {
         // Arrange
         var personSubject = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -3587,7 +3791,7 @@ public class MaterializedMetadataRepositoryTests
         personContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = personSubject.Id
         });
         personMovie.Contributions.Add(personContribution);
@@ -3603,7 +3807,7 @@ public class MaterializedMetadataRepositoryTests
         studioContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "studio",
+            Kind = "publisher",
             RelatedMetadataContainerId = studioSubject.Id
         });
         studioMovie.Contributions.Add(studioContribution);
@@ -3637,7 +3841,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByRelationships_ByTypeIsNullAndIsNotNull()
+    public async Task QueryAsync_FiltersByRelationships_WhenFilteringByTypeIsNullAndIsNotNull()
     {
         // Arrange
         var personSubject = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -3670,7 +3874,7 @@ public class MaterializedMetadataRepositoryTests
         materializedContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = personSubject.Id
         });
         materializedMovie.Contributions.Add(materializedContribution);
@@ -3736,7 +3940,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByRelationships_BySubjectExternalId()
+    public async Task QueryAsync_FiltersByRelationships_WhenFilteringBySubjectExternalId()
     {
         // Arrange
         var pinnedSubject = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -3750,7 +3954,7 @@ public class MaterializedMetadataRepositoryTests
         pinnedSubjectContribution.ExternalIds.Add(new()
         {
             Ordinal = 0,
-            Source = "provider-b.performer",
+            Source = "provider-b.director",
             Value = "12345"
         });
         pinnedSubject.Contributions.Add(pinnedSubjectContribution);
@@ -3766,7 +3970,7 @@ public class MaterializedMetadataRepositoryTests
         otherSubjectContribution.ExternalIds.Add(new()
         {
             Ordinal = 0,
-            Source = "provider-b.performer",
+            Source = "provider-b.director",
             Value = "99999"
         });
         otherSubject.Contributions.Add(otherSubjectContribution);
@@ -3784,7 +3988,7 @@ public class MaterializedMetadataRepositoryTests
         pinnedContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = pinnedSubject.Id
         });
         pinnedMovie.Contributions.Add(pinnedContribution);
@@ -3800,7 +4004,7 @@ public class MaterializedMetadataRepositoryTests
         otherContribution.Relationships.Add(new()
         {
             Ordinal = 0,
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = otherSubject.Id
         });
         otherMovie.Contributions.Add(otherContribution);
@@ -3831,7 +4035,7 @@ public class MaterializedMetadataRepositoryTests
                                     new()
                                     {
                                         Operator = CriteriaValueOperator.Equals,
-                                        Value = "provider-b.performer"
+                                        Value = "provider-b.director"
                                     }
                                 ]
                             }
@@ -4073,5 +4277,99 @@ public class MaterializedMetadataRepositoryTests
         // Assert
         var titles = result.Items.Select(m => m.Title).ToList();
         Assert.That(titles, Is.EqualTo(["Earlier", "Later"]));
+    }
+
+    [Test]
+    public async Task QueryAsync_SkipsTheShadowedRelationship_WhenAQualifiedDuplicateExists()
+    {
+        // Arrange
+        var relatedContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(relatedContainer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var shadowedContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var qualifiedContribution = new MetadataContribution
+        {
+            ProviderType = "primary",
+            Ordinal = 0,
+            Title = "Shadowed",
+            CreatedAt = DateTime.UtcNow
+        };
+        qualifiedContribution.Relationships.Add(new()
+        {
+            Ordinal = 0,
+            Kind = "actor",
+            RelatedMetadataContainerId = relatedContainer.Id,
+            Qualifier = "Lead"
+        });
+        var unqualifiedContribution = new MetadataContribution
+        {
+            ProviderType = "secondary",
+            Ordinal = 1,
+            Title = "Shadowed",
+            CreatedAt = DateTime.UtcNow
+        };
+        unqualifiedContribution.Relationships.Add(new()
+        {
+            Ordinal = 0,
+            Kind = "actor",
+            RelatedMetadataContainerId = relatedContainer.Id,
+            Qualifier = null
+        });
+        shadowedContainer.Contributions.Add(qualifiedContribution);
+        shadowedContainer.Contributions.Add(unqualifiedContribution);
+
+        var plainContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var plainContribution = new MetadataContribution
+        {
+            ProviderType = "primary",
+            Ordinal = 0,
+            Title = "Unqualified",
+            CreatedAt = DateTime.UtcNow
+        };
+        plainContribution.Relationships.Add(new()
+        {
+            Ordinal = 0,
+            Kind = "actor",
+            RelatedMetadataContainerId = relatedContainer.Id,
+            Qualifier = null
+        });
+        plainContainer.Contributions.Add(plainContribution);
+
+        _context.MetadataContainers.AddRange(shadowedContainer, plainContainer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var criteria = new MetadataCriteria
+        {
+            Relationships = new()
+            {
+                Some =
+                [
+                    [
+                        new()
+                        {
+                            Kind = new() { And = [new() { Value = "actor" }] },
+                            Qualifier = new() { And = [new() { Operator = CriteriaValueOperator.IsNull }] }
+                        }
+                    ]
+                ]
+            }
+        };
+
+        // Act
+        var result = await _subject.QueryAsync(
+            criteria,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.Items)).Exactly(1).Items);
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .One.Property(nameof(MaterializedMetadata.ContainerId)).EqualTo(plainContainer.Id));
+        }
     }
 }

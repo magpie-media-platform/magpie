@@ -19,6 +19,7 @@ import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/Toast';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useContentDetail } from '@/hooks/useContent';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useReleaseGrabGuard } from '@/hooks/useReleaseGrabGuard';
@@ -28,7 +29,7 @@ import {
     type InteractiveSearchCandidate,
 } from '@/hooks/useInteractiveSearch';
 import { formatDate } from '@/lib/dateFormatting';
-import { getErrorMessage, isNoDownloadClientError } from '@/lib/errors';
+import { getErrorMessage, isConflictError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/formatSize';
 
 import './InteractiveSearchPage.css';
@@ -45,6 +46,7 @@ function MatchCell({ candidate }: { candidate: InteractiveSearchCandidate }) {
 }
 
 export function InteractiveSearchPage() {
+    useDocumentTitle('Interactive Search');
     const usesCardLayout = useCardLayout();
     const { contentHierarchyItemId } = useParams<{ contentHierarchyItemId: string }>();
     const { hasPermission } = useAuth();
@@ -80,7 +82,7 @@ export function InteractiveSearchPage() {
                     },
                     onError: (grabError) => {
                         markGrabFailed(candidate.release.id);
-                        if (isNoDownloadClientError(grabError)) {
+                        if (isConflictError(grabError)) {
                             toast({
                                 title: 'No download client configured',
                                 description: 'Add a download client on the Download Clients page to download releases.',
@@ -358,5 +360,7 @@ export function InteractiveSearchPage() {
         </div>
     );
 }
+
+InteractiveSearchPage.displayName = 'InteractiveSearchPage';
 
 export default InteractiveSearchPage;

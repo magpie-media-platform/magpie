@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { apiGet } from '@/lib/api';
 
-import { clearEventInvalidationDiagnostics, getEventInvalidationDiagnostics } from './eventInvalidationDiagnostics';
 import { useEventStream } from './useEventStream';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 
@@ -29,7 +28,6 @@ describe('useInvalidateQueriesOnEvents', () => {
     beforeEach(() => {
         queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         vi.clearAllMocks();
-        clearEventInvalidationDiagnostics();
     });
 
     afterEach(() => {
@@ -115,11 +113,12 @@ describe('useInvalidateQueriesOnEvents', () => {
         });
 
         await vi.waitFor(() => expect(queryFn).toHaveBeenCalledOnce());
-        expect(
-            getEventInvalidationDiagnostics().some(
-                (entry) => entry.owner === 'subject-detail' && entry.refetched === true,
-            ),
-        ).toBe(true);
+        await vi.waitFor(() =>
+            expect(queryClient.getQueryData(['subjects', 'detail', 'subject-1'])).toEqual({
+                id: 'subject-1',
+                title: 'Updated',
+            }),
+        );
     });
 
     it('coalesces many relevant events into one active query refetch', async () => {

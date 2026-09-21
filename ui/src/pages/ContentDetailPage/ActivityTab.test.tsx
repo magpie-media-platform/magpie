@@ -203,56 +203,63 @@ describe('ActivityTab', () => {
             expect(screen.getByTestId('activity-tab__table')).toBeInTheDocument();
         });
 
-        expect(screen.getByRole('button', { name: /sort by activity/i })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /sort by status/i })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /sort by type/i })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /sort by timestamp/i })).toBeInTheDocument();
+        expect(screen.getByRole('columnheader', { name: 'Activity' })).toBeInTheDocument();
+        expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
+        expect(screen.getByRole('columnheader', { name: 'Type' })).toBeInTheDocument();
+        expect(screen.getByRole('columnheader', { name: 'Timestamp' })).toBeInTheDocument();
         const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
         expect(headers.some((t) => t === 'Detail')).toBe(true);
         expect(screen.getAllByRole('button', { name: /^detail$/i }).length).toBeGreaterThan(0);
     });
 
-    it('binds compact sort controls to the URL-backed activity sort state', async () => {
-        const user = userEvent.setup();
-        renderTab('/?sort=type:desc&page=2');
-
-        await waitFor(() => {
-            expect(screen.getByTestId('activity-tab__table')).toBeInTheDocument();
-        });
-
-        const controls = screen.getByTestId('activity-tab__sort-controls');
-        const field = within(controls).getByRole('combobox', { name: 'Sort activity by' });
-        expect(field).toHaveTextContent('Type');
-        expect(within(controls).getByRole('button', { name: 'Sort activity by Type ascending' })).toBeEnabled();
-
-        await user.click(field);
-        expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
-            'Activity',
-            'Status',
-            'Type',
-            'Timestamp',
-        ]);
-        await user.click(screen.getByRole('option', { name: 'Timestamp' }));
-
-        await waitFor(() => {
-            const params = new URLSearchParams(screen.getByTestId('activity-tab__location-search').textContent ?? '');
-            expect(params.get('sort')).toBe('timestamp:asc');
-            expect(params.get('page')).toBeNull();
-        });
-
-        const getTableOrder = () =>
+    it('preserves server order and offers no page-local sort controls', async () => {
+        // Arrange
+        renderTab('/?sort=timestamp:asc');
+        // Act
+        await screen.findByTestId('activity-tab__table');
+        // Assert
+        expect(screen.queryByRole('combobox', { name: 'Sort activity by' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /sort by/i })).not.toBeInTheDocument();
+        expect(
             Array.from(document.querySelectorAll('[data-testid="activity-tab__table"] tbody tr')).map((row) =>
                 row.getAttribute('data-row-id'),
-            );
-        expect(getTableOrder()).toEqual(['AuditRecord-audit-1', 'JobExecution-job-1', 'JobExecution-job-acq-1']);
+            ),
+        ).toEqual(['JobExecution-job-1', 'JobExecution-job-acq-1', 'AuditRecord-audit-1']);
+    });
 
-        await user.click(screen.getByRole('button', { name: 'Sort activity by Timestamp descending' }));
+    it('fetches the last page when the URL page exceeds the total', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockResolvedValue({ ...mockActivity, totalItems: 40 });
+        // Act
+        renderTab('/?page=99');
+        // Assert
+        await waitFor(() =>
+            expect(apiGet).toHaveBeenCalledWith('/audit-history?contentId=content-1&pageNumber=2&pageSize=25'),
+        );
+        expect(await screen.findByText('Page 2 of 2')).toBeInTheDocument();
+    });
 
-        await waitFor(() => {
-            const params = new URLSearchParams(screen.getByTestId('activity-tab__location-search').textContent ?? '');
-            expect(params.get('sort')).toBeNull();
-        });
-        expect(getTableOrder()).toEqual(['JobExecution-job-acq-1', 'JobExecution-job-1', 'AuditRecord-audit-1']);
+    it.each(['0', '-1', '1.5', 'invalid'])('loads page one for invalid page %s', async (page) => {
+        // Arrange
+        vi.mocked(apiGet).mockResolvedValue(mockActivity);
+        // Act
+        renderTab(`/?page=${page}`);
+        // Assert
+        await waitFor(() =>
+            expect(apiGet).toHaveBeenCalledWith('/audit-history?contentId=content-1&pageNumber=1&pageSize=25'),
+        );
+    });
+
+    it('retries an activity load failure', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockRejectedValueOnce(new Error('Activity unavailable'));
+        renderTab();
+        // Act
+        await user.click(await screen.findByRole('button', { name: 'Retry' }));
+        // Assert
+        expect(await screen.findByText('Grab Skipped')).toBeInTheDocument();
+        expect(screen.queryByText('Activity unavailable')).not.toBeInTheDocument();
     });
 
     it('shows each row detail text clamped to keep rows compact', async () => {
@@ -282,7 +289,7 @@ describe('ActivityTab', () => {
         expect(screen.getByText('Grab Skipped')).toBeInTheDocument();
     });
 
-    it('opens Details first and loads Trace context only after its tab is selected', async () => {
+    it('opens Details first and loads the related activity only after its tab is selected', async () => {
         const user = userEvent.setup();
         renderTab();
 
@@ -299,7 +306,7 @@ describe('ActivityTab', () => {
         expect(self).toHaveTextContent('Provider A 404');
         expect(within(dialog).queryByTestId('related-events__chain')).not.toBeInTheDocument();
 
-        await user.click(within(dialog).getByRole('tab', { name: 'Trace context' }));
+        await user.click(within(dialog).getByRole('tab', { name: 'Related activity' }));
         await waitFor(() => {
             expect(within(dialog).getByTestId('related-events__chain')).toBeInTheDocument();
         });
@@ -312,7 +319,7 @@ describe('ActivityTab', () => {
         expect(selfStep).toHaveTextContent('Content Metadata Refresh Item');
     });
 
-    it('pins and highlights the clicked event when the chain omits it (outside the newest-20 window)', async () => {
+    it('still shows and highlights the selected activity when the execution tree does not include it', async () => {
         const user = userEvent.setup();
         const unrelated = Array.from({ length: 20 }).map((_, i) => ({
             id: `create-${i}`,
@@ -342,12 +349,13 @@ describe('ActivityTab', () => {
         await user.click(within(refreshRow!).getByRole('button', { name: /^detail$/i }));
 
         const dialog = await screen.findByRole('dialog');
-        await user.click(within(dialog).getByRole('tab', { name: 'Trace context' }));
+        await user.click(within(dialog).getByRole('tab', { name: 'Related activity' }));
         await waitFor(() => {
             expect(within(dialog).getByTestId('related-events__chain')).toBeInTheDocument();
         });
 
-        const selfStep = within(dialog).getByTestId('related-events__self-step');
+        const also = within(dialog).getByTestId('related-events__also');
+        const selfStep = within(also).getByTestId('related-events__self-step');
         expect(selfStep).toHaveTextContent('Selected activity');
         expect(selfStep).toHaveTextContent('Content Metadata Refresh Item');
         expect(within(dialog).getAllByTestId('related-events__self-step')).toHaveLength(1);
@@ -436,7 +444,7 @@ describe('ActivityTab', () => {
             return Promise.resolve(null);
         });
 
-        renderTab();
+        renderTab('/?tab=activity&sort=timestamp:asc');
 
         await waitFor(() => {
             expect(screen.getByText(/Page 1 of 3/)).toBeInTheDocument();
@@ -451,5 +459,14 @@ describe('ActivityTab', () => {
                 .filter((u) => u.startsWith('/audit-history'));
             expect(activityCalls.some((u) => u.includes('pageNumber=2'))).toBe(true);
         });
+        expect(screen.getByTestId('activity-tab__location-search')).toHaveTextContent(
+            '?tab=activity&sort=timestamp%3Aasc&page=2',
+        );
+
+        await user.click(screen.getByRole('button', { name: /go to first page/i }));
+        await waitFor(() => expect(screen.getByText('Page 1 of 3')).toBeInTheDocument());
+        expect(screen.getByTestId('activity-tab__location-search').textContent).toBe(
+            '?tab=activity&sort=timestamp%3Aasc',
+        );
     });
 });

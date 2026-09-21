@@ -8,7 +8,7 @@ export function OverlayBodyGuard(): null {
                 if (body.style.pointerEvents !== 'none') {
                     return;
                 }
-                if (document.querySelector('.sheet-content, .dialog-content')) {
+                if (document.querySelector('[data-overlay-content]')) {
                     return;
                 }
                 body.style.pointerEvents = '';

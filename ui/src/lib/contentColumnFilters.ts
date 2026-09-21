@@ -1,4 +1,5 @@
 import type { ContentFilterSelection } from './contentFilterOptions';
+import { escapeQueryString, unescapeQueryString } from './simpleFilterQuery';
 
 type ContentFilterField = 'monitoring' | 'title' | 'publishDateFrom' | 'publishDateTo';
 
@@ -10,24 +11,24 @@ interface Predicate {
     value?: string;
 }
 
-const CONTENT_TYPE_RE = /^contentType\s*=\s*"([^"]*)"$/i;
-const LEVEL_RE = /^level\s*=\s*"([^"]*)"$/i;
+const CONTENT_TYPE_RE = /^contentType\s*=\s*"((?:\\.|[^"\\])*)"$/i;
+const LEVEL_RE = /^level\s*=\s*"((?:\\.|[^"\\])*)"$/i;
 const MONITORING_RE = /^monitoring\s*=\s*(true|false)$/i;
-const TITLE_RE = /^title\s+contains\s+"([^"]*)"$/i;
-const PUBLISH_FROM_RE = /^publishDate\s*>=\s*"([^"]*)"$/i;
-const PUBLISH_TO_RE = /^publishDate\s*<=\s*"([^"]*)"$/i;
+const TITLE_RE = /^title\s+contains\s+"((?:\\.|[^"\\])*)"$/i;
+const PUBLISH_FROM_RE = /^publishDate\s*>=\s*"((?:\\.|[^"\\])*)"$/i;
+const PUBLISH_TO_RE = /^publishDate\s*<=\s*"((?:\\.|[^"\\])*)"$/i;
 
 function classify(clause: string): Predicate {
     const trimmed = clause.trim();
 
     const contentType = trimmed.match(CONTENT_TYPE_RE);
     if (contentType) {
-        return { field: 'contentType', raw: trimmed, value: contentType[1] };
+        return { field: 'contentType', raw: trimmed, value: unescapeQueryString(contentType[1]) };
     }
 
     const level = trimmed.match(LEVEL_RE);
     if (level) {
-        return { field: 'level', raw: trimmed, value: level[1] };
+        return { field: 'level', raw: trimmed, value: unescapeQueryString(level[1]) };
     }
 
     const monitoring = trimmed.match(MONITORING_RE);
@@ -37,17 +38,17 @@ function classify(clause: string): Predicate {
 
     const title = trimmed.match(TITLE_RE);
     if (title) {
-        return { field: 'title', raw: trimmed, value: title[1] };
+        return { field: 'title', raw: trimmed, value: unescapeQueryString(title[1]) };
     }
 
     const from = trimmed.match(PUBLISH_FROM_RE);
     if (from) {
-        return { field: 'publishDateFrom', raw: trimmed, value: from[1] };
+        return { field: 'publishDateFrom', raw: trimmed, value: unescapeQueryString(from[1]) };
     }
 
     const to = trimmed.match(PUBLISH_TO_RE);
     if (to) {
-        return { field: 'publishDateTo', raw: trimmed, value: to[1] };
+        return { field: 'publishDateTo', raw: trimmed, value: unescapeQueryString(to[1]) };
     }
 
     return { field: null, raw: trimmed };
@@ -131,19 +132,20 @@ export function splitClauses(query: string): Predicate[] {
 }
 
 function serializeClause(field: ClassifiedContentFilterField, value: string): string {
+    const quoted = escapeQueryString(value);
     switch (field) {
         case 'contentType':
-            return `contentType = "${value}"`;
+            return `contentType = "${quoted}"`;
         case 'level':
-            return `level = "${value}"`;
+            return `level = "${quoted}"`;
         case 'monitoring':
             return `monitoring = ${value}`;
         case 'title':
-            return `title contains "${value}"`;
+            return `title contains "${quoted}"`;
         case 'publishDateFrom':
-            return `publishDate >= "${value}"`;
+            return `publishDate >= "${quoted}"`;
         case 'publishDateTo':
-            return `publishDate <= "${value}"`;
+            return `publishDate <= "${quoted}"`;
     }
 }
 

@@ -83,11 +83,11 @@ public class TvmazeContentMetadataProviderRelationshipTests
         _show = JsonSerializer.Deserialize<ShowDto>(ShowWithCreditsJson, JsonOptions)!;
         _client = new Mock<IClient>();
         _client
-            .Setup(client => client.GetShowWithCreditsAsync(82, It.IsAny<CancellationToken>()))
+            .Setup(client => client.GetShowWithEmbedsAsync(82, new[] { "cast", "crew" }, It.IsAny<CancellationToken>()))
             .ReturnsAsync(_show);
         _client
             .Setup(client => client.GetEpisodeGuestCastAsync(4952, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(JsonSerializer.Deserialize<GuestCastEntryDto[]>(GuestCastJson, JsonOptions)!);
+            .ReturnsAsync(JsonSerializer.Deserialize<CastEntryDto[]>(GuestCastJson, JsonOptions)!);
         _client
             .Setup(client => client.GetEpisodeGuestCrewAsync(4952, It.IsAny<CancellationToken>()))
             .ReturnsAsync(JsonSerializer.Deserialize<GuestCrewEntryDto[]>(GuestCrewJson, JsonOptions)!);
@@ -272,7 +272,8 @@ public class TvmazeContentMetadataProviderRelationshipTests
         // Assert
         Assert.That(relationships, Is.Empty);
         _client.Verify(
-            client => client.GetShowWithCreditsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            client => client.GetShowWithEmbedsAsync(
+                It.IsAny<int>(), new[] { "cast", "crew" }, It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -315,7 +316,7 @@ public class TvmazeContentMetadataProviderRelationshipTests
     }
 
     [Test]
-    public async Task GetRelationshipsAsync_ReturnsEmpty_ForNonShowLevels()
+    public async Task GetRelationshipsAsync_ReturnsEmpty_WhenNonShowLevels()
     {
         // Arrange
         var subject = new ContentMetadataProvider(
@@ -347,7 +348,8 @@ public class TvmazeContentMetadataProviderRelationshipTests
         // Assert
         Assert.That(relationships, Is.Empty);
         _client.Verify(
-            client => client.GetShowWithCreditsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            client => client.GetShowWithEmbedsAsync(
+                It.IsAny<int>(), new[] { "cast", "crew" }, It.IsAny<CancellationToken>()),
             Times.Never);
         _client.Verify(
             client => client.GetEpisodeGuestCastAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()),

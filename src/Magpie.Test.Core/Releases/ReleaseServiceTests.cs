@@ -106,7 +106,7 @@ public sealed class ReleaseServiceTests
             _acquisitionQualityTierListId = Guid.NewGuid();
             _acquisitionRootFolderId = Guid.NewGuid();
 
-            _acquisitionReleaseRepository = new Mock<IReleaseRepository>();
+            _acquisitionReleaseRepository = new Mock<IReleaseRepository> { CallBase = true };
             _acquisitionReleaseRepository
                 .Setup(r => r.GetByIdAsync(_acquisitionReleaseId, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new Release
@@ -119,7 +119,7 @@ public sealed class ReleaseServiceTests
                     CreatedAt = DateTime.UtcNow
                 });
 
-            _acquisitionReleaseScopes = new Mock<IReleaseScopeRepository>();
+            _acquisitionReleaseScopes = new Mock<IReleaseScopeRepository> { CallBase = true };
             _acquisitionReleaseScopes
                 .Setup(r => r.QueryAsync(
                     It.Is<ReleaseScopeQuery>(query => query.ReleaseId == _acquisitionReleaseId),
@@ -139,7 +139,7 @@ public sealed class ReleaseServiceTests
                     ],
                     TotalItems = 1,
                 });
-            _acquisitionDownloadScopes = new Mock<IDownloadScopeRepository>();
+            _acquisitionDownloadScopes = new Mock<IDownloadScopeRepository> { CallBase = true };
             _acquisitionDownloadScopes
                 .Setup(r => r.QueryAsync(
                     It.IsAny<DownloadScopeQuery>(),
@@ -151,37 +151,98 @@ public sealed class ReleaseServiceTests
                 .Setup(r => r.CreateAsync(It.IsAny<DownloadScope>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync((DownloadScope scope, Guid? _, CancellationToken _) => scope);
 
-            _acquisitionHierarchyItems = new Mock<IContentHierarchyItemRepository>();
-            var tree = new (Guid Id, Guid? ParentId, string Level, string Name)[]
+            _acquisitionHierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+            var show = new ContentHierarchyItem
             {
-                (_acquisitionShowId, null, "series", "Show"),
-                (_acquisitionSeasonOneId, _acquisitionShowId, "season", "Season 1"),
-                (_acquisitionSeasonTwoId, _acquisitionShowId, "season", "Season 2"),
-                (_acquisitionLeafId, _acquisitionSeasonOneId, "episode", "S1E1"),
-                (_acquisitionEpisodeTwoId, _acquisitionSeasonOneId, "episode", "S1E2"),
-                (_acquisitionEpisodeThreeId, _acquisitionSeasonTwoId, "episode", "S2E1"),
-                (_acquisitionOrphanId, null, "episode", "Orphan"),
+                Id = _acquisitionShowId,
+                ParentId = null,
+                MetadataContainerId = Guid.NewGuid(),
+                ContentType = "tv",
+                Level = "series",
+                Slug = "Show",
+                Name = "Show",
+                EffectiveMonitoring = true,
+                EffectiveQualityTierListId = _acquisitionQualityTierListId,
             };
-            var nodes = new List<ContentHierarchyItem>();
-            foreach (var (id, parentId, level, name) in tree)
+            var seasonOne = new ContentHierarchyItem
             {
-                var node = new ContentHierarchyItem
-                {
-                    Id = id,
-                    ParentId = parentId,
-                    MetadataContainerId = Guid.NewGuid(),
-                    ContentType = "tv",
-                    Level = level,
-                    Slug = name,
-                    Name = name,
-                    EffectiveMonitoring = true,
-                    EffectiveQualityTierListId = _acquisitionQualityTierListId,
-                };
-                nodes.Add(node);
-                _acquisitionHierarchyItems
-                    .Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>()))
-                    .ReturnsAsync(node);
-            }
+                Id = _acquisitionSeasonOneId,
+                ParentId = _acquisitionShowId,
+                MetadataContainerId = Guid.NewGuid(),
+                ContentType = "tv",
+                Level = "season",
+                Slug = "Season 1",
+                Name = "Season 1",
+                EffectiveMonitoring = true,
+                EffectiveQualityTierListId = _acquisitionQualityTierListId,
+            };
+            var seasonTwo = new ContentHierarchyItem
+            {
+                Id = _acquisitionSeasonTwoId,
+                ParentId = _acquisitionShowId,
+                MetadataContainerId = Guid.NewGuid(),
+                ContentType = "tv",
+                Level = "season",
+                Slug = "Season 2",
+                Name = "Season 2",
+                EffectiveMonitoring = true,
+                EffectiveQualityTierListId = _acquisitionQualityTierListId,
+            };
+            var episodeOne = new ContentHierarchyItem
+            {
+                Id = _acquisitionLeafId,
+                ParentId = _acquisitionSeasonOneId,
+                MetadataContainerId = Guid.NewGuid(),
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "S1E1",
+                Name = "S1E1",
+                EffectiveMonitoring = true,
+                EffectiveQualityTierListId = _acquisitionQualityTierListId,
+            };
+            var episodeTwo = new ContentHierarchyItem
+            {
+                Id = _acquisitionEpisodeTwoId,
+                ParentId = _acquisitionSeasonOneId,
+                MetadataContainerId = Guid.NewGuid(),
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "S1E2",
+                Name = "S1E2",
+                EffectiveMonitoring = true,
+                EffectiveQualityTierListId = _acquisitionQualityTierListId,
+            };
+            var episodeThree = new ContentHierarchyItem
+            {
+                Id = _acquisitionEpisodeThreeId,
+                ParentId = _acquisitionSeasonTwoId,
+                MetadataContainerId = Guid.NewGuid(),
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "S2E1",
+                Name = "S2E1",
+                EffectiveMonitoring = true,
+                EffectiveQualityTierListId = _acquisitionQualityTierListId,
+            };
+            var orphan = new ContentHierarchyItem
+            {
+                Id = _acquisitionOrphanId,
+                ParentId = null,
+                MetadataContainerId = Guid.NewGuid(),
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "Orphan",
+                Name = "Orphan",
+                EffectiveMonitoring = true,
+                EffectiveQualityTierListId = _acquisitionQualityTierListId,
+            };
+            var nodes = new List<ContentHierarchyItem>
+            {
+                show, seasonOne, seasonTwo, episodeOne, episodeTwo, episodeThree, orphan,
+            };
+            _acquisitionHierarchyItems
+                .Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Guid id, CancellationToken _) => nodes.Find(node => node.Id == id));
 
             _acquisitionHierarchyItems
                 .Setup(r => r.QueryAsync(
@@ -191,7 +252,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = nodes, TotalItems = nodes.Count, });
 
-            _acquisitionDownloadRepository = new Mock<IDownloadRepository>();
+            _acquisitionDownloadRepository = new Mock<IDownloadRepository> { CallBase = true };
             _acquisitionDownloadRepository
                 .Setup(r => r.QueryAsync(
                     It.IsAny<DownloadQuery>(),
@@ -214,7 +275,7 @@ public sealed class ReleaseServiceTests
             integration.SetupGet(i => i.ProviderType).Returns("downloadclient-a");
             integration.SetupGet(i => i.SupportedProtocols).Returns(["torrent"]);
 
-            _acquisitionDownloadClients = new Mock<IDownloadClientRepository>();
+            _acquisitionDownloadClients = new Mock<IDownloadClientRepository> { CallBase = true };
             _acquisitionDownloadClients
                 .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(
@@ -298,7 +359,7 @@ public sealed class ReleaseServiceTests
                 .Setup(r => r.GetDefinitionFor("tv"))
                 .Returns(factProvider.Object.Definition);
 
-            var materializedMetadataRepository = new Mock<IMaterializedMetadataRepository>();
+            var materializedMetadataRepository = new Mock<IMaterializedMetadataRepository> { CallBase = true };
             materializedMetadataRepository
                 .Setup(repository => repository.QueryAsync(
                     It.IsAny<MetadataCriteria>(),
@@ -323,6 +384,7 @@ public sealed class ReleaseServiceTests
                 _acquisitionReleaseScopes.Object,
                 _acquisitionDownloadScopes.Object,
                 _acquisitionDownloadRepository.Object,
+                new ReleaseBlockList(_acquisitionDownloadRepository.Object, TimeProvider.System),
                 _acquisitionDownloadClients.Object,
                 [integration.Object],
                 _acquisitionDownloadService.Object,
@@ -368,7 +430,7 @@ public sealed class ReleaseServiceTests
                 MetadataContainer = episodeContainer,
             };
 
-            _packSelectionContentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
+            _packSelectionContentHierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
             _packSelectionContentHierarchyItems
                 .Setup(r => r.GetByIdAsync(_packSelectionEpisodeId, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(episode);
@@ -437,7 +499,7 @@ public sealed class ReleaseServiceTests
                     TotalItems = 1,
                 });
 
-            _packSelectionReleaseRepository = new Mock<IReleaseRepository>();
+            _packSelectionReleaseRepository = new Mock<IReleaseRepository> { CallBase = true };
             _packSelectionReleaseRepository
                 .Setup(r => r.QueryAsync(
                     It.IsAny<ReleaseQuery>(),
@@ -446,7 +508,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<Release>());
 
-            _packSelectionReleaseScopes = new Mock<IReleaseScopeRepository>();
+            _packSelectionReleaseScopes = new Mock<IReleaseScopeRepository> { CallBase = true };
             _packSelectionReleaseScopes
                 .Setup(r => r.QueryAsync(
                     It.IsAny<ReleaseScopeQuery>(),
@@ -455,7 +517,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<ReleaseScope>());
 
-            _packSelectionDownloadRepository = new Mock<IDownloadRepository>();
+            _packSelectionDownloadRepository = new Mock<IDownloadRepository> { CallBase = true };
             _packSelectionDownloadRepository
                 .Setup(r => r.QueryAsync(
                     It.IsAny<DownloadQuery>(),
@@ -476,7 +538,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
 
-            _packSelectionQualityTierLists = new Mock<IQualityTierListRepository>();
+            _packSelectionQualityTierLists = new Mock<IQualityTierListRepository> { CallBase = true };
             var fullHd = new QualityTier
             {
                 Id = Guid.NewGuid(),
@@ -603,7 +665,7 @@ public sealed class ReleaseServiceTests
                 .Setup(registry => registry.GetDefinitionFor("tv"))
                 .Returns(_packSelectionFactProvider.Object.Definition);
 
-            var indexerRepository = new Mock<IIndexerRepository>();
+            var indexerRepository = new Mock<IIndexerRepository> { CallBase = true };
             indexerRepository
                 .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
@@ -621,7 +683,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .Returns((Func<CancellationToken, Task<Download>> operation, CancellationToken cancellationToken) =>
                     operation(cancellationToken));
-            var materializedMetadataRepository = new Mock<IMaterializedMetadataRepository>();
+            var materializedMetadataRepository = new Mock<IMaterializedMetadataRepository> { CallBase = true };
             materializedMetadataRepository
                 .Setup(repository => repository.QueryAsync(
                     It.IsAny<MetadataCriteria>(),
@@ -646,6 +708,7 @@ public sealed class ReleaseServiceTests
                 _packSelectionReleaseScopes.Object,
                 Mock.Of<IDownloadScopeRepository>(),
                 _packSelectionDownloadRepository.Object,
+                new ReleaseBlockList(_packSelectionDownloadRepository.Object, TimeProvider.System),
                 Mock.Of<IDownloadClientRepository>(),
                 [],
                 Mock.Of<IDownloadService>(),
@@ -670,7 +733,7 @@ public sealed class ReleaseServiceTests
                 Fulfillment = FulfillmentStatus.Missing
             };
 
-            _selectionContentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
+            _selectionContentHierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
             _selectionContentHierarchyItems
                 .Setup(r => r.GetByIdAsync(_selectionHierarchyId, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ContentHierarchyItem
@@ -739,7 +802,7 @@ public sealed class ReleaseServiceTests
                     ],
                     TotalItems = 1,
                 });
-            _selectionReleaseRepository = new Mock<IReleaseRepository>();
+            _selectionReleaseRepository = new Mock<IReleaseRepository> { CallBase = true };
             _selectionReleaseRepository
                 .Setup(r => r.QueryAsync(
                     It.IsAny<ReleaseQuery>(),
@@ -748,7 +811,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<Release>());
 
-            _selectionReleaseScopes = new Mock<IReleaseScopeRepository>();
+            _selectionReleaseScopes = new Mock<IReleaseScopeRepository> { CallBase = true };
             _selectionReleaseScopes
                 .Setup(r => r.QueryAsync(
                     It.IsAny<ReleaseScopeQuery>(),
@@ -757,7 +820,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<ReleaseScope>());
 
-            _selectionDownloadRepository = new Mock<IDownloadRepository>();
+            _selectionDownloadRepository = new Mock<IDownloadRepository> { CallBase = true };
             _selectionDownloadRepository
                 .Setup(r => r.QueryAsync(
                     It.IsAny<DownloadQuery>(),
@@ -778,7 +841,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
 
-            _selectionQualityTierLists = new Mock<IQualityTierListRepository>();
+            _selectionQualityTierLists = new Mock<IQualityTierListRepository> { CallBase = true };
             var createdAt = DateTime.UtcNow;
             var ultraHd = new QualityTier
             {
@@ -953,7 +1016,7 @@ public sealed class ReleaseServiceTests
                 .Setup(registry => registry.GetDefinitionFor("movie"))
                 .Returns(_selectionFactProvider.Object.Definition);
 
-            _selectionIndexers = new Mock<IIndexerRepository>();
+            _selectionIndexers = new Mock<IIndexerRepository> { CallBase = true };
             _selectionIndexers
                 .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
@@ -975,7 +1038,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .Returns((Func<CancellationToken, Task<Download>> operation, CancellationToken cancellationToken) =>
                     operation(cancellationToken));
-            var materializedMetadataRepository = new Mock<IMaterializedMetadataRepository>();
+            var materializedMetadataRepository = new Mock<IMaterializedMetadataRepository> { CallBase = true };
             materializedMetadataRepository
                 .Setup(repository => repository.QueryAsync(
                     It.IsAny<MetadataCriteria>(),
@@ -1000,6 +1063,7 @@ public sealed class ReleaseServiceTests
                 _selectionReleaseScopes.Object,
                 Mock.Of<IDownloadScopeRepository>(),
                 _selectionDownloadRepository.Object,
+                new ReleaseBlockList(_selectionDownloadRepository.Object, TimeProvider.System),
                 Mock.Of<IDownloadClientRepository>(),
                 [],
                 Mock.Of<IDownloadService>(),
@@ -1026,7 +1090,7 @@ public sealed class ReleaseServiceTests
                 CreatedAt = DateTime.UtcNow,
             };
 
-            _viewContentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
+            _viewContentHierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
             _viewContentHierarchyItems
                 .Setup(r => r.GetByIdAsync(_viewHierarchyId, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(hierarchyItem);
@@ -1044,7 +1108,7 @@ public sealed class ReleaseServiceTests
                 .Setup(r => r.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync([hierarchyItem]);
 
-            _viewReleaseRepository = new Mock<IReleaseRepository>();
+            _viewReleaseRepository = new Mock<IReleaseRepository> { CallBase = true };
             _viewReleaseRepository
                 .Setup(r => r.QueryAsync(
                     It.IsAny<ReleaseQuery>(),
@@ -1053,7 +1117,7 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<Release>());
 
-            _viewDownloadRepository = new Mock<IDownloadRepository>();
+            _viewDownloadRepository = new Mock<IDownloadRepository> { CallBase = true };
             _viewDownloadRepository
                 .Setup(r => r.QueryAsync(
                     It.IsAny<DownloadQuery>(),
@@ -1062,12 +1126,12 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<Download>());
 
-            var indexerRepository = new Mock<IIndexerRepository>();
+            var indexerRepository = new Mock<IIndexerRepository> { CallBase = true };
             indexerRepository
                 .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
 
-            _viewQualityTierLists = new Mock<IQualityTierListRepository>();
+            _viewQualityTierLists = new Mock<IQualityTierListRepository> { CallBase = true };
             _viewQualityTierLists
                 .Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync((QualityTierList?)null);
@@ -1099,7 +1163,7 @@ public sealed class ReleaseServiceTests
                 .Returns((Func<CancellationToken, Task<Download>> operation, CancellationToken cancellationToken) =>
                     operation(cancellationToken));
 
-            var materializedMetadataRepository = new Mock<IMaterializedMetadataRepository>();
+            var materializedMetadataRepository = new Mock<IMaterializedMetadataRepository> { CallBase = true };
             materializedMetadataRepository
                 .Setup(repository => repository.QueryAsync(
                     It.IsAny<MetadataCriteria>(),
@@ -1125,6 +1189,7 @@ public sealed class ReleaseServiceTests
                 Mock.Of<IReleaseScopeRepository>(),
                 Mock.Of<IDownloadScopeRepository>(),
                 _viewDownloadRepository.Object,
+                new ReleaseBlockList(_viewDownloadRepository.Object, TimeProvider.System),
                 Mock.Of<IDownloadClientRepository>(),
                 [],
                 Mock.Of<IDownloadService>(),
@@ -1174,8 +1239,7 @@ public sealed class ReleaseServiceTests
         Assert.That(
             exception!.Message,
             Is.EqualTo(
-                "Root folder 'TV Library' has no quality tier list configured for level 'episode'. " +
-                "Configure a default quality tier list for this level in the root folder settings."));
+                "Root folder 'TV Library' has no quality tier list configured for level 'episode'."));
         _acquisitionDownloadService.Verify(
             service => service.GrabAsync(
                 It.IsAny<Release>(),
@@ -1240,7 +1304,8 @@ public sealed class ReleaseServiceTests
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("client dispatched then failed"));
 
-        // Act / Assert
+        // Act
+        // Assert
         Assert.ThrowsAsync<InvalidOperationException>(() =>
             _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, userId: null));
         _acquisitionDownloadService.Verify(
@@ -1268,7 +1333,8 @@ public sealed class ReleaseServiceTests
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("client dispatched then failed"));
 
-        // Act / Assert
+        // Act
+        // Assert
         Assert.ThrowsAsync<InvalidOperationException>(() =>
             _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, userId: null));
         _acquisitionDownloadRepository.Verify(
@@ -1449,7 +1515,6 @@ public sealed class ReleaseServiceTests
     public async Task AcquireAsync_DropsFulfilledLeavesFromTheDownloadScope_WhenGrabbingAPack()
     {
         // Arrange
-        // the fulfilled episode is absent from the needs-acquisition query, which filters on fulfillment
         _acquisitionHierarchyItems
             .Setup(r => r.QueryAsync(
                 It.IsAny<ContentHierarchyItemCriteria>(),
@@ -1719,8 +1784,6 @@ public sealed class ReleaseServiceTests
     [Test]
     public async Task SelectBestReleaseAsync_ReturnsNull_WhenNoStoredReleasesExist()
     {
-        // Arrange
-
         // Act
         var selected = await _selectionSubject
             .SelectBestReleaseAsync(_selectionCandidate.Id, userId: null, correlationId: null)
@@ -2214,7 +2277,11 @@ public sealed class ReleaseServiceTests
                     ExternalId = string.Empty,
                     Title = "failed grab",
                     Status = DownloadStatus.Failed,
-                    CreatedAt = DateTime.UtcNow
+                    CreatedAt = DateTime.UtcNow,
+                    ReleaseIdentityKeys =
+                    {
+                        new ReleaseIdentityKey { Authority = "provider", Value = "tainted-key" },
+                    }
                 }
             ]);
 
@@ -2282,7 +2349,7 @@ public sealed class ReleaseServiceTests
 
     [TestCase("Dune.2021.1080p.BluRay.x264-GRP", "Dune.2021.1080p.PROPER.BluRay.x264-GRP", true)]
     [TestCase("Dune.2021.1080p.BluRay.x264", "Dune.2021.1080p.PROPER.BluRay.x264", false)]
-    public async Task SelectBestReleaseAsync_Result_WhenProperRevisionGroupIsEvaluated(
+    public async Task SelectBestReleaseAsync_SelectsThePreferredRevision_WhenProperRevisionGroupIsEvaluated(
         string importedTitle,
         string properTitle,
         bool shouldSelect)
@@ -2491,7 +2558,6 @@ public sealed class ReleaseServiceTests
     [Test]
     public async Task GetReleaseViewAsync_ReturnsEmpty_WhenNoReleasesExist()
     {
-        // Arrange
         // Act
         var result = await _viewSubject.GetReleaseViewAsync(_viewHierarchyId).ConfigureAwait(false);
 
@@ -3042,7 +3108,7 @@ public sealed class ReleaseServiceTests
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<Release> { Items = [release], TotalItems = 1 });
-        var firstPage = Enumerable.Range(0, 200)
+        var firstPage = Enumerable.Range(0, 500)
             .Select(index => new Download
             {
                 Id = Guid.NewGuid(),
@@ -3080,7 +3146,7 @@ public sealed class ReleaseServiceTests
                     Items = paging.PageNumber == 1 ? firstPage : [pageTwoDownload],
                     PageNumber = paging.PageNumber,
                     PageSize = paging.PageSize,
-                    TotalItems = 201
+                    TotalItems = 501
                 });
 
         // Act
@@ -3093,7 +3159,7 @@ public sealed class ReleaseServiceTests
             _viewDownloadRepository.Verify(
                 repository => repository.QueryAsync(
                     It.IsAny<DownloadQuery>(),
-                    It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 200),
+                    It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 500),
                     It.IsAny<SortParameter?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Once);

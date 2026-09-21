@@ -80,6 +80,28 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.ToTable("job_enqueue_coalescing_lock", (string)null);
                 });
 
+            modelBuilder.Entity("Magpie.Data.ClusterEvent", b =>
+                {
+                    b.Property<long>("Seq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Seq"));
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("PublishedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Seq");
+
+                    b.HasIndex("PublishedAt");
+
+                    b.ToTable("system_clusterEvent", (string)null);
+                });
+
             modelBuilder.Entity("Magpie.Models.Data.AlternateText", b =>
                 {
                     b.Property<Guid>("Id")
@@ -184,6 +206,9 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.Property<string>("EntityType")
                         .HasColumnType("nvarchar(450)");
 
+                    b.Property<Guid?>("JobExecutionId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Operation")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -206,6 +231,8 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.HasIndex("EntityId");
 
                     b.HasIndex("EntityType");
+
+                    b.HasIndex("JobExecutionId");
 
                     b.HasIndex("Timestamp");
 
@@ -456,6 +483,9 @@ namespace Magpie.Data.SqlServer.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("DateLastSearched")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("FulfilledAt")
                         .HasColumnType("datetime2");
 
                     b.Property<int>("Fulfillment")
@@ -912,13 +942,6 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("extension_activationState", (string)null);
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Generation = 0L
-                        });
                 });
 
             modelBuilder.Entity("Magpie.Models.Data.ExtensionNodeStatus", b =>
@@ -1005,19 +1028,6 @@ namespace Magpie.Data.SqlServer.Migrations
                         .IsUnique();
 
                     b.ToTable("extension_packageSource", (string)null);
-
-                    b.HasData(
-                        new
-                        {
-                            Id = new Guid("5d9a2b5f-5c59-4a1f-8c70-8011a8b4e0b1"),
-                            CreatedAt = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            CredentialKind = 0,
-                            Enabled = true,
-                            Name = "nuget.org",
-                            SearchFilterKind = 0,
-                            SearchFilterValue = "magpie",
-                            SourceUrl = "https://api.nuget.org/v3/index.json"
-                        });
                 });
 
             modelBuilder.Entity("Magpie.Models.Data.ExternalId", b =>
@@ -1326,7 +1336,7 @@ namespace Magpie.Data.SqlServer.Migrations
 
                     b.Property<string>("JobType")
                         .IsRequired()
-                        .HasColumnType("nvarchar(max)");
+                        .HasColumnType("nvarchar(450)");
 
                     b.Property<DateTime?>("LastHeartbeat")
                         .HasColumnType("datetime2");
@@ -1346,6 +1356,24 @@ namespace Magpie.Data.SqlServer.Migrations
 
                     b.Property<Guid?>("OriginalExecutionId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ParameterContentHierarchyItemId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)")
+                        .HasComputedColumnSql("LOWER(CONVERT(nvarchar(256), JSON_VALUE([Parameters], '$.\"contentHierarchyItemId\"')))", true);
+
+                    b.Property<string>("ParameterContentItemId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)")
+                        .HasComputedColumnSql("LOWER(CONVERT(nvarchar(256), JSON_VALUE([Parameters], '$.\"contentItemId\"')))", true);
+
+                    b.Property<string>("ParameterDownloadId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)")
+                        .HasComputedColumnSql("LOWER(CONVERT(nvarchar(256), JSON_VALUE([Parameters], '$.\"downloadId\"')))", true);
 
                     b.Property<string>("Parameters")
                         .IsRequired()
@@ -1379,6 +1407,24 @@ namespace Magpie.Data.SqlServer.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("TriggerContextContentHierarchyItemId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)")
+                        .HasComputedColumnSql("LOWER(CONVERT(nvarchar(256), JSON_VALUE([TriggerContext], '$.\"event.context.content.hierarchyItemId\"')))", true);
+
+                    b.Property<string>("TriggerContextContentItemId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)")
+                        .HasComputedColumnSql("LOWER(CONVERT(nvarchar(256), JSON_VALUE([TriggerContext], '$.\"event.context.content.itemId\"')))", true);
+
+                    b.Property<string>("TriggerContextDownloadId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)")
+                        .HasComputedColumnSql("LOWER(CONVERT(nvarchar(256), JSON_VALUE([TriggerContext], '$.\"event.context.download.id\"')))", true);
+
                     b.HasKey("Id");
 
                     b.HasIndex("CorrelationId");
@@ -1389,16 +1435,40 @@ namespace Magpie.Data.SqlServer.Migrations
 
                     b.HasIndex("NotBeforeAt");
 
+                    b.HasIndex("ParameterContentHierarchyItemId");
+
+                    b.HasIndex("ParameterContentItemId");
+
+                    b.HasIndex("ParameterDownloadId");
+
                     b.HasIndex("ScheduleTriggerId");
 
                     b.HasIndex("StartedAt");
 
-                    b.HasIndex("Status");
+                    b.HasIndex("TriggerContextContentHierarchyItemId");
+
+                    b.HasIndex("TriggerContextContentItemId");
+
+                    b.HasIndex("TriggerContextDownloadId");
+
+                    b.HasIndex("CreatedAt", "Id")
+                        .IsDescending(true, false);
 
                     b.HasIndex("ParentExecutionId", "CreatedAt");
 
+                    b.HasIndex("JobType", "CreatedAt", "Id")
+                        .IsDescending(false, true, false);
+
+                    b.HasIndex("Status", "CreatedAt", "Id")
+                        .IsDescending(false, true, false);
+
+                    b.HasIndex("JobType", "Status", "CreatedAt", "Id")
+                        .IsDescending(false, false, true, false);
+
                     b.HasIndex(new[] { "LockPartition" }, "IX_job_execution_LockPartition")
                         .HasFilter("\"Status\" IN (1, 2, 6)");
+
+                    b.HasIndex(new[] { "LockPartition" }, "IX_job_execution_LockPartition_All");
 
                     b.HasIndex(new[] { "DedupKey" }, "UX_job_execution_DedupKey")
                         .IsUnique()
@@ -1429,6 +1499,13 @@ namespace Magpie.Data.SqlServer.Migrations
 
                     b.Property<string>("FilePath")
                         .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("GroupKey")
+                        .HasColumnType("nvarchar(max)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<string>("LayoutKey")
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<int>("MatchCount")
@@ -1492,8 +1569,14 @@ namespace Magpie.Data.SqlServer.Migrations
 
                     b.Property<string>("FilePath")
                         .IsRequired()
-                        .HasColumnType("nvarchar(450)")
+                        .HasColumnType("nvarchar(max)")
                         .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<byte[]>("FilePathHash")
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("varbinary(900)")
+                        .HasComputedColumnSql("CONVERT(varbinary(32), HASHBYTES('SHA2_256', [FilePath]))", true);
 
                     b.Property<long>("FileSize")
                         .HasColumnType("bigint");
@@ -1512,17 +1595,23 @@ namespace Magpie.Data.SqlServer.Migrations
 
                     b.Property<string>("PathKey")
                         .IsRequired()
-                        .HasColumnType("nvarchar(450)")
+                        .HasColumnType("nvarchar(max)")
                         .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<byte[]>("PathKeyHash")
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("varbinary(900)")
+                        .HasComputedColumnSql("CONVERT(varbinary(32), HASHBYTES('SHA2_256', [PathKey]))", true);
 
                     b.HasKey("Id");
 
                     b.HasIndex("ContentItemId");
 
-                    b.HasIndex("FilePath")
+                    b.HasIndex("FilePathHash")
                         .IsUnique();
 
-                    b.HasIndex("PathKey")
+                    b.HasIndex("PathKeyHash")
                         .IsUnique();
 
                     b.ToTable("content_mediaFile", (string)null);
@@ -2633,6 +2722,9 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<bool?>("Monitoring")
+                        .HasColumnType("bit");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -2933,7 +3025,7 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.HasOne("Magpie.Models.Data.ReleaseSource", "ReleaseSource")
                         .WithMany("Downloads")
                         .HasForeignKey("ReleaseSourceId")
-                        .OnDelete(DeleteBehavior.SetNull);
+                        .OnDelete(DeleteBehavior.NoAction);
 
                     b.Navigation("Release");
 

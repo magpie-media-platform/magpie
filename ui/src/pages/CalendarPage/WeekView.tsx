@@ -15,15 +15,18 @@ export function WeekView({ currentDate, getEventsForDate, onDayClick, onEventCli
         <div className="calendar-page__week-view" data-component="week-view">
             <div className="calendar-page__weekday-header">
                 {getWeekDays(getWeekStart(currentDate)).map((date, i) => (
-                    <div
+                    <button
                         key={i}
+                        type="button"
                         className={`calendar-page__weekday-col ${isToday(date) ? 'calendar-page__weekday-col--today' : ''}`}
+                        onClick={() => onDayClick(date)}
+                        aria-label={formatDate(date)}
                     >
                         <span className="calendar-page__weekday-name">{WEEKDAY_NAMES[date.getDay()]}</span>
                         <span className="calendar-page__weekday-date" data-testid="calendar-page__weekday-date">
                             {date.getDate()}
                         </span>
-                    </div>
+                    </button>
                 ))}
             </div>
             <div className="calendar-page__week-grid">
@@ -32,24 +35,19 @@ export function WeekView({ currentDate, getEventsForDate, onDayClick, onEventCli
                     return (
                         <div
                             key={i}
-                            role="button"
-                            tabIndex={0}
                             className={`calendar-page__week-col ${isToday(date) ? 'calendar-page__week-col--today' : ''}`}
-                            onClick={() => onDayClick(date)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault();
-                                    onDayClick(date);
-                                }
-                            }}
-                            aria-label={formatDate(date)}
                             data-date={formatDateKey(date)}
                             {...(isToday(date) ? { 'data-testid': 'calendar-page__week-col--today' } : {})}
                         >
-                            <div className="calendar-page__week-day-heading" aria-hidden="true">
+                            <button
+                                type="button"
+                                className="calendar-page__week-day-heading"
+                                onClick={() => onDayClick(date)}
+                                aria-label={formatDate(date)}
+                            >
                                 <span>{WEEKDAY_NAMES[date.getDay()]}</span>
                                 <span>{date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
-                            </div>
+                            </button>
                             {dayEvents.map((evt) => (
                                 <EventCard key={evt.id} event={evt} onClick={onEventClick} compact />
                             ))}

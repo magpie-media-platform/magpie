@@ -2,9 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import type { LibraryImportCandidate } from '@/hooks/useLibraryImportCandidates';
+import type { LibraryImportCandidateGroup } from '@/hooks/useLibraryImportCandidateGroups';
 import type { LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 
 const mockToast = vi.hoisted(() => vi.fn());
@@ -64,7 +65,19 @@ vi.mock('@phosphor-icons/react', () => {
 vi.mock('@/components/ui/Dialog', () => ({
     Dialog: ({ open, children }: { open?: boolean; children: ReactNode }) => (open ? <div>{children}</div> : null),
     DialogBody: ({ children, ...props }: { children: ReactNode }) => <div {...props}>{children}</div>,
-    DialogContent: ({ children, ...props }: { children: ReactNode }) => <div {...props}>{children}</div>,
+    DialogContent: ({
+        children,
+        onOpenAutoFocus,
+        ...props
+    }: {
+        children: ReactNode;
+        onOpenAutoFocus?: (event: Event) => void;
+    }) => {
+        useEffect(() => {
+            onOpenAutoFocus?.(new Event('focus', { cancelable: true }));
+        });
+        return <div {...props}>{children}</div>;
+    },
     DialogDescription: ({ children, ...props }: { children: ReactNode }) => <p {...props}>{children}</p>,
     DialogHeader: ({ children, ...props }: { children: ReactNode }) => <div {...props}>{children}</div>,
     DialogTitle: ({ children, ...props }: { children: ReactNode }) => <h2 {...props}>{children}</h2>,
@@ -108,6 +121,30 @@ function buildUnmatched(overrides: Partial<LibraryImportCandidate> = {}): Librar
         createdAt: '2024-01-01T00:00:00Z',
         ...overrides,
     };
+}
+
+function buildGroup(overrides: Partial<LibraryImportCandidateGroup> = {}): LibraryImportCandidateGroup {
+    return {
+        groupKey: '/media/tv/Bluey',
+        kind: 'Directory',
+        sourcePath: '/media/tv/Bluey',
+        title: 'Bluey',
+        contentType: 'tv',
+        subtitle: null,
+        match: null,
+        leafCount: 157,
+        topLevelSlug: 'show',
+        leafLevelSlug: 'episode',
+        leafLevelDisplayName: 'Episode',
+        childLevelSlug: 'season',
+        childLevelDisplayName: 'Season',
+        statusCounts: { Pending: 157 },
+        ...overrides,
+    };
+}
+
+function candidateTarget(overrides: Partial<LibraryImportCandidate> = {}) {
+    return { kind: 'candidate' as const, candidate: buildUnmatched(overrides) };
 }
 
 function titleInput(): HTMLInputElement {
@@ -154,7 +191,7 @@ describe('ManualMatchDialog', () => {
             return queryString ? `${path}?${queryString}` : path;
         });
         mockApiPost.mockImplementation((url: string) => {
-            if (url.endsWith('/match')) {
+            if (url.includes('/match')) {
                 return Promise.resolve({ id: 'empty-1' });
             }
             return Promise.reject(new Error(`unexpected ${url}`));
@@ -166,7 +203,7 @@ describe('ManualMatchDialog', () => {
     });
 
     it('uses user-focused match copy', () => {
-        render(<ManualMatchDialog match={buildUnmatched()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
@@ -175,7 +212,7 @@ describe('ManualMatchDialog', () => {
     });
 
     it('keeps the search action after the match fields', () => {
-        render(<ManualMatchDialog match={buildUnmatched()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
@@ -191,7 +228,7 @@ describe('ManualMatchDialog', () => {
     it('pre-fills the Title and Release year inputs with the parsed values', () => {
         render(
             <ManualMatchDialog
-                match={buildUnmatched({
+                target={candidateTarget({
                     parsedSignals: { title: ['The Matrix'], year: ['1999'] },
                     contentType: 'movie',
                 })}
@@ -208,7 +245,7 @@ describe('ManualMatchDialog', () => {
     it('pre-fills a title containing "and" so the visible inputs still carry the parsed values', () => {
         render(
             <ManualMatchDialog
-                match={buildUnmatched({ parsedSignals: { title: ['Beauty and the Beast'], year: ['1991'] } })}
+                target={candidateTarget({ parsedSignals: { title: ['Beauty and the Beast'], year: ['1991'] } })}
                 onClose={vi.fn()}
                 onMatched={vi.fn()}
             />,
@@ -219,10 +256,28 @@ describe('ManualMatchDialog', () => {
         expect(yearInput().value).toBe('1991');
     });
 
+    it('places the caret at the end of the pre-filled title instead of selecting it', () => {
+        render(
+            <ManualMatchDialog
+                target={candidateTarget({
+                    parsedSignals: { title: ['The Matrix'], year: ['1999'] },
+                    contentType: 'movie',
+                })}
+                onClose={vi.fn()}
+                onMatched={vi.fn()}
+            />,
+            { wrapper: createWrapper() },
+        );
+
+        const input = titleInput();
+        expect(input.selectionStart).toBe('The Matrix'.length);
+        expect(input.selectionEnd).toBe('The Matrix'.length);
+    });
+
     it('strips a stale year embedded in the parsed title before pre-filling', () => {
         render(
             <ManualMatchDialog
-                match={buildUnmatched({
+                target={candidateTarget({
                     parsedSignals: { title: ['The Matrix 1999'], year: ['1999'] },
                     contentType: 'movie',
                 })}
@@ -240,7 +295,7 @@ describe('ManualMatchDialog', () => {
         const user = userEvent.setup();
         render(
             <ManualMatchDialog
-                match={buildUnmatched({
+                target={candidateTarget({
                     parsedSignals: { title: ['The Matrix'], year: ['1999'] },
                     contentType: 'movie',
                 })}
@@ -267,7 +322,7 @@ describe('ManualMatchDialog', () => {
 
     it('searches with the live field edits, not the stale seed', async () => {
         const user = userEvent.setup();
-        render(<ManualMatchDialog match={buildUnmatched()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
@@ -287,7 +342,7 @@ describe('ManualMatchDialog', () => {
 
     it('searches for matches and lists provider metadata candidates', async () => {
         const user = userEvent.setup();
-        render(<ManualMatchDialog match={buildUnmatched()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
@@ -336,7 +391,7 @@ describe('ManualMatchDialog', () => {
             });
         });
         const user = userEvent.setup();
-        render(<ManualMatchDialog match={buildUnmatched()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
@@ -376,7 +431,7 @@ describe('ManualMatchDialog', () => {
             details: { message: 'Unexpected token', position: 3, expected: [] },
         });
         const user = userEvent.setup();
-        render(<ManualMatchDialog match={buildUnmatched()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
@@ -388,7 +443,7 @@ describe('ManualMatchDialog', () => {
     it('uses the generic message for other candidate search failures', async () => {
         mockApiGet.mockRejectedValue(new Error('boom'));
         const user = userEvent.setup();
-        render(<ManualMatchDialog match={buildUnmatched()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
@@ -412,7 +467,7 @@ describe('ManualMatchDialog', () => {
 
         render(
             <ManualMatchDialog
-                match={buildUnmatched({ filePath: `/media/movies/${longFileName}` })}
+                target={candidateTarget({ filePath: `/media/movies/${longFileName}` })}
                 onClose={vi.fn()}
                 onMatched={vi.fn()}
             />,
@@ -442,7 +497,7 @@ describe('ManualMatchDialog', () => {
         const user = userEvent.setup();
         const onClose = vi.fn();
         const onMatched = vi.fn();
-        render(<ManualMatchDialog match={buildUnmatched()} onClose={onClose} onMatched={onMatched} />, {
+        render(<ManualMatchDialog target={candidateTarget()} onClose={onClose} onMatched={onMatched} />, {
             wrapper: createWrapper(),
         });
 
@@ -469,5 +524,186 @@ describe('ManualMatchDialog', () => {
         expect(mockApiPost).not.toHaveBeenCalledWith(expect.stringContaining('/accept'), expect.anything());
         expect(onMatched).toHaveBeenCalled();
         expect(onClose).toHaveBeenCalled();
+    });
+
+    it('says a matched file can move to another queue row, because matching re-keys its group', async () => {
+        const user = userEvent.setup();
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.click(screen.getByRole('button', { name: /^Search$/ }));
+        await waitFor(() => {
+            expect(screen.getByTestId('manual-match-dialog__results')).toBeInTheDocument();
+        });
+        await user.click(screen.getByRole('button', { name: /^Match$/ }));
+
+        await waitFor(() => {
+            expect(mockToast).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    title: 'Match set',
+                    description: '"Fight Club" is now matched to this file.',
+                }),
+            );
+        });
+    });
+
+    it('names the gone file and closes when a candidate match 404s, instead of asking for a retry', async () => {
+        const user = userEvent.setup();
+        const onClose = vi.fn();
+        const onMatched = vi.fn();
+        mockApiPost.mockRejectedValueOnce({ status: 404, message: 'Not Found' });
+        render(<ManualMatchDialog target={candidateTarget()} onClose={onClose} onMatched={onMatched} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.click(screen.getByRole('button', { name: /^Search$/ }));
+        await waitFor(() => {
+            expect(screen.getByTestId('manual-match-dialog__results')).toBeInTheDocument();
+        });
+        await user.click(screen.getByRole('button', { name: /^Match$/ }));
+
+        await waitFor(() => {
+            expect(mockToast).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    title: 'File is gone',
+                    description: 'The queue was out of date. Magpie refreshed it and removed this file.',
+                    variant: 'error',
+                }),
+            );
+        });
+        expect(onClose).toHaveBeenCalled();
+        expect(onMatched).not.toHaveBeenCalled();
+    });
+
+    it('tells the user to pick another result when the match is rejected as invalid', async () => {
+        const user = userEvent.setup();
+        mockApiPost.mockRejectedValueOnce({ status: 400, message: 'Bad Request' });
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.click(screen.getByRole('button', { name: /^Search$/ }));
+        await waitFor(() => {
+            expect(screen.getByTestId('manual-match-dialog__results')).toBeInTheDocument();
+        });
+        await user.click(screen.getByRole('button', { name: /^Match$/ }));
+
+        await waitFor(() => {
+            expect(mockToast).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    title: 'Failed to set match',
+                    description: 'This result is missing the identifiers Magpie needs. Pick a different result.',
+                    variant: 'error',
+                }),
+            );
+        });
+    });
+
+    it('seeds the search from the group title for a group target, with no filename in the description', () => {
+        render(
+            <ManualMatchDialog
+                target={{ kind: 'group', group: buildGroup({ title: 'Bluey 2018' }), rootFolderId: 'folder-1' }}
+                onClose={vi.fn()}
+                onMatched={vi.fn()}
+            />,
+            { wrapper: createWrapper() },
+        );
+
+        expect(titleInput().value).toBe('Bluey');
+        expect(yearInput().value).toBe('2018');
+        expect(
+            screen.getByText(/Search for a match for "Bluey 2018"\. Matching applies to every candidate/),
+        ).toBeInTheDocument();
+    });
+
+    it('matching a group posts to candidate-groups/match with the group key and root folder, never a candidate id', async () => {
+        const user = userEvent.setup();
+        const onClose = vi.fn();
+        const onMatched = vi.fn();
+        render(
+            <ManualMatchDialog
+                target={{ kind: 'group', group: buildGroup(), rootFolderId: 'folder-1' }}
+                onClose={onClose}
+                onMatched={onMatched}
+            />,
+            { wrapper: createWrapper() },
+        );
+
+        await user.click(screen.getByRole('button', { name: /^Search$/ }));
+        await waitFor(() => {
+            expect(screen.getByTestId('manual-match-dialog__results')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: /^Match$/ }));
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith(
+                expect.stringMatching(/^\/import\/candidate-groups\/match\?/),
+                expect.objectContaining({ providerType: 'provider-a', externalId: '550' }),
+            );
+        });
+        const [url] = mockApiPost.mock.calls.find(([callUrl]) => callUrl.includes('candidate-groups/match'))!;
+        expect(url).toContain('groupKey=');
+        expect(url).toContain('rootFolderId=folder-1');
+        expect(mockApiPost).not.toHaveBeenCalledWith(expect.stringContaining('/candidates/'), expect.anything());
+        expect(onMatched).toHaveBeenCalled();
+        expect(onClose).toHaveBeenCalled();
+    });
+
+    it('shows a gone-group toast and closes when a group match 404s (the group no longer exists)', async () => {
+        const user = userEvent.setup();
+        const onClose = vi.fn();
+        const onMatched = vi.fn();
+        mockApiPost.mockRejectedValueOnce({ status: 404, message: 'Not Found' });
+        render(
+            <ManualMatchDialog
+                target={{ kind: 'group', group: buildGroup(), rootFolderId: 'folder-1' }}
+                onClose={onClose}
+                onMatched={onMatched}
+            />,
+            { wrapper: createWrapper() },
+        );
+
+        await user.click(screen.getByRole('button', { name: /^Search$/ }));
+        await waitFor(() => {
+            expect(screen.getByTestId('manual-match-dialog__results')).toBeInTheDocument();
+        });
+        await user.click(screen.getByRole('button', { name: /^Match$/ }));
+
+        await waitFor(() => {
+            expect(mockToast).toHaveBeenCalledWith(
+                expect.objectContaining({ title: 'Group is gone', variant: 'error' }),
+            );
+        });
+        expect(onClose).toHaveBeenCalled();
+        expect(onMatched).not.toHaveBeenCalled();
+    });
+
+    it('keeps the generic failure toast when a group match fails with a non-404 status', async () => {
+        const user = userEvent.setup();
+        const onClose = vi.fn();
+        mockApiPost.mockRejectedValueOnce({ status: 500, message: 'Internal Server Error' });
+        render(
+            <ManualMatchDialog
+                target={{ kind: 'group', group: buildGroup(), rootFolderId: 'folder-1' }}
+                onClose={onClose}
+                onMatched={vi.fn()}
+            />,
+            { wrapper: createWrapper() },
+        );
+
+        await user.click(screen.getByRole('button', { name: /^Search$/ }));
+        await waitFor(() => {
+            expect(screen.getByTestId('manual-match-dialog__results')).toBeInTheDocument();
+        });
+        await user.click(screen.getByRole('button', { name: /^Match$/ }));
+
+        await waitFor(() => {
+            expect(mockToast).toHaveBeenCalledWith(
+                expect.objectContaining({ title: 'Failed to set match', variant: 'error' }),
+            );
+        });
+        expect(onClose).not.toHaveBeenCalled();
     });
 });

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Database;
+using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Models;
 using Magpie.Models.Api;
@@ -15,7 +16,9 @@ namespace Magpie.Core;
 internal sealed class DatabaseManagementService(
     IDatabaseManagementProvider dbManagementProvider,
     IMagpieSystem system,
-    IEventBus eventBus) : IDatabaseManagementService
+    IAuditRecordRepository auditRecordRepository,
+    IEventBus eventBus,
+    TimeProvider timeProvider) : IDatabaseManagementService
 {
     public async Task<DatabaseManagementInfo> GetInfo(CancellationToken cancellationToken = default)
     {
@@ -63,6 +66,18 @@ internal sealed class DatabaseManagementService(
         var deleted = await recoverable.DeleteBackupAsync(backupId, cancellationToken).ConfigureAwait(false);
         if (deleted)
         {
+            await auditRecordRepository.CreateAsync(
+                new()
+                {
+                    Category = AuditCategories.System,
+                    Operation = "BackupDeleted",
+                    EntityType = "Backup",
+                    EntityId = backupId,
+                    Detail = $"Database backup {backupId} deleted.",
+                    Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                    UserId = callerUserId
+                },
+                cancellationToken).ConfigureAwait(false);
             await eventBus.PublishAsync(DatabaseEventBuilder.BuildBackupDeletedEvent(backupId), cancellationToken)
                 .ConfigureAwait(false);
         }

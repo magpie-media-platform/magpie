@@ -41,7 +41,7 @@ public sealed class QbittorrentExtension : IExtension
             QbittorrentDownloadClientIntegration.TorrentFileHttpClientName,
             client => client.Timeout = TimeSpan.FromSeconds(30));
 
-        services.AddSingleton<IDownloadClientIntegration, QbittorrentDownloadClientIntegration>();
+        services.AddScoped<IDownloadClientIntegration, QbittorrentDownloadClientIntegration>();
 
         services.AddScoped<IDiagnosticCheck, QbittorrentCategoryDiagnostic>();
     }

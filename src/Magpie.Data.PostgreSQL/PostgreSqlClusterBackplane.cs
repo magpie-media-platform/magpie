@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -27,23 +28,27 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
     private const string ChannelName = "magpie_cluster_events";
     private const string ListenCommandText = "LISTEN " + ChannelName;
     private const int MaxPayloadBytes = 7999;
+    private const string RelayReferencePrefix = "@relay:";
+
+    private const string RelayCommandText =
+        """
+        INSERT INTO "system_clusterEvent" ("Payload", "PublishedAt") VALUES (@payload, now()) RETURNING "Seq";
+        DELETE FROM "system_clusterEvent" WHERE "PublishedAt" < now() - interval '5 minutes';
+        """;
 
     public async Task BroadcastEventAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken = default)
     {
         var payload = JsonSerializer.Serialize(magpieEvent, SerializerOptions);
-        if (Encoding.UTF8.GetByteCount(payload) > MaxPayloadBytes)
-        {
-            logger.LogError(
-                "The event {EventName} ({EventId}) is larger than the PostgreSQL notification limit. The " +
-                "backplane discarded the event, so the peers did not receive it.",
-                magpieEvent.Name,
-                magpieEvent.Id);
-            return;
-        }
 
         var connection = new NpgsqlConnection(connectionString);
         await using var connectionHandle = connection.ConfigureAwait(false);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        if (Encoding.UTF8.GetByteCount(payload) > MaxPayloadBytes)
+        {
+            payload = RelayReferencePrefix +
+                await RelayPayloadAsync(connection, payload, cancellationToken).ConfigureAwait(false);
+        }
 
         var command = new NpgsqlCommand("SELECT pg_notify(@channel, @payload)", connection);
         await using var commandHandle = command.ConfigureAwait(false);
@@ -57,13 +62,27 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
         return new NotificationListener(connectionString, logger);
     }
 
+    private static async Task<long> RelayPayloadAsync(
+        NpgsqlConnection connection,
+        string payload,
+        CancellationToken cancellationToken)
+    {
+        var command = new NpgsqlCommand(RelayCommandText, connection);
+        await using var commandHandle = command.ConfigureAwait(false);
+        command.Parameters.AddWithValue("payload", payload);
+
+        return (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
     private sealed class NotificationListener : IEventListener
     {
         private readonly string _connectionString;
         private readonly ILogger _logger;
         private readonly Channel<MagpieEvent> _channel = Channel.CreateUnbounded<MagpieEvent>();
+        private readonly Channel<string> _payloads = Channel.CreateUnbounded<string>();
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _listenLoop;
+        private readonly Task _resolveLoop;
 
         public NotificationListener(string connectionString, ILogger logger)
         {
@@ -73,6 +92,7 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
             }.ConnectionString;
             _logger = logger;
             _listenLoop = Task.Run(() => ListenAsync(_cts.Token), default);
+            _resolveLoop = Task.Run(() => ResolvePayloadsAsync(_cts.Token), default);
         }
 
         public IAsyncEnumerable<MagpieEvent> ReadAllAsync(CancellationToken cancellationToken = default)
@@ -83,6 +103,7 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
         public void Dispose()
         {
             _cts.Cancel();
+            _payloads.Writer.TryComplete();
             _channel.Writer.TryComplete();
         }
 
@@ -93,6 +114,7 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
             try
             {
                 await _listenLoop.ConfigureAwait(false);
+                await _resolveLoop.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -131,7 +153,7 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
                 {
                     _logger.LogWarning(
                         ex,
-                        "The PostgreSQL cluster backplane listener disconnected. The listener will retry in {Delay}.",
+                        "The PostgreSQL cluster backplane listener disconnected, so it retries in {Delay}.",
                         reconnectDelay);
 
                     try
@@ -147,22 +169,89 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
                 }
             }
 
-            _channel.Writer.TryComplete();
+            _payloads.Writer.TryComplete();
         }
 
         private void OnNotification(object sender, NpgsqlNotificationEventArgs e)
         {
+            _payloads.Writer.TryWrite(e.Payload);
+        }
+
+        private async Task ResolvePayloadsAsync(CancellationToken cancellationToken)
+        {
             try
             {
-                var magpieEvent = JsonSerializer.Deserialize<MagpieEvent>(e.Payload, SerializerOptions);
-                if (magpieEvent is not null)
+                await foreach (var notified in _payloads.Reader
+                    .ReadAllAsync(cancellationToken)
+                    .ConfigureAwait(false))
                 {
-                    _channel.Writer.TryWrite(magpieEvent);
+                    try
+                    {
+                        var payload = notified.StartsWith(RelayReferencePrefix, StringComparison.Ordinal)
+                            ? await ReadRelayedPayloadAsync(notified, cancellationToken).ConfigureAwait(false)
+                            : notified;
+                        if (payload == null)
+                        {
+                            continue;
+                        }
+
+                        var magpieEvent = JsonSerializer.Deserialize<MagpieEvent>(payload, SerializerOptions);
+                        if (magpieEvent is not null)
+                        {
+                            _channel.Writer.TryWrite(magpieEvent);
+                        }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "The listener discarded an unreadable cluster backplane notification payload.");
+                    }
                 }
             }
-            catch (JsonException ex)
+            catch (OperationCanceledException)
             {
-                _logger.LogWarning(ex, "The listener discarded an unreadable cluster backplane notification payload.");
+            }
+
+            _channel.Writer.TryComplete();
+        }
+
+        private async Task<string?> ReadRelayedPayloadAsync(string notified, CancellationToken cancellationToken)
+        {
+            var reference = notified[RelayReferencePrefix.Length..];
+            if (!long.TryParse(reference, CultureInfo.InvariantCulture, out var sequence))
+            {
+                _logger.LogWarning("The listener discarded an unreadable relay reference {Reference}.", reference);
+                return null;
+            }
+
+            try
+            {
+                var connection = new NpgsqlConnection(_connectionString);
+                await using var connectionHandle = connection.ConfigureAwait(false);
+                await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+                var command = new NpgsqlCommand(
+                    """SELECT "Payload" FROM "system_clusterEvent" WHERE "Seq" = @sequence""",
+                    connection);
+                await using var commandHandle = command.ConfigureAwait(false);
+                command.Parameters.AddWithValue("sequence", sequence);
+                var payload = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+                if (payload == null)
+                {
+                    _logger.LogWarning("The listener found no relayed cluster event {Sequence}.", sequence);
+                }
+
+                return payload;
+            }
+            catch (NpgsqlException ex)
+            {
+                _logger.LogWarning(ex, "The listener could not read the relayed cluster event {Sequence}.", sequence);
+                return null;
             }
         }
     }

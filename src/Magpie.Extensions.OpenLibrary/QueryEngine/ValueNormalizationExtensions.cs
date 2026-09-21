@@ -172,13 +172,6 @@ internal static class ValueNormalizationExtensions
             : normalized;
     }
 
-    internal static bool IsUnmappedTwoLetterLanguage(this string? value)
-    {
-        var normalized = NormalizeLanguageSubtag(value);
-        return normalized is { Length: 2 } &&
-            !LanguageAliases.ContainsKey(normalized);
-    }
-
     internal static string NormalizeLanguagePreference(this string? value)
     {
         var normalized = NormalizeLanguageSubtag(value);

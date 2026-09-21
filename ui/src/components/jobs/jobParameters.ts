@@ -1,5 +1,5 @@
 import type { JobParameterDefinition } from '@/hooks/useJobs';
-import type { DictionaryPatch } from '@/hooks/useScheduleTriggers';
+import type { DictionaryPatch } from '@/types/patch';
 
 const JOB_PARAMETER_DATA_TYPE_NUMBER = 1;
 export const JOB_PARAMETER_DATA_TYPE_BOOLEAN = 2;

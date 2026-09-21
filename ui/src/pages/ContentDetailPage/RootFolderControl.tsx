@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 
 import { InlineEditRow } from '@/components/ui/InlineEditRow';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/Select';
@@ -19,7 +19,6 @@ export function RootFolderControl({ contentHierarchyItemId, contentType, canEdit
     const { data: effective, isLoading } = useEffectiveRootFolder(contentHierarchyItemId);
     const { folders: rootFolders, isLoading: foldersLoading } = useRootFolders();
     const setMutation = useSetContentRootFolder();
-    const pickedRef = useRef(false);
 
     const eligibleRoots = useMemo(() => {
         if (!rootFolders) {
@@ -82,20 +81,9 @@ export function RootFolderControl({ contentHierarchyItemId, contentType, canEdit
                     defaultOpen
                     value={selectedRootId || INHERIT_VALUE}
                     onValueChange={(value) => {
-                        pickedRef.current = true;
                         void handleChange(value, close);
                     }}
-                    onOpenChange={(open) => {
-                        if (!open) {
-                            queueMicrotask(() => {
-                                if (pickedRef.current) {
-                                    pickedRef.current = false;
-                                } else {
-                                    close();
-                                }
-                            });
-                        }
-                    }}
+                    onDismiss={close}
                     disabled={foldersLoading || setMutation.isPending}
                 >
                     <SelectTrigger

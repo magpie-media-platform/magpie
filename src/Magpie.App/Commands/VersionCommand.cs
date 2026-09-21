@@ -19,7 +19,7 @@ internal sealed class VersionCommand : Command
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ??
             version;
 
-#pragma warning disable RS0030 // the version command writes its contract to standard output.
+#pragma warning disable RS0030
         Console.WriteLine($"Magpie {informationalVersion}");
 #pragma warning restore RS0030
 

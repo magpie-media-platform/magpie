@@ -23,9 +23,9 @@ internal sealed class BlockedFileTypeRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<BlockedFileTypeRepository> logger,
-    TimeProvider? timeProvider = null) : IBlockedFileTypeRepository
+    TimeProvider timeProvider) : IBlockedFileTypeRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     public async Task<IEnumerable<BlockedFileType>> ListAllAsync(CancellationToken cancellationToken = default)
     {

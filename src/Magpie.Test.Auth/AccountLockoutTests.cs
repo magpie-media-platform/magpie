@@ -11,7 +11,6 @@ using Magpie.Models.Repositories;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -28,7 +27,6 @@ public class AccountLockoutTests
     private Mock<IEventBus> _eventBus = null!;
     private LocalCredentialAuthenticationProvider _subject = null!;
     private AccountLockoutOptions _options = null!;
-    private ILoggerFactory _loggerFactory = null!;
 
     [SetUp]
     public void SetUp()
@@ -36,7 +34,9 @@ public class AccountLockoutTests
         _userService = new Mock<IUserService>();
         _userRepository = new Mock<IUserRepository>();
         _eventBus = new Mock<IEventBus>();
-        _loggerFactory = NullLoggerFactory.Instance;
+        var time = new Mock<TimeProvider>();
+        time.Setup(value => value.GetUtcNow())
+            .Returns(new DateTimeOffset(2026, 9, 9, 12, 0, 0, TimeSpan.Zero));
         _options = new AccountLockoutOptions
         {
             Enabled = true,
@@ -49,18 +49,12 @@ public class AccountLockoutTests
             _userRepository.Object,
             _options,
             _eventBus.Object,
-            TimeProvider.System,
-            _loggerFactory.CreateLogger<LocalCredentialAuthenticationProvider>());
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        _loggerFactory?.Dispose();
+            time.Object,
+            NullLogger<LocalCredentialAuthenticationProvider>.Instance);
     }
 
     [Test]
-    public async Task VerifyCredentials_DeniesLockedAccount_BeforeCheckingPassword()
+    public async Task VerifyCredentials_DeniesWithoutCheckingThePassword_WhenTheAccountIsLocked()
     {
         // Arrange
         var user = new User
@@ -72,7 +66,7 @@ public class AccountLockoutTests
             Role = Role.Viewer,
             PasswordHash = "hash",
             PasswordSalt = "salt",
-            LockedUntil = DateTime.UtcNow.AddMinutes(2),
+            LockedUntil = new DateTime(2026, 9, 9, 12, 2, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         _userService.Setup(s => s.GetAuthenticationUserAsync("alice", It.IsAny<CancellationToken>()))
@@ -85,8 +79,7 @@ public class AccountLockoutTests
         Assert.That(result, Is.Null);
         _userService.Verify(
             s => s.VerifyPasswordAsync(It.IsAny<User>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
-            Times.Never,
-            "Locked-out account must not even reach the password verifier.");
+            Times.Never);
     }
 
     [Test]
@@ -103,7 +96,7 @@ public class AccountLockoutTests
             PasswordHash = "hash",
             PasswordSalt = "salt",
             FailedLoginAttempts = 3,
-            LockedUntil = DateTime.UtcNow.AddMinutes(-1),
+            LockedUntil = new DateTime(2026, 9, 9, 11, 59, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         _userService.Setup(s => s.GetAuthenticationUserAsync("alice", It.IsAny<CancellationToken>()))
@@ -121,23 +114,21 @@ public class AccountLockoutTests
             Assert.That(result, Is.SameAs(user));
             Assert.That(user.FailedLoginAttempts, Is.Zero);
             Assert.That(user.LockedUntil, Is.Null);
-            _userRepository.Verify(
-                r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()),
-                Times.Once,
-                "Expired lockout must be reset before the password check.");
-            _userRepository.Verify(
-                r => r.ClearFailedLoginsAsync(user.Id, It.IsAny<CancellationToken>()),
-                Times.Once,
-                "Successful login after expiry must leave the failure counter reset.");
-            _eventBus.Verify(
-                b => b.PublishAsync(
-                    It.Is<MagpieEvent>(e =>
-                        e.Name == MagpieEvents.Names.UserUnlocked &&
-                        e.Context[MagpieEvents.Keys.UserUnlockReason] == "expiry"),
-                    It.IsAny<CancellationToken>()),
-                Times.Once,
-                "An expired lockout being reset must raise user.unlocked with reason 'expiry'.");
         }
+
+        _userRepository.Verify(
+            r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _userRepository.Verify(
+            r => r.ClearFailedLoginsAsync(user.Id, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _eventBus.Verify(
+            b => b.PublishAsync(
+                It.Is<MagpieEvent>(e =>
+                    e.Name == MagpieEvents.Names.UserUnlocked &&
+                    e.Context[MagpieEvents.Keys.UserUnlockReason] == "expiry"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -154,7 +145,7 @@ public class AccountLockoutTests
             PasswordHash = "hash",
             PasswordSalt = "salt",
             FailedLoginAttempts = 3,
-            LockedUntil = DateTime.UtcNow.AddMinutes(-1),
+            LockedUntil = new DateTime(2026, 9, 9, 11, 59, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         _userService.Setup(s => s.GetAuthenticationUserAsync("alice", It.IsAny<CancellationToken>()))
@@ -175,14 +166,14 @@ public class AccountLockoutTests
             Assert.That(result, Is.Null);
             Assert.That(user.FailedLoginAttempts, Is.Zero);
             Assert.That(user.LockedUntil, Is.Null);
-            _userRepository.Verify(
-                r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()),
-                Times.Once);
-            _userRepository.Verify(
-                r => r.RecordFailedLoginAsync(user.Id, null, It.IsAny<CancellationToken>()),
-                Times.Once,
-                "The first failure after expiry must not lock the account.");
         }
+
+        _userRepository.Verify(
+            r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _userRepository.Verify(
+            r => r.RecordFailedLoginAsync(user.Id, null, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -246,21 +237,19 @@ public class AccountLockoutTests
         _userRepository
             .Setup(r => r.RecordFailedLoginAsync(user.Id, It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
             .Callback<Guid, DateTime?, CancellationToken>((_, lockUntil, _) => capturedLockUntil = lockUntil)
-            .ReturnsAsync(new FailedLoginResult(3, DateTime.UtcNow.Add(_options.LockoutDuration)));
+            .ReturnsAsync(new FailedLoginResult(3, new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc)));
 
         // Act
         await _subject.VerifyCredentialsAsync("alice", "bad-password").ConfigureAwait(false);
 
         // Assert
-        Assert.That(capturedLockUntil, Is.Not.Null);
         Assert.That(
-            capturedLockUntil!.Value,
-            Is.EqualTo(DateTime.UtcNow.Add(_options.LockoutDuration))
-                .Within(TimeSpan.FromSeconds(2)));
+            capturedLockUntil,
+            Is.EqualTo(new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc)));
     }
 
     [Test]
-    public async Task VerifyCredentials_ClearsFailureCounter_OnSuccess()
+    public async Task VerifyCredentials_ClearsFailureCounter_WhenSuccess()
     {
         // Arrange
         var user = new User
@@ -288,8 +277,7 @@ public class AccountLockoutTests
         Assert.That(result, Is.Not.Null);
         _userRepository.Verify(
             r => r.ClearFailedLoginsAsync(user.Id, It.IsAny<CancellationToken>()),
-            Times.Once,
-            "Successful login must reset failure counter so accumulated attempts don't persist.");
+            Times.Once);
     }
 
     [Test]

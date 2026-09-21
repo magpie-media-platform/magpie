@@ -418,8 +418,6 @@ test.describe.serial('Journey 18: search, acquire and import each current conten
                     jobType: 'ReleaseSearchItem',
                     parameters: { contentHierarchyItemId: movie.targetId },
                 });
-                // Cancel immediately while Queued/Running. Waiting for Running alone is racy when the
-                // worker claims the job between status polls.
                 await api.post(`/api/jobs/${executionId}/cancel`);
                 expect((await waitForJob(api, executionId, 120_000)).status).toBe('Cancelled');
             } finally {
@@ -475,9 +473,7 @@ test.describe.serial('Journey 18: search, acquire and import each current conten
             expect(jobs.items.filter((job) => job.status === 'Completed').length).toBeGreaterThan(20);
             expect(jobs.items.some((job) => job.parentExecutionId)).toBe(true);
             expect(jobs.items.some((job) => job.progress === 100)).toBe(true);
-            if (concurrentGrabStatus !== undefined) {
-                expect(concurrentGrabStatus, 'a second grab must be rejected while the first is running').toBe(409);
-            }
+            expect(concurrentGrabStatus, 'a second grab must be rejected while the first is running').toBe(409);
         });
     });
 });

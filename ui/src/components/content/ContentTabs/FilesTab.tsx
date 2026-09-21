@@ -23,16 +23,6 @@ import { formatFileSize } from '@/lib/formatSize';
 
 import './ContentTabs.css';
 
-export interface FileQuality {
-    resolution?: string;
-
-    videoCodec?: string;
-
-    audioCodec?: string;
-
-    source?: string;
-}
-
 interface MediaInfoTrack {
     type: string;
     name: string;
@@ -69,19 +59,13 @@ export interface MediaFile {
 
     size: number;
 
-    quality?: FileQuality;
-
     dateAdded?: string;
-
-    languages?: string[];
 
     mediaInfo?: MediaInfo | null;
 }
 
 export interface FilesTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
     files: MediaFile[];
-
-    onFileClick?: (file: MediaFile) => void;
 
     onDeleteFile?: (file: MediaFile) => void;
 
@@ -159,7 +143,7 @@ function UnlinkFileButton({
 }) {
     return (
         <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={(event) => {
                 event.stopPropagation();
@@ -277,23 +261,11 @@ function trackBitrate(track: MediaInfoTrack): string | undefined {
     return Number.isFinite(numeric) && numeric > 0 ? formatBitrateBps(numeric) : undefined;
 }
 
-function resolutionTier(height?: number | null): string | undefined {
+function resolutionLabel(height?: number | null): string | undefined {
     if (height == null || height <= 0) {
         return undefined;
     }
-    if (height >= 2000) {
-        return '4K';
-    }
-    if (height >= 1080) {
-        return '1080p';
-    }
-    if (height >= 720) {
-        return '720p';
-    }
-    if (height >= 480) {
-        return '480p';
-    }
-    return `${height}p`;
+    return height === 2160 ? '4K' : `${height}p`;
 }
 
 function formatFrameRate(frameRate: number): string {
@@ -376,7 +348,7 @@ function trackTitle(track: MediaInfoTrack): string | undefined {
 function VideoRow({ track }: { track: MediaInfoTrack }) {
     const codec = track.codec ?? pickProperty(track, 'Codec', 'CodecID', 'Format');
     const resolution = track.width && track.height ? `${track.width}x${track.height}` : undefined;
-    const tier = resolutionTier(track.height);
+    const tier = resolutionLabel(track.height);
     const bitDepth = track.bitDepth ? `${track.bitDepth}-bit` : undefined;
     const frameRate = track.frameRate ? formatFrameRate(track.frameRate) : undefined;
     const bitrate = trackBitrate(track);
@@ -523,7 +495,6 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
     (
         {
             files,
-            onFileClick,
             onDeleteFile,
             onUnlinkFile,
             onImportFile,
@@ -580,46 +551,9 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                         const isMutating = isDeleting || isUnlinking;
 
                         return (
-                            <div
-                                key={file.id}
-                                className="files-tab__panel"
-                                onClick={onFileClick ? () => onFileClick(file) : undefined}
-                                onKeyDown={
-                                    onFileClick
-                                        ? (e) => {
-                                              if (e.key === 'Enter' || e.key === ' ') {
-                                                  e.preventDefault();
-                                                  onFileClick(file);
-                                              }
-                                          }
-                                        : undefined
-                                }
-                                data-file-id={file.id}
-                                role={onFileClick ? 'button' : undefined}
-                                tabIndex={onFileClick ? 0 : undefined}
-                            >
+                            <div key={file.id} className="files-tab__panel" data-file-id={file.id}>
                                 <div className="files-tab__panel-header">
                                     <FileNameCell file={file} />
-                                    {(onUnlinkFile || onDeleteFile) && (
-                                        <div className="files-tab__file-actions">
-                                            {onUnlinkFile && (
-                                                <UnlinkFileButton
-                                                    file={file}
-                                                    isUnlinking={isUnlinking}
-                                                    disabled={isMutating}
-                                                    onUnlink={onUnlinkFile}
-                                                />
-                                            )}
-                                            {onDeleteFile && (
-                                                <DeleteFileButton
-                                                    file={file}
-                                                    isDeleting={isDeleting}
-                                                    disabled={isMutating}
-                                                    onDelete={onDeleteFile}
-                                                />
-                                            )}
-                                        </div>
-                                    )}
                                 </div>
                                 <div className="files-tab__panel-meta">
                                     <QualityCell mediaInfo={file.mediaInfo} />
@@ -631,6 +565,26 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                                     )}
                                 </div>
                                 <MediaInfoPanel mediaInfo={file.mediaInfo} size={file.size} />
+                                {(onUnlinkFile || onDeleteFile) && (
+                                    <div className="files-tab__file-actions">
+                                        {onUnlinkFile && (
+                                            <UnlinkFileButton
+                                                file={file}
+                                                isUnlinking={isUnlinking}
+                                                disabled={isMutating}
+                                                onUnlink={onUnlinkFile}
+                                            />
+                                        )}
+                                        {onDeleteFile && (
+                                            <DeleteFileButton
+                                                file={file}
+                                                isDeleting={isDeleting}
+                                                disabled={isMutating}
+                                                onDelete={onDeleteFile}
+                                            />
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}

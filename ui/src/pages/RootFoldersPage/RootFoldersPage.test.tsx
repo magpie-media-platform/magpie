@@ -767,7 +767,7 @@ describe('RootFoldersPage actions', () => {
         await user.click(screen.getByRole('radio', { name: 'Set Music Library as default for Music' }));
 
         await waitFor(() => {
-            expect(mockApiPatch).toHaveBeenCalledWith('/root-folders/folder-3', { isDefault: true });
+            expect(mockApiPatch).toHaveBeenCalledWith('/root-folders/folder-3', { isDefault: { value: true } });
         });
     });
 });
@@ -884,6 +884,47 @@ describe('RootFoldersPage unknown content type badge', () => {
             expect(row).toBeInTheDocument();
             const badge = within(row as HTMLElement).getByText('Unknown');
             expect(badge.closest('[data-component="badge"]')).toHaveAttribute('data-status', 'unknown');
+        });
+    });
+});
+
+describe('RootFoldersPage (mobile card collapse)', () => {
+    const mockApiGet = vi.mocked(apiGet);
+    const mockApiDelete = vi.mocked(apiDelete);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockApiGet.mockImplementation(defaultApiGet);
+        mockApiDelete.mockResolvedValue(undefined);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('marks the name cell as header role and the select column as hidden (no layout-participating checkbox)', async () => {
+        render(<RootFoldersPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('td[data-column="name"]')).toHaveAttribute('data-mobile-role', 'header');
+        });
+        expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
+    });
+
+    it('bulk-deletes every selected folder', async () => {
+        const user = userEvent.setup();
+        render(<RootFoldersPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => expect(screen.getByLabelText('Select Movies')).toBeInTheDocument());
+
+        await user.click(screen.getByLabelText('Select Movies'));
+        await user.click(screen.getByLabelText('Select TV Shows'));
+        await user.click(screen.getByRole('button', { name: 'Delete selected root folders' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(mockApiDelete).toHaveBeenCalledWith('/root-folders/folder-1');
+            expect(mockApiDelete).toHaveBeenCalledWith('/root-folders/folder-2');
         });
     });
 });

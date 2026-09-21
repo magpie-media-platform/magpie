@@ -22,12 +22,12 @@ function createWrapper(loaderState: LoaderState = 'ready') {
     });
     const extensionContext: ExtensionContextValue = {
         state: { state: loaderState, error: null, manifest: { assets: [], extensions: [] } },
+        retriesExhausted: false,
         context: {
             apiBaseUrl: '/api',
             userId: 'user-1',
             username: 'admin',
             role: 'Admin',
-            theme: null,
         },
         getExtensionsForSlot: () => [],
         retry: () => Promise.resolve(),

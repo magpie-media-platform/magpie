@@ -8,6 +8,7 @@ describe('describeCron', () => {
         expect(describeCron('0 */4 * * *')).toBe('Every 4 hours');
         expect(describeCron('0 0 * * *')).toBe('Daily at midnight');
         expect(describeCron('0 6 * * *')).toBe('Daily at 6 AM');
+        expect(describeCron('0 2 * * *')).toBe('Daily at 2 AM');
         expect(describeCron('0 0 * * 0')).toBe('Weekly on Sunday');
     });
 

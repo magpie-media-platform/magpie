@@ -75,13 +75,14 @@ describe('ReleasesTab', () => {
     });
 
     it('provides accessible compact sort controls with every release sort field', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
         render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
 
         const controls = screen.getByTestId('releases-tab__sort-controls');
-        const field = within(controls).getByRole('combobox', { name: 'Sort releases by' });
+        const field = within(controls).getByRole('combobox', { name: 'Sort by field' });
         const direction = within(controls).getByRole('button', {
-            name: 'Choose a release sort field before changing direction',
+            name: 'Sort descending',
         });
 
         expect(direction).toBeDisabled();
@@ -98,7 +99,7 @@ describe('ReleasesTab', () => {
         await user.click(screen.getByRole('option', { name: 'Title' }));
 
         expect(direction).toBeEnabled();
-        expect(direction).toHaveAccessibleName('Sort releases by Title descending');
+        expect(direction).toHaveAccessibleName('Sort descending');
     });
 
     it('renders only sorted manual release cards on mobile', async () => {
@@ -132,7 +133,7 @@ describe('ReleasesTab', () => {
         expect(document.querySelector('.releases-tab__data-table')).not.toBeInTheDocument();
         expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
 
-        const field = screen.getByRole('combobox', { name: 'Sort releases by' });
+        const field = screen.getByRole('combobox', { name: 'Sort by field' });
         const getMobileOrder = () =>
             Array.from(document.querySelectorAll('.releases-tab__mobile-card')).map((card) =>
                 card.getAttribute('data-release-id'),
@@ -152,7 +153,7 @@ describe('ReleasesTab', () => {
             expect(getMobileOrder()).toEqual(expected);
         }
 
-        await user.click(screen.getByRole('button', { name: 'Sort releases by Publish date descending' }));
+        await user.click(screen.getByRole('button', { name: 'Sort descending' }));
 
         expect(getMobileOrder()).toEqual(['release-alpha', 'release-zulu', 'release-beta']);
     });
@@ -350,38 +351,5 @@ describe('ReleasesTab', () => {
         render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: null })]} onGrab={vi.fn()} />);
 
         expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
-    });
-
-    it('surfaces the auto-grab block reason as a banner above the releases table', () => {
-        render(
-            <ReleasesTab
-                releases={[releaseRow()]}
-                onGrab={vi.fn()}
-                acquisitionBlockReason="No root folder is configured for content type 'movie'."
-            />,
-        );
-
-        const banner = screen.getByTestId('releases-tab__block-banner');
-        expect(banner).toBeInTheDocument();
-        expect(banner).toHaveTextContent(/no root folder is configured/i);
-    });
-
-    it('surfaces the auto-grab block reason even when no releases were found', () => {
-        render(
-            <ReleasesTab
-                releases={[]}
-                onGrab={vi.fn()}
-                acquisitionBlockReason="No root folder is configured for content type 'movie'."
-            />,
-        );
-
-        expect(screen.getByTestId('releases-tab__block-banner')).toBeInTheDocument();
-        expect(screen.getByText(/no releases found/i)).toBeInTheDocument();
-    });
-
-    it('renders no block banner when the item can auto-grab', () => {
-        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
-
-        expect(screen.queryByTestId('releases-tab__block-banner')).not.toBeInTheDocument();
     });
 });

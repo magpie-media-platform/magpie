@@ -10,7 +10,9 @@ using Magpie.Abstractions.Security;
 using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Patch;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -25,9 +27,72 @@ internal sealed class IndexerFeedRepository(
     IEventBus eventBus,
     ILogger<IndexerFeedRepository> logger,
     IDataProtectionService protector,
-    TimeProvider? timeProvider = null) : IIndexerFeedRepository
+    TimeProvider timeProvider) : IIndexerFeedRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
+
+    private static void ApplyPatch(
+        IDictionary<string, string> values,
+        DictionaryPatch<string, string, string> patch)
+    {
+        if (patch.Add is not null)
+        {
+            foreach (var (key, value) in patch.Add)
+            {
+                values[key] = value ?? string.Empty;
+            }
+        }
+
+        if (patch.Update is not null)
+        {
+            foreach (var (key, value) in patch.Update)
+            {
+                if (values.ContainsKey(key))
+                {
+                    values[key] = value ?? string.Empty;
+                }
+            }
+        }
+
+        if (patch.Remove is not null)
+        {
+            foreach (var key in patch.Remove)
+            {
+                values.Remove(key);
+            }
+        }
+    }
+
+    private static IReadOnlyCollection<string> ChangedFields(IndexerFeedPatch patch)
+    {
+        var fields = new List<string>();
+        if (patch.ProviderType is not null)
+        {
+            fields.Add("providerType");
+        }
+
+        if (patch.Name is not null)
+        {
+            fields.Add("name");
+        }
+
+        if (patch.Description is not null)
+        {
+            fields.Add("description");
+        }
+
+        if (patch.Settings is not null)
+        {
+            fields.Add("settings");
+        }
+
+        if (patch.Enabled is not null)
+        {
+            fields.Add("enabled");
+        }
+
+        return fields;
+    }
 
     private static IReadOnlyCollection<string> ChangedFields(IndexerFeed current, IndexerFeed model)
     {
@@ -251,6 +316,97 @@ internal sealed class IndexerFeedRepository(
         {
             logger.LogError(ex, "The indexer feed repository failed to update indexer feed " +
                 "{IndexerFeedId}.", model.Id);
+            throw;
+        }
+    }
+
+    public async Task<bool> PatchAsync(
+        IndexerFeedPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var model = await context.IndexerFeeds
+                        .FirstOrDefaultAsync(f => f.Id == patch.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (model is null)
+                    {
+                        return false;
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    if (patch.ProviderType is not null)
+                    {
+                        model.ProviderType = patch.ProviderType.Value;
+                    }
+
+                    if (patch.Name is not null)
+                    {
+                        model.Name = patch.Name.Value;
+                    }
+
+                    if (patch.Description is not null)
+                    {
+                        model.Description = patch.Description.Value;
+                    }
+
+                    if (patch.Enabled is not null)
+                    {
+                        model.Enabled = patch.Enabled.Value;
+                    }
+
+                    if (patch.Settings is not null)
+                    {
+                        var settings = protector.Unprotect(model.Settings);
+                        ApplyPatch(settings, patch.Settings);
+
+                        model.Settings = protector.Protect(settings);
+                        context.Entry(model).Property(f => f.Settings).IsModified = true;
+                    }
+
+                    model.ModifiedAt = now;
+                    model.ModifiedByUserId = modifiedByUserId;
+
+                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (updated > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Patch",
+                                EntityId = patch.Id.ToString(),
+                                EntityType = nameof(IndexerFeed),
+                                Detail = $"Updated indexer feed {model.Name}",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patched)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        IndexerEventBuilder.BuildIndexerFeedUpdatedEvent(patch.Id, ChangedFields(patch)),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return patched;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The indexer feed repository failed to patch indexer feed " +
+                "{IndexerFeedId}.", patch.Id);
             throw;
         }
     }

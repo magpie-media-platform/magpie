@@ -407,6 +407,46 @@ describe('DiskSpaceWidget compact mobile elements', () => {
     });
 });
 
+describe('DiskSpaceWidget unavailable state', () => {
+    const unavailableFolder: DiskSpaceInfo = {
+        id: 'rf-unavailable',
+        name: 'Network Share',
+        path: '\\\\server\\share',
+        usedBytes: 0,
+        totalBytes: 0,
+        freeBytes: 0,
+    };
+
+    it('shows Unavailable instead of a usage percentage', () => {
+        render(<DiskSpaceWidget folders={[unavailableFolder]} />);
+        expect(screen.getByText('Unavailable')).toBeInTheDocument();
+        expect(screen.queryByText('0%')).not.toBeInTheDocument();
+    });
+
+    it('applies the unavailable usage status', () => {
+        render(<DiskSpaceWidget folders={[unavailableFolder]} />);
+        const row = screen.getByText('Unavailable').closest('[data-folder-id]');
+        expect(row).toHaveAttribute('data-usage-status', 'unavailable');
+    });
+
+    it('does not render a progress bar', () => {
+        render(<DiskSpaceWidget folders={[unavailableFolder]} />);
+        expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    });
+
+    it('does not render used, free, or total figures', () => {
+        render(<DiskSpaceWidget folders={[unavailableFolder]} />);
+        expect(screen.queryByText(/used$/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/free$/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/total$/)).not.toBeInTheDocument();
+    });
+
+    it('still shows the folder path', () => {
+        render(<DiskSpaceWidget folders={[unavailableFolder]} />);
+        expect(screen.getByText('\\\\server\\share')).toBeInTheDocument();
+    });
+});
+
 describe('DiskSpaceWidget byte formatting', () => {
     it('formats bytes correctly', () => {
         const folder: DiskSpaceInfo = {

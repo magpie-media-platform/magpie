@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
@@ -52,11 +53,29 @@ internal sealed class EventBus(
             OccurredAt = magpieEvent.OccurredAt == default ? now : magpieEvent.OccurredAt,
             PublishedAt = magpieEvent.PublishedAt == default ? now : magpieEvent.PublishedAt,
             NodeId = hostEnvironment.NodeId,
-            JobExecutionId = magpieEvent.JobExecutionId ?? jobExecutionScopes.CurrentExecutionId
+            JobExecutionId = magpieEvent.JobExecutionId ?? jobExecutionScopes.CurrentExecutionId,
+            CorrelationId = magpieEvent.CorrelationId ?? jobExecutionScopes.CurrentCorrelationId,
+            TraceContext = magpieEvent.TraceContext ?? CaptureTraceContext()
         };
 
         Emit(published);
         return Task.CompletedTask;
+    }
+
+    private static IReadOnlyDictionary<string, string>? CaptureTraceContext()
+    {
+        if (Activity.Current is not { } activity)
+        {
+            return null;
+        }
+
+        var carrier = new Dictionary<string, string>(StringComparer.Ordinal);
+        DistributedContextPropagator.Current.Inject(
+            activity,
+            carrier,
+            static (target, key, value) => ((IDictionary<string, string>)target!)[key] = value);
+
+        return carrier.Count == 0 ? null : carrier;
     }
 
     private static string GetNamePrefix(string name)

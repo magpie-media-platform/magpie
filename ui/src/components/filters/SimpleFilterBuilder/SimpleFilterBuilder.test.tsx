@@ -355,6 +355,16 @@ describe('SimpleFilterBuilder', () => {
             expect(mockOnChange).toHaveBeenLastCalledWith('tag has "favorite"');
         });
 
+        it('keeps an earlier edit when the next edit lands before the value prop catches up', async () => {
+            const user = userEvent.setup();
+            render(<SimpleFilterBuilder value="" onChange={mockOnChange} />);
+
+            await user.type(screen.getByLabelText('Title'), 'Journey');
+            await user.type(screen.getByLabelText('Tag'), 'follow');
+
+            expect(mockOnChange).toHaveBeenLastCalledWith('title contains "Journey" and tag has "follow"');
+        });
+
         it('preserves the monitoring clause across edits even without a visible control', async () => {
             const user = userEvent.setup();
             render(<SimpleFilterBuilder value="monitoring = true" onChange={mockOnChange} />);

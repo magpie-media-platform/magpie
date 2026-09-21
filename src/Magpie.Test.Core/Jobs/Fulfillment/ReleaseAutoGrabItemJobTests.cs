@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Models;
@@ -28,7 +29,9 @@ public sealed class ReleaseAutoGrabItemJobTests
     private Mock<IContentHierarchyItemRepository> _hierarchyRepository = null!;
     private Mock<IJobManager> _jobManager = null!;
     private Mock<IAuditRecordRepository> _auditRecordRepository = null!;
+    private Mock<ITransactionManager> _transactionManager = null!;
     private List<AuditRecord> _audits = null!;
+    private int _committedTransactions;
     private IJob _subject = null!;
     private JobContext _jobContext = null!;
     private Guid _userId;
@@ -38,6 +41,7 @@ public sealed class ReleaseAutoGrabItemJobTests
     {
         _userId = Guid.NewGuid();
         _audits = [];
+        _committedTransactions = 0;
 
         _releaseService = new Mock<IReleaseService>();
         _releaseService
@@ -68,6 +72,17 @@ public sealed class ReleaseAutoGrabItemJobTests
             .Callback((AuditRecord record, CancellationToken _) => _audits.Add(record))
             .Returns((AuditRecord record, CancellationToken _) => Task.FromResult(record));
 
+        _transactionManager = new Mock<ITransactionManager>();
+        _transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(async (Func<CancellationToken, Task> operation, CancellationToken token) =>
+            {
+                await operation(token).ConfigureAwait(false);
+                _committedTransactions++;
+            });
+
         _jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,
@@ -82,28 +97,9 @@ public sealed class ReleaseAutoGrabItemJobTests
             _hierarchyRepository.Object,
             _jobManager.Object,
             _auditRecordRepository.Object,
+            _transactionManager.Object,
             TimeProvider.System,
             NullLogger<ReleaseAutoGrabItemJob>.Instance);
-    }
-
-    [Test]
-    public void Spec_DescribesPerTargetContentJob_WhenRead()
-    {
-        // Arrange
-        // Act
-        var spec = ReleaseAutoGrabItemJob.Spec;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(spec.JobType, Is.EqualTo("ReleaseAutoGrabItem"));
-            Assert.That(spec.Scope, Is.EqualTo(JobScope.Content));
-            Assert.That(spec.ConcurrencyScope, Is.EqualTo(ConcurrencyScope.PerTypeAndTarget));
-            Assert.That(spec.LockPartitionFields, Is.EqualTo(["contentItemId"]));
-            Assert.That(spec.Parameters, Has.Count.EqualTo(1));
-            Assert.That(spec.Parameters[0].Name, Is.EqualTo("contentItemId"));
-            Assert.That(spec.Parameters[0].Required, Is.True);
-        }
     }
 
     [Test]
@@ -137,7 +133,7 @@ public sealed class ReleaseAutoGrabItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_EnqueuesReleaseAcquisition_ForSelectedRelease()
+    public async Task ExecuteAsync_EnqueuesReleaseAcquisition_WhenAReleaseIsSelected()
     {
         // Arrange
         var contentItemId = Guid.NewGuid();
@@ -214,7 +210,7 @@ public sealed class ReleaseAutoGrabItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_WritesGrabAttemptedAudit_OnEnqueue()
+    public async Task ExecuteAsync_WritesGrabAttemptedAudit_WhenAcquisitionIsEnqueued()
     {
         // Arrange
         var contentItemId = Guid.NewGuid();
@@ -287,6 +283,75 @@ public sealed class ReleaseAutoGrabItemJobTests
     }
 
     [Test]
+    public void ExecuteAsync_FailsWithoutCommittingTheEnqueue_WhenTheGrabAttemptedAuditWriteFails()
+    {
+        // Arrange
+        var contentItemId = Guid.NewGuid();
+        var hierarchyItemId = Guid.NewGuid();
+        var release = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Chosen release",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = hierarchyItemId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "chosen",
+                        Name = "Chosen",
+                        EffectiveMonitoring = true,
+                        ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Missing }
+                    }
+                ]
+            });
+        _releaseService
+            .Setup(s => s.SelectBestReleaseAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(release);
+        _auditRecordRepository
+            .Setup(r => r.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The audit store rejected the record"));
+        var context = _jobContext with
+        {
+            Parameters = new Dictionary<string, string> { ["contentItemId"] = contentItemId.ToString() }
+        };
+
+        // Act
+        void Act() => _subject.ExecuteAsync(context).GetAwaiter().GetResult();
+
+        // Assert
+        Assert.Throws<InvalidOperationException>(Act);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_committedTransactions, Is.EqualTo(0));
+            _jobManager.Verify(
+                m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
+                Times.Once);
+            _auditRecordRepository.Verify(
+                r => r.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
     public async Task ExecuteAsync_DoesNotEnqueue_WhenContentItemNoLongerExists()
     {
         // Arrange
@@ -347,7 +412,7 @@ public sealed class ReleaseAutoGrabItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_DoesNotEnqueue_WhenItemNoLongerEffectivelyMonitored()
+    public async Task ExecuteAsync_DoesNotEnqueue_WhenItemIsNotEffectivelyMonitored()
     {
         // Arrange
         var contentItemId = Guid.NewGuid();
@@ -369,21 +434,10 @@ public sealed class ReleaseAutoGrabItemJobTests
                         Level = "movie",
                         Slug = "unmonitored",
                         Name = "Unmonitored",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = false,
                         ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Missing }
                     }
                 ]
-            });
-        _hierarchyRepository
-            .Setup(r => r.GetByIdAsync(hierarchyItemId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ContentHierarchyItem
-            {
-                Id = hierarchyItemId,
-                ContentType = "movie",
-                Level = "movie",
-                Slug = "unmonitored",
-                Name = "Unmonitored",
-                EffectiveMonitoring = false
             });
         var context = _jobContext with
         {

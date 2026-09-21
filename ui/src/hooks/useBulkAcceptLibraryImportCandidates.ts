@@ -1,7 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiPost } from '@/lib/api';
+import { libraryImportCandidateGroupQueryKeys } from '@/hooks/useLibraryImportCandidateGroups';
 import { libraryImportCandidateQueryKeys } from '@/hooks/useLibraryImportCandidates';
+
+export type LibraryImportMonitoringMode = 'Inherit' | 'Monitored' | 'Unmonitored' | 'Future';
 
 interface BulkAcceptLibraryImportCandidatesFilter {
     rootFolderId?: string;
@@ -10,22 +13,22 @@ interface BulkAcceptLibraryImportCandidatesFilter {
 }
 
 type BulkAcceptLibraryImportCandidatesVariables =
-    | { ids: string[] }
-    | { filter: BulkAcceptLibraryImportCandidatesFilter };
+    | { ids: string[]; monitoringMode: LibraryImportMonitoringMode }
+    | { filter: BulkAcceptLibraryImportCandidatesFilter; monitoringMode: LibraryImportMonitoringMode };
 
-interface LibraryImportQueuedResult {
+export interface LibraryImportQueuedResult {
     candidateId: string;
 
     jobExecutionId: string;
 }
 
-interface LibraryImportSkippedResult {
+export interface LibraryImportSkippedResult {
     candidateId: string;
 
     reason: string;
 }
 
-interface BulkAcceptLibraryImportCandidatesResponse {
+export interface LibraryImportSubmissionResult {
     queued: LibraryImportQueuedResult[];
 
     skipped: LibraryImportSkippedResult[];
@@ -33,8 +36,8 @@ interface BulkAcceptLibraryImportCandidatesResponse {
 
 async function bulkAcceptLibraryImportCandidates(
     variables: BulkAcceptLibraryImportCandidatesVariables,
-): Promise<BulkAcceptLibraryImportCandidatesResponse> {
-    return apiPost<BulkAcceptLibraryImportCandidatesResponse>('/import/candidates/bulk-accept', variables);
+): Promise<LibraryImportSubmissionResult> {
+    return apiPost<LibraryImportSubmissionResult>('/import/candidates/bulk-accept', variables);
 }
 
 export function useBulkAcceptLibraryImportCandidates() {
@@ -44,6 +47,7 @@ export function useBulkAcceptLibraryImportCandidates() {
         mutationFn: bulkAcceptLibraryImportCandidates,
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: libraryImportCandidateQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: libraryImportCandidateGroupQueryKeys.all });
         },
     });
 }

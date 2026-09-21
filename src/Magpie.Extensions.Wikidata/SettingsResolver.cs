@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Extensions.Wikidata.Mapping;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
@@ -38,8 +39,8 @@ internal sealed class SettingsResolver(
             {
                 _missingContactWarned = true;
                 logger.LogWarning(
-                    "Settings group {GroupName} has no {ContactKey}, and {EnvVar} is not set. " +
-                    "Wikidata requests will use a generic User-Agent without contact information",
+                    "Wikidata requests use a generic User-Agent because settings group {GroupName} has no " +
+                    "{ContactKey} and environment variable {EnvVar} is not set.",
                     Settings.GroupName,
                     Settings.ContactKey,
                     EnvContactVariable);
@@ -84,40 +85,19 @@ internal sealed class SettingsResolver(
         }
 
         var trimmed = value.Trim();
-        return normalizeLanguage ? NormalizeLanguage(trimmed) : trimmed;
+        return normalizeLanguage ? (trimmed.ToPrimaryLanguage() ?? Settings.FallbackLanguage) : trimmed;
     }
 
     private static string ResolveLanguage(string? configured, string? fallback)
     {
         if (!string.IsNullOrWhiteSpace(configured))
         {
-            return NormalizeLanguage(configured!);
+            return configured!.ToPrimaryLanguage() ?? Settings.FallbackLanguage;
         }
 
         return string.IsNullOrWhiteSpace(fallback)
             ? Settings.FallbackLanguage
-            : NormalizeLanguage(fallback!);
-    }
-
-    private static string NormalizeLanguage(string value)
-    {
-        var trimmed = value.Trim();
-        var separator = trimmed.IndexOf('-');
-        var primary = separator > 0 ? trimmed.Substring(0, separator) : trimmed;
-        if (primary.Length is < 2 or > 12)
-        {
-            return Settings.FallbackLanguage;
-        }
-
-        foreach (var character in primary)
-        {
-            if (!char.IsLetter(character))
-            {
-                return Settings.FallbackLanguage;
-            }
-        }
-
-        return primary.ToLowerInvariant();
+            : (fallback!.ToPrimaryLanguage() ?? Settings.FallbackLanguage);
     }
 
     private async Task<Settings> ReadSnapshotAsync(CancellationToken cancellationToken)

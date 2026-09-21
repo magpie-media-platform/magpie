@@ -21,14 +21,12 @@ internal sealed class JellyfinClient(
         PropertyNameCaseInsensitive = true
     };
 
-    private const string SystemInfoPath = "System/Info/Public";
+    private const string SystemInfoPath = "System/Info";
     private const string LibraryRefreshPath = "Library/Refresh";
     private const string VirtualFoldersPath = "Library/VirtualFolders";
     private const string ItemsPath = "Items";
 
     public const string ApiKeyHeader = "X-Emby-Token";
-
-    public const string HttpClientName = "magpie.jellyfin";
 
     private readonly HttpClient _http = http;
     private readonly ILogger<JellyfinClient> _logger = logger;
@@ -69,7 +67,7 @@ internal sealed class JellyfinClient(
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
             throw new JellyfinAuthenticationException(
-                $"Jellyfin returned HTTP {(int)response.StatusCode} for /System/Info/Public.");
+                $"Jellyfin returned HTTP {(int)response.StatusCode} for /System/Info.");
         }
 
         response.EnsureSuccessStatusCode();
@@ -183,7 +181,7 @@ internal sealed class JellyfinClient(
         {
             _logger.LogDebug(
                 ex,
-                "The Jellyfin /Items search for {Title} failed. No deep link is available.",
+                "The Jellyfin /Items search for {Title} failed.",
                 title);
             return new DeepLinkLookupResult(null, DeepLinkLookupStatus.LookupError);
         }
@@ -193,7 +191,7 @@ internal sealed class JellyfinClient(
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogDebug(
-                    "The Jellyfin /Items search for {Title} returned HTTP {Status}. No deep link is available.",
+                    "The Jellyfin /Items search for {Title} returned HTTP {Status}.",
                     title,
                     (int)response.StatusCode);
                 return new DeepLinkLookupResult(null, DeepLinkLookupStatus.LookupError);
@@ -214,7 +212,7 @@ internal sealed class JellyfinClient(
             {
                 _logger.LogDebug(
                     ex,
-                    "The Jellyfin /Items search for {Title} returned invalid JSON. No deep link is available.",
+                    "The Jellyfin /Items search for {Title} returned invalid JSON.",
                     title);
                 return new DeepLinkLookupResult(null, DeepLinkLookupStatus.LookupError);
             }
@@ -252,8 +250,7 @@ internal sealed class JellyfinClient(
             }
 
             _logger.LogDebug(
-                "The Jellyfin /Items search for {Title} returned {Count} items without provider ids. " +
-                "No deep link is available.",
+                "The Jellyfin /Items search for {Title} returned {Count} items without provider ids.",
                 title,
                 items.Count);
             return new DeepLinkLookupResult(null, DeepLinkLookupStatus.NotFound);

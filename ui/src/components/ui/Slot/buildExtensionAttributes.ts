@@ -1,5 +1,7 @@
 import type { UIExtension } from '@/extensions/types';
 
+export type SlotContext = Record<string, string | undefined>;
+
 interface BuildExtensionAttributesOptions {
     extension: UIExtension;
     apiBaseUrl: string;
@@ -8,6 +10,7 @@ interface BuildExtensionAttributesOptions {
     role: string | null;
     entityId?: string;
     entityType?: string;
+    context?: SlotContext;
 }
 
 export function buildExtensionAttributes({
@@ -18,8 +21,15 @@ export function buildExtensionAttributes({
     role,
     entityId,
     entityType,
+    context,
 }: BuildExtensionAttributesOptions): Record<string, string> {
     const attributes: Record<string, string> = { ...extension.attributes };
+
+    for (const [key, value] of Object.entries(context ?? {})) {
+        if (value !== undefined && value !== '') {
+            attributes[`data-magpie-${key}`] = value;
+        }
+    }
 
     attributes['data-magpie-api-base'] = apiBaseUrl;
     attributes['data-magpie-extension-id'] = extension.extensionId;

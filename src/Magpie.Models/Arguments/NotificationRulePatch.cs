@@ -1,3 +1,5 @@
+using System;
+
 using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
@@ -8,6 +10,11 @@ namespace Magpie.Models.Arguments;
 /// </summary>
 public sealed record NotificationRulePatch
 {
+    /// <summary>
+    /// The id of the notification rule to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
     /// <summary>
     /// The patch for the display name of the rule.
     /// </summary>

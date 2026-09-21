@@ -46,7 +46,7 @@ const DialogOverlay = forwardRef<ComponentRef<typeof DialogPrimitive.Overlay>, D
     ({ className, ...props }, ref) => {
         const classes = ['dialog-overlay', className].filter(Boolean).join(' ');
 
-        return <DialogPrimitive.Overlay ref={ref} className={classes} {...props} />;
+        return <DialogPrimitive.Overlay data-dialog-overlay ref={ref} className={classes} {...props} />;
     },
 );
 
@@ -73,6 +73,8 @@ const DialogContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, D
                     ref={ref}
                     className={classes}
                     data-component="dialog"
+                    data-overlay-content
+                    data-dialog-content
                     data-size={size}
                     aria-describedby={ariaDescribedBy}
                     {...props}

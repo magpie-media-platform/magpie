@@ -130,7 +130,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         AddTextFilters(criteria.Overview, TextField.Overview, textFilters, ref knownEmpty);
         AddTextFilters(criteria.ProductionStatus, TextField.ProductionStatus, textFilters, ref knownEmpty);
         AddTemporalFilters(criteria.PublishDate, temporalFilters, ref knownEmpty);
-        AddDurationFilters(criteria.Duration, route, durationFilters, warnings, ref knownEmpty);
+        AddDurationFilters(criteria.Duration, durationFilters, ref knownEmpty);
 
         AddAbsentPropertyCriteria(criteria.Established.And, ref knownEmpty);
         AddAbsentPropertyCriteria(criteria.Dissolved.And, ref knownEmpty);
@@ -184,7 +184,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             AddContentIdFilter([exclusion], route, excluded: true, contentIdFilters, warnings, ref knownEmpty);
         }
 
-        AddElementFilters(criteria, elementFilters, warnings, ref knownEmpty);
+        AddElementFilters(criteria, elementFilters, ref knownEmpty);
     }
 
     private bool ExcludesProviderType(PropertyCriterion<string> criterion)
@@ -421,9 +421,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
     private void AddDurationFilters(
         CriteriaSet<PropertyCriterion<TimeSpan>> criteria,
-        ContentRoute route,
         List<DurationFilter> filters,
-        List<string> warnings,
         ref bool knownEmpty)
     {
         foreach (var criterion in criteria.And)
@@ -438,10 +436,6 @@ internal sealed class QueryPlanner : IQueryPlanner
             }
 
             filters.Add(new DurationFilter(op, negate, values));
-            if (route == ContentRoute.TvShow)
-            {
-                warnings.Add("TMDb series runtime data can be incomplete.");
-            }
         }
     }
 
@@ -640,7 +634,7 @@ internal sealed class QueryPlanner : IQueryPlanner
     {
         var alternatives = new List<ContentId>();
         var invalid = false;
-        var unsupportedRoute = false;
+        var unsupportedSource = false;
         foreach (var id in ids)
         {
             if (id.Source.And.Any(criterion => !criterion.IsPositiveEquality()) ||
@@ -653,15 +647,9 @@ internal sealed class QueryPlanner : IQueryPlanner
             var values = PositiveEqualsValues(id.Value);
             foreach (var source in sources)
             {
-                if (!IsContentIdSource(source))
+                if (!IsContentIdSource(source) || route == ContentRoute.Movie && IsTvdbSource(source))
                 {
-                    invalid = true;
-                    continue;
-                }
-
-                if (route == ContentRoute.Movie && IsTvdbSource(source))
-                {
-                    unsupportedRoute = true;
+                    unsupportedSource = true;
                     continue;
                 }
 
@@ -684,13 +672,13 @@ internal sealed class QueryPlanner : IQueryPlanner
             filters.Add(new ContentIdFilter(excluded, alternatives));
         }
 
-        if ((alternatives.Count > 0 || excluded) && (invalid || alternatives.Count == 0 && !unsupportedRoute))
+        if ((alternatives.Count > 0 || excluded) && (invalid || alternatives.Count == 0 && !unsupportedSource))
         {
             warnings.Add("TMDb ignored an invalid exact content identifier.");
         }
 
-        if (excluded && (invalid || unsupportedRoute) ||
-            alternatives.Count == 0 && (!excluded || invalid || unsupportedRoute))
+        if (excluded && (invalid || unsupportedSource) ||
+            alternatives.Count == 0 && (!excluded || invalid || unsupportedSource))
         {
             knownEmpty = true;
         }
@@ -699,24 +687,15 @@ internal sealed class QueryPlanner : IQueryPlanner
     private void AddElementFilters(
         MetadataCriteria criteria,
         List<ElementFilter> filters,
-        List<string> warnings,
         ref bool knownEmpty)
     {
-        const string contentRatingWarning = "TMDb ignored an unsupported content rating alternative.";
-        const string alternateTextWarning = "TMDb ignored an unsupported alternate text alternative.";
-        const string previewWarning = "TMDb ignored an unsupported preview alternative.";
-        const string imageWarning = "TMDb ignored an unsupported image alternative.";
-        const string referenceWarning = "TMDb ignored an unsupported reference alternative.";
-
         foreach (var group in criteria.ContentRatings.Some)
         {
             AddElementFilter(
                 ElementFamily.ContentRating,
                 CompileContentRatings(group),
                 excluded: false,
-                contentRatingWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -726,9 +705,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.ContentRating,
                 CompileContentRatings([exclusion]),
                 excluded: true,
-                contentRatingWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -738,9 +715,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.AlternateText,
                 CompileAlternateTexts(group),
                 excluded: false,
-                alternateTextWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -750,9 +725,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.AlternateText,
                 CompileAlternateTexts([exclusion]),
                 excluded: true,
-                alternateTextWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -762,9 +735,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.Preview,
                 CompilePreviews(group),
                 excluded: false,
-                previewWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -774,9 +745,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.Preview,
                 CompilePreviews([exclusion]),
                 excluded: true,
-                previewWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -786,9 +755,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.Image,
                 CompileImages(group),
                 excluded: false,
-                imageWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -798,9 +765,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.Image,
                 CompileImages([exclusion]),
                 excluded: true,
-                imageWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -810,9 +775,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.Reference,
                 CompileReferences(group),
                 excluded: false,
-                referenceWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
 
@@ -822,9 +785,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ElementFamily.Reference,
                 CompileReferences([exclusion]),
                 excluded: true,
-                referenceWarning,
                 filters,
-                warnings,
                 ref knownEmpty);
         }
     }
@@ -833,9 +794,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         ElementFamily family,
         IReadOnlyList<IReadOnlyList<ElementPredicate>?> compiled,
         bool excluded,
-        string unsupportedWarning,
         List<ElementFilter> filters,
-        List<string> warnings,
         ref bool knownEmpty)
     {
         var usable = new List<IReadOnlyList<ElementPredicate>>();
@@ -857,11 +816,6 @@ internal sealed class QueryPlanner : IQueryPlanner
             }
 
             usable.Add(folded);
-        }
-
-        if (incomplete && (usable.Count > 0 || excluded))
-        {
-            warnings.Add(unsupportedWarning);
         }
 
         if (usable.Count > 0)
@@ -2044,7 +1998,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 var values = TextValues(criterion);
                 var mapped = values.Select(MapRole).Where(role => role is not null).Select(role => role!.Value)
                     .Distinct().ToList();
-                hasUnmappedValues |= mapped.Count != values.Count;
+                hasUnmappedValues |= values.Any(value => MapRole(value) is null);
                 return mapped;
             })
             .ToList();

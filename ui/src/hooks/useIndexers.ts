@@ -6,7 +6,7 @@ import { executeImmediateJobRequest, type JobActionDisposition } from '@/lib/job
 import type { ConnectionTestResult } from '@/hooks/useTestConnection';
 import { useJobAction, type JobActionLifecycleOptions } from '@/hooks/useJobAction';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
-import type { DictionaryPatch, ScalarPatch } from '@/hooks/useScheduleTriggers';
+import type { DictionaryPatch, ScalarPatch } from '@/types/patch';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
 import { healthStatusLabels, healthStatusVariants } from '@/types/healthStatus';
@@ -140,19 +140,17 @@ interface IndexerCreateRequest {
 }
 
 interface IndexerUpdateRequest {
-    providerType?: string;
+    providerType?: ScalarPatch<string>;
 
-    name?: string;
+    name?: ScalarPatch<string>;
 
-    description?: string;
+    description?: ScalarPatch<string | null>;
 
-    availability?: IndexerAvailabilityValue;
+    availability?: ScalarPatch<IndexerAvailabilityValue>;
 
-    categories?: string[];
+    categories?: ScalarPatch<string[]>;
 
-    languages?: string[];
-
-    settings?: Record<string, string>;
+    languages?: ScalarPatch<string[]>;
 }
 
 interface IndexerConnectionUpdateRequest {
@@ -184,25 +182,22 @@ interface IndexerFeedCreateRequest {
 }
 
 interface IndexerFeedUpdateRequest {
-    providerType?: string;
+    providerType?: ScalarPatch<string>;
 
-    name?: string;
+    name?: ScalarPatch<string>;
 
-    description?: string;
+    description?: ScalarPatch<string | null>;
 
-    settings?: Record<string, string>;
+    settings?: DictionaryPatch<string, string>;
 
-    enabled?: boolean;
+    enabled?: ScalarPatch<boolean>;
 }
 
 export const indexerQueryKeys = {
-    all: ['indexers'] as const,
     list: () => ['indexers', 'list'] as const,
     connections: () => ['indexers', 'connections'] as const,
     connectionsByIndexer: (indexerId: string) => ['indexers', 'connections', indexerId] as const,
     feeds: () => ['indexers', 'feeds'] as const,
-    detail: (id: string) => ['indexers', 'detail', id] as const,
-    feedDetail: (id: string) => ['indexers', 'feeds', id] as const,
 };
 
 export function countConfiguredIndexerInstances(indexers: readonly ApiIndexer[]): number {
@@ -283,11 +278,11 @@ async function testIndexerSettings(
 }
 
 async function enableIndexerFeed(id: string): Promise<void> {
-    return apiPatch(`/indexer-feeds/${id}`, { enabled: true });
+    return apiPatch(`/indexer-feeds/${id}`, { enabled: { value: true } });
 }
 
 async function disableIndexerFeed(id: string): Promise<void> {
-    return apiPatch(`/indexer-feeds/${id}`, { enabled: false });
+    return apiPatch(`/indexer-feeds/${id}`, { enabled: { value: false } });
 }
 
 async function syncIndexerFeed(id: string): Promise<JobActionDisposition> {

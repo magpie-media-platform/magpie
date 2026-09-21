@@ -10,6 +10,7 @@ import {
 } from '@phosphor-icons/react';
 
 import { useWishlistPreview } from '@/hooks/useWishlistPreview';
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { ProviderSearchWarnings } from '@/components/content/ProviderSearchWarnings';
 import { useQualityTierLists } from '@/hooks/useQualityTierLists';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
@@ -28,6 +29,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { FilterBar } from '@/components/filters/FilterBar';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
+import { MonitoringToggle } from '@/components/ui/MonitoringToggle';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Switch } from '@/components/ui/Switch';
 import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
@@ -36,17 +38,24 @@ import { TagInput } from '@/components/ui/TagInput';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
-import type {
-    ContentFilterOption,
-    QualityTierListOption,
-    RootFolderOption,
-    TagOption,
-    WishlistFormValues,
-} from '@/types';
+import type { ContentFilterOption, QualityTierListOption, RootFolderOption, TagOption } from '@/types';
 
 import './WishlistForm.css';
 
-export type { ContentFilterOption, QualityTierListOption, RootFolderOption, TagOption, WishlistFormValues };
+export type { ContentFilterOption, QualityTierListOption, RootFolderOption, TagOption };
+
+export interface WishlistFormValues {
+    id?: string;
+    name: string;
+    filterId: string | null;
+    contentType: string;
+    criteria: ContentFilterCriteria;
+    qualityTierListId: string | null;
+    rootFolderId: string | null;
+    enabled: boolean;
+    monitoring: boolean | null;
+    tagIds: string[];
+}
 
 interface WishlistFormProps {
     open: boolean;
@@ -83,7 +92,8 @@ const emptyValues: WishlistFormValues = {
     criteria: emptyCriteria,
     qualityTierListId: null,
     rootFolderId: null,
-    monitored: true,
+    enabled: true,
+    monitoring: null,
     tagIds: [],
 };
 
@@ -98,7 +108,8 @@ function normalizeWishlist(input: { values: WishlistFormValues; filterQuery: str
         contentType: values.contentType,
         qualityTierListId: values.qualityTierListId,
         rootFolderId: values.rootFolderId,
-        monitored: values.monitored,
+        enabled: values.enabled,
+        monitoring: values.monitoring,
         tagIds: [...values.tagIds].sort(),
         filterQuery,
     };
@@ -111,7 +122,8 @@ function normalizeServerWishlist(values: WishlistFormValues): unknown {
         criteria: values.criteria,
         qualityTierListId: values.qualityTierListId,
         rootFolderId: values.rootFolderId,
-        monitored: values.monitored,
+        enabled: values.enabled,
+        monitoring: values.monitoring,
         tagIds: [...values.tagIds].sort(),
     };
 }
@@ -357,9 +369,13 @@ export function WishlistForm({
         }));
     }, []);
 
-    const handleMonitoredChange = useCallback((monitored: boolean) => {
-        setValues((prev) => ({ ...prev, monitored }));
+    const handleEnabledChange = useCallback((enabled: boolean) => {
+        setValues((prev) => ({ ...prev, enabled }));
         setErrors((prev) => ({ ...prev, criteria: '' }));
+    }, []);
+
+    const handleMonitoringChange = useCallback((monitoring: boolean | null) => {
+        setValues((prev) => ({ ...prev, monitoring }));
     }, []);
 
     const handleTagsChange = useCallback((tagIds: string[]) => {
@@ -460,11 +476,11 @@ export function WishlistForm({
                 return;
             }
 
-            if (values.monitored && criteriaIsEmpty(criteria)) {
+            if (values.enabled && criteriaIsEmpty(criteria)) {
                 newErrors.criteria = 'Add filter criteria to monitor this wishlist';
             }
 
-            if (values.monitored && !effectiveContentType) {
+            if (values.enabled && !effectiveContentType) {
                 newErrors.contentType = 'Select a content type to monitor this wishlist';
             }
 
@@ -643,19 +659,13 @@ export function WishlistForm({
                                                     key={`${candidate.providerType}:${candidate.externalIdSource}:${candidate.externalId}`}
                                                     className="wishlist-form__preview-item"
                                                 >
-                                                    {candidate.thumbnailUrl ? (
-                                                        <img
-                                                            src={candidate.thumbnailUrl}
-                                                            alt=""
-                                                            className="wishlist-form__preview-thumb"
-                                                            loading="lazy"
-                                                        />
-                                                    ) : (
-                                                        <div
-                                                            className="wishlist-form__preview-thumb wishlist-form__preview-thumb--placeholder"
-                                                            aria-hidden="true"
-                                                        />
-                                                    )}
+                                                    <ContentPoster
+                                                        posterUrl={candidate.thumbnailUrl}
+                                                        alt=""
+                                                        className="wishlist-form__preview-thumb"
+                                                        placeholderClassName="wishlist-form__preview-thumb--placeholder"
+                                                        placeholder={null}
+                                                    />
                                                     <div className="wishlist-form__preview-body">
                                                         <span className="wishlist-form__preview-title">
                                                             {candidate.title?.trim() || 'Untitled'}
@@ -793,18 +803,28 @@ export function WishlistForm({
                         <div className="wishlist-form__field wishlist-form__field--toggle">
                             <div className="wishlist-form__toggle-wrapper">
                                 <Switch
-                                    id="wishlist-monitored"
-                                    checked={values.monitored}
-                                    onCheckedChange={handleMonitoredChange}
+                                    id="wishlist-enabled"
+                                    checked={values.enabled}
+                                    onCheckedChange={handleEnabledChange}
                                     disabled={isSubmitting || readOnly}
-                                    data-field="monitored"
+                                    data-field="enabled"
                                 />
-                                <Label htmlFor="wishlist-monitored">Monitored</Label>
+                                <Label htmlFor="wishlist-enabled">Enabled</Label>
                             </div>
                             <p className="wishlist-form__help">
-                                Monitored wishlists will be searched for missing content automatically.
+                                Enabled wishlists will be searched for matching content automatically.
                             </p>
                         </div>
+
+                        <fieldset className="wishlist-form__field">
+                            <legend className="label">Monitoring</legend>
+                            <MonitoringToggle
+                                value={values.monitoring}
+                                onChange={handleMonitoringChange}
+                                disabled={isSubmitting || readOnly}
+                                data-field="monitoring"
+                            />
+                        </fieldset>
 
                         <div className="wishlist-form__field" data-field="tags">
                             <Label htmlFor="wishlist-tags">Tags</Label>

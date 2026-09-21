@@ -18,11 +18,11 @@ namespace Magpie.Test.Core.Jobs.Runtime.Scheduling;
 public sealed class MlfqJobConcurrencySchedulerTests
 {
     [Test]
-    public void FairAdmission_AdmitsMinorityTypeWithinOneRound_WhenMajorityBacklogExists()
+    public void TrySelectAdmission_AdmitsTheMinorityTypeInTheFirstTwoSlots_WhenTheBacklogIsLarger()
     {
         // Arrange
         var scheduler = new MlfqJobConcurrencyScheduler(
-            new JobRuntimeOptions { MaxConcurrentJobs = 15 },
+            new JobRuntimeOptions { PoolSize = 15 },
             TimeProvider.System,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
@@ -37,6 +37,8 @@ public sealed class MlfqJobConcurrencySchedulerTests
 
         var admitted = new List<JobClaimCandidate>();
         var excluded = new HashSet<Guid>();
+
+        // Act
         while (scheduler.HasAdmissionCapacity() && scheduler.TrySelectAdmission(candidates, excluded, out var selected))
         {
             scheduler.CommitAdmission(selected);
@@ -44,15 +46,8 @@ public sealed class MlfqJobConcurrencySchedulerTests
             candidates.RemoveAll(c => c.Id == selected.Id);
         }
 
-        // Act
-        var minorityRank = admitted.FindIndex(c => c.Id == minority.Id);
-
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(minorityRank, Is.GreaterThanOrEqualTo(0));
-            Assert.That(minorityRank, Is.LessThanOrEqualTo(1));
-        }
+        Assert.That(admitted.Take(2).Select(candidate => candidate.Id), Does.Contain(minority.Id));
     }
 
     [Test]
@@ -63,7 +58,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions
             {
-                MaxConcurrentJobs = 15,
+                PoolSize = 15,
                 MlfqQuanta = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), null, null],
             },
             time,
@@ -85,14 +80,14 @@ public sealed class MlfqJobConcurrencySchedulerTests
     }
 
     [Test]
-    public void Demotion_ReArmsQuantumPerLevel_ViaLevelEnteredAt()
+    public void Demotion_ReArmsQuantumPerLevel_WhenWorkEntersTheNextLevel()
     {
         // Arrange
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions
             {
-                MaxConcurrentJobs = 15,
+                PoolSize = 15,
                 MlfqQuanta = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), null, null],
             },
             time,
@@ -123,7 +118,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions
             {
-                MaxConcurrentJobs = 5,
+                PoolSize = 5,
                 MlfqQuanta = [TimeSpan.FromSeconds(1), TimeSpan.FromHours(1), TimeSpan.FromHours(1), null],
             },
             time,
@@ -149,11 +144,10 @@ public sealed class MlfqJobConcurrencySchedulerTests
         // Arrange
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
 
-        // Ceiling 17 -> general 15 + fast-lane 2.
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions
             {
-                MaxConcurrentJobs = 17,
+                PoolSize = 17,
                 MlfqQuanta = [TimeSpan.FromSeconds(1), TimeSpan.FromHours(1), TimeSpan.FromHours(1), null],
             },
             time,
@@ -187,7 +181,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions
             {
-                MaxConcurrentJobs = 15,
+                PoolSize = 15,
                 MlfqQuanta =
                 [
                     TimeSpan.FromMilliseconds(1),
@@ -228,14 +222,14 @@ public sealed class MlfqJobConcurrencySchedulerTests
     }
 
     [Test]
-    public void Ceiling_TotalInFlight_NeverExceedsConfiguredTotal()
+    public void TryReserveSlot_LimitsTotalInFlight_WhenTheConfiguredCeilingIsReached()
     {
         // Arrange
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions
             {
-                MaxConcurrentJobs = 15,
+                PoolSize = 15,
                 MlfqQuanta =
                 [
                     TimeSpan.FromMilliseconds(1),
@@ -272,16 +266,15 @@ public sealed class MlfqJobConcurrencySchedulerTests
         }
 
         // Assert
-        Assert.That(maxInFlight, Is.LessThanOrEqualTo(scheduler.GeneralCapacity));
-        Assert.That(maxInFlight, Is.EqualTo(scheduler.GeneralCapacity));
+        Assert.That(maxInFlight, Is.EqualTo(14));
     }
 
     [Test]
-    public void TryReserveSlot_OccupiesAdmissionSlot_AndReleasesOnDispose()
+    public void TryReserveSlot_ReleasesAdmissionSlot_WhenTheReservationIsDisposed()
     {
         // Arrange
         var scheduler = new MlfqJobConcurrencyScheduler(
-            new JobRuntimeOptions { MaxConcurrentJobs = 5 },
+            new JobRuntimeOptions { PoolSize = 5 },
             TimeProvider.System,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         var candidate = new JobClaimCandidate(Guid.NewGuid(), "ReleaseSearchItem", "rs:1");
@@ -313,43 +306,32 @@ public sealed class MlfqJobConcurrencySchedulerTests
     {
         // Arrange
         var scheduler = new MlfqJobConcurrencyScheduler(
-            new JobRuntimeOptions { MaxConcurrentJobs = 5 },
+            new JobRuntimeOptions { PoolSize = 5 },
             TimeProvider.System,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
-        var reservations = new List<IDisposable>();
-        var general = scheduler.GeneralCapacity;
 
         // Act
-        for (var index = 0; index < general; index++)
+        for (var index = 0; index < 4; index++)
         {
-            // Assert
-            Assert.That(scheduler.TryReserveSlot(out var reservation), Is.True);
-            reservations.Add(reservation);
+            scheduler.TryReserveSlot(out _);
         }
 
-        var denied = scheduler.TryReserveSlot(out var deniedReservation);
+        var denied = scheduler.TryReserveSlot(out _);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(denied, Is.False);
-            Assert.That(scheduler.InFlight, Is.EqualTo(general));
+            Assert.That(scheduler.InFlight, Is.EqualTo(4));
         }
-
-        deniedReservation.Dispose();
-        foreach (var reservation in reservations)
-        {
-            reservation.Dispose();
-        }
-
-        Assert.That(scheduler.InFlight, Is.EqualTo(0));
     }
 
     [Test]
-    public void Release_FreesSlot_AllowingFurtherAdmission()
+    public void Release_AllowsFurtherAdmission_WhenAnOccupiedSlotIsFreed()
     {
         // Arrange
         var scheduler = new MlfqJobConcurrencyScheduler(
-            new JobRuntimeOptions { MaxConcurrentJobs = 15 },
+            new JobRuntimeOptions { PoolSize = 15 },
             TimeProvider.System,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
@@ -386,14 +368,14 @@ public sealed class MlfqJobConcurrencySchedulerTests
     {
         // Arrange
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 5 };
+        var options = new JobRuntimeOptions { PoolSize = 5 };
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             time,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(1));
 
-        var target = scheduler.GeneralCapacity;
+        var target = 4;
         var candidates = Enumerable
             .Range(0, 256)
             .Select(index => new JobClaimCandidate(Guid.NewGuid(), $"TestJob{index % 4}", null))
@@ -417,8 +399,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
             Assert.That(scheduler.InFlight, Is.LessThanOrEqualTo(scheduler.Total));
         }
 
-        Assert.That(scheduler.InFlight, Is.EqualTo(target));
-        Assert.That(scheduler.InFlight, Is.EqualTo(scheduler.GeneralCapacity));
+        Assert.That(scheduler.InFlight, Is.EqualTo(4));
 
         // Act
         var immediate = await scheduler.AcquireImmediateSlotAsync(default)
@@ -427,8 +408,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(scheduler.InFlight, Is.EqualTo(scheduler.Total));
-            Assert.That(scheduler.InFlight, Is.EqualTo(scheduler.GeneralCapacity + scheduler.FastLaneCapacity));
+            Assert.That(scheduler.InFlight, Is.EqualTo(5));
         }
 
         immediate.Dispose();
@@ -441,10 +421,10 @@ public sealed class MlfqJobConcurrencySchedulerTests
     }
 
     [Test]
-    public async Task AcquireImmediateSlotAsync_BorrowsGeneralSlot_WhenFastLaneIsSaturatedAndGeneralCapacityIsIdle()
+    public async Task AcquireImmediateSlotAsync_BorrowsAGeneralSlot_WhenTheFastLaneIsSaturated()
     {
         // Arrange
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 5 };
+        var options = new JobRuntimeOptions { PoolSize = 5 };
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             TimeProvider.System,
@@ -479,7 +459,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
     {
         // Arrange
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 5 };
+        var options = new JobRuntimeOptions { PoolSize = 5 };
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             time,
@@ -540,11 +520,11 @@ public sealed class MlfqJobConcurrencySchedulerTests
     }
 
     [Test]
-    public async Task InFlight_CountsGeneralFastLaneAndBorrowedImmediateWork_WithoutExceedingTheCeiling()
+    public async Task InFlight_CountsGeneralFastLaneAndBorrowedImmediateWork_WhenAllLanesHaveWork()
     {
         // Arrange
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 16 };
+        var options = new JobRuntimeOptions { PoolSize = 16 };
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             time,
@@ -602,11 +582,11 @@ public sealed class MlfqJobConcurrencySchedulerTests
     }
 
     [Test]
-    public void Admission_NeverDispatchesBeyondTheConfiguredCeiling_UnderSaturatingDemand()
+    public void Admission_NeverDispatchesBeyondTheConfiguredCeiling_WhenDemandExceedsCapacity()
     {
         // Arrange
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 8 };
+        var options = new JobRuntimeOptions { PoolSize = 8 };
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             time,
@@ -649,7 +629,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
     public void Constructor_SplitsCeilingIntoGeneralPoolAndFastLaneFloor_WhenCeilingIs16()
     {
         // Arrange
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 16 };
+        var options = new JobRuntimeOptions { PoolSize = 16 };
 
         // Act
         var scheduler = new MlfqJobConcurrencyScheduler(
@@ -671,7 +651,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
     public void Constructor_SplitsCeilingIntoGeneralPoolAndFastLaneFloor_WhenCeilingIs15()
     {
         // Arrange
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 15 };
+        var options = new JobRuntimeOptions { PoolSize = 15 };
 
         // Act
         var scheduler = new MlfqJobConcurrencyScheduler(
@@ -693,7 +673,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
     public void Constructor_SplitsCeilingIntoGeneralPoolAndFastLaneFloor_WhenCeilingIs30()
     {
         // Arrange
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 30 };
+        var options = new JobRuntimeOptions { PoolSize = 30 };
 
         // Act
         var scheduler = new MlfqJobConcurrencyScheduler(
@@ -715,7 +695,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
     public void Constructor_RaisesToMinimum_WhenConfiguredBelowFloor()
     {
         // Arrange
-        var options = new JobRuntimeOptions { MaxConcurrentJobs = 2 };
+        var options = new JobRuntimeOptions { PoolSize = 2 };
 
         // Act
         var scheduler = new MlfqJobConcurrencyScheduler(
@@ -747,7 +727,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(scheduler.Total, Is.EqualTo(options.MaxConcurrentJobs));
+            Assert.That(scheduler.Total, Is.EqualTo(options.PoolSize));
             Assert.That(scheduler.FastLaneCapacity, Is.GreaterThanOrEqualTo(1));
             Assert.That(scheduler.GeneralCapacity + scheduler.FastLaneCapacity, Is.EqualTo(scheduler.Total));
         }

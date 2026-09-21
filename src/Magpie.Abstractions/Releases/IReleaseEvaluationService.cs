@@ -35,6 +35,24 @@ public interface IReleaseEvaluationService
         ReleaseEvaluationContext context);
 
     /// <summary>
+    /// Tells if a release is a permitted upgrade over the file that the content item already holds.
+    /// </summary>
+    /// <param name="assessment">The assessment of the release against the target content item</param>
+    /// <param name="release">The release to test</param>
+    /// <param name="context">The context for the target content hierarchy item</param>
+    bool IsAcceptableUpgradeOverCurrentFile(
+        ReleaseAssessment assessment,
+        Release release,
+        ReleaseEvaluationContext context);
+
+    /// <summary>
+    /// Gives the quality rank that ranking uses, which holds the releases at or above a cutoff as equal.
+    /// </summary>
+    /// <param name="assessment">The assessment that holds the matched rank</param>
+    /// <param name="context">The context that holds the quality tier list and the rank of the current file</param>
+    int EffectiveQualityRank(ReleaseAssessment assessment, ReleaseEvaluationContext context);
+
+    /// <summary>
     /// Scores a release against the quality tier list of a content hierarchy item.
     /// </summary>
     /// <param name="release">The release to score</param>
@@ -61,7 +79,7 @@ public interface IReleaseEvaluationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the hierarchy nodes that a release fulfills for a content hierarchy item.
+    /// Resolves the hierarchy nodes that a release fulfills for a content hierarchy item.
     /// </summary>
     /// <param name="release">The release to evaluate</param>
     /// <param name="releaseFacts">The facts that the parser read from the release</param>

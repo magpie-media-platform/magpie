@@ -1,4 +1,5 @@
 import { apiFetch, isApiError } from '@/lib/api';
+import { escapeQueryString } from '@/lib/simpleFilterQuery';
 
 interface MagpieQlParseError {
     message: string;
@@ -20,7 +21,7 @@ function isParseError(value: unknown): value is MagpieQlParseError {
 }
 
 export function magpieQlString(value: string): string {
-    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    return `"${escapeQueryString(value)}"`;
 }
 
 export function magpieQlAnd(clauses: readonly string[]): string {

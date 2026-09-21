@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
@@ -17,6 +18,7 @@ namespace Magpie.Extensions.MusicBrainz;
 
 internal sealed class MusicBrainzClient(
     IHttpClientFactory httpClientFactory,
+    TimeProvider timeProvider,
     ILogger<MusicBrainzClient> logger) : IMusicBrainzClient
 {
     public const string HttpClientName = "magpie.musicbrainz";
@@ -27,6 +29,14 @@ internal sealed class MusicBrainzClient(
     private const int MaximumIsrcResponseBytes = 8 * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    private static readonly TimeSpan MinimumRequestInterval = TimeSpan.FromSeconds(1);
+
+    private static readonly TimeSpan MaximumRequestInterval = TimeSpan.FromSeconds(30);
+
+    private readonly SemaphoreSlim _requestGate = new(1, 1);
+
+    private long _nextSendTimestamp;
 
     public async Task<FetchResult<SearchPage>> SearchAsync(
         Request request,
@@ -379,6 +389,24 @@ internal sealed class MusicBrainzClient(
         return BitConverter.ToString(hash, 0, 6).Replace("-", string.Empty).ToLowerInvariant();
     }
 
+    private TimeSpan RequestInterval(HttpResponseMessage response)
+    {
+        if (response.StatusCode is not (HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable))
+        {
+            return MinimumRequestInterval;
+        }
+
+        var retryAfter = response.Headers.RetryAfter;
+        var delay = retryAfter?.Delta ??
+            (retryAfter?.Date is { } date ? date - timeProvider.GetUtcNow() : MinimumRequestInterval);
+        if (delay < MinimumRequestInterval)
+        {
+            return MinimumRequestInterval;
+        }
+
+        return delay > MaximumRequestInterval ? MaximumRequestInterval : delay;
+    }
+
     private async Task<FetchResult<T>> SendJsonAsync<T>(
         string relativeTarget,
         string endpoint,
@@ -395,22 +423,42 @@ internal sealed class MusicBrainzClient(
         request.Headers.TryAddWithoutValidation("User-Agent", BuildUserAgent(settings));
 
         HttpResponseMessage response;
+        var nextInterval = MinimumRequestInterval;
+        await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            response = await client.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken).ConfigureAwait(false);
+            var remaining = _nextSendTimestamp - Stopwatch.GetTimestamp();
+            if (remaining > 0)
+            {
+                var pause = TimeSpan.FromSeconds((double)remaining / Stopwatch.Frequency);
+                await Task.Delay(pause, cancellationToken).ConfigureAwait(false);
+            }
+
+            try
+            {
+                response = await client.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning("MusicBrainz timed out at {Endpoint} ({Key})", endpoint, diagnosticKey);
+                return new FetchResult<T> { Outcome = FetchOutcome.Timeout };
+            }
+            catch (HttpRequestException ex)
+            {
+                logger.LogWarning(ex, "MusicBrainz transport failed at {Endpoint} ({Key})", endpoint, diagnosticKey);
+                return new FetchResult<T> { Outcome = FetchOutcome.Unavailable };
+            }
+
+            nextInterval = RequestInterval(response);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        finally
         {
-            logger.LogWarning("MusicBrainz timed out at {Endpoint} ({Key})", endpoint, diagnosticKey);
-            return new FetchResult<T> { Outcome = FetchOutcome.Timeout };
-        }
-        catch (HttpRequestException ex)
-        {
-            logger.LogWarning(ex, "MusicBrainz transport failed at {Endpoint} ({Key})", endpoint, diagnosticKey);
-            return new FetchResult<T> { Outcome = FetchOutcome.Unavailable };
+            _nextSendTimestamp = Stopwatch.GetTimestamp() +
+                (long)(nextInterval.TotalSeconds * Stopwatch.Frequency);
+            _requestGate.Release();
         }
 
         using (response)

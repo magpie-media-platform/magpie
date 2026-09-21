@@ -2,18 +2,8 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
-import { RequireRole, useRequireRole } from './RequireRole';
+import { RequireRole } from './RequireRole';
 import { Role } from './types';
-
-function RoleHookConsumer({ min }: { min: Role }) {
-    const { allowed, requiredRoleName } = useRequireRole(min);
-    return (
-        <div>
-            <span data-testid="allowed">{allowed.toString()}</span>
-            <span data-testid="required-role">{requiredRoleName}</span>
-        </div>
-    );
-}
 
 describe('RequireRole', () => {
     it('renders children when user meets role requirement', () => {
@@ -97,41 +87,5 @@ describe('RequireRole', () => {
         );
 
         expect(screen.getByText('Viewer content')).toBeInTheDocument();
-    });
-});
-
-describe('useRequireRole', () => {
-    it('returns allowed=true when user meets requirement', () => {
-        const user = { id: '1', username: 'admin', role: Role.Admin };
-
-        render(
-            <AuthProvider initialUser={user}>
-                <RoleHookConsumer min={Role.Manager} />
-            </AuthProvider>,
-        );
-
-        expect(screen.getByTestId('allowed')).toHaveTextContent('true');
-    });
-
-    it('returns allowed=false when user does not meet requirement', () => {
-        const user = { id: '1', username: 'viewer', role: Role.Viewer };
-
-        render(
-            <AuthProvider initialUser={user}>
-                <RoleHookConsumer min={Role.Admin} />
-            </AuthProvider>,
-        );
-
-        expect(screen.getByTestId('allowed')).toHaveTextContent('false');
-    });
-
-    it('returns the required role name', () => {
-        render(
-            <AuthProvider>
-                <RoleHookConsumer min={Role.Admin} />
-            </AuthProvider>,
-        );
-
-        expect(screen.getByTestId('required-role')).toHaveTextContent('Admin');
     });
 });

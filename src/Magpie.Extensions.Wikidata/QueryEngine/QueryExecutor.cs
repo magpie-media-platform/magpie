@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -21,9 +22,47 @@ internal sealed class QueryExecutor(
     IQueryCoordinator cache,
     ILogger<QueryExecutor> logger) : IQueryExecutor
 {
+    private sealed class QueryTotals
+    {
+        public int RowsFetched { get; set; }
+
+        public int Requests { get; set; }
+
+        public int PrunedStages { get; set; }
+
+        public int Windows { get; set; }
+    }
+
+    private sealed record CandidateWindowResult(
+        IReadOnlyList<SearchHit> Hits,
+        IReadOnlyList<string> Warnings,
+        bool HasMore);
+
+    private sealed record CandidateState(
+        SearchHit Hit,
+        EntityDto? Entity,
+        IReadOnlyList<ResidualFilter> Pending);
+
+    private sealed record CollectionItem(
+        object Value,
+        string? EntityQid,
+        CriteriaMatchResult Existence = CriteriaMatchResult.Matched,
+        bool NameComplete = true,
+        bool IdentityComplete = true,
+        bool BodyComplete = true);
+
+    private sealed record SubjectView(
+        IReadOnlyList<string>? Names,
+        IReadOnlyList<PropertyValue> ExternalIds);
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
     private const int CandidateLimit = SparqlQueryBuilder.CandidateWindow;
 
     private const int MaxRequestedLanguages = 50;
+
+    private const int MaxSearchWindows = 20;
+
+    private const int MaxResolvedQids = 500;
 
     private static readonly IReadOnlyDictionary<string, EntityDto> EmptyEntities =
         new Dictionary<string, EntityDto>();
@@ -32,7 +71,7 @@ internal sealed class QueryExecutor(
         IReadOnlyDictionary<string, SparqlBindingDto> binding,
         EntityKind kind)
     {
-        var qid = ExtractQid(Read(binding, "child"));
+        var qid = Read(binding, "child").ToQid();
         var title = Read(binding, "childLabel")?.Trim();
         if (qid is null ||
             title is null ||
@@ -71,8 +110,7 @@ internal sealed class QueryExecutor(
                 RequestedPage = plan.Page,
                 HasMore = false
             },
-            Warnings = warnings,
-            CriterionDispositions = plan.CriterionDispositions
+            Warnings = warnings
         };
 
     private QueryResult Failure(QueryPlan plan, string diagnostic) =>
@@ -88,18 +126,6 @@ internal sealed class QueryExecutor(
 
     private bool IsTitleWindowSentinel(IReadOnlyDictionary<string, SparqlBindingDto> binding) =>
         string.Equals(Read(binding, "titleWindowExceeded"), "1", StringComparison.Ordinal);
-
-    private string? ExtractQid(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        var slash = value!.LastIndexOf('/');
-        var qid = slash >= 0 && slash < value.Length - 1 ? value.Substring(slash + 1) : value;
-        return qid.Length > 1 && qid[0] == 'Q' && qid.Substring(1).All(char.IsDigit) ? qid : null;
-    }
 
     private void AddExternal(IDictionary<string, string> values, string source, string? value)
     {
@@ -118,11 +144,18 @@ internal sealed class QueryExecutor(
             Qids =
             [
                 .. alternative.Qids
-                    .Concat(alternative.Names.SelectMany(name => resolutions[name]))
+                    .Concat(alternative.Names
+                        .Where(name => !string.IsNullOrWhiteSpace(name))
+                        .SelectMany(name => resolutions[name]))
                     .Distinct(StringComparer.Ordinal)
             ],
             Names = []
         };
+        if (resolved.Qids.Count > MaxResolvedQids)
+        {
+            throw new WikidataBudgetException("Wikidata entity resolution matched too many identifiers.");
+        }
+
         return HasSubjectSelector(resolved) ? resolved : null;
     }
 
@@ -414,6 +447,16 @@ internal sealed class QueryExecutor(
         CancellationToken cancellationToken)
     {
         plan = plan.PrepareDiagnostics();
+        if (plan.CriterionDispositions.Count > 0)
+        {
+            logger.LogDebug(
+                "Wikidata query resolved criterion dispositions: {Dispositions}",
+                string.Join(
+                    "; ",
+                    plan.CriterionDispositions.Select(
+                        disposition => $"{disposition.Source}={disposition.Disposition} ({disposition.Reason})")));
+        }
+
         using var activity = Telemetry.Source.StartActivity("wikidata.query.execute");
         var startedTimestamp = Stopwatch.GetTimestamp();
         var totals = new QueryTotals();
@@ -436,8 +479,7 @@ internal sealed class QueryExecutor(
             var unsupported = new QueryResult
             {
                 Supported = false,
-                PageInfo = ProviderSearchPageInfo.Unsupported,
-                CriterionDispositions = plan.CriterionDispositions
+                PageInfo = ProviderSearchPageInfo.Unsupported
             };
             Complete(
                 activity,
@@ -467,12 +509,14 @@ internal sealed class QueryExecutor(
             return empty;
         }
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(2));
         try
         {
             var resolvedPlan = plan;
-            resolvedPlan = await ResolveTitleCandidatesAsync(resolvedPlan, context, totals, cancellationToken)
+            resolvedPlan = await ResolveTitleCandidatesAsync(resolvedPlan, context, totals, timeout.Token)
                 .ConfigureAwait(false);
-            resolvedPlan = await ResolveEntityNamesAsync(resolvedPlan, context, totals, cancellationToken)
+            resolvedPlan = await ResolveEntityNamesAsync(resolvedPlan, context, totals, timeout.Token)
                 .ConfigureAwait(false);
             plan = resolvedPlan;
             if (plan.Strategy == QueryStrategy.Empty)
@@ -507,6 +551,11 @@ internal sealed class QueryExecutor(
                 var seedOffset = 0;
                 while (collected.Count < logicalBoundary)
                 {
+                    if (totals.Windows++ == MaxSearchWindows)
+                    {
+                        throw new WikidataBudgetException("Wikidata search scanned too many pages without finishing.");
+                    }
+
                     var seedRequest = SparqlQueryBuilder.BuildRelationshipSeed(
                         plan.EntityKind,
                         plan.Filters[relationshipIndex],
@@ -516,9 +565,9 @@ internal sealed class QueryExecutor(
                         context,
                         totals,
                         RequestRole.RelationshipSeedWindows,
-                        cancellationToken).ConfigureAwait(false);
+                        timeout.Token).ConfigureAwait(false);
                     var seedQids = (from row in seedRows
-                                    let qid = ExtractQid(Read(row, "item"))
+                                    let qid = Read(row, "item").ToQid()
                                     where qid is not null
                                     select qid!)
                         .Distinct(StringComparer.Ordinal)
@@ -530,15 +579,15 @@ internal sealed class QueryExecutor(
                         break;
                     }
 
-                    var seededPlan = BindRelationshipSeed(plan, relationshipIndex, windowQids);
-                    var window = await SearchCandidateWindowAsync(
-                        seededPlan,
+                    await CollectCandidateWindowsAsync(
+                        BindRelationshipSeed(plan, relationshipIndex, windowQids),
                         context,
-                        0,
                         totals,
-                        cancellationToken).ConfigureAwait(false);
-                    AddDistinct(collected, collectedQids, window.Hits);
-                    executionWarnings.AddRange(window.Warnings);
+                        logicalBoundary,
+                        collected,
+                        collectedQids,
+                        executionWarnings,
+                        timeout.Token).ConfigureAwait(false);
                     if (!seedHasMore)
                     {
                         break;
@@ -549,24 +598,15 @@ internal sealed class QueryExecutor(
             }
             else
             {
-                var candidateOffset = 0;
-                while (collected.Count < logicalBoundary)
-                {
-                    var window = await SearchCandidateWindowAsync(
-                        plan,
-                        context,
-                        candidateOffset,
-                        totals,
-                        cancellationToken).ConfigureAwait(false);
-                    AddDistinct(collected, collectedQids, window.Hits);
-                    executionWarnings.AddRange(window.Warnings);
-                    if (!plan.UsesLocalPaging || !window.HasMore)
-                    {
-                        break;
-                    }
-
-                    candidateOffset += SparqlQueryBuilder.CandidateWindow;
-                }
+                await CollectCandidateWindowsAsync(
+                    plan,
+                    context,
+                    totals,
+                    logicalBoundary,
+                    collected,
+                    collectedQids,
+                    executionWarnings,
+                    timeout.Token).ConfigureAwait(false);
             }
 
             var resultOffset = plan.UsesLocalPaging ? logicalOffset : 0;
@@ -585,8 +625,7 @@ internal sealed class QueryExecutor(
                     .. plan.Warnings
                         .Concat(executionWarnings)
                         .Distinct()
-                ],
-                CriterionDispositions = plan.CriterionDispositions
+                ]
             };
             Complete(
                 activity,
@@ -641,7 +680,8 @@ internal sealed class QueryExecutor(
                 throttled);
             return throttled;
         }
-        catch (Exception exception) when (exception is HttpRequestException or JsonException)
+        catch (Exception exception) when (exception is HttpRequestException or JsonException
+            or WikidataBudgetException)
         {
             logger.LogWarning(exception, "Wikidata search failed for entity kind {EntityKind}", plan.EntityKind);
             var failed = Failure(plan, "Wikidata search failed; no Wikidata results were returned.");
@@ -666,6 +706,41 @@ internal sealed class QueryExecutor(
                 survivingRows: 0,
                 result: null);
             throw;
+        }
+    }
+
+    private async Task CollectCandidateWindowsAsync(
+        QueryPlan plan,
+        RequestContext context,
+        QueryTotals totals,
+        int logicalBoundary,
+        List<SearchHit> collected,
+        HashSet<string> collectedQids,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        var candidateOffset = 0;
+        while (collected.Count < logicalBoundary)
+        {
+            if (totals.Windows++ == MaxSearchWindows)
+            {
+                throw new WikidataBudgetException("Wikidata search scanned too many pages without finishing.");
+            }
+
+            var window = await SearchCandidateWindowAsync(
+                plan,
+                context,
+                candidateOffset,
+                totals,
+                cancellationToken).ConfigureAwait(false);
+            AddDistinct(collected, collectedQids, window.Hits);
+            warnings.AddRange(window.Warnings);
+            if (!plan.UsesLocalPaging || !window.HasMore)
+            {
+                break;
+            }
+
+            candidateOffset += SparqlQueryBuilder.CandidateWindow;
         }
     }
 
@@ -758,7 +833,7 @@ internal sealed class QueryExecutor(
                 value => provenance = value).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException
-            or OperationCanceledException)
+            or OperationCanceledException or WikidataBudgetException)
         {
             activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
             EndRequest(activity, totals, role, QueryCoordinatorRegion.Searches, cacheHit: false, rows: 0);
@@ -817,7 +892,6 @@ internal sealed class QueryExecutor(
             new KeyValuePair<string, object?>("provider", Telemetry.Provider),
             new KeyValuePair<string, object?>("cache_region", region),
             new KeyValuePair<string, object?>("outcome", cacheHit ? "hit" : "miss"));
-        activity?.Dispose();
     }
 
     private void SkipStage(QueryTotals totals, string role, string reason)
@@ -915,7 +989,8 @@ internal sealed class QueryExecutor(
                     provenance != SearchCacheProvenance.Remote,
                     resolved.Count);
             }
-            catch (Exception exception) when (exception is JsonException or HttpRequestException ||
+            catch (Exception exception) when (exception is JsonException or HttpRequestException
+                or WikidataBudgetException ||
                 (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
                 activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
@@ -926,7 +1001,7 @@ internal sealed class QueryExecutor(
                     QueryCoordinatorRegion.EntitySearches,
                     cacheHit: false,
                     rows: 0);
-                logger.LogDebug(exception, "Wikidata title candidate lookup failed for {Term}", term);
+                logger.LogWarning(exception, "Wikidata title candidate lookup failed for {Term}", term);
             }
         }
 
@@ -1076,7 +1151,8 @@ internal sealed class QueryExecutor(
                     "Wikidata result details were rate limited; some Wikidata result details are missing."
                 ]);
         }
-        catch (Exception exception) when (exception is HttpRequestException or JsonException)
+        catch (Exception exception) when (exception is HttpRequestException or JsonException
+            or WikidataBudgetException)
         {
             logger.LogWarning(
                 exception,
@@ -1090,7 +1166,7 @@ internal sealed class QueryExecutor(
         }
 
         var projections = (from row in rows
-                           let qid = ExtractQid(Read(row, "item"))
+                           let qid = Read(row, "item").ToQid()
                            where qid is not null
                            group row by qid! into matches
                            select matches)
@@ -1232,7 +1308,7 @@ internal sealed class QueryExecutor(
             throw;
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException
-            or OperationCanceledException)
+            or OperationCanceledException or WikidataBudgetException)
         {
             return new ResidualHydrationBatch
             {
@@ -1274,26 +1350,30 @@ internal sealed class QueryExecutor(
         var entityContext = EntityHydrationContext(entityResiduals, context);
         var entityQids = survivors.Select(hit => hit.Qid).ToArray();
         var entityRemote = false;
-        using var entityActivity = StartRequest(
+        ResidualHydrationBatch entityBatch;
+        using (var entityActivity = StartRequest(
             RequestRole.ResidualEntityHydration,
-            string.Join("|", entityQids));
-        var entityBatch = await HydrateCandidatesAsync(
-            entityQids,
-            entityContext,
-            cancellationToken,
-            value => entityRemote |= value == SearchCacheProvenance.Remote).ConfigureAwait(false);
-        if (entityBatch.Failed)
+            string.Join("|", entityQids)))
         {
-            entityActivity?.SetStatus(ActivityStatusCode.Error, "hydration_failed");
+            entityBatch = await HydrateCandidatesAsync(
+                entityQids,
+                entityContext,
+                cancellationToken,
+                value => entityRemote |= value == SearchCacheProvenance.Remote).ConfigureAwait(false);
+            if (entityBatch.Failed)
+            {
+                entityActivity?.SetStatus(ActivityStatusCode.Error, "hydration_failed");
+            }
+
+            EndRequest(
+                entityActivity,
+                totals,
+                RequestRole.ResidualEntityHydration,
+                QueryCoordinatorRegion.Entities,
+                !entityRemote,
+                entityBatch.Entities.Count);
         }
 
-        EndRequest(
-            entityActivity,
-            totals,
-            RequestRole.ResidualEntityHydration,
-            QueryCoordinatorRegion.Entities,
-            !entityRemote,
-            entityBatch.Entities.Count);
         if (entityBatch.Failed)
         {
             foreach (var hit in survivors)
@@ -2545,32 +2625,9 @@ internal sealed class QueryExecutor(
         }
 
         return [.. from qualifier in qualifiers
-                let qid = EntityId(qualifier)
+                let qid = qualifier.EntityId()
                 where qid is not null
                 select qid!];
-    }
-
-    private string? EntityId(SnakDto? snak)
-    {
-        var value = snak is { SnakType: null or "value" } ? snak.DataValue?.Value : null;
-        if (value is not { ValueKind: JsonValueKind.Object } element ||
-            !element.TryGetProperty("id", out var id) ||
-            id.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(id.GetString()))
-        {
-            return null;
-        }
-
-        var qid = id.GetString()!.Trim();
-        if (qid.Length <= 1 ||
-            qid[0] is not ('Q' or 'q') ||
-            qid[1] == '0' ||
-            qid.Skip(1).Any(value => value is < '0' or > '9'))
-        {
-            return null;
-        }
-
-        return qid[0] == 'q' ? "Q" + qid.Substring(1) : qid;
     }
 
     private CriteriaMatchResult MatchAny(
@@ -2590,35 +2647,4 @@ internal sealed class QueryExecutor(
 
         return result;
     }
-
-    private sealed class QueryTotals
-    {
-        public int RowsFetched { get; set; }
-
-        public int Requests { get; set; }
-
-        public int PrunedStages { get; set; }
-    }
-
-    private sealed record CandidateWindowResult(
-        IReadOnlyList<SearchHit> Hits,
-        IReadOnlyList<string> Warnings,
-        bool HasMore);
-
-    private sealed record CandidateState(
-        SearchHit Hit,
-        EntityDto? Entity,
-        IReadOnlyList<ResidualFilter> Pending);
-
-    private sealed record CollectionItem(
-        object Value,
-        string? EntityQid,
-        CriteriaMatchResult Existence = CriteriaMatchResult.Matched,
-        bool NameComplete = true,
-        bool IdentityComplete = true,
-        bool BodyComplete = true);
-
-    private sealed record SubjectView(
-        IReadOnlyList<string>? Names,
-        IReadOnlyList<PropertyValue> ExternalIds);
 }

@@ -29,7 +29,6 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
 import { useAddContentByExternalId } from '@/hooks/useAddContentByExternalId';
-import { useSavedProviderMetadataCandidateSearch } from '@/hooks/useSavedProviderMetadataCandidateSearch';
 import {
     useProviderMetadataCandidateSearch,
     type ProviderMetadataCandidate,
@@ -45,9 +44,11 @@ import {
 import { useRootFolders, type ApiRootFolder } from '@/hooks/useRootFolders';
 import { useToggle } from '@/hooks/useToggle';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
-import { isApiError } from '@/lib/api';
 import { setContentFilterSelection } from '@/lib/contentColumnFilters';
+import { candidateSearchErrorMessage, getErrorMessage } from '@/lib/errors';
 import { parseMagpieQl } from '@/lib/magpieQl';
+import { toPlainTextSummary } from '@/lib/plainTextSummary';
+import { sortTableRows } from '@/lib/sortTableRows';
 import type { LibraryAddPreloadState, WishlistsPageCreateState } from '@/types/navigation';
 
 import {
@@ -66,16 +67,6 @@ const SAVED_FILTER_NONE_VALUE = '__none__';
 
 const DEFAULT_SORTING: SortingState = [];
 
-function candidateSearchErrorMessage(error: unknown): string {
-    if (isApiError(error) && typeof error.details === 'object' && error.details !== null) {
-        const details = error.details as { message?: unknown; position?: unknown };
-        if (typeof details.message === 'string' && typeof details.position === 'number') {
-            return details.message;
-        }
-    }
-    return 'Search failed. Please try again.';
-}
-
 type AddTab = 'live' | 'saved';
 
 function fromProviderMetadataCandidate(candidate: ProviderMetadataCandidate): AddableCandidate {
@@ -90,7 +81,7 @@ function fromProviderMetadataCandidate(candidate: ProviderMetadataCandidate): Ad
         year: candidate.year != null ? String(candidate.year) : undefined,
         yearValue: candidate.year ?? undefined,
         releaseDate: candidate.releaseDate ?? undefined,
-        overview: candidate.overview,
+        overview: toPlainTextSummary(candidate.overview) || undefined,
         thumbnailUrl: candidate.thumbnailUrl,
         inLibrary: candidate.inLibrary ?? false,
         existingContentHierarchyItemId: candidate.existingContentHierarchyItemId ?? undefined,
@@ -153,6 +144,19 @@ const ADD_CONTENT_SORT_OPTIONS: MobileListSortOption[] = [
     { id: 'published', label: 'Published', initialDirection: 'desc' },
 ];
 
+function noResultsDescription(canGoNext: boolean, page: number, hasWarnings: boolean): string {
+    if (canGoNext) {
+        return 'Continue to the next page to see more results.';
+    }
+    if (page > 1) {
+        return 'Return to a previous page to see earlier results.';
+    }
+    if (hasWarnings) {
+        return 'No usable matches were returned. Review the provider warnings and adjust the filter.';
+    }
+    return 'No providers returned content matching this filter. Try broader criteria, or save it as a wishlist to keep checking for new matches.';
+}
+
 export type { LibraryAddPreloadState } from '@/types/navigation';
 
 export function LibraryAddPage() {
@@ -178,8 +182,8 @@ export function LibraryAddPage() {
     const [saveFilterError, setSaveFilterError] = useState<string | null>(null);
     const [candidateSearchError, setCandidateSearchError] = useState<string | null>(null);
 
-    const candidateSearch = useProviderMetadataCandidateSearch();
-    const savedCandidateSearch = useSavedProviderMetadataCandidateSearch();
+    const liveCandidateSearch = useProviderMetadataCandidateSearch();
+    const savedCandidateSearch = useProviderMetadataCandidateSearch();
 
     const addMutation = useAddContentByExternalId();
 
@@ -244,10 +248,10 @@ export function LibraryAddPage() {
                 {
                     onSuccess: (contentHierarchyItemId) =>
                         handleAddSuccess(candidate.key, candidate.title, contentHierarchyItemId),
-                    onError: () => {
+                    onError: (error) => {
                         toast({
                             title: 'Failed to add content',
-                            description: 'The server rejected the request. Please try again.',
+                            description: getErrorMessage(error, 'Failed to add content.'),
                             variant: 'error',
                         });
                     },
@@ -318,10 +322,10 @@ export function LibraryAddPage() {
                 {
                     onSuccess: (contentHierarchyItemId) =>
                         handleAddSuccess(candidateKey, target.fallbackTitle, contentHierarchyItemId),
-                    onError: () => {
+                    onError: (error) => {
                         toast({
                             title: 'Failed to add content',
-                            description: 'The server rejected the request. Please try again.',
+                            description: getErrorMessage(error, 'Failed to add content.'),
                             variant: 'error',
                         });
                     },
@@ -340,7 +344,7 @@ export function LibraryAddPage() {
             lastCandidateSearchRef.current = { kind: 'adhoc', query: queryText };
 
             try {
-                await candidateSearch.mutateAsync({
+                await liveCandidateSearch.mutateAsync({
                     query: queryText,
                     page: candidateSearchPage,
                 });
@@ -348,7 +352,7 @@ export function LibraryAddPage() {
                 setCandidateSearchError(candidateSearchErrorMessage(error));
             }
         },
-        [candidateSearch],
+        [liveCandidateSearch],
     );
 
     const handleApplyFilter = useCallback(() => {
@@ -519,7 +523,6 @@ export function LibraryAddPage() {
                         contentHierarchyItem?: { and?: unknown[] };
                         mediaFiles?: { and?: unknown[] };
                     },
-                    isShared: false,
                 });
 
                 closeSaveFilterDialog();
@@ -547,17 +550,17 @@ export function LibraryAddPage() {
                       data: savedCandidateSearch.data,
                   }
                 : {
-                      isPending: candidateSearch.isPending,
-                      isError: candidateSearch.isError,
-                      isSuccess: candidateSearch.isSuccess,
-                      data: candidateSearch.data,
+                      isPending: liveCandidateSearch.isPending,
+                      isError: liveCandidateSearch.isError,
+                      isSuccess: liveCandidateSearch.isSuccess,
+                      data: liveCandidateSearch.data,
                   },
         [
             activeSearchKind,
-            candidateSearch.isPending,
-            candidateSearch.isError,
-            candidateSearch.isSuccess,
-            candidateSearch.data,
+            liveCandidateSearch.isPending,
+            liveCandidateSearch.isError,
+            liveCandidateSearch.isSuccess,
+            liveCandidateSearch.data,
             savedCandidateSearch.isPending,
             savedCandidateSearch.isError,
             savedCandidateSearch.isSuccess,
@@ -602,15 +605,10 @@ export function LibraryAddPage() {
     const showLoading = providerCandidateSearch.isPending;
     const showError = (!!candidateSearchError || providerCandidateSearch.isError) && !showLoading;
     const showNoResults =
-        !showLoading &&
-        !showError &&
-        !showInitialEmpty &&
-        candidates.length === 0 &&
-        !canGoNext &&
-        providerCandidateSearch.isSuccess;
+        !showLoading && !showError && !showInitialEmpty && candidates.length === 0 && providerCandidateSearch.isSuccess;
 
     const hasResultsForPaging =
-        !showLoading && !showError && !showInitialEmpty && !showNoResults && (candidates.length > 0 || canGoNext);
+        !showLoading && !showError && !showInitialEmpty && (candidates.length > 0 || canGoNext || page > 1);
 
     const canCreateWishlistFromSearch = tab === 'saved' ? !!selectedSavedFilterId : filterQuery.trim().length > 0;
     const canGoPrev = page > 1;
@@ -646,10 +644,10 @@ export function LibraryAddPage() {
             setPage(1);
             setCandidateSearchError(null);
             lastCandidateSearchRef.current = null;
-            candidateSearch.reset();
+            liveCandidateSearch.reset();
             savedCandidateSearch.reset();
         },
-        [candidateSearch, savedCandidateSearch],
+        [liveCandidateSearch, savedCandidateSearch],
     );
 
     const hasFilterQuery = filterQuery.trim().length > 0;
@@ -670,43 +668,7 @@ export function LibraryAddPage() {
 
     const columns = useMemo(() => buildAddableColumns({ rowActionContext }), [rowActionContext]);
 
-    const sortedCandidates = useMemo(() => {
-        const sort = sorting[0];
-        if (!sort) {
-            return candidates;
-        }
-        const dir = sort.desc ? -1 : 1;
-        const byTitle = (a: AddableCandidate, b: AddableCandidate) => a.title.localeCompare(b.title) * dir;
-        if (sort.id === 'title') {
-            return [...candidates].sort(byTitle);
-        }
-        if (sort.id === 'published') {
-            return [...candidates].sort((a, b) => {
-                if (a.yearValue == null && b.yearValue == null) {
-                    return a.title.localeCompare(b.title);
-                }
-                if (a.yearValue == null) {
-                    return 1;
-                }
-                if (b.yearValue == null) {
-                    return -1;
-                }
-                if (a.yearValue !== b.yearValue) {
-                    return (a.yearValue - b.yearValue) * dir;
-                }
-                return a.title.localeCompare(b.title);
-            });
-        }
-        if (sort.id === 'type') {
-            return [...candidates].sort((a, b) => {
-                const left = a.levelSlug ?? a.contentType;
-                const right = b.levelSlug ?? b.contentType;
-                const comparison = left.localeCompare(right);
-                return comparison === 0 ? a.title.localeCompare(b.title) : comparison * dir;
-            });
-        }
-        return candidates;
-    }, [candidates, sorting]);
+    const sortedCandidates = useMemo(() => sortTableRows(candidates, columns, sorting), [candidates, columns, sorting]);
 
     const usesCardLayout = useCardLayout();
 
@@ -875,12 +837,8 @@ export function LibraryAddPage() {
                 {showNoResults && (
                     <EmptyState
                         icon={<SparkleIcon weight="duotone" />}
-                        title="No matches"
-                        description={
-                            warnings.length > 0
-                                ? 'No usable matches were returned. Review the provider warnings and adjust the filter.'
-                                : 'No providers returned content matching this filter. Try broader criteria, or save it as a wishlist to keep checking for new matches.'
-                        }
+                        title={canGoNext || page > 1 ? 'No matches on this page' : 'No matches'}
+                        description={noResultsDescription(canGoNext, page, warnings.length > 0)}
                         action={
                             canCreateWishlistFromSearch ? (
                                 <Button
@@ -969,7 +927,8 @@ export function LibraryAddPage() {
                         <div className="library-add-page__table" data-testid="library-add-page__result-list">
                             <DataTable<AddableCandidate>
                                 columns={columns}
-                                data={candidates}
+                                data={sortedCandidates}
+                                manualSorting
                                 size="sm"
                                 enableSorting
                                 sorting={sorting}

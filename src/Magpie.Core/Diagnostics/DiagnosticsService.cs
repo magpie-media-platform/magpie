@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Jobs;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
@@ -23,9 +24,6 @@ internal sealed class DiagnosticsService(
     ISettingsRepository settingsRepository,
     ILogger<DiagnosticsService> logger) : IDiagnosticsService
 {
-    private const string SettingsGroupName = "diagnostics";
-    private const string LastScannedAtSettingKey = "last-scanned-at";
-
     public async Task<DiagnosticFindings> GetFindingsAsync(CancellationToken cancellationToken = default)
     {
         var findings = (await findingRepository.ListAllAsync(cancellationToken).ConfigureAwait(false)).ToList();
@@ -80,12 +78,12 @@ internal sealed class DiagnosticsService(
     private async Task<DateTime?> ReadLastScannedAtAsync(CancellationToken cancellationToken)
     {
         var group = await settingsRepository
-            .GetByIdAsync(new SettingsGroupLookupKey(null, SettingsGroupName), cancellationToken)
+            .GetByIdAsync(new SettingsGroupLookupKey(null, MagpieJobs.Settings.DiagnosticsGroup), cancellationToken)
             .ConfigureAwait(false);
         var settings = group?.Settings.ToDictionary(s => s.Key, s => s.Value, StringComparer.Ordinal)
 
             ?? new Dictionary<string, string>();
-        if (!settings.TryGetValue(LastScannedAtSettingKey, out var raw) || string.IsNullOrWhiteSpace(raw))
+        if (!settings.TryGetValue(MagpieJobs.Settings.LastScannedAt, out var raw) || string.IsNullOrWhiteSpace(raw))
         {
             return null;
         }

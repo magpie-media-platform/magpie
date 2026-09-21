@@ -15,15 +15,7 @@ internal sealed class MockSubjectMetadataProvider : ISubjectMetadataProvider
     private const string MethodName = "tryGetMetadata";
     private const string ProviderTypeName = "subjectmetadata";
 
-    private static readonly string[] SupportedSubjectKindValues =
-    [
-        "movie",
-        "tv",
-        "music-artist",
-        "music-album",
-        "book",
-        "person",
-    ];
+    private static readonly string[] SupportedSubjectKindValues = ["*"];
 
     private readonly AuditWriter _audit;
     private readonly LatencyInjector _latency;

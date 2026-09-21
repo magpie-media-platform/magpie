@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { type ContentItem } from '@/components/ui/ContentList';
-import { getRootLevels, useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
+import { getRootLevels, useLibraryTypes } from '@/hooks/useLibraryTypes';
 
 export function useLibraryRoute() {
     const { contentType: contentTypeSlug, levelSlug } = useParams<{
@@ -12,7 +12,6 @@ export function useLibraryRoute() {
     const navigate = useNavigate();
 
     const { contentTypes, isLoading: libraryTypesLoading, error: libraryTypesError } = useLibraryTypes();
-    const typeIconName = useTypeIconName();
 
     const currentContentType = useMemo(() => {
         if (!contentTypeSlug) {
@@ -43,11 +42,7 @@ export function useLibraryRoute() {
     const showTypePicker = currentContentType !== null && !levelSlug && rootLevels.length > 1;
 
     const pageTitle = selectedLevel?.displayName ?? currentContentType?.pluralName ?? 'Library';
-    const pageIconName = selectedLevel
-        ? typeIconName(selectedLevel.slug)
-        : routeContentTypeSlug
-          ? typeIconName(routeContentTypeSlug)
-          : undefined;
+    const pageIconName = (selectedLevel ? selectedLevel.iconName : currentContentType?.iconName) ?? undefined;
 
     const handleContentClick = useCallback(
         (item: ContentItem) => {

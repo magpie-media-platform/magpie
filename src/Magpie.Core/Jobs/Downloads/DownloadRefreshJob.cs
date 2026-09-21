@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Arguments;
-using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Integrations;
 using Magpie.Models.Jobs;
@@ -27,11 +26,11 @@ internal sealed class DownloadRefreshJob(
     ILogger<DownloadRefreshJob> logger,
     IDownloadService downloadService,
     TimeProvider timeProvider,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "DownloadRefresh",
+        JobType = MagpieJobs.Types.DownloadRefresh,
         DisplayName = "Download refresh",
         Description = "Polls enabled download clients and updates tracked downloads.",
         Category = "Integrations",
@@ -45,8 +44,6 @@ internal sealed class DownloadRefreshJob(
         Parameters = [],
     };
 
-    private const string DownloadRefreshJobType = "DownloadRefresh";
-
     private static readonly TimeSpan FastDelay = TimeSpan.FromSeconds(5);
 
     private static readonly TimeSpan CalibrationDelay = TimeSpan.FromSeconds(15);
@@ -58,9 +55,8 @@ internal sealed class DownloadRefreshJob(
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
         var userId = jobContext.ManualTriggerUserId;
-        var progress = progressReporter;
 
-        progress?.Report(0, "The refresh will load the download clients.");
+        progressReporter.Report(0, "The refresh will load the download clients.");
 
         var enabledClients = (await downloadClientRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
             .Where(c => c.Enabled)
@@ -71,7 +67,7 @@ internal sealed class DownloadRefreshJob(
         if (enabledClients.Length == 0)
         {
             logger.LogInformation("Because no download client is enabled, DownloadRefresh skipped this run");
-            progress?.Report(1, "The refresh stopped because no enabled download client is configured.");
+            progressReporter.Report(1, "The refresh stopped because no enabled download client is configured.");
             return;
         }
 
@@ -81,7 +77,7 @@ internal sealed class DownloadRefreshJob(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var client = enabledClients[i];
-            progress?.ReportFraction(
+            progressReporter.ReportFraction(
                 i,
                 enabledClients.Length,
                 $"The download refresh will process client {client.Name}.");
@@ -98,25 +94,9 @@ internal sealed class DownloadRefreshJob(
                     continue;
                 }
 
-                const int pageSize = 500;
-                var clientDownloads = new List<Download>();
-                var pageNumber = 1;
-                while (true)
-                {
-                    var page = await downloadRepository.QueryAsync(
-                        new DownloadQuery { DownloadClientId = client.Id },
-                        new() { PageNumber = pageNumber, PageSize = pageSize },
-                        sort: null,
-                        cancellationToken).ConfigureAwait(false);
-                    var pageItems = page.Items.ToList();
-                    clientDownloads.AddRange(pageItems);
-                    if (pageItems.Count < pageSize)
-                    {
-                        break;
-                    }
-
-                    pageNumber++;
-                }
+                var clientDownloads = await downloadRepository.QueryAllAsync(
+                    new DownloadQuery { DownloadClientId = client.Id },
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 var downloads = clientDownloads
                     .Where(d => d.Status is not DownloadStatus.Imported
@@ -149,8 +129,8 @@ internal sealed class DownloadRefreshJob(
                 {
                     logger.LogWarning(
                         ex,
-                        "The batch lookup for client {DownloadClientName} failed." +
-                        " This refresh tick skipped the client",
+                        "The batch lookup for client {DownloadClientName} failed, so this refresh tick" +
+                        " skipped the client",
                         client.Name);
                     continue;
                 }
@@ -262,7 +242,8 @@ internal sealed class DownloadRefreshJob(
             await jobManager.ExecuteAsync(
                 new JobEnqueueRequest
                 {
-                    JobType = DownloadRefreshJobType,
+                    JobType = MagpieJobs.Types.DownloadRefresh,
+                    IsSuccessor = true,
                     NotBeforeAt = notBefore,
                     UserId = userId,
                     Mode = JobExecutionMode.Queue,
@@ -274,7 +255,7 @@ internal sealed class DownloadRefreshJob(
                 notBefore);
         }
 
-        progress?.Report(1, "The download refresh completed.");
+        progressReporter.Report(1, "The download refresh completed.");
     }
 
     private static TimeSpan ComputeSuccessorDelay(

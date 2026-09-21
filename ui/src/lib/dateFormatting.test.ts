@@ -97,6 +97,20 @@ describe('formatDateTime', () => {
         expect(result).toMatch(/Jun/);
     });
 
+    it('renders the placeholder for the .NET DateTime.MinValue sentinel', () => {
+        expect(formatDateTime('0001-01-01T00:00:00Z')).toBe('-');
+        expect(formatDateTime('0001-01-01T00:00:00')).toBe('-');
+        expect(formatDateTime('0001-01-01')).toBe('-');
+    });
+
+    it('renders the placeholder for the Unix epoch sentinel', () => {
+        expect(formatDateTime('1970-01-01T00:00:00Z')).toBe('-');
+    });
+
+    it('still formats a real date near the epoch sentinel', () => {
+        expect(formatDateTime('1970-01-02T00:00:00Z')).not.toBe('-');
+    });
+
     it('formats offsetless API timestamps as UTC in negative time zones', () => {
         process.env.TZ = 'America/Los_Angeles';
         const expected = new Date('2024-01-01T20:00:00Z').toLocaleDateString(undefined, {
@@ -186,7 +200,7 @@ describe('formatUtcDate', () => {
 
 describe('formatUtcDateTime', () => {
     it('formats a date-time string in UTC', () => {
-        const expected = new Date('2024-01-01T20:00:00Z').toLocaleString('en-US', {
+        const expected = new Date('2024-01-01T20:00:00Z').toLocaleString(undefined, {
             year: 'numeric',
             month: 'short',
             day: 'numeric',

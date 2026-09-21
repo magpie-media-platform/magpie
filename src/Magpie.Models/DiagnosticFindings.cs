@@ -13,10 +13,10 @@ public sealed record DiagnosticFindings
     /// <summary>
     /// The findings from the most recent scan.
     /// </summary>
-    public required IReadOnlyList<DiagnosticFinding> Findings { get; set; }
+    public required IReadOnlyList<DiagnosticFinding> Findings { get; init; }
 
     /// <summary>
     /// The UTC time of the last scan, or <see langword="null"/> when no scan ran.
     /// </summary>
-    public DateTime? LastScannedAt { get; set; }
+    public DateTime? LastScannedAt { get; init; }
 }

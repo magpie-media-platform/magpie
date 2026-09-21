@@ -48,7 +48,10 @@ internal static class CardigannTemplateExtensions
 
     private const string FalseVar = ".False";
 
-    public static string RenderCardigannTemplate(this string template, IReadOnlyDictionary<string, object?> variables)
+    public static string RenderCardigannTemplate(
+        this string template,
+        IReadOnlyDictionary<string, object?> variables,
+        Func<string, string>? escapeValue = null)
     {
         if (string.IsNullOrEmpty(template) || !template.Contains("{{", StringComparison.Ordinal))
         {
@@ -74,17 +77,25 @@ internal static class CardigannTemplateExtensions
             vars[FalseVar] = null;
         }
 
-        template = ApplyReReplace(template, vars);
-        template = ApplyJoin(template, vars);
+        template = ApplyReReplace(template, vars, escapeValue);
+        template = ApplyJoin(template, vars, escapeValue);
         template = ApplyLogicFunctions(template, vars);
         template = ApplyConditionals(template, vars);
-        template = ApplyRange(template, vars);
-        template = ApplySimpleVariables(template, vars);
+        template = ApplyRange(template, vars, escapeValue);
+        template = ApplySimpleVariables(template, vars, escapeValue);
 
         return template;
     }
 
-    private static string ApplyReReplace(string template, IDictionary<string, object?> vars)
+    private static string Escape(string value, Func<string, string>? escapeValue)
+    {
+        return escapeValue is null ? value : escapeValue(value);
+    }
+
+    private static string ApplyReReplace(
+        string template,
+        IDictionary<string, object?> vars,
+        Func<string, string>? escapeValue)
     {
         template = ReplaceAll(
             template,
@@ -94,7 +105,7 @@ internal static class CardigannTemplateExtensions
                 var variable = m.Groups[1].Value;
                 var pattern = m.Groups[2].Value;
                 var replacement = m.Groups[3].Value;
-                return ReReplace(GetString(vars, variable), pattern, replacement, m.Value);
+                return ReReplace(GetString(vars, variable), pattern, replacement, m.Value, escapeValue);
             });
 
         template = ReplaceAll(
@@ -105,17 +116,24 @@ internal static class CardigannTemplateExtensions
                 var variable = m.Groups[1].Value;
                 var pattern = m.Groups[2].Value;
                 var replacement = m.Groups[3].Value;
-                return ReReplace(GetString(vars, variable), pattern, replacement, m.Value);
+                return ReReplace(GetString(vars, variable), pattern, replacement, m.Value, escapeValue);
             });
 
         return template;
     }
 
-    private static string ReReplace(string input, string pattern, string replacement, string original)
+    private static string ReReplace(
+        string input,
+        string pattern,
+        string replacement,
+        string original,
+        Func<string, string>? escapeValue)
     {
         try
         {
-            return Regex.Replace(input ?? string.Empty, pattern, replacement, RegexOptions.None, RegexTimeout);
+            return Escape(
+                Regex.Replace(input ?? string.Empty, pattern, replacement, RegexOptions.None, RegexTimeout),
+                escapeValue);
         }
         catch (RegexMatchTimeoutException)
         {
@@ -127,7 +145,10 @@ internal static class CardigannTemplateExtensions
         }
     }
 
-    private static string ApplyJoin(string template, IDictionary<string, object?> vars)
+    private static string ApplyJoin(
+        string template,
+        IDictionary<string, object?> vars,
+        Func<string, string>? escapeValue)
     {
         template = ReplaceAll(
             template,
@@ -136,7 +157,9 @@ internal static class CardigannTemplateExtensions
             {
                 var variable = m.Groups[1].Value;
                 var delimiter = m.Groups[2].Value;
-                return string.Join(delimiter, GetList(vars, variable));
+                return string.Join(
+                    delimiter,
+                    GetList(vars, variable).Select(value => Escape(value, escapeValue)));
             });
 
         template = ReplaceAll(
@@ -146,7 +169,9 @@ internal static class CardigannTemplateExtensions
             {
                 var variable = m.Groups[1].Value;
                 var delimiter = m.Groups[2].Value;
-                return string.Join(delimiter, GetList(vars, variable));
+                return string.Join(
+                    delimiter,
+                    GetList(vars, variable).Select(value => Escape(value, escapeValue)));
             });
 
         return template;
@@ -271,7 +296,10 @@ internal static class CardigannTemplateExtensions
         return true;
     }
 
-    private static string ApplyRange(string template, IDictionary<string, object?> vars)
+    private static string ApplyRange(
+        string template,
+        IDictionary<string, object?> vars,
+        Func<string, string>? escapeValue)
     {
         return ReplaceAll(
             template,
@@ -295,12 +323,12 @@ internal static class CardigannTemplateExtensions
                     {
                         var indexText = indexValue.ToString(CultureInfo.InvariantCulture);
                         expanded += prefix.Replace(indexReplace, indexText, StringComparison.Ordinal) +
-                            value +
+                            Escape(value, escapeValue) +
                             postfix.Replace(indexReplace, indexText, StringComparison.Ordinal);
                     }
                     else
                     {
-                        expanded += prefix + value + postfix;
+                        expanded += prefix + Escape(value, escapeValue) + postfix;
                     }
                 }
 
@@ -308,7 +336,10 @@ internal static class CardigannTemplateExtensions
             });
     }
 
-    private static string ApplySimpleVariables(string template, IDictionary<string, object?> vars)
+    private static string ApplySimpleVariables(
+        string template,
+        IDictionary<string, object?> vars,
+        Func<string, string>? escapeValue)
     {
         return ReplaceAll(
             template,
@@ -316,7 +347,7 @@ internal static class CardigannTemplateExtensions
             m =>
             {
                 var variable = m.Groups[1].Value;
-                return GetString(vars, variable);
+                return Escape(GetString(vars, variable), escapeValue);
             });
     }
 

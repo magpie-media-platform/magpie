@@ -23,6 +23,10 @@ namespace Magpie.Test.Core.Notifications;
 [TestFixture]
 public sealed class NotificationServiceTestPathTests
 {
+    private const string RuleId = "cfd83b0a-97a3-45ae-802a-acd453d15182";
+    private const string CallerUserId = "5d47ef13-839a-4495-86dd-d0b36876185b";
+    private const string OtherUserId = "342f1f32-14b7-4ab9-85c9-1e9a385b65d5";
+
     private Mock<INotificationProvider> _provider = null!;
     private Mock<INotificationRuleRepository> _rules = null!;
     private ConcurrentQueue<(NotificationRule Rule, MagpieEvent MagpieEvent)> _sent = null!;
@@ -55,162 +59,306 @@ public sealed class NotificationServiceTestPathTests
             NullLogger<NotificationService>.Instance);
     }
 
-    [TestCase(true, true, false, true, TestName = "PatchAsync_ReturnsTrue_WhenCallerOwnsRule")]
-    [TestCase(true, false, true, true, TestName = "PatchAsync_ReturnsTrue_WhenCallerIsAdministrator")]
-    [TestCase(true, null, true, true, TestName = "PatchAsync_ReturnsTrue_WhenGlobalRuleAndCallerIsAdministrator")]
-    [TestCase(true, false, false, false, TestName = "PatchAsync_ReturnsFalse_WhenAnotherUserOwnsRule")]
-    [TestCase(true, null, false, false, TestName = "PatchAsync_ReturnsFalse_WhenGlobalRuleAndCallerIsNotAdministrator")]
-    [TestCase(false, false, false, false, TestName = "PatchAsync_ReturnsFalse_WhenRuleIsAbsent")]
-    public async Task PatchAsync_Result_WhenAccessIsEvaluated(
-        bool ruleExists,
-        bool? ownerIsCaller,
-        bool callerIsAdmin,
-        bool expected)
+    [TestCase(CallerUserId, false, TestName = "PatchAsync_AppliesThePatch_WhenTheCallerOwnsTheRule")]
+    [TestCase(OtherUserId, true, TestName = "PatchAsync_AppliesThePatch_WhenTheCallerIsAnAdministrator")]
+    [TestCase(null, true, TestName = "PatchAsync_AppliesThePatch_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator")]
+    public async Task PatchAsync_AppliesThePatch_WhenTheCallerMayEditTheRule(string? ownerUserId, bool callerIsAdmin)
     {
         // Arrange
-        var ruleId = Guid.NewGuid();
-        var callerUserId = Guid.NewGuid();
-        var otherUserId = Guid.NewGuid();
-        NotificationRule? rule = ruleExists
-            ? new()
-            {
-                Id = ruleId,
-                Name = "original",
-                OwnerUserId = ownerIsCaller is null
-                    ? null
-                    : ownerIsCaller.Value ? callerUserId : otherUserId,
-                ProviderType = "webhook",
-            }
-            : null;
+        var rule = new NotificationRule
+        {
+            Id = new Guid(RuleId),
+            Name = "original",
+            OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+            ProviderType = "webhook",
+        };
         _rules
-            .Setup(repository => repository.GetByIdAsync(ruleId, It.IsAny<CancellationToken>()))
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
             .ReturnsAsync(rule);
+        NotificationRulePatch? applied = null;
+        Guid? appliedBy = null;
         _rules
-            .Setup(repository => repository.UpdateAsync(
-                It.IsAny<NotificationRule>(),
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<NotificationRulePatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
+            .Callback((NotificationRulePatch rulePatch, Guid? actor, CancellationToken _) =>
+            {
+                applied = rulePatch;
+                appliedBy = actor;
+            })
             .ReturnsAsync(true);
         var patch = new NotificationRulePatch { Name = new() { Value = "patched" } };
 
         // Act
         var result = await _subject
-            .PatchAsync(ruleId, patch, callerUserId, callerIsAdmin)
+            .PatchAsync(new Guid(RuleId), patch, new Guid(CallerUserId), callerIsAdmin)
             .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.EqualTo(expected));
-            Assert.That(rule?.Name, Is.EqualTo(ruleExists ? expected ? "patched" : "original" : null));
+            Assert.That(result, Is.True);
+            Assert.That(applied!.Id, Is.EqualTo(new Guid(RuleId)));
+            Assert.That(applied.Name!.Value, Is.EqualTo("patched"));
+            Assert.That(appliedBy, Is.EqualTo(new Guid(CallerUserId)));
+            Assert.That(rule.Name, Is.EqualTo("original"));
         }
-
-        _rules.Verify(
-            repository => repository.UpdateAsync(
-                It.IsAny<NotificationRule>(),
-                callerUserId,
-                It.IsAny<CancellationToken>()),
-            Times.Exactly(expected ? 1 : 0));
     }
 
-    [TestCase(true, true, false, true, TestName = "DeleteAsync_ReturnsTrue_WhenCallerOwnsRule")]
-    [TestCase(true, false, true, true, TestName = "DeleteAsync_ReturnsTrue_WhenCallerIsAdministrator")]
-    [TestCase(true, null, true, true, TestName = "DeleteAsync_ReturnsTrue_WhenGlobalRuleAndCallerIsAdministrator")]
-    [TestCase(true, false, false, false, TestName = "DeleteAsync_ReturnsFalse_WhenAnotherUserOwnsRule")]
-    [TestCase(
-        true,
-        null,
-        false,
-        false,
-        TestName = "DeleteAsync_ReturnsFalse_WhenGlobalRuleAndCallerIsNotAdministrator")]
-    [TestCase(false, false, false, false, TestName = "DeleteAsync_ReturnsFalse_WhenRuleIsAbsent")]
-    public async Task DeleteAsync_Result_WhenAccessIsEvaluated(
-        bool ruleExists,
-        bool? ownerIsCaller,
-        bool callerIsAdmin,
-        bool expected)
+    [TestCase(OtherUserId, TestName = "PatchAsync_ReturnsFalse_WhenAnotherUserOwnsTheRule")]
+    [TestCase(null, TestName = "PatchAsync_ReturnsFalse_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator")]
+    public async Task PatchAsync_ReturnsFalse_WhenTheCallerMayNotEditTheRule(string? ownerUserId)
     {
         // Arrange
-        var ruleId = Guid.NewGuid();
-        var callerUserId = Guid.NewGuid();
-        var otherUserId = Guid.NewGuid();
-        NotificationRule? rule = ruleExists
-            ? new()
-            {
-                Id = ruleId,
-                Name = "rule",
-                OwnerUserId = ownerIsCaller is null
-                    ? null
-                    : ownerIsCaller.Value ? callerUserId : otherUserId,
-                ProviderType = "webhook",
-            }
-            : null;
+        var rule = new NotificationRule
+        {
+            Id = new Guid(RuleId),
+            Name = "original",
+            OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+            ProviderType = "webhook",
+        };
         _rules
-            .Setup(repository => repository.GetByIdAsync(ruleId, It.IsAny<CancellationToken>()))
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
             .ReturnsAsync(rule);
+        NotificationRulePatch? applied = null;
         _rules
-            .Setup(repository => repository.DeleteAsync(
-                ruleId,
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<NotificationRulePatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
+            .Callback((NotificationRulePatch rulePatch, Guid? _, CancellationToken _) => applied = rulePatch)
+            .ReturnsAsync(true);
+        var patch = new NotificationRulePatch { Name = new() { Value = "patched" } };
+
+        // Act
+        var result = await _subject
+            .PatchAsync(new Guid(RuleId), patch, new Guid(CallerUserId), false)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            Assert.That(applied, Is.Null);
+            Assert.That(rule.Name, Is.EqualTo("original"));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_ReturnsFalse_WhenTheRuleIsAbsent()
+    {
+        // Arrange
+        _rules
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((NotificationRule?)null);
+        NotificationRulePatch? applied = null;
+        _rules
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<NotificationRulePatch>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((NotificationRulePatch rulePatch, Guid? _, CancellationToken _) => applied = rulePatch)
+            .ReturnsAsync(true);
+        var patch = new NotificationRulePatch { Name = new() { Value = "patched" } };
+
+        // Act
+        var result = await _subject
+            .PatchAsync(new Guid(RuleId), patch, new Guid(CallerUserId), true)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            Assert.That(applied, Is.Null);
+        }
+    }
+
+    [TestCase(CallerUserId, false, TestName = "DeleteAsync_DeletesTheRule_WhenTheCallerOwnsIt")]
+    [TestCase(OtherUserId, true, TestName = "DeleteAsync_DeletesTheRule_WhenTheCallerIsAnAdministrator")]
+    [TestCase(null, true, TestName = "DeleteAsync_DeletesTheRule_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator")]
+    public async Task DeleteAsync_DeletesTheRule_WhenTheCallerMayDeleteIt(string? ownerUserId, bool callerIsAdmin)
+    {
+        // Arrange
+        var rule = new NotificationRule
+        {
+            Id = new Guid(RuleId),
+            Name = "rule",
+            OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+            ProviderType = "webhook",
+        };
+        _rules
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(rule);
+        Guid? deletedBy = null;
+        _rules
+            .Setup(repository => repository.DeleteAsync(
+                new Guid(RuleId),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((Guid _, Guid? actor, CancellationToken _) => deletedBy = actor)
             .ReturnsAsync(true);
 
         // Act
         var result = await _subject
-            .DeleteAsync(ruleId, callerUserId, callerIsAdmin)
-            .ConfigureAwait(false);
-
-        // Assert
-        Assert.That(result, Is.EqualTo(expected));
-        _rules.Verify(
-            repository => repository.DeleteAsync(
-                ruleId,
-                callerUserId,
-                It.IsAny<CancellationToken>()),
-            Times.Exactly(expected ? 1 : 0));
-    }
-
-    [TestCase(true, true, false, true, TestName = "TestAsync_ReturnsResult_WhenCallerOwnsRule")]
-    [TestCase(true, false, true, true, TestName = "TestAsync_ReturnsResult_WhenCallerIsAdministrator")]
-    [TestCase(true, null, true, true, TestName = "TestAsync_ReturnsResult_WhenGlobalRuleAndCallerIsAdministrator")]
-    [TestCase(true, false, false, false, TestName = "TestAsync_ReturnsNull_WhenAnotherUserOwnsRule")]
-    [TestCase(true, null, false, false, TestName = "TestAsync_ReturnsNull_WhenGlobalRuleAndCallerIsNotAdministrator")]
-    [TestCase(false, false, false, false, TestName = "TestAsync_ReturnsNull_WhenRuleIsAbsent")]
-    public async Task TestAsync_Result_WhenAccessIsEvaluated(
-        bool ruleExists,
-        bool? ownerIsCaller,
-        bool callerIsAdmin,
-        bool expected)
-    {
-        // Arrange
-        var ruleId = Guid.NewGuid();
-        var callerUserId = Guid.NewGuid();
-        var otherUserId = Guid.NewGuid();
-        NotificationRule? rule = ruleExists
-            ? new()
-            {
-                Id = ruleId,
-                Name = "rule",
-                OwnerUserId = ownerIsCaller is null
-                    ? null
-                    : ownerIsCaller.Value ? callerUserId : otherUserId,
-                ProviderType = "webhook",
-            }
-            : null;
-        _rules
-            .Setup(repository => repository.GetByIdAsync(ruleId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(rule);
-
-        // Act
-        var result = await _subject
-            .TestAsync(ruleId, callerUserId, callerIsAdmin)
+            .DeleteAsync(new Guid(RuleId), new Guid(CallerUserId), callerIsAdmin)
             .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result is not null, Is.EqualTo(expected));
-            Assert.That(_sent, Has.Count.EqualTo(expected ? 1 : 0));
+            Assert.That(result, Is.True);
+            Assert.That(deletedBy, Is.EqualTo(new Guid(CallerUserId)));
+        }
+    }
+
+    [TestCase(OtherUserId, TestName = "DeleteAsync_ReturnsFalse_WhenAnotherUserOwnsTheRule")]
+    [TestCase(null, TestName = "DeleteAsync_ReturnsFalse_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator")]
+    public async Task DeleteAsync_ReturnsFalse_WhenTheCallerMayNotDeleteTheRule(string? ownerUserId)
+    {
+        // Arrange
+        var rule = new NotificationRule
+        {
+            Id = new Guid(RuleId),
+            Name = "rule",
+            OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+            ProviderType = "webhook",
+        };
+        _rules
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(rule);
+        var deleteCalls = 0;
+        _rules
+            .Setup(repository => repository.DeleteAsync(
+                new Guid(RuleId),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => deleteCalls++)
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject
+            .DeleteAsync(new Guid(RuleId), new Guid(CallerUserId), false)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            Assert.That(deleteCalls, Is.EqualTo(0));
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_ReturnsFalse_WhenTheRuleIsAbsent()
+    {
+        // Arrange
+        _rules
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((NotificationRule?)null);
+        var deleteCalls = 0;
+        _rules
+            .Setup(repository => repository.DeleteAsync(
+                new Guid(RuleId),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => deleteCalls++)
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject
+            .DeleteAsync(new Guid(RuleId), new Guid(CallerUserId), true)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            Assert.That(deleteCalls, Is.EqualTo(0));
+        }
+    }
+
+    [TestCase(CallerUserId, false, TestName = "TestAsync_SendsTheNotification_WhenTheCallerOwnsTheRule")]
+    [TestCase(OtherUserId, true, TestName = "TestAsync_SendsTheNotification_WhenTheCallerIsAnAdministrator")]
+    [TestCase(
+        null,
+        true,
+        TestName = "TestAsync_SendsTheNotification_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator")]
+    public async Task TestAsync_SendsTheNotification_WhenTheCallerMayTestTheRule(
+        string? ownerUserId,
+        bool callerIsAdmin)
+    {
+        // Arrange
+        _rules
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NotificationRule
+            {
+                Id = new Guid(RuleId),
+                Name = "rule",
+                OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+                ProviderType = "webhook",
+            });
+
+        // Act
+        var result = await _subject
+            .TestAsync(new Guid(RuleId), new Guid(CallerUserId), callerIsAdmin)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Not.Null);
+            Assert.That(_sent, Has.Count.EqualTo(1));
+        }
+    }
+
+    [TestCase(OtherUserId, TestName = "TestAsync_ReturnsNull_WhenAnotherUserOwnsTheRule")]
+    [TestCase(null, TestName = "TestAsync_ReturnsNull_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator")]
+    public async Task TestAsync_ReturnsNull_WhenTheCallerMayNotTestTheRule(string? ownerUserId)
+    {
+        // Arrange
+        _rules
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NotificationRule
+            {
+                Id = new Guid(RuleId),
+                Name = "rule",
+                OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+                ProviderType = "webhook",
+            });
+
+        // Act
+        var result = await _subject
+            .TestAsync(new Guid(RuleId), new Guid(CallerUserId), false)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Null);
+            Assert.That(_sent, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task TestAsync_ReturnsNull_WhenTheRuleIsAbsent()
+    {
+        // Arrange
+        _rules
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((NotificationRule?)null);
+
+        // Act
+        var result = await _subject
+            .TestAsync(new Guid(RuleId), new Guid(CallerUserId), true)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Null);
+            Assert.That(_sent, Is.Empty);
         }
     }
 

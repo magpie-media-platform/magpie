@@ -118,9 +118,7 @@ function hasPreviousScope(context: Readonly<Record<string, string>>): boolean {
     ].some((key) => Boolean(context[key]));
 }
 
-/**
- * Reads the self-contained content impact an event carries, or null when it carries none.
- */
+/** Reads the self-contained content impact an event carries, or null when it carries none. */
 export function readContentEventImpact(event: EventStreamPayload): ContentEventImpact | null {
     const cached = impacts.get(event);
     if (cached !== undefined) {
@@ -158,16 +156,12 @@ function present(ids: readonly (string | undefined)[]): readonly string[] {
     return ids.filter((id): id is string => Boolean(id));
 }
 
-/**
- * The entities the event changed: the primary one plus every entity a subtree or batch change removed or touched.
- */
+/** The entities the event changed: the primary one plus every entity a subtree or batch change touched. */
 export function impactChangedIds(impact: ContentEventImpact): readonly string[] {
     return present([impact.hierarchyItemId, impact.contentItemId, ...impact.subtreeIds, ...impact.batchIds]);
 }
 
-/**
- * The hierarchy the changed entity sits under, before and after the change.
- */
+/** The hierarchy the changed entity sits under, before and after the change. */
 export function impactContainingIds(impact: ContentEventImpact): readonly string[] {
     return present([
         impact.scope.parentId,
@@ -179,9 +173,7 @@ export function impactContainingIds(impact: ContentEventImpact): readonly string
     ]);
 }
 
-/**
- * The metadata containers the changed relationships point at, in either direction.
- */
+/** The metadata containers the changed relationships point at, in either direction. */
 export function impactRelationshipContainerIds(impact: ContentEventImpact): readonly string[] {
     return present([
         impact.metadataSourceContainerId,

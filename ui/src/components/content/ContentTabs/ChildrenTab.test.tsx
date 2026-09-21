@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -53,6 +53,25 @@ describe('ChildrenTab controlled sorting stability', () => {
     beforeEach(() => {
         sortingProps.length = 0;
         vi.stubGlobal('matchMedia', createMatchMedia(1024));
+    });
+
+    it('replaces failed child artwork in the card layout', () => {
+        // Arrange
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        render(
+            <TooltipProvider>
+                <MemoryRouter>
+                    <ChildrenTab items={[{ ...items[0], posterUrl: '/broken.jpg' }]} parentId="content-1" />
+                </MemoryRouter>
+            </TooltipProvider>,
+        );
+
+        // Act
+        fireEvent.error(screen.getByAltText('Season 1 artwork'));
+
+        // Assert
+        expect(screen.queryByAltText('Season 1 artwork')).not.toBeInTheDocument();
+        expect(document.querySelector('.children-tab__poster--placeholder')).toBeInTheDocument();
     });
 
     it('keeps Number-sort controlled sorting referentially stable across re-renders', () => {
@@ -157,7 +176,7 @@ describe('ChildrenTab card-layout pagination', () => {
         await user.click(screen.getByRole('button', { name: 'Go to next page' }));
         expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
 
-        await user.click(screen.getByRole('button', { name: 'Sort children by Number descending' }));
+        await user.click(screen.getByRole('button', { name: 'Sort descending' }));
 
         expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
         expect(screen.getByText('Episode 51')).toBeInTheDocument();

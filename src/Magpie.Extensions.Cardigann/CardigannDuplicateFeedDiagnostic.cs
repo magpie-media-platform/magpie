@@ -27,13 +27,13 @@ internal sealed class CardigannDuplicateFeedDiagnostic : IDiagnosticCheck
         var groups = context.IndexerFeeds
             .Where(f => string.Equals(
                 f.ProviderType,
-                CardigannFeedProvider.ProviderTypeName,
+                Constants.ProviderTypeName,
                 StringComparison.OrdinalIgnoreCase))
             .GroupBy(
-                feed => feed.Settings.TryGetValue(CardigannFeedProvider.GitUrlSettingKey, out var value) &&
+                feed => feed.Settings.TryGetValue(Constants.GitUrlSettingKey, out var value) &&
                     !string.IsNullOrWhiteSpace(value)
                         ? value.Trim()
-                        : CardigannFeedProvider.DefaultGitUrl,
+                        : Constants.DefaultGitUrl,
                 StringComparer.OrdinalIgnoreCase);
 
         var findings = new List<DiagnosticFinding>();
@@ -50,7 +50,7 @@ internal sealed class CardigannDuplicateFeedDiagnostic : IDiagnosticCheck
             var names = string.Join(", ", feedsInGroup.Select(f => f.Name));
             var isCommunitySource = string.Equals(
                 group.Key,
-                CardigannFeedProvider.DefaultGitUrl,
+                Constants.DefaultGitUrl,
                 StringComparison.OrdinalIgnoreCase);
             findings.Add(new DiagnosticFinding
             {
@@ -61,7 +61,7 @@ internal sealed class CardigannDuplicateFeedDiagnostic : IDiagnosticCheck
                     $"{feedsInGroup.Count} Cardigann feeds ({names}) all resolve to {group.Key}, so they " +
                     "sync the same indexer definitions repeatedly. Remove the duplicates so each source " +
                     "is configured once.",
-                RepairId = isCommunitySource ? CardigannDuplicateFeedRepair.Id : null,
+                RepairId = isCommunitySource ? Constants.DuplicateFeedRepairId : null,
             });
         }
 

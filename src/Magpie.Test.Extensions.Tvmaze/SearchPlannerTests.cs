@@ -17,7 +17,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Extensions.Tvmaze;
 
 [TestFixture]
-internal sealed class SearchPlannerTests
+public class SearchPlannerTests
 {
     [Test]
     public void Plan_TitleSearch_WhenProviderTypeAcceptsTvmaze()
@@ -44,7 +44,8 @@ internal sealed class SearchPlannerTests
         var leaf = (SearchPlanNode.Seeded)plan;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.Warnings, Is.Empty);
+            Assert.That(leaf.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
         }
     }
@@ -132,13 +133,14 @@ internal sealed class SearchPlannerTests
         var leaf = (SearchPlanNode.Seeded)plan;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.Warnings, Is.Empty);
+            Assert.That(leaf.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
         }
     }
 
     [Test]
-    public void Plan_HandlesProviderTypeNullChecks_AsSelfIdentity()
+    public void Plan_HandlesProviderTypeNullChecksAsSelfIdentity_WhenTheProviderTypeCriterionIsANullCheck()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -172,7 +174,8 @@ internal sealed class SearchPlannerTests
         {
             Assert.That(nullPlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
             Assert.That(notNullPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(((SearchPlanNode.Seeded)notNullPlan).Warnings, Is.Empty);
+            Assert.That(((SearchPlanNode.Seeded)notNullPlan).Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -239,7 +242,8 @@ internal sealed class SearchPlannerTests
         var leaf = (SearchPlanNode.Seeded)plan;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.Warnings, Is.Empty);
+            Assert.That(leaf.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(leaf.HitFilters.Any(filter => filter.Kind == LocalFilterKind.Source), Is.True);
         }
     }
@@ -276,7 +280,7 @@ internal sealed class SearchPlannerTests
     }
 
     [Test]
-    public void Plan_AbsentTags_ApplyEmptyCollectionSemantics()
+    public void Plan_ApplyEmptyCollectionSemantics_WhenAbsentTags()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -347,13 +351,14 @@ internal sealed class SearchPlannerTests
         {
             Assert.That(positivePlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
             Assert.That(excludedPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(leaf.Warnings, Is.Empty);
+            Assert.That(leaf.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
         }
     }
 
     [Test]
-    public void Plan_EvaluatesPersonDates_AsAbsentConcepts()
+    public void Plan_EvaluatesPersonDatesAsAbsentConcepts_WhenBirthOrDeathDateCriteriaArePresent()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -424,9 +429,11 @@ internal sealed class SearchPlannerTests
         {
             Assert.That(positivePlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
             Assert.That(negatedPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(((SearchPlanNode.Seeded)negatedPlan).Warnings, Is.Empty);
+            Assert.That(((SearchPlanNode.Seeded)negatedPlan).Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(isNullPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(((SearchPlanNode.Seeded)isNullPlan).Warnings, Is.Empty);
+            Assert.That(((SearchPlanNode.Seeded)isNullPlan).Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(isNotNullPlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
         }
     }
@@ -512,13 +519,14 @@ internal sealed class SearchPlannerTests
         var leaf = (SearchPlanNode.Seeded)plan;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.Warnings, Is.Empty);
+            Assert.That(leaf.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
         }
     }
 
     [Test]
-    public void Plan_EvaluatesCustomMetadata_AsAbsentConcepts()
+    public void Plan_EvaluatesCustomMetadataAsAbsentConcepts_WhenCustomMetadataCriteriaArePresent()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -578,12 +586,13 @@ internal sealed class SearchPlannerTests
         {
             Assert.That(positivePlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
             Assert.That(negatedPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(((SearchPlanNode.Seeded)negatedPlan).Warnings, Is.Empty);
+            Assert.That(((SearchPlanNode.Seeded)negatedPlan).Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_RelationshipAndImageCriteria_CompileAsResiduals()
+    public void Plan_CompileAsResiduals_WhenRelationshipAndImageCriteria()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -618,12 +627,14 @@ internal sealed class SearchPlannerTests
             Assert.That(
                 leaf.ImageResiduals.Single().Alternatives.Single().Kind,
                 Is.EqualTo(ImageCriteriaResidual.EvaluationKind.Presence));
-            Assert.That(leaf.Warnings, Is.Empty);
+            Assert.That(leaf.Dispositions.Count(disposition =>
+                disposition.Source == "Relationships.Some[1]" &&
+                disposition.Disposition == "pass-through-residual"), Is.EqualTo(1));
         }
     }
 
     [Test]
-    public void Plan_ImageCriteria_SplitPresenceAndGalleryResiduals()
+    public void Plan_SplitPresenceAndGalleryResiduals_WhenImageCriteria()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -682,7 +693,8 @@ internal sealed class SearchPlannerTests
                         ImageCriteriaResidual.EvaluationKind.Gallery,
                         ImageCriteriaResidual.EvaluationKind.Presence,
                     ]));
-            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -906,7 +918,8 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.ImageResiduals, Has.Count.EqualTo(1));
-            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -1000,7 +1013,8 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.ImageResiduals, Is.Empty);
-            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(
                 plan.Dispositions.Any(disposition =>
                     disposition.Source == "Images.None[1]" &&
@@ -1091,12 +1105,13 @@ internal sealed class SearchPlannerTests
             Assert.That(
                 plan.ImageResiduals[1].Alternatives.Single().Kind,
                 Is.EqualTo(ImageCriteriaResidual.EvaluationKind.Gallery));
-            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_ReturnsUnboundedPlanWithWarning_WhenTitleUsesRegex()
+    public void Plan_PreservesResidual_WhenTitleUsesRegex()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -1119,17 +1134,20 @@ internal sealed class SearchPlannerTests
         var plan = planner.Compile(criteria);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Unbounded>());
-        var node = (SearchPlanNode.Unbounded)plan;
+        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Browse>());
+        var node = (SearchPlanNode.Browse)plan;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(node.Warnings.Select(warning => warning), Has.Some.Contains("the title filter"));
-            Assert.That(node.Warnings.Select(warning => warning), Has.Some.Contains("no search was run"));
+            Assert.That(node.Dispositions.Where(disposition =>
+                disposition.Source == "Title" && disposition.Disposition == "pass-through-residual"),
+                Is.Not.Empty);
+            Assert.That(node.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("unbounded-refusal"));
         }
     }
 
     [Test]
-    public void Plan_CompilesEveryTitleCriterion_AsLocalFilter()
+    public void Plan_CompilesEveryTitleCriterionAsLocalFilter_WhenTwoTitleEqualityCriteriaAreAnded()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -1531,7 +1549,8 @@ internal sealed class SearchPlannerTests
             Assert.That(plan.HitFilters.Single().Kind, Is.EqualTo(LocalFilterKind.Title));
             Assert.That(plan.AkaFilters.Single().Kind, Is.EqualTo(LocalFilterKind.OriginalTitle));
             Assert.That(plan.RelationshipResiduals, Is.Empty);
-            Assert.That(plan.Warnings, Is.EqualTo([SearchWarnings.PersonSearchApproximate]));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -1603,7 +1622,8 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.AkaFilters.Single().Kind, Is.EqualTo(LocalFilterKind.OriginalTitle));
-            Assert.That(plan.Warnings, Is.EqualTo([SearchWarnings.PersonSearchApproximate]));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(plan.RelationshipResiduals, Is.Empty);
         }
     }
@@ -1775,10 +1795,8 @@ internal sealed class SearchPlannerTests
             Assert.That(alternative.IncludeCast, Is.False);
             Assert.That(alternative.IncludeCrew, Is.True);
             Assert.That(alternative.CrewKinds, Is.EqualTo(["director"]));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("person-name search is fuzzy"));
-            Assert.That(plan.Warnings.Select(warning => warning), Has.None.Contains("at most"));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -1868,12 +1886,13 @@ internal sealed class SearchPlannerTests
             Assert.That(alternative.PersonIds, Is.EqualTo([14072L]));
             Assert.That(alternative.IncludeCast, Is.True);
             Assert.That(plan.RelationshipResiduals, Is.Empty);
-            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_Unbounded_WhenPersonIdAlternativeIncludesUnsupportedSource()
+    public void Plan_Browse_WhenPersonIdAlternativeIncludesUnsupportedSource()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -1976,7 +1995,7 @@ internal sealed class SearchPlannerTests
         var plan = planner.Compile(criteria);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Unbounded>());
+        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Browse>());
     }
 
     [Test]
@@ -2056,7 +2075,7 @@ internal sealed class SearchPlannerTests
     }
 
     [Test]
-    public void Plan_Unbounded_WhenNoCriterionCanSeed()
+    public void Plan_Browse_WhenNoCriterionCanSeed()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -2081,15 +2100,14 @@ internal sealed class SearchPlannerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan, Is.InstanceOf<SearchPlanNode.Unbounded>());
-            Assert.That(
-                ((SearchPlanNode.Unbounded)plan).Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a bounded identifier"));
+            Assert.That(plan, Is.InstanceOf<SearchPlanNode.Browse>());
+            Assert.That(((SearchPlanNode.Browse)plan).Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("unbounded-refusal"));
         }
     }
 
     [Test]
-    public void Plan_RecordsCriterionDispositions_OnEveryPlanNode()
+    public void Plan_RecordsCriterionDispositions_WhenEveryPlanNode()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -2114,7 +2132,7 @@ internal sealed class SearchPlannerTests
                 ],
             },
         };
-        var unboundedCriteria = new MetadataCriteria
+        var browseCriteria = new MetadataCriteria
         {
             Language = new CriteriaSet<PropertyCriterion<string>>
             {
@@ -2132,7 +2150,7 @@ internal sealed class SearchPlannerTests
         // Act
         var seeded = (SearchPlanNode.Seeded)planner.Compile(seededCriteria);
         var knownEmpty = (SearchPlanNode.KnownEmpty)planner.Compile(knownEmptyCriteria);
-        var unbounded = (SearchPlanNode.Unbounded)planner.Compile(unboundedCriteria);
+        var browse = (SearchPlanNode.Browse)planner.Compile(browseCriteria);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -2151,18 +2169,18 @@ internal sealed class SearchPlannerTests
                     disposition.Source == "Title" && disposition.Disposition == "not-executed-known-empty"),
                 Is.True);
             Assert.That(
-                unbounded.Dispositions.Any(disposition =>
+                browse.Dispositions.Any(disposition =>
                     disposition.Source == "Language" &&
-                    disposition.Disposition == "hit-filter-not-executed-unbounded"),
+                    disposition.Disposition == "hit-filter"),
                 Is.True);
             Assert.That(
-                unbounded.Dispositions.Any(disposition => disposition.Disposition == "unbounded-refusal"),
-                Is.True);
+                browse.HitFilters.Select(filter => filter.Kind),
+                Is.EqualTo([LocalFilterKind.Language]));
         }
     }
 
     [Test]
-    public void Plan_PersonChainWithWarning_WhenPersonRelationshipHasQualifier()
+    public void Plan_PersonChainWithResidual_WhenPersonRelationshipHasQualifier()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -2222,7 +2240,8 @@ internal sealed class SearchPlannerTests
         {
             Assert.That(seeded.Seed, Is.InstanceOf<SearchSeed.PersonChain>());
             Assert.That(seeded.RelationshipResiduals, Has.Count.EqualTo(1));
-            Assert.That(seeded.Warnings.Select(warning => warning), Has.None.Contains("no search was run"));
+            Assert.That(seeded.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("unbounded-refusal"));
         }
     }
 
@@ -2310,7 +2329,8 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((SearchSeed.IdLookup)plan.Seed).Lookups, Has.Count.EqualTo(11));
-            Assert.That(plan.Warnings.Select(warning => warning), Has.None.Contains("lookup"));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -2370,7 +2390,8 @@ internal sealed class SearchPlannerTests
             Assert.That(alternative.MatchesNetwork, Is.True);
             Assert.That(alternative.MatchesPerson, Is.False);
             Assert.That(alternative.PassThrough, Is.False);
-            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -2449,7 +2470,8 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.RelationshipResiduals, Is.Empty);
-            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -2533,14 +2555,14 @@ internal sealed class SearchPlannerTests
         {
             Assert.That(alternatives, Has.Count.EqualTo(2));
             Assert.That(alternatives.Count(alternative => alternative.PassThrough), Is.EqualTo(1));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.One.Contains("positive relationship group 1"));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Source == "Relationships.Some[1]" && disposition.Disposition == "pass-through-residual"),
+                Is.Not.Empty);
         }
     }
 
     [Test]
-    public void Plan_Unbounded_WhenBareSubjectIsTheOnlyPossibleSeed()
+    public void Plan_Browse_WhenBareSubjectIsTheOnlyPossibleSeed()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -2574,7 +2596,7 @@ internal sealed class SearchPlannerTests
         var plan = planner.Compile(criteria);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Unbounded>());
+        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Browse>());
     }
 
     [Test]
@@ -2681,7 +2703,8 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.RelationshipResiduals, Is.Empty);
-            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -2754,7 +2777,7 @@ internal sealed class SearchPlannerTests
     }
 
     [Test]
-    public void Plan_PreservesSafeSupersetAndWarnings_WhenRelationshipsCannotBeEvaluated()
+    public void Plan_PreservesSafeSuperset_WhenRelationshipsCannotBeEvaluated()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -2832,12 +2855,12 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.RelationshipResiduals.Single().Alternatives.Single().PassThrough, Is.True);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("positive relationship group 1"));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("relationship exclusion 1"));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Source == "Relationships.Some[1]" && disposition.Disposition == "pass-through-residual"),
+                Is.Not.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Source == "Relationships.None[1]" && disposition.Disposition == "pass-through-residual"),
+                Is.Not.Empty);
         }
     }
 
@@ -2924,12 +2947,12 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.RelationshipResiduals.Single().Alternatives.Single().PassThrough, Is.True);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("positive relationship group 1"));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("relationship exclusion 1"));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Source == "Relationships.Some[1]" && disposition.Disposition == "pass-through-residual"),
+                Is.Not.Empty);
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Source == "Relationships.None[1]" && disposition.Disposition == "pass-through-residual"),
+                Is.Not.Empty);
         }
     }
 
@@ -2957,9 +2980,9 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
-            Assert.That(
-                plan.Warnings,
-                Is.EqualTo(["the duration filter".EmptyCriterionWarning()]));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Source == "Duration" && disposition.Disposition == "pass-through-residual"),
+                Is.Not.Empty);
         }
     }
 
@@ -2994,7 +3017,8 @@ internal sealed class SearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((SearchSeed.FuzzyShow)leaf.Seed).Terms, Is.EqualTo(["Game of Thrones", "Game"]));
-            Assert.That(leaf.Warnings, Is.Empty);
+            Assert.That(leaf.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
 
@@ -3131,7 +3155,8 @@ internal sealed class SearchPlannerTests
             Assert.That(plan.Query, Is.SameAs(query));
             Assert.That(plan.MaximumResults, Is.EqualTo(1));
             Assert.That(fetch.AnchorKind, Is.EqualTo(SearchAnchorKind.Browse));
-            Assert.That(plan.Warnings, Does.Not.Contain(SearchWarnings.Unbounded));
+            Assert.That(plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("unbounded-refusal"));
             Assert.That(
                 plan.Dispositions.Any(disposition =>
                     disposition.Source == LocalFilterKind.Genre.ToString() &&
@@ -3212,11 +3237,6 @@ internal sealed class SearchPlannerTests
         {
             Assert.That(fetch.AnchorKind, Is.EqualTo(SearchAnchorKind.Title));
             Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Does.Contain(
-                    "tvmaze cannot evaluate the requested operator for the content type filter; that criterion was" +
-                    " not applied."));
-            Assert.That(
                 plan.Dispositions.Any(disposition =>
                     disposition.Source == "ContentType" &&
                     Equals(disposition.OperatorsAndValues, criterion) &&
@@ -3226,7 +3246,7 @@ internal sealed class SearchPlannerTests
     }
 
     [Test]
-    public void Plan_TitleAnchor_WarnsThatUnpagedRankedSearchMayOmitMatches()
+    public void Plan_KeepsTitleAnchorWithoutWarning_WhenTitleSeedIsUsable()
     {
         // Arrange
         var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
@@ -3258,14 +3278,55 @@ internal sealed class SearchPlannerTests
         var plan = planner.Plan(query, maxResults: 25);
 
         // Assert
+        Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
+    }
+
+    [Test]
+    public void Plan_SafeSuperset_WhenLevelValueListIsEmpty()
+    {
+        // Arrange
+        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
+        var criterion = new PropertyCriterion<string> { Operator = CriteriaValueOperator.In, Values = [] };
+        var query = new ContentHierarchyItemCriteria
+        {
+            Level = new CriteriaSet<PropertyCriterion<string>> { And = [criterion] },
+            Metadata = new CriteriaSet<MetadataCriteria>
+            {
+                And =
+                [
+                    new MetadataCriteria
+                    {
+                        Title = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.ContainsString,
+                                    Value = "lost"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var plan = planner.Plan(query, maxResults: 25);
+
+        // Assert
+        var filter = (FilterPlanNode)plan.Root;
+        var fetch = (FetchPlanNode)filter.Child;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.Warnings, Does.Contain(SearchWarnings.TitleSearchApproximate));
+            Assert.That(fetch.AnchorKind, Is.EqualTo(SearchAnchorKind.Title));
             Assert.That(
                 plan.Dispositions.Any(disposition =>
-                    disposition.Source == "seed:title" &&
-                    disposition.Disposition == "warning" &&
-                    Equals(disposition.OperatorsAndValues, SearchWarnings.TitleSearchApproximate)),
+                    disposition.Source == "Level" &&
+                    Equals(disposition.OperatorsAndValues, criterion) &&
+                    disposition.Disposition == "safe-superset"),
                 Is.True);
         }
     }
@@ -3416,9 +3477,8 @@ internal sealed class SearchPlannerTests
                 Is.All.Not.Null);
             Assert.That(personUnions, Has.All.Property(nameof(UnionPlanNode.Children)).Count.EqualTo(2));
             Assert.That(filter.RelationshipResiduals, Is.Empty);
-            Assert.That(plan.Warnings, Does.Contain(SearchWarnings.PersonSearchApproximate));
-            Assert.That(plan.Warnings, Does.Not.Contain(SearchWarnings.TitleSearchApproximate));
-            Assert.That(plan.Warnings, Does.Not.Contain(SearchWarnings.AkaSearchApproximate));
+            Assert.That(plan.Dispositions.Where(disposition =>
+                disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(
                 plan.Dispositions.Count(disposition =>
                     disposition.Source.StartsWith("Relationships.Some[", StringComparison.Ordinal) &&
@@ -3553,9 +3613,9 @@ internal sealed class SearchPlannerTests
         var root = document.RootElement.GetProperty("root");
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(root.GetProperty("hitFilterCount").GetInt32(), Is.GreaterThan(0));
-            Assert.That(root.GetProperty("relationshipResidualCount").GetInt32(), Is.GreaterThan(0));
-            Assert.That(root.GetProperty("imageResidualCount").GetInt32(), Is.GreaterThan(0));
+            Assert.That(root.GetProperty("hitFilterCount").GetInt32(), Is.EqualTo(2));
+            Assert.That(root.GetProperty("relationshipResidualCount").GetInt32(), Is.EqualTo(1));
+            Assert.That(root.GetProperty("imageResidualCount").GetInt32(), Is.EqualTo(1));
             Assert.That(json, Does.Not.Contain("secret-local-genre"));
             Assert.That(json, Does.Not.Contain("secret-relationship-subject"));
             Assert.That(json, Does.Not.Contain("secret-image-url"));

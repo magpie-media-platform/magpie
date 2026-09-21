@@ -16,6 +16,7 @@ import {
     WarningCircleIcon,
 } from '@phosphor-icons/react';
 
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -40,7 +41,7 @@ import { getStandardMetadataField, useLibraryTypes } from '@/hooks/useLibraryTyp
 import { useSubjectMetadataInspector } from '@/hooks/useSubjectMetadataInspector';
 import { resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from '@/types/subjects';
 import { getErrorMessage, isNotFoundError } from '@/lib/errors';
-import { escapeQueryString } from '@/lib/simpleFilterQuery';
+import { relationshipClause } from '@/lib/simpleFilterQuery';
 import { extractTitle, isInternalSource, type ContentReference } from '@/lib/metadata';
 import { extractExternalIds, useSubject, useRefreshSubject, useSetPrimaryImage } from '@/hooks/useSubjects';
 import {
@@ -321,10 +322,7 @@ export function SubjectDetailPage() {
         };
     }, [apiSubject, kindType, subjectMetadataQuery.data]);
 
-    const subjectFilterQuery = subject
-        ? `Relationships has (Name = "${escapeQueryString(subject.title)}"` +
-          ` and Type = "${escapeQueryString(subject.kind)}")`
-        : '';
+    const subjectFilterQuery = subject ? relationshipClause(subject.kind, subject.title) : '';
     const librarySearch = new URLSearchParams({ filter: subjectFilterQuery }).toString();
     const addContentState: LibraryAddPreloadState = { filterQuery: subjectFilterQuery };
 
@@ -529,8 +527,9 @@ export function SubjectDetailPage() {
                                 className="subject-detail-page__image subject-detail-page__image--media"
                                 style={{ '--hero-image': `url(${JSON.stringify(subject.imageUrl)})` } as CSSProperties}
                             >
-                                <img
-                                    src={subject.imageUrl}
+                                <ContentPoster
+                                    placeholderClassName="subject-detail-page__image--placeholder"
+                                    posterUrl={subject.imageUrl}
                                     alt={`${subject.title} image`}
                                     className="subject-detail-page__image-img"
                                     loading="eager"
@@ -720,20 +719,13 @@ export function SubjectDetailPage() {
                                             data-relationship-id={relationship.id}
                                         >
                                             <div className="subject-detail-page__person-avatar">
-                                                {relationship.imageUrl ? (
-                                                    <img
-                                                        className="subject-detail-page__person-image"
-                                                        src={relationship.imageUrl}
-                                                        alt=""
-                                                    />
-                                                ) : (
-                                                    <div
-                                                        className="subject-detail-page__person-image subject-detail-page__person-image--placeholder"
-                                                        data-testid="subject-detail-page__person-image--placeholder"
-                                                    >
-                                                        <UsersIcon weight="thin" aria-hidden="true" />
-                                                    </div>
-                                                )}
+                                                <ContentPoster
+                                                    posterUrl={relationship.imageUrl}
+                                                    alt=""
+                                                    className="subject-detail-page__person-image"
+                                                    placeholderClassName="subject-detail-page__person-image--placeholder"
+                                                    placeholder={<UsersIcon weight="thin" aria-hidden="true" />}
+                                                />
                                             </div>
                                             <div className="subject-detail-page__person-info">
                                                 {relationship.name &&

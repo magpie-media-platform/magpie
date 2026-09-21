@@ -17,12 +17,12 @@ namespace Magpie.Core.Jobs;
 internal sealed class DatabaseBackupJob(
     IEventBus eventBus,
     ILogger<DatabaseBackupJob> logger,
-    IDatabaseManagementProvider? databaseProvider = null,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter,
+    IDatabaseManagementProvider? databaseProvider = null) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "DatabaseBackup",
+        JobType = MagpieJobs.Types.DatabaseBackup,
         DisplayName = "Database backup",
         Description = "Creates an on-demand database backup.",
         Category = "System",
@@ -36,7 +36,7 @@ internal sealed class DatabaseBackupJob(
         Parameters =
         [
             new(
-                NameParameter,
+                MagpieJobs.Parameters.Name,
                 "Optional backup name. When omitted, a timestamp-based name is used.",
                 DataType.String,
                 false,
@@ -44,11 +44,8 @@ internal sealed class DatabaseBackupJob(
         ],
     };
 
-    private const string NameParameter = "name";
-
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
-        var progress = progressReporter;
         string? createdBackupId = null;
 
         if (databaseProvider is not IRecoverableDatabaseManagementProvider backupProvider)
@@ -61,8 +58,8 @@ internal sealed class DatabaseBackupJob(
             throw new InvalidOperationException(reason);
         }
 
-        jobContext.Parameters.TryGetValue(NameParameter, out var name);
-        progress?.Report(null, "The backup job will create a database backup.");
+        jobContext.Parameters.TryGetValue(MagpieJobs.Parameters.Name, out var name);
+        progressReporter.Report(null, "The backup job will create a database backup.");
 
         try
         {
@@ -90,7 +87,7 @@ internal sealed class DatabaseBackupJob(
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            progress?.Report(1, "The database backup completed.");
+            progressReporter.Report(1, "The database backup completed.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

@@ -8,7 +8,9 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.Jobs;
+using Magpie.Sdk.Content;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
@@ -17,14 +19,16 @@ using Microsoft.Extensions.Logging;
 namespace Magpie.Core.Jobs.Metadata;
 
 internal sealed class ContentMetadataRefreshScanJob(
+    IEnumerable<IContentHierarchyMetadataProvider> metadataProviders,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
     IJobManager jobManager,
+    TimeProvider timeProvider,
     ILogger<ContentMetadataRefreshScanJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "ContentMetadataRefreshScan",
+        JobType = MagpieJobs.Types.ContentMetadataRefreshScan,
         DisplayName = "Content metadata refresh scan",
         Description = "Finds content still using placeholder metadata and queues one metadata refresh per item.",
         Category = "Metadata",
@@ -38,6 +42,8 @@ internal sealed class ContentMetadataRefreshScanJob(
         Parameters = [],
     };
 
+    private static readonly TimeSpan RetryInterval = TimeSpan.FromHours(24);
+
     private static double GetProgress(int completed, int total)
     {
         if (total == 0)
@@ -50,22 +56,53 @@ internal sealed class ContentMetadataRefreshScanJob(
 
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
-        var progress = progressReporter;
-        progress?.Report(0, "The scan will load the placeholder metadata items.");
+        progressReporter.Report(0, "The scan will load the placeholder metadata items.");
 
         const int pageSize = 500;
+
+        var cutoff = timeProvider.GetUtcNow().UtcDateTime - RetryInterval;
+
+        var supportedContentTypes = metadataProviders
+            .SelectMany(provider => provider.SupportedContentTypes)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (supportedContentTypes.Count == 0)
+        {
+            progressReporter.Report(
+                1,
+                "The content metadata refresh scan completed because no metadata provider is enabled.");
+            return;
+        }
+
+        var contentTypeCriteria = supportedContentTypes.Contains("*", StringComparer.Ordinal)
+            ? null
+            : new CriteriaSet<PropertyCriterion<string>>
+            {
+                And =
+                [
+                    new PropertyCriterion<string>
+                    {
+                        Operator = CriteriaValueOperator.In,
+                        Values = supportedContentTypes
+                    }
+                ]
+            };
         var placeholderIds = new List<Guid>();
         var pageNumber = 1;
         while (true)
         {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new ContentHierarchyItemCriteria { PendingMetadataRefresh = true },
+            var page = await contentHierarchyItemRepository.QueryIdsAsync(
+                new ContentHierarchyItemCriteria
+                {
+                    PendingMetadataRefresh = true,
+                    LastRefreshedBefore = cutoff,
+                    ContentType = contentTypeCriteria ?? new(),
+                },
                 new() { PageNumber = pageNumber, PageSize = pageSize },
                 sort: null,
                 cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            placeholderIds.AddRange(pageItems.Select(item => item.Id));
-            if (pageItems.Count < pageSize)
+            placeholderIds.AddRange(page);
+            if (page.Count < pageSize)
             {
                 break;
             }
@@ -75,7 +112,7 @@ internal sealed class ContentMetadataRefreshScanJob(
 
         if (placeholderIds.Count == 0)
         {
-            progress?.Report(1, "The content metadata refresh scan completed because no item needs a refresh.");
+            progressReporter.Report(1, "The content metadata refresh scan completed because no item needs a refresh.");
             return;
         }
 
@@ -83,7 +120,9 @@ internal sealed class ContentMetadataRefreshScanJob(
         for (var i = 0; i < placeholderIds.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report(GetProgress(i, placeholderIds.Count), null);
+            progressReporter.Report(
+                GetProgress(i, placeholderIds.Count),
+                $"The scan queued {queued} of {placeholderIds.Count} items.");
 
             var itemId = placeholderIds[i];
             try
@@ -91,10 +130,10 @@ internal sealed class ContentMetadataRefreshScanJob(
                 await jobManager.ExecuteAsync(
                     new()
                     {
-                        JobType = ContentMetadataRefreshItemJob.Spec.JobType,
+                        JobType = MagpieJobs.Types.ContentMetadataRefreshItem,
                         Parameters = new Dictionary<string, string>()
                         {
-                            ["contentHierarchyItemId"] = itemId.ToString("D"),
+                            [MagpieJobs.Parameters.ContentHierarchyItemId] = itemId.ToString("D"),
                         },
                         Mode = JobExecutionMode.Queue,
                         UserId = context.ManualTriggerUserId,
@@ -116,7 +155,7 @@ internal sealed class ContentMetadataRefreshScanJob(
             }
         }
 
-        progress?.Report(
+        progressReporter.Report(
             1,
             $"The content metadata refresh scan completed and queued {queued} of {placeholderIds.Count} items.");
     }

@@ -5,7 +5,7 @@
     }
 
     .children-tab__sort-controls {
-        display: none;
+        margin-bottom: var(--space-md);
     }
 
     .children-tab__poster {
@@ -276,36 +276,21 @@
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-md);
-
-        &[role='button'] {
-            cursor: pointer;
-            transition:
-                background-color var(--duration-fast) var(--easing-default),
-                border-color var(--duration-fast) var(--easing-default);
-
-            &:hover {
-                background-color: var(--bg-tertiary);
-                border-color: var(--accent-primary);
-            }
-        }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: var(--focus-ring-offset);
-        }
     }
 
     .files-tab__panel-header {
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: var(--space-md);
     }
 
     .files-tab__file-actions {
         display: flex;
         align-items: center;
-        gap: var(--space-xs);
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+        padding-top: var(--space-sm);
+        border-top: 1px solid var(--border-subtle);
     }
 
     .files-tab__panel-meta {
@@ -391,46 +376,6 @@
             width: 36px;
             height: 54px;
         }
-
-        .files-tab__panel-header {
-            align-items: flex-start;
-            flex-direction: column;
-        }
-
-        .files-tab__file-actions {
-            flex-wrap: wrap;
-            width: 100%;
-        }
-    }
-
-    .children-tab[data-layout='card'] {
-        .children-tab__sort-controls {
-            display: flex;
-            align-items: center;
-            gap: var(--space-xs);
-            margin-bottom: var(--space-md);
-            padding: var(--space-xs);
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-default);
-            border-radius: var(--radius-md);
-        }
-
-        .children-tab__sort-icon {
-            flex: 0 0 auto;
-            color: var(--accent-primary);
-            font-size: var(--text-base);
-        }
-
-        .children-tab__sort-controls .select-trigger {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .children-tab__sort-direction {
-            flex: 0 0 auto;
-            min-width: auto;
-            padding: var(--space-xs);
-        }
     }
 
     .releases-tab {
@@ -443,10 +388,6 @@
         display: block;
         min-width: 0;
         max-width: 100%;
-    }
-
-    .releases-tab__sort-controls {
-        display: none;
     }
 
     .releases-tab[data-layout='table'] {
@@ -462,35 +403,6 @@
 
         & .releases-tab__data-table .data-table__cell[data-column='status'] {
             overflow: visible;
-        }
-    }
-
-    .releases-tab[data-layout='card'] {
-        .releases-tab__sort-controls {
-            display: flex;
-            align-items: center;
-            gap: var(--space-xs);
-            padding: var(--space-xs);
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-default);
-            border-radius: var(--radius-md);
-        }
-
-        .releases-tab__sort-icon {
-            flex: 0 0 auto;
-            color: var(--accent-primary);
-            font-size: var(--text-base);
-        }
-
-        .releases-tab__sort-controls .select-trigger {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .releases-tab__sort-direction {
-            flex: 0 0 auto;
-            min-width: auto;
-            padding: var(--space-xs);
         }
     }
 

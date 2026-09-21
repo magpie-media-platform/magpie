@@ -76,7 +76,7 @@ public sealed class CardigannIndexerIntegrationTests
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsNoReleases_WhenLoginFails()
+    public void SearchAsync_ThrowsAuthenticationFailure_WhenLoginFails()
     {
         // Arrange
         _definition.Login = new LoginBlock { Test = new LoginTest { Path = "/", Selector = "a.logout" } };
@@ -104,12 +104,12 @@ public sealed class CardigannIndexerIntegrationTests
             NullLogger<CardigannIndexerIntegration>.Instance);
 
         // Act
-        var releases = await integration
+        var action = async () => await integration
             .SearchAsync(new ReleaseSearchRequest { Title = "cool" }, new Dictionary<string, string>(), default)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(releases, Is.Empty);
+        Assert.That(action, Throws.TypeOf<CardigannAuthenticationException>());
     }
 
     [Test]
@@ -134,21 +134,19 @@ public sealed class CardigannIndexerIntegrationTests
             .ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(releases, Is.Empty);
-            _sessions.Verify(
-                s => s.EnsureLoggedInAsync(
-                    It.IsAny<string>(),
-                    It.IsAny<LoginBlock>(),
-                    It.IsAny<Uri>(),
-                    It.IsAny<IReadOnlyDictionary<string, object?>>(),
-                    It.IsAny<string?>(),
-                    It.IsAny<string>(),
-                    It.IsAny<bool>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Never);
-        }
+        Assert.That(releases, Is.Empty);
+
+        _sessions.Verify(
+            s => s.EnsureLoggedInAsync(
+                It.IsAny<string>(),
+                It.IsAny<LoginBlock>(),
+                It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>(),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Test]
@@ -197,22 +195,20 @@ public sealed class CardigannIndexerIntegrationTests
             .ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(releases.ToList(), Has.Count.EqualTo(1));
-            _sessions.Verify(s => s.InvalidateSession("priv@https://tracker.test"), Times.Once);
-            _sessions.Verify(
-                s => s.SendAsync(
-                    It.IsAny<string>(),
-                    It.IsAny<Uri>(),
-                    It.IsAny<HttpMethod>(),
-                    It.IsAny<Uri>(),
-                    It.IsAny<string?>(),
-                    It.IsAny<string>(),
-                    It.IsAny<bool>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Exactly(2));
-        }
+        Assert.That(releases.ToList(), Has.Count.EqualTo(1));
+
+        _sessions.Verify(s => s.InvalidateSession("priv@https://tracker.test"), Times.Once);
+        _sessions.Verify(
+            s => s.SendAsync(
+                It.IsAny<string>(),
+                It.IsAny<Uri>(),
+                It.IsAny<HttpMethod>(),
+                It.IsAny<Uri>(),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
     }
 
     [Test]
@@ -249,6 +245,65 @@ public sealed class CardigannIndexerIntegrationTests
     }
 
     [Test]
+    public async Task SearchAsync_ResolvesEveryRequestedRow_WhenMoreThanFiftyDetailsAreNeeded()
+    {
+        // Arrange
+        _definition.Download = new DownloadBlock { Selector = "a.magnet", Attribute = "href" };
+        _parser
+            .Setup(p => p.Parse(
+                It.IsAny<string>(),
+                It.IsAny<CardigannDefinition>(),
+                It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns(
+            [
+                .. Enumerable
+                    .Range(0, 60)
+                    .Select(index => new Release
+                    {
+                        Protocol = "torrent",
+                        Title = "Cool Release " + index,
+                        InfoUrl = new Uri("https://tracker.test/details/" + index),
+                    }),
+                new Release { Protocol = "torrent", Title = "Resolved magnet", InfoUrl = new Uri(Magnet) }
+            ]);
+        _parser
+            .Setup(p => p.ExtractDownloadTarget(
+                It.IsAny<string>(),
+                It.IsAny<DownloadBlock>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns(Magnet);
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var releases = (await integration
+            .SearchAsync(
+                new ReleaseSearchRequest { Title = "cool", MaximumResults = 200 },
+                new Dictionary<string, string>(),
+                default)
+            .ConfigureAwait(false)).ToList();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(61));
+            Assert.That(releases[^1].Title, Is.EqualTo("Resolved magnet"));
+        }
+
+        _parser.Verify(
+            p => p.ExtractDownloadTarget(
+                It.IsAny<string>(),
+                It.IsAny<DownloadBlock>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
+            Times.Exactly(60));
+    }
+
+    [Test]
     public async Task SearchAsync_ResolvesDetailPageIntoInfoUrl_WhenDownloadBlockIsConfigured()
     {
         // Arrange
@@ -269,7 +324,10 @@ public sealed class CardigannIndexerIntegrationTests
                 },
             ]);
         _parser
-            .Setup(p => p.ExtractDownloadTarget(It.IsAny<string>(), It.IsAny<DownloadBlock>()))
+            .Setup(p => p.ExtractDownloadTarget(
+                It.IsAny<string>(),
+                It.IsAny<DownloadBlock>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
             .Returns(Magnet);
         var integration = new CardigannIndexerIntegration(
             Guid.Empty,
@@ -288,8 +346,9 @@ public sealed class CardigannIndexerIntegrationTests
         {
             Assert.That(releases, Has.Count.EqualTo(1));
             Assert.That(releases[0].InfoUrl, Is.EqualTo(new Uri(Magnet)));
-            _parser.Verify(p => p.ApplyResolvedDownload(releases[0], new Uri(Magnet)), Times.Once);
         }
+
+        _parser.Verify(p => p.ApplyResolvedDownload(releases[0], new Uri(Magnet)), Times.Once);
     }
 
     [Test]
@@ -313,7 +372,10 @@ public sealed class CardigannIndexerIntegrationTests
                 },
             ]);
         _parser
-            .Setup(p => p.ExtractDownloadTarget(It.IsAny<string>(), It.IsAny<DownloadBlock>()))
+            .Setup(p => p.ExtractDownloadTarget(
+                It.IsAny<string>(),
+                It.IsAny<DownloadBlock>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
             .Returns((string?)null);
         var integration = new CardigannIndexerIntegration(
             Guid.Empty,
@@ -364,12 +426,14 @@ public sealed class CardigannIndexerIntegrationTests
             Times.Once);
     }
 
-    [Test]
-    public async Task SearchAsync_PostsInputsAndRecordsSanitizedRequest_WhenSearchMethodIsPost()
+    [TestCase("password")]
+    [TestCase("cookie")]
+    [TestCase("text")]
+    public async Task SearchAsync_PostsInputsAndRecordsSanitizedRequest_WhenSearchMethodIsPost(string settingType)
     {
         // Arrange
         _definition.Search.Paths[0].Method = "post";
-        _definition.Settings.Add(new CardigannSettingDefinition { Name = "passkey", Type = "password" });
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = "passkey", Type = settingType });
         _definition.Search.Inputs["q"] = "{{ .Keywords }}";
         _definition.Search.Inputs["passkey"] = "{{ .Config.passkey }}";
         var integration = new CardigannIndexerIntegration(
@@ -397,18 +461,68 @@ public sealed class CardigannIndexerIntegrationTests
             Assert.That(
                 activity.GetTagItem("magpie.request.body"),
                 Is.EqualTo("q=cool%20movie&passkey=%5BREDACTED%5D"));
-            _sessions.Verify(
-                sessions => sessions.SendAsync(
-                    "priv@https://tracker.test",
-                    new Uri("https://tracker.test/"),
-                    HttpMethod.Post,
-                    new Uri("https://tracker.test/search"),
-                    "q=cool%20movie&passkey=secret-value",
-                    It.IsAny<string>(),
-                    It.IsAny<bool>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
         }
+
+        _sessions.Verify(
+            sessions => sessions.SendAsync(
+                "priv@https://tracker.test",
+                new Uri("https://tracker.test/"),
+                HttpMethod.Post,
+                new Uri("https://tracker.test/search"),
+                "q=cool%20movie&passkey=secret-value",
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [TestCase("cool movie", "POST")]
+    [TestCase(null, "GET")]
+    public async Task SearchAsync_ResolvesTheVerbFromTheRenderedTemplate_WhenTheSearchMethodIsTemplated(
+        string? title,
+        string expected)
+    {
+        // Arrange
+        _definition.Search.Paths[0].Method = "{{ if .Keywords }}post{{ else }}get{{ end }}";
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+        using var activity = new Activity("magpie.release-query.request").Start();
+
+        // Act
+        await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = title },
+            new Dictionary<string, string>(),
+            default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(activity.GetTagItem("magpie.request.method"), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SearchAsync_Throws_WhenTheSearchMethodIsAnUnsupportedVerb()
+    {
+        // Arrange
+        _definition.Search.Paths[0].Method = "put";
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(() => integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "cool" },
+            new Dictionary<string, string>(),
+            default));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("Cardigann search method 'put' is not supported."));
     }
 
     [Test]
@@ -441,6 +555,50 @@ public sealed class CardigannIndexerIntegrationTests
                 false,
                 It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
+    }
+
+    [Test]
+    public void SearchAsync_ThrowsTheUnsolvedChallengeError_WhenTheResponseIsACloudflareChallenge()
+    {
+        // Arrange
+        _sessions
+            .Setup(s => s.SendAsync(
+                It.IsAny<string>(),
+                It.IsAny<Uri>(),
+                It.IsAny<HttpMethod>(),
+                It.IsAny<Uri>(),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                var challenge = new HttpResponseMessage(HttpStatusCode.Forbidden)
+                {
+                    Content = new StringContent("<html><body>Just a moment...</body></html>"),
+                };
+                challenge.Headers.TryAddWithoutValidation("CF-RAY", "7a1b2c3d");
+                return challenge;
+            });
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var exception = Assert.ThrowsAsync<HttpRequestException>(() => integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "cool" },
+            new Dictionary<string, string>(),
+            default));
+
+        // Assert
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo(
+                "Cardigann tracker priv is behind Cloudflare (HTTP 403 with CF headers) and the challenge " +
+                "could not be solved."));
     }
 
     [Test]
@@ -603,5 +761,210 @@ public sealed class CardigannIndexerIntegrationTests
 
         // Assert
         Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public async Task SearchAsync_ReturnsRowsFromEveryPath_WhenDefinitionHasMultiplePaths()
+    {
+        // Arrange
+        _definition.Search.Paths.Add(new SearchPath { Path = "/second" });
+        _parser.SetupSequence(parser => parser.Parse(It.IsAny<string>(), _definition, It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns([new Release { Protocol = "torrent", Title = "First" }])
+            .Returns([new Release { Protocol = "torrent", Title = "Second" }]);
+        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
+            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var rows = await integration.SearchAsync(new ReleaseSearchRequest { MaximumResults = 2 },
+            new Dictionary<string, string>(), default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(rows.Select(row => row.Title), Is.EqualTo(["First", "Second"]));
+    }
+
+    [Test]
+    public async Task SearchAsync_StopsRequestingPaths_WhenTheRequestedResultCountIsReached()
+    {
+        // Arrange
+        _definition.Search.Paths.Add(new SearchPath { Path = "/second" });
+        _parser.Setup(parser => parser.Parse(It.IsAny<string>(), _definition, It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns([new Release { Protocol = "torrent", Title = "First" }]);
+        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
+            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+        using var activity = new Activity("magpie.release-query.request").Start();
+
+        // Act
+        var rows = await integration.SearchAsync(new ReleaseSearchRequest { MaximumResults = 1 },
+            new Dictionary<string, string>(), default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rows.Select(row => row.Title), Is.EqualTo(["First"]));
+            Assert.That(activity.GetTagItem("magpie.request.target"), Is.EqualTo("/search"));
+        }
+
+        _sessions.Verify(
+            sessions => sessions.SendAsync(It.IsAny<string>(), It.IsAny<Uri>(), It.IsAny<HttpMethod>(),
+                It.IsAny<Uri>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task SearchAsync_RecordsEveryRequestedPath_WhenDefinitionHasMultiplePaths()
+    {
+        // Arrange
+        _definition.Search.Paths.Add(new SearchPath { Path = "/second" });
+        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
+            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+        using var activity = new Activity("magpie.release-query.request").Start();
+
+        // Act
+        await integration.SearchAsync(new ReleaseSearchRequest { MaximumResults = 5 },
+            new Dictionary<string, string>(), default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(activity.GetTagItem("magpie.request.target"), Is.EqualTo("/search /second"));
+    }
+
+    [TestCase("get")]
+    [TestCase("post")]
+    public async Task SearchAsync_EncodesSubstitutions_WhenPathAndRawInputContainQueryValues(string method)
+    {
+        // Arrange
+        _definition.Search.Paths[0] = new SearchPath { Path = "{{ .Keywords }}", Method = method };
+        _definition.Search.Inputs["$raw"] = "q={{ .Keywords }}&fixed=1";
+        Uri? sentUri = null;
+        string? sentBody = null;
+        _sessions.Setup(session => session.SendAsync(It.IsAny<string>(), It.IsAny<Uri>(), It.IsAny<HttpMethod>(),
+                It.IsAny<Uri>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, Uri, HttpMethod, Uri, string?, string, bool, CancellationToken>(
+                (_, _, _, uri, body, _, _, _) => { sentUri = uri; sentBody = body; })
+            .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("rows") });
+        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
+            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        await integration.SearchAsync(new ReleaseSearchRequest { Title = "//attacker.test/a&admin=1" },
+            new Dictionary<string, string>(), default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(sentUri!.Host, Is.EqualTo("tracker.test"));
+            Assert.That(sentUri.AbsolutePath, Is.EqualTo("/%2F%2Fattacker.test%2Fa%26admin%3D1"));
+            Assert.That(sentBody ?? sentUri.Query.TrimStart('?'),
+                Is.EqualTo("q=%2F%2Fattacker.test%2Fa%26admin%3D1&fixed=1"));
+        }
+    }
+
+    [TestCase("get")]
+    [TestCase("post")]
+    public async Task SearchAsync_SkipsTarget_WhenDefinitionLeavesConfiguredAuthority(string method)
+    {
+        // Arrange
+        _definition.Search.Paths[0] = new SearchPath { Path = "//attacker.test/search", Method = method };
+        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
+            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var rows = await integration.SearchAsync(new ReleaseSearchRequest(),
+            new Dictionary<string, string>(), default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(rows, Is.Empty);
+        _sessions.Verify(session => session.SendAsync(It.IsAny<string>(), It.IsAny<Uri>(), It.IsAny<HttpMethod>(),
+            It.IsAny<Uri>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestCase("get", "//api.tracker.test/search")]
+    [TestCase("post", "//api.tracker.test/search")]
+    [TestCase("get", "http://tracker.test/search")]
+    [TestCase("post", "https://tracker.test:8443/search")]
+    [TestCase("get", "https://user:password@tracker.test/search")]
+    public async Task SearchAsync_RetainsValidResults_WhenOnePathLeavesConfiguredAuthority(string method, string path)
+    {
+        // Arrange
+        _definition.Search.Paths.Add(new SearchPath { Path = path, Method = method });
+        _definition.Search.Paths.Add(new SearchPath { Path = "/third" });
+        _parser.SetupSequence(parser => parser.Parse(It.IsAny<string>(), _definition, It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns([new Release { Protocol = "torrent", Title = "First" }])
+            .Returns([new Release { Protocol = "torrent", Title = "Third" }]);
+        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
+            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+        using var activity = new Activity("magpie.release-query.request").Start();
+
+        // Act
+        var rows = await integration.SearchAsync(new ReleaseSearchRequest { MaximumResults = 5 },
+            new Dictionary<string, string>(), default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rows.Select(row => row.Title), Is.EqualTo(["First", "Third"]));
+            Assert.That(activity.GetTagItem("magpie.request.target"), Is.EqualTo("/search /third"));
+        }
+
+        _sessions.Verify(session => session.SendAsync(It.IsAny<string>(), It.IsAny<Uri>(), It.IsAny<HttpMethod>(),
+            It.Is<Uri>(uri => uri.AbsoluteUri != "https://tracker.test/search" &&
+                uri.AbsoluteUri != "https://tracker.test/third"),
+            It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+        _sessions.Verify(session => session.SendAsync(It.IsAny<string>(), It.IsAny<Uri>(), It.IsAny<HttpMethod>(),
+            It.IsAny<Uri>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Test]
+    public void SearchAsync_ReportsLoginFailure_WhenSessionExpiresBeforeDetailFetch()
+    {
+        // Arrange
+        _definition.Login = new LoginBlock { Method = "cookie" };
+        _definition.Download = new DownloadBlock { Selector = "a.download" };
+        _parser.Setup(parser => parser.Parse(It.IsAny<string>(), _definition, It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns(
+                [new Release { Protocol = "torrent", Title = "One", InfoUrl = new Uri("https://tracker.test/item") }]);
+        _sessions.SetupSequence(session => session.EnsureLoggedInAsync(It.IsAny<string>(), _definition.Login,
+                It.IsAny<Uri>(), It.IsAny<IReadOnlyDictionary<string, object?>>(), It.IsAny<string?>(),
+                It.IsAny<string>(), false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CardigannLoginOutcome { Success = true })
+            .ReturnsAsync(new CardigannLoginOutcome { Success = true })
+            .ReturnsAsync(new CardigannLoginOutcome { Success = false, FailureKind = ConfigurationFailureKind.Auth });
+        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
+            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var action = async () => await integration.SearchAsync(new ReleaseSearchRequest { MaximumResults = 1 },
+            new Dictionary<string, string>(), default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(action, Throws.TypeOf<CardigannAuthenticationException>());
+    }
+
+    [Test]
+    public async Task SearchAsync_RedactsTextSettings_WhenCredentialsAppearInTarget()
+    {
+        // Arrange
+        _definition.Search.Paths[0].Path = "/{{ .Config.passkey }}/search";
+        _definition.Search.Inputs["key"] = "{{ .Config.passkey }}";
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = "passkey", Type = "text" });
+        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
+            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+        using var activity = new Activity("magpie.release-query.request").Start();
+
+        // Act
+        await integration.SearchAsync(new ReleaseSearchRequest(),
+            new Dictionary<string, string> { ["passkey"] = "secret-value" }, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(activity.GetTagItem("magpie.request.target"),
+            Is.EqualTo("/%5BREDACTED%5D/search?key=%5BREDACTED%5D"));
     }
 }

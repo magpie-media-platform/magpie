@@ -1,15 +1,17 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Core.Caching;
 using Magpie.Extensions.OpenLibrary;
 using Magpie.Extensions.OpenLibrary.Mapping;
 using Magpie.Extensions.OpenLibrary.QueryEngine;
+using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
+using Magpie.Sdk.Caching;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -22,19 +24,114 @@ namespace Magpie.Test.Extensions.OpenLibrary;
 [TestFixture]
 public sealed class QueryExecutorTests
 {
-    private MemoryCacheFactory _cacheFactory = null!;
-    private MemoryCacheStore _cacheStore = null!;
     private Mock<IOpenLibraryClient> _client = null!;
     private IQueryExecutor _subject = null!;
     private IQueryExecutor _requestSubject = null!;
     private RequestContext _context = null!;
     private ApiRequest _request = null!;
 
+    private ICacheFactory _cacheFactory = null!;
+
     [SetUp]
     public void SetUp()
     {
-        _cacheStore = new MemoryCacheStore(TimeProvider.System);
-        _cacheFactory = new MemoryCacheFactory(_cacheStore);
+        var cacheFactory = new Mock<ICacheFactory>();
+        var caches = new Dictionary<string, ICache>(StringComparer.Ordinal);
+        cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns<string, Func<CachePolicy>?>((name, _) =>
+            {
+                if (caches.TryGetValue(name, out var existing))
+                {
+                    return existing;
+                }
+
+                var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+                var cache = new Mock<ICache>();
+                cache.Setup(value => value.Set(It.IsAny<string>(), It.IsAny<It.IsAnyType>()))
+                    .Callback(new InvocationAction(invocation =>
+                        values[(string)invocation.Arguments[0]] = invocation.Arguments[1]));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<It.IsAnyType?>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value;
+                        return found;
+                    }));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<bool>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value ?? false;
+                        return found;
+                    }));
+                cache.Setup(value => value.Remove(It.IsAny<string>())).Returns<string>(values.Remove);
+                cache.Setup(value => value.GetOrAddAsync(
+                        It.IsAny<string>(),
+                        It.IsAny<Func<CancellationToken, ValueTask<SourcePage>>>(),
+                        It.IsAny<CancellationToken>()))
+                    .Returns<string, Func<CancellationToken, ValueTask<SourcePage>>, CancellationToken>(
+                        async (key, valueFactory, token) =>
+                        {
+                            if (values.TryGetValue(key, out var cached))
+                            {
+                                return (SourcePage)cached!;
+                            }
+
+                            var created = await valueFactory(token).ConfigureAwait(false);
+                            values[key] = created;
+                            return created;
+                        });
+                cache.Setup(value => value.GetOrAddAsync(
+                        It.IsAny<string>(),
+                        It.IsAny<Func<CancellationToken, ValueTask<WorkResolution>>>(),
+                        It.IsAny<CancellationToken>()))
+                    .Returns<string, Func<CancellationToken, ValueTask<WorkResolution>>, CancellationToken>(
+                        async (key, valueFactory, token) =>
+                        {
+                            if (values.TryGetValue(key, out var cached))
+                            {
+                                return (WorkResolution)cached!;
+                            }
+
+                            var created = await valueFactory(token).ConfigureAwait(false);
+                            values[key] = created;
+                            return created;
+                        });
+                cache.Setup(value => value.GetOrAddAsync(
+                        It.IsAny<string>(),
+                        It.IsAny<Func<CancellationToken, ValueTask<EditionLookup>>>(),
+                        It.IsAny<CancellationToken>()))
+                    .Returns<string, Func<CancellationToken, ValueTask<EditionLookup>>, CancellationToken>(
+                        async (key, valueFactory, token) =>
+                        {
+                            if (values.TryGetValue(key, out var cached))
+                            {
+                                return (EditionLookup)cached!;
+                            }
+
+                            var created = await valueFactory(token).ConfigureAwait(false);
+                            values[key] = created;
+                            return created;
+                        });
+                cache.Setup(value => value.GetOrAddAsync(
+                        It.IsAny<string>(),
+                        It.IsAny<Func<CancellationToken, ValueTask<AuthorLookup>>>(),
+                        It.IsAny<CancellationToken>()))
+                    .Returns<string, Func<CancellationToken, ValueTask<AuthorLookup>>, CancellationToken>(
+                        async (key, valueFactory, token) =>
+                        {
+                            if (values.TryGetValue(key, out var cached))
+                            {
+                                return (AuthorLookup)cached!;
+                            }
+
+                            var created = await valueFactory(token).ConfigureAwait(false);
+                            values[key] = created;
+                            return created;
+                        });
+                return caches[name] = cache.Object;
+            });
+        _cacheFactory = cacheFactory.Object;
         _client = new Mock<IOpenLibraryClient>(MockBehavior.Strict);
         _context = new RequestContext { UserAgent = "test" };
         _request = null!;
@@ -66,13 +163,6 @@ public sealed class QueryExecutorTests
             _cacheFactory,
             settingsResolver.Object,
             NullLogger<QueryExecutor>.Instance);
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        _cacheFactory.Dispose();
-        _cacheStore.Dispose();
     }
 
     [Test]
@@ -141,12 +231,96 @@ public sealed class QueryExecutorTests
             Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL2W", "OL4W"]));
             Assert.That(result.PageInfo.RequestedPage, Is.EqualTo(1));
             Assert.That(result.PageInfo.HasMore, Is.True);
+            Assert.That(result.Warnings, Is.Empty);
         }
 
         _client.Verify(
             value => value.GetJsonAsync<SearchResponseDto>(
                 It.IsAny<ApiRequest>(), _context, It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteSearchAsync_EmptyWithoutWarnings_WhenPlanIsUnavailable()
+    {
+        // Arrange
+        var plan = new QueryPlan
+        {
+            Root = new PlanNode { Kind = PlanNodeKind.Filter, State = PlanNodeState.Unavailable },
+            Hierarchy = new BookHierarchy
+            {
+                ContentTypeSlug = "books",
+                BookLevelSlug = "book"
+            },
+            Advanced = true
+        };
+
+        // Act
+        var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        _client.VerifyNoOtherCalls();
+    }
+
+    [Test]
+    public async Task ExecuteSearchAsync_EmptyWithoutRequest_WhenRelationshipRoleIsUnsupported()
+    {
+        // Arrange
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria>
+            {
+                And =
+                [
+                    new MetadataCriteria
+                    {
+                        Title = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Value = "Dune" }]
+                        },
+                        Relationships = new CollectionCriteria<RelationshipCriteria>
+                        {
+                            Some =
+                            [
+                                [
+                                    new RelationshipCriteria
+                                    {
+                                        Kind = new CriteriaSet<PropertyCriterion<string>>
+                                        {
+                                            And = [new PropertyCriterion<string> { Value = "director" }]
+                                        }
+                                    }
+                                ]
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        var plan = new QueryPlanner().Plan(new QueryRequest
+        {
+            Intent = QueryIntent.AdvancedSearch,
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            Criteria = query
+        });
+
+        // Act
+        var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        _client.VerifyNoOtherCalls();
     }
 
     [Test]
@@ -320,10 +494,7 @@ public sealed class QueryExecutorTests
         var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL1W"]));
-        }
+        Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL1W"]));
 
         _client.Verify(
             value => value.GetJsonAsync<SearchResponseDto>(
@@ -428,7 +599,7 @@ public sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task ExecuteSearchAsync_EmptyWithoutRequest_WhenOrdinaryPageOffsetExceedsApiRange()
+    public async Task ExecuteSearchAsync_EmptyWithoutRequestOrWarning_WhenOrdinaryPageOffsetExceedsApiRange()
     {
         // Arrange
         var plan = new QueryPlan
@@ -456,9 +627,7 @@ public sealed class QueryExecutorTests
             Assert.That(result.Hits, Is.Empty);
             Assert.That(result.PageInfo.RequestedPage, Is.EqualTo(int.MaxValue));
             Assert.That(result.PageInfo.HasMore, Is.False);
-            Assert.That(
-                result.Warnings,
-                Does.Contain("Open Library cannot represent the requested page offset. No search was run."));
+            Assert.That(result.Warnings, Is.Empty);
         }
 
         _client.Verify(
@@ -1708,7 +1877,7 @@ public sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task ExecuteSearchAsync_KeepsHitAndWarns_WhenOptionalFieldIsMissing()
+    public async Task ExecuteSearchAsync_KeepsHitWithoutWarnings_WhenOptionalFieldIsMissing()
     {
         // Arrange
         _client
@@ -1770,9 +1939,7 @@ public sealed class QueryExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL1W"]));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Does.Contain("Open Library retained rows with missing optional fields and degraded certainty."));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 

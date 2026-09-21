@@ -109,12 +109,12 @@ async function populateRichLibrary(api: ApiClient): Promise<Omit<RichLibraryResu
 
     const episodes = Array.from({ length: 30 }, (_, index) => {
         const number = index + 1;
-        const sequenced = number <= 28;
+        const { publishDate, sequenceNumber } = episodeSchedule(number);
         return {
             level: 'episode',
             name: `Journey Episode ${String(number).padStart(2, '0')}`,
             slug: `journey-episode-${String(number).padStart(2, '0')}`,
-            ordinal: sequenced ? number : null,
+            ordinal: sequenceNumber,
             alignmentKey: `episode:1:${number}`,
             externalIds: { tmdb: `rich-tv-episode-${number}` },
             initialContribution: {
@@ -122,10 +122,8 @@ async function populateRichLibrary(api: ApiClient): Promise<Omit<RichLibraryResu
                 source: `tmdb:rich-tv-episode-${number}`,
                 title: `Journey Episode ${String(number).padStart(2, '0')}`,
                 overview: `Episode ${number} in the rich-library sequence.`,
-                publishDate: sequenced
-                    ? `2025-03-${String(number).padStart(2, '0')}T00:00:00Z`
-                    : `2025-04-${String(number === 30 ? 20 : 10).padStart(2, '0')}T00:00:00Z`,
-                sequenceNumber: sequenced ? number : null,
+                publishDate,
+                sequenceNumber,
                 externalIds: [{ source: 'tmdb', value: `rich-tv-episode-${number}`, ordinal: 0 }],
             },
         };
@@ -171,15 +169,10 @@ async function populateRichLibrary(api: ApiClient): Promise<Omit<RichLibraryResu
         throw new Error('The first rich-library episode did not hydrate.');
     }
     for (const item of episodeRows) {
-        const number = Number(item.name.slice(-2));
+        const { publishDate, sequenceNumber } = episodeSchedule(Number(item.name.slice(-2)));
         await api.patch(`/api/content/${item.id}/metadata`, {
-            sequenceNumber: { value: number <= 28 ? number : null },
-            publishDate: {
-                value:
-                    number <= 28
-                        ? `2025-03-${String(number).padStart(2, '0')}T00:00:00Z`
-                        : `2025-04-${String(number === 30 ? 20 : 10).padStart(2, '0')}T00:00:00Z`,
-            },
+            sequenceNumber: { value: sequenceNumber },
+            publishDate: { value: publishDate },
         });
     }
 
@@ -375,6 +368,12 @@ async function populateRichLibrary(api: ApiClient): Promise<Omit<RichLibraryResu
         },
         fileAnchors,
     };
+}
+
+function episodeSchedule(number: number): { publishDate: string; sequenceNumber: number | null } {
+    return number <= 28
+        ? { publishDate: `2025-03-${String(number).padStart(2, '0')}T00:00:00Z`, sequenceNumber: number }
+        : { publishDate: `2025-04-${String(number === 30 ? 20 : 10).padStart(2, '0')}T00:00:00Z`, sequenceNumber: null };
 }
 
 async function hydrate(api: ApiClient, fixture: HydrateFixture): Promise<string> {

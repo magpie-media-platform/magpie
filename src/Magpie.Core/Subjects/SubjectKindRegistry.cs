@@ -33,7 +33,8 @@ internal sealed class SubjectKindRegistry : ISubjectKindRegistry
             {
                 logger.LogWarning(
                     ex,
-                    "Subject kind provider {Provider} failed to supply definitions. The registry ignored this provider",
+                    "The subject kind registry ignored provider {Provider} because it failed to supply " +
+                    "definitions",
                     provider.GetType().FullName);
                 continue;
             }
@@ -62,26 +63,26 @@ internal sealed class SubjectKindRegistry : ISubjectKindRegistry
             IEnumerable<(string Slug, SubjectKindDefinition Definition, Type ProviderType)> contributions,
             ILogger logger)
     {
-        var map = new Dictionary<string, (string Slug, SubjectKindDefinition Definition, Type ProviderType)>();
+        var map = new Dictionary<string, (string Slug, SubjectKindDefinition Definition, Type ProviderType)>(
+            StringComparer.Ordinal);
         foreach (var group in contributions
             .Where(contribution => !string.IsNullOrWhiteSpace(contribution.Slug))
-            .GroupBy(contribution => contribution.Slug))
+            .GroupBy(contribution => contribution.Slug, StringComparer.Ordinal))
         {
             var members = group.ToList();
-            var winner = members[^1];
             if (members.Count > 1)
             {
                 logger.LogWarning(
-                    "Multiple {ItemLabel} declared {KeyLabel} {Key}. " +
-                    "The registry used {Winner} and ignored {Displaced}",
-                    "subject kind definition providers",
-                    "slug",
+                    "Multiple subject kind definition providers declared slug {Slug}; the registry used " +
+                    "{Winner} and ignored {Displaced}",
                     group.Key,
-                    winner.ProviderType.FullName,
-                    string.Join(", ", members.Take(members.Count - 1).Select(member => member.ProviderType.FullName)));
+                    members[^1].ProviderType.FullName,
+                    string.Join(
+                        ", ",
+                        members.Take(members.Count - 1).Select(member => member.ProviderType.FullName)));
             }
 
-            map[group.Key] = winner;
+            map[group.Key] = members[^1];
         }
 
         return map;

@@ -82,6 +82,28 @@ namespace Magpie.Data.PostgreSQL.Migrations
                     b.ToTable("job_enqueue_coalescing_lock", (string)null);
                 });
 
+            modelBuilder.Entity("Magpie.Data.ClusterEvent", b =>
+                {
+                    b.Property<long>("Seq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Seq"));
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("PublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Seq");
+
+                    b.HasIndex("PublishedAt");
+
+                    b.ToTable("system_clusterEvent", (string)null);
+                });
+
             modelBuilder.Entity("Magpie.Models.Data.AlternateText", b =>
                 {
                     b.Property<Guid>("Id")
@@ -186,6 +208,9 @@ namespace Magpie.Data.PostgreSQL.Migrations
                     b.Property<string>("EntityType")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("JobExecutionId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Operation")
                         .IsRequired()
                         .HasColumnType("text");
@@ -208,6 +233,8 @@ namespace Magpie.Data.PostgreSQL.Migrations
                     b.HasIndex("EntityId");
 
                     b.HasIndex("EntityType");
+
+                    b.HasIndex("JobExecutionId");
 
                     b.HasIndex("Timestamp");
 
@@ -457,6 +484,9 @@ namespace Magpie.Data.PostgreSQL.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("DateLastSearched")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("FulfilledAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Fulfillment")
@@ -913,13 +943,6 @@ namespace Magpie.Data.PostgreSQL.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("extension_activationState", (string)null);
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Generation = 0L
-                        });
                 });
 
             modelBuilder.Entity("Magpie.Models.Data.ExtensionNodeStatus", b =>
@@ -1006,19 +1029,6 @@ namespace Magpie.Data.PostgreSQL.Migrations
                         .IsUnique();
 
                     b.ToTable("extension_packageSource", (string)null);
-
-                    b.HasData(
-                        new
-                        {
-                            Id = new Guid("5d9a2b5f-5c59-4a1f-8c70-8011a8b4e0b1"),
-                            CreatedAt = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            CredentialKind = 0,
-                            Enabled = true,
-                            Name = "nuget.org",
-                            SearchFilterKind = 0,
-                            SearchFilterValue = "magpie",
-                            SourceUrl = "https://api.nuget.org/v3/index.json"
-                        });
                 });
 
             modelBuilder.Entity("Magpie.Models.Data.ExternalId", b =>
@@ -1348,6 +1358,24 @@ namespace Magpie.Data.PostgreSQL.Migrations
                     b.Property<Guid?>("OriginalExecutionId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ParameterContentHierarchyItemId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasComputedColumnSql("lower(left((\"Parameters\"::jsonb ->> 'contentHierarchyItemId'), 256))", true);
+
+                    b.Property<string>("ParameterContentItemId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasComputedColumnSql("lower(left((\"Parameters\"::jsonb ->> 'contentItemId'), 256))", true);
+
+                    b.Property<string>("ParameterDownloadId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasComputedColumnSql("lower(left((\"Parameters\"::jsonb ->> 'downloadId'), 256))", true);
+
                     b.Property<string>("Parameters")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1380,6 +1408,24 @@ namespace Magpie.Data.PostgreSQL.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("TriggerContextContentHierarchyItemId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasComputedColumnSql("lower(left((\"TriggerContext\"::jsonb ->> 'event.context.content.hierarchyItemId'), 256))", true);
+
+                    b.Property<string>("TriggerContextContentItemId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasComputedColumnSql("lower(left((\"TriggerContext\"::jsonb ->> 'event.context.content.itemId'), 256))", true);
+
+                    b.Property<string>("TriggerContextDownloadId")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasComputedColumnSql("lower(left((\"TriggerContext\"::jsonb ->> 'event.context.download.id'), 256))", true);
+
                     b.HasKey("Id");
 
                     b.HasIndex("CorrelationId");
@@ -1390,16 +1436,40 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
                     b.HasIndex("NotBeforeAt");
 
+                    b.HasIndex("ParameterContentHierarchyItemId");
+
+                    b.HasIndex("ParameterContentItemId");
+
+                    b.HasIndex("ParameterDownloadId");
+
                     b.HasIndex("ScheduleTriggerId");
 
                     b.HasIndex("StartedAt");
 
-                    b.HasIndex("Status");
+                    b.HasIndex("TriggerContextContentHierarchyItemId");
+
+                    b.HasIndex("TriggerContextContentItemId");
+
+                    b.HasIndex("TriggerContextDownloadId");
+
+                    b.HasIndex("CreatedAt", "Id")
+                        .IsDescending(true, false);
 
                     b.HasIndex("ParentExecutionId", "CreatedAt");
 
+                    b.HasIndex("JobType", "CreatedAt", "Id")
+                        .IsDescending(false, true, false);
+
+                    b.HasIndex("Status", "CreatedAt", "Id")
+                        .IsDescending(false, true, false);
+
+                    b.HasIndex("JobType", "Status", "CreatedAt", "Id")
+                        .IsDescending(false, false, true, false);
+
                     b.HasIndex(new[] { "LockPartition" }, "IX_job_execution_LockPartition")
                         .HasFilter("\"Status\" IN (1, 2, 6)");
+
+                    b.HasIndex(new[] { "LockPartition" }, "IX_job_execution_LockPartition_All");
 
                     b.HasIndex(new[] { "DedupKey" }, "UX_job_execution_DedupKey")
                         .IsUnique()
@@ -1430,6 +1500,12 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
                     b.Property<string>("FilePath")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("GroupKey")
+                        .HasColumnType("text");
+
+                    b.Property<string>("LayoutKey")
                         .HasColumnType("text");
 
                     b.Property<int>("MatchCount")
@@ -1464,6 +1540,8 @@ namespace Magpie.Data.PostgreSQL.Migrations
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("GroupKey");
 
                     b.HasIndex("RootFolderId", "ScanRunId");
 
@@ -2629,6 +2707,9 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
                     b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("uuid");
+
+                    b.Property<bool?>("Monitoring")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("Name")
                         .IsRequired()

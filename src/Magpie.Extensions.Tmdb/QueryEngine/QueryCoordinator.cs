@@ -7,14 +7,13 @@ using System.Threading.Tasks;
 using Magpie.Extensions.Tmdb.Mapping;
 using Magpie.Sdk.Caching;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Extensions.Tmdb.QueryEngine;
 
-internal sealed class QueryCoordinator(
-    ICacheFactory cacheFactory,
-    IHostApplicationLifetime lifetime) : IQueryCoordinator
+internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
 {
     private const int GenreCapacity = 32;
     private const int PositiveSubjectCapacity = 512;
@@ -38,33 +37,23 @@ internal sealed class QueryCoordinator(
     private static readonly TimeSpan CreditsTtl = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ScanTtl = TimeSpan.FromMinutes(2);
 
-    private readonly ICache _configuration = cacheFactory.GetOrCreate(
-        "tmdb-configuration",
-        () => Policy(ConfigurationTtl, 1));
+    private readonly IServiceScope _cacheScope;
 
-    private readonly ICache _genres = cacheFactory.GetOrCreate("tmdb-genres", () => Policy(GenreTtl, GenreCapacity));
+    private readonly ICache _configuration;
 
-    private readonly ICache _positiveSubjects = cacheFactory.GetOrCreate(
-            "tmdb-subjects",
-            () => Policy(PositiveSubjectTtl, PositiveSubjectCapacity));
+    private readonly ICache _genres;
 
-    private readonly ICache _negativeSubjects = cacheFactory.GetOrCreate(
-            "tmdb-subjects-negative",
-            () => Policy(NegativeSubjectTtl, NegativeSubjectCapacity));
+    private readonly ICache _positiveSubjects;
 
-    private readonly ICache _positiveSubjectSets = cacheFactory.GetOrCreate(
-            "tmdb-subject-sets",
-            () => Policy(PositiveSubjectTtl, PositiveSubjectCapacity));
+    private readonly ICache _negativeSubjects;
 
-    private readonly ICache _negativeSubjectSets = cacheFactory.GetOrCreate(
-            "tmdb-subject-sets-negative",
-            () => Policy(NegativeSubjectTtl, NegativeSubjectCapacity));
+    private readonly ICache _positiveSubjectSets;
 
-    private readonly ICache _credits = cacheFactory.GetOrCreate(
-        "tmdb-credits",
-        () => Policy(CreditsTtl, CreditsCapacity));
+    private readonly ICache _negativeSubjectSets;
 
-    private readonly ICache _scans = cacheFactory.GetOrCreate("tmdb-scans", () => Policy(ScanTtl, ScanCapacity));
+    private readonly ICache _credits;
+
+    private readonly ICache _scans;
     private readonly Dictionary<string, Task<string>> _configurationInflight = [];
     private readonly Dictionary<string, Task<IReadOnlyDictionary<string, int>>> _genreInflight = [];
     private readonly Dictionary<string, Task<SubjectResolution>> _subjectInflight = [];
@@ -76,7 +65,30 @@ internal sealed class QueryCoordinator(
     private readonly object _creditsGate = new();
     private readonly object _scanGate = new();
 
-    private readonly IHostApplicationLifetime _lifetime = lifetime;
+    private readonly IHostApplicationLifetime _lifetime;
+
+    public QueryCoordinator(IServiceScopeFactory scopeFactory, IHostApplicationLifetime lifetime)
+    {
+        _lifetime = lifetime;
+        _cacheScope = scopeFactory.CreateScope();
+        var cacheFactory = _cacheScope.ServiceProvider.GetRequiredService<ICacheFactory>();
+        _configuration = cacheFactory.GetOrCreate("tmdb-configuration", () => Policy(ConfigurationTtl, 1));
+        _genres = cacheFactory.GetOrCreate("tmdb-genres", () => Policy(GenreTtl, GenreCapacity));
+        _positiveSubjects = cacheFactory.GetOrCreate(
+            "tmdb-subjects",
+            () => Policy(PositiveSubjectTtl, PositiveSubjectCapacity));
+        _negativeSubjects = cacheFactory.GetOrCreate(
+            "tmdb-subjects-negative",
+            () => Policy(NegativeSubjectTtl, NegativeSubjectCapacity));
+        _positiveSubjectSets = cacheFactory.GetOrCreate(
+            "tmdb-subject-sets",
+            () => Policy(PositiveSubjectTtl, PositiveSubjectCapacity));
+        _negativeSubjectSets = cacheFactory.GetOrCreate(
+            "tmdb-subject-sets-negative",
+            () => Policy(NegativeSubjectTtl, NegativeSubjectCapacity));
+        _credits = cacheFactory.GetOrCreate("tmdb-credits", () => Policy(CreditsTtl, CreditsCapacity));
+        _scans = cacheFactory.GetOrCreate("tmdb-scans", () => Policy(ScanTtl, ScanCapacity));
+    }
 
     public async Task<string> GetImageBaseUrlAsync(
         RequestContext context,
@@ -113,8 +125,8 @@ internal sealed class QueryCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "TMDb configuration request failed. The cache will use the default image base URL.");
-            return TmdbClient.DefaultImageBaseUrl;
+            logger.LogWarning(ex, "TMDb configuration request failed; the cache uses the default image base URL.");
+            return Constants.DefaultImageBaseUrl;
         }
     }
 
@@ -224,7 +236,7 @@ internal sealed class QueryCoordinator(
             lock (_subjectGate)
             {
                 shared.Waiters--;
-                if (shared.Waiters == 0 && !shared.Task.IsCompleted)
+                if (shared.Waiters == 0 && !shared.Finished)
                 {
                     shared.Cancellation.Cancel();
                 }
@@ -265,6 +277,11 @@ internal sealed class QueryCoordinator(
 
             return scan!;
         }
+    }
+
+    public void Dispose()
+    {
+        _cacheScope.Dispose();
     }
 
     private static CachePolicy Policy(TimeSpan lifetime, int capacity)
@@ -363,6 +380,7 @@ internal sealed class QueryCoordinator(
         {
             lock (_subjectGate)
             {
+                shared.Finished = true;
                 if (_subjectSetInflight.TryGetValue(key, out var current) && ReferenceEquals(current, shared))
                 {
                     _subjectSetInflight.Remove(key);
@@ -438,5 +456,7 @@ internal sealed class QueryCoordinator(
         internal Task<IReadOnlyList<SubjectResolution>> Task { get; set; } = null!;
 
         internal int Waiters { get; set; }
+
+        internal bool Finished { get; set; }
     }
 }

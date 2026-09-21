@@ -153,7 +153,10 @@
     }
 
     .library-add-page__poster--placeholder {
-        display: block;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
     }
 
     .library-add-page__poster-link {

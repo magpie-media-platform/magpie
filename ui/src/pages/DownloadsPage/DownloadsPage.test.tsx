@@ -1,4 +1,4 @@
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter, useSearchParams, Routes, Route } from 'react-router-dom';
@@ -250,7 +250,7 @@ function respondDownloads(url: string, source: ApiDownload[] = mockApiDownloads)
     }
 
     const sortBy = params.get('sortBy');
-    const desc = (params.get('sortDirection') ?? '2') !== '1';
+    const desc = (params.get('sortDirection') ?? 'Descending') !== 'Ascending';
     const dir = desc ? -1 : 1;
     const cmp = (a: string | number, b: string | number) => (a < b ? -1 : a > b ? 1 : 0);
     if (sortBy === 'DateCompleted') {
@@ -475,7 +475,8 @@ describe('DownloadsPage shell', () => {
         expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
 
         await user.click(screen.getByRole('button', { name: /^select$/i }));
-        await user.click(within(queueCards).getByRole('checkbox', { name: 'Select Breaking Bad' }));
+        expect(within(queueCards).queryAllByRole('checkbox')).toHaveLength(0);
+        await user.click(within(queueCards).getByRole('button', { name: 'Select Breaking Bad' }));
 
         const queueBar = document.querySelector(
             '[data-component="downloads-mobile-selection-bar-queue"]',
@@ -523,7 +524,6 @@ describe('DownloadsPage shell', () => {
 
         await waitFor(() => {
             expect(screen.getAllByText('No active downloads').length).toBeGreaterThan(0);
-            expect(screen.getByTestId('downloads-page__tab-count')).toHaveTextContent('3');
         });
 
         expect(within(getTable()).queryByText('Terminal.Timestamp.Failed.1080p.WEB.x264')).not.toBeInTheDocument();
@@ -531,6 +531,7 @@ describe('DownloadsPage shell', () => {
         await user.click(screen.getByRole('tab', { name: /history/i }));
 
         await waitFor(() => {
+            expect(screen.getByTestId('downloads-page__tab-count')).toHaveTextContent('3');
             expect(within(getTable()).getByText('Terminal.Timestamp.Failed.1080p.WEB.x264')).toBeInTheDocument();
             expect(within(getTable()).getByText('Terminal.Timestamp.Cancelled.2160p.WEB.x265')).toBeInTheDocument();
             expect(within(getTable()).getByText('Terminal.Timestamp.Completed.720p.WEB.x264')).toBeInTheDocument();
@@ -655,7 +656,9 @@ describe('DownloadsPage sorting', () => {
             const listCalls = mockApiGet.mock.calls
                 .map((c) => String(c[0]))
                 .filter((u) => u.startsWith('/downloads') && u.includes('statuses='));
-            expect(listCalls.some((u) => u.includes('sortBy=CreatedAt') && u.includes('sortDirection=2'))).toBe(true);
+            expect(
+                listCalls.some((u) => u.includes('sortBy=CreatedAt') && u.includes('sortDirection=Descending')),
+            ).toBe(true);
         });
     });
 
@@ -722,7 +725,7 @@ describe('DownloadsPage sorting', () => {
                     (url) =>
                         url.startsWith('/downloads') &&
                         url.includes('sortBy=DateCompleted') &&
-                        url.includes('sortDirection=1'),
+                        url.includes('sortDirection=Ascending'),
                 );
             expect(requestedAscending).toBe(true);
         });
@@ -737,7 +740,7 @@ describe('DownloadsPage sorting', () => {
                     (url) =>
                         url.startsWith('/downloads') &&
                         url.includes('sortBy=DateCompleted') &&
-                        url.includes('sortDirection=2'),
+                        url.includes('sortDirection=Descending'),
                 );
             expect(requestedDescending).toBe(true);
         });
@@ -869,6 +872,7 @@ describe('DownloadsPage row actions', () => {
         await user.click(await screen.findByRole('menuitem', { name: /^forget$/i }));
 
         const dialog = await screen.findByRole('dialog');
+        expect(within(dialog).queryByRole('switch', { name: /also delete files from disk/i })).not.toBeInTheDocument();
         await user.click(within(dialog).getByRole('button', { name: /^forget$/i }));
 
         await waitFor(() => expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-1'));
@@ -1011,6 +1015,9 @@ describe('DownloadsPage poster column', () => {
 
         const artwork = within(getTable()).getByRole('img', { name: 'Breaking Bad artwork' });
         expect(artwork).toHaveAttribute('src', 'https://images.example/breaking-bad.jpg');
+        fireEvent.error(artwork);
+        expect(within(getTable()).queryByRole('img', { name: 'Breaking Bad artwork' })).not.toBeInTheDocument();
+        expect(getTable().querySelector('.downloads-page__poster--placeholder')).toBeInTheDocument();
     });
 });
 
@@ -1136,6 +1143,20 @@ describe('DownloadsPage history tab', () => {
 
         expect(getEndedCell('term-failed')).toHaveAttribute('title', formatDateTime('2024-01-16T03:00:00Z'));
         expect(getEndedCell('term-failed')).not.toHaveAttribute('title', formatDateTime('2024-01-10T03:00:00Z'));
+    });
+
+    it('shows cancelled downloads when the cancelled filter is selected', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        setupApiGet(terminalTimestampDownloads);
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history') });
+        await screen.findByText('Terminal.Timestamp.Cancelled.2160p.WEB.x265');
+        // Act
+        await user.click(within(getTable()).getByRole('button', { name: 'Filter by Status' }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Cancelled' }));
+        // Assert
+        await waitFor(() => expect(apiGet).toHaveBeenCalledWith(expect.stringContaining('status=Cancelled')));
+        expect(within(getTable()).getByText('Terminal.Timestamp.Cancelled.2160p.WEB.x265')).toBeInTheDocument();
     });
 
     it('renders Cancelled and completed history Ended from their terminal timestamps', async () => {
@@ -1298,8 +1319,9 @@ describe('DownloadsPage filters and summary', () => {
         const user = userEvent.setup();
         render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qclient=client-2&qstate=Paused') });
 
-        const queueCards = await screen.findByRole('list', { name: 'Download queue' });
-        expect(await within(queueCards).findByText('No active downloads')).toBeInTheDocument();
+        expect(await screen.findByText('No active downloads')).toBeInTheDocument();
+        expect(screen.queryByRole('list', { name: 'Download queue' })).not.toBeInTheDocument();
+        const queueCards = document.querySelector('.downloads-page__mobile-list') as HTMLElement;
 
         const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]') as HTMLElement;
         expect(toolbar).toBeInTheDocument();
@@ -1321,8 +1343,9 @@ describe('DownloadsPage filters and summary', () => {
             wrapper: createUrlWrapper('/downloads?tab=history&hclient=client-2&hstate=Failed'),
         });
 
-        const historyCards = await screen.findByRole('list', { name: 'Download history' });
-        expect(await within(historyCards).findByText('No download history')).toBeInTheDocument();
+        expect(await screen.findByText('No download history')).toBeInTheDocument();
+        expect(screen.queryByRole('list', { name: 'Download history' })).not.toBeInTheDocument();
+        const historyCards = document.querySelector('.downloads-page__mobile-list') as HTMLElement;
 
         const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]') as HTMLElement;
         expect(toolbar).toBeInTheDocument();
@@ -1348,16 +1371,19 @@ describe('DownloadsPage request fan-out', () => {
 
     afterEach(() => vi.restoreAllMocks());
 
-    it('loads both tab totals from the grouped list responses with no per-status count request', async () => {
+    it('loads each tab only when it becomes active with no per-status count request', async () => {
+        const user = userEvent.setup();
         const mockApiGet = setupApiGet();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
-        await waitFor(() => {
-            const counts = screen.getAllByTestId('downloads-page__tab-count').map((el) => el.textContent);
-            expect(counts).toEqual(['6', '3']);
-        });
+        expect(
+            mockApiGet.mock.calls.map((call) => String(call[0])).filter((url) => url.startsWith('/downloads')),
+        ).toHaveLength(1);
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await waitFor(() => expect(screen.getAllByTestId('downloads-page__tab-count')[1]).toHaveTextContent('3'));
 
         const listCalls = mockApiGet.mock.calls
             .map((call) => String(call[0]))
@@ -1663,7 +1689,7 @@ describe('DownloadsPage bulk selection', () => {
         expect(screen.queryByRole('button', { name: /clear all/i })).not.toBeInTheDocument();
     });
 
-    it('keeps the bulk-action bar visible with disabled actions when nothing is selected', async () => {
+    it('keeps the bulk-action bar collapsed and inert when nothing is selected', async () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
@@ -1671,12 +1697,11 @@ describe('DownloadsPage bulk selection', () => {
 
         const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
         expect(bar).toBeInTheDocument();
-        expect(within(bar).getByText('0 selected')).toBeInTheDocument();
-        expect(within(bar).getByRole('button', { name: /forget/i })).toBeDisabled();
-        expect(within(bar).getByRole('button', { name: /remove/i })).toBeDisabled();
-        expect(within(bar).getByRole('button', { name: /^start$/i })).toBeDisabled();
-        expect(within(bar).getByRole('button', { name: /^pause$/i })).toBeDisabled();
-        expect(within(bar).getByRole('button', { name: /^stop$/i })).toBeDisabled();
+        expect(bar).toHaveClass('bulk-actions-toolbar-presence');
+        expect(bar).toHaveAttribute('data-visible', 'false');
+        expect(bar).toHaveAttribute('aria-hidden', 'true');
+        expect(within(bar).queryByRole('button', { name: /forget/i })).not.toBeInTheDocument();
+        expect(within(bar).queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
     });
 
     it('enables the actions once a workable row is selected', async () => {
@@ -1718,8 +1743,8 @@ describe('DownloadsPage bulk selection', () => {
 
         const historyCards = screen.getByRole('list', { name: 'Download history' });
         await user.click(screen.getByRole('button', { name: /^select$/i }));
-        const checkbox = within(historyCards).getByRole('checkbox', { name: /select the bear/i });
-        await user.click(checkbox);
+        const toggle = within(historyCards).getByRole('button', { name: /select the bear/i });
+        await user.click(toggle);
 
         const bar = document.querySelector('[data-component="downloads-mobile-selection-bar-history"]') as HTMLElement;
         expect(within(bar).getByText('1 selected')).toBeInTheDocument();
@@ -1780,17 +1805,17 @@ describe('DownloadsPage bulk selection', () => {
         const queueCards = await screen.findByRole('list', { name: 'Download queue' });
         await waitFor(() => expect(within(queueCards).getByText('Breaking Bad')).toBeInTheDocument());
         await user.click(screen.getByRole('button', { name: /^select$/i }));
-        await user.click(within(queueCards).getByRole('checkbox', { name: 'Select Breaking Bad' }));
+        await user.click(screen.getByRole('button', { name: 'Select Breaking Bad' }));
 
         await user.click(screen.getByRole('tab', { name: /history/i }));
         const historyCards = await screen.findByRole('list', { name: 'Download history' });
         await waitFor(() => expect(within(historyCards).getByText('The Bear')).toBeInTheDocument());
         await user.click(screen.getByRole('button', { name: /^select$/i }));
-        await user.click(within(historyCards).getByRole('checkbox', { name: 'Select The Bear' }));
+        await user.click(screen.getByRole('button', { name: 'Select The Bear' }));
 
         await user.click(screen.getByRole('tab', { name: /active/i }));
         expect(screen.getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
-        expect(within(queueCards).getByRole('checkbox', { name: 'Select Breaking Bad' })).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Select Breaking Bad' })).toHaveAttribute('aria-pressed', 'true');
         expect(
             within(
                 document.querySelector('[data-component="downloads-mobile-selection-bar-queue"]') as HTMLElement,
@@ -1799,7 +1824,19 @@ describe('DownloadsPage bulk selection', () => {
 
         await user.click(screen.getByRole('tab', { name: /history/i }));
         expect(screen.getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
-        expect(within(historyCards).getByRole('checkbox', { name: 'Select The Bear' })).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Select The Bear' })).toHaveAttribute('aria-pressed', 'true');
+
+        await user.click(screen.getByRole('button', { name: /stop selecting/i }));
+        expect(screen.queryByRole('button', { name: 'Select The Bear' })).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: /^select$/i }));
+        expect(screen.getByRole('button', { name: 'Select The Bear' })).toHaveAttribute('aria-pressed', 'false');
+
+        await user.click(screen.getByRole('tab', { name: /active/i }));
+        expect(screen.getByRole('button', { name: 'Select Breaking Bad' })).toHaveAttribute('aria-pressed', 'true');
+        await user.click(screen.getByRole('button', { name: /stop selecting/i }));
+        expect(screen.queryByRole('button', { name: 'Select Breaking Bad' })).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: /^select$/i }));
+        expect(screen.getByRole('button', { name: 'Select Breaking Bad' })).toHaveAttribute('aria-pressed', 'false');
     });
 
     it('bulk Forget removes each selected row via DELETE /downloads/{id}', async () => {
@@ -1823,6 +1860,31 @@ describe('DownloadsPage bulk selection', () => {
 
         await waitFor(() => expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-1'));
         expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-3');
+        expect(mockApiDelete).not.toHaveBeenCalledWith('/downloads/dl-1/files');
+    });
+
+    it('bulk Forget offers no file deletion and leaves files in the client', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockResolvedValue(undefined);
+
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
+        await user.click(
+            within(document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement).getByRole(
+                'button',
+                { name: /forget/i },
+            ),
+        );
+
+        const dialog = await screen.findByRole('dialog');
+        expect(within(dialog).queryByRole('switch', { name: /also delete files from disk/i })).not.toBeInTheDocument();
+        expect(within(dialog).getByText(/will remain in the download client/i)).toBeInTheDocument();
+        await user.click(within(dialog).getByRole('button', { name: /^forget$/i }));
+
+        await waitFor(() => expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-1'));
         expect(mockApiDelete).not.toHaveBeenCalledWith('/downloads/dl-1/files');
     });
 
@@ -1866,7 +1928,7 @@ describe('DownloadsPage bulk selection', () => {
         await waitFor(() => expect(screen.getByText('Download forgotten')).toBeInTheDocument());
         expect(mockApiDelete.mock.calls.filter(([url]) => url === '/downloads/dl-1')).toHaveLength(1);
         expect(mockApiDelete.mock.calls.filter(([url]) => url === '/downloads/dl-3')).toHaveLength(2);
-        expect(within(bar).getByText('0 selected')).toBeInTheDocument();
+        await waitFor(() => expect(bar).toHaveAttribute('data-visible', 'false'));
     });
 
     it('bulk Remove removes each selected row via DELETE /downloads/{id}/files', async () => {
@@ -1965,7 +2027,7 @@ describe('DownloadsPage bulk selection', () => {
         expect(mockApiPost.mock.calls.filter(([url]) => url === '/downloads/dl-1/pause')).toHaveLength(1);
         expect(mockApiPost.mock.calls.filter(([url]) => url === '/downloads/dl-2/pause')).toHaveLength(2);
         expect(mockApiPost.mock.calls.filter(([url]) => url === '/downloads/dl-3/pause')).toHaveLength(1);
-        expect(within(bar).getByText('0 selected')).toBeInTheDocument();
+        await waitFor(() => expect(bar).toHaveAttribute('data-visible', 'false'));
     });
 });
 
@@ -2008,12 +2070,14 @@ describe('DownloadsPage permission gating', () => {
 
     it('lets a Requester select queue rows and bulk pause/resume but not stop or delete', async () => {
         grantRole(Role.Requester);
+        const user = userEvent.setup();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
 
         expect(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i })).toBeInTheDocument();
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
 
         const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
         expect(within(bar).getByRole('button', { name: /^start$/i })).toBeInTheDocument();
@@ -2055,12 +2119,14 @@ describe('DownloadsPage permission gating', () => {
 
     it('shows a Manager the full bulk-action set and the selection checkboxes', async () => {
         grantRole(Role.Manager);
+        const user = userEvent.setup();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
 
         expect(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i })).toBeInTheDocument();
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
 
         const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
         expect(within(bar).getByRole('button', { name: /^start$/i })).toBeInTheDocument();
@@ -2072,10 +2138,13 @@ describe('DownloadsPage permission gating', () => {
 
     it('gives every bulk-action button an aria-label so it keeps an accessible name when its text label is hidden on mobile', async () => {
         grantRole(Role.Manager);
+        const user = userEvent.setup();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
 
         const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
         const start = within(bar).getByRole('button', { name: /^start$/i });
@@ -2166,7 +2235,14 @@ describe('DownloadsPage select all across pages', () => {
         expect(within(banner).getByRole('button', { name: /select all 40 across all pages/i })).toBeInTheDocument();
     });
 
-    it('bulk Forget across pages sends one filtered request, not a per-id delete', async () => {
+    it.each([
+        [
+            'Forget',
+            '/downloads/bulk/delete',
+            'Magpie stopped tracking them. The transfers are left in the download client.',
+        ],
+        ['Remove', '/downloads/bulk/remove', 'Removed the download and its files from the download client.'],
+    ])('bulk %s across pages sends one filtered request', async (action, route, description) => {
         const user = userEvent.setup();
         const mockApiPost = vi.mocked(apiPost);
         mockApiPost.mockResolvedValue({ count: 40, error: null });
@@ -2178,13 +2254,14 @@ describe('DownloadsPage select all across pages', () => {
         await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
 
         const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
-        await user.click(within(bar).getByRole('button', { name: /forget/i }));
+        await user.click(within(bar).getByRole('button', { name: action }));
 
         const dialog = await screen.findByRole('dialog');
-        await user.click(within(dialog).getByRole('button', { name: /^forget$/i }));
+        expect(within(dialog).queryByRole('switch', { name: 'Also delete files from disk' })).not.toBeInTheDocument();
+        await user.click(within(dialog).getByRole('button', { name: action }));
 
         await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(1));
-        expect(mockApiPost).toHaveBeenCalledWith('/downloads/bulk/delete', {
+        expect(mockApiPost).toHaveBeenCalledWith(route, {
             filter: {
                 downloadClientId: undefined,
                 statuses: ['Grabbed', 'Queued', 'Downloading', 'Paused', 'Stalled'],
@@ -2192,6 +2269,7 @@ describe('DownloadsPage select all across pages', () => {
             },
         });
         expect(apiDelete).not.toHaveBeenCalled();
+        expect(await screen.findByText(description)).toBeInTheDocument();
     });
 
     it.each([

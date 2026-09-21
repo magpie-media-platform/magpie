@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CaretDownIcon, CaretRightIcon, PencilSimpleIcon, PlusIcon, TrashIcon } from '@phosphor-icons/react';
 
 import { useAuth, Role } from '@/auth';
+import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import {
@@ -1538,6 +1539,12 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
                 />
             )}
 
+            {data?.subjectsTruncated && (
+                <Alert variant="warning" title="Some related names are not resolved">
+                    Magpie shows the unresolved names as Unknown.
+                </Alert>
+            )}
+
             <ContributionStack
                 contributions={effectiveContributions}
                 canManage={canManage}
@@ -1705,9 +1712,6 @@ function ContributionStack({
                 <p className="metadata-inspector__empty">No contributions yet.</p>
             ) : (
                 <>
-                    <p className="sr-only" aria-live="polite" aria-atomic="true">
-                        {sortable.announcement}
-                    </p>
                     <ol className="metadata-inspector__stack-list">
                         {ordered.map((contribution) => {
                             const fieldValues = contribution.fieldValues ?? {};
@@ -1983,7 +1987,7 @@ function ResolvedValues({
                                             data-action="override-field"
                                             onClick={() => onEdit(field, entry)}
                                         >
-                                            <PencilSimpleIcon weight="bold" aria-hidden="true" />
+                                            <PencilSimpleIcon size={16} weight="bold" aria-hidden="true" />
                                         </GatedButton>
                                     )}
                                 </td>
@@ -2078,7 +2082,7 @@ function EditableSubsections({
                                                     data-action="edit-subitem"
                                                     onClick={() => onEdit(kind.key, kind.label, row)}
                                                 >
-                                                    <PencilSimpleIcon weight="bold" aria-hidden="true" />
+                                                    <PencilSimpleIcon size={16} weight="bold" aria-hidden="true" />
                                                 </GatedButton>
                                                 <GatedButton
                                                     canManage={canManage}

@@ -15,8 +15,8 @@ public interface IMediaFileRepository : ICrudRepository<Guid, MediaFile>, IQuery
     /// <summary>
     /// Gets the media file with the specified host path.
     /// </summary>
-    /// <param name="filePath">The full host path.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The media file, or <see langword="null"/> when the path does not exist.</returns>
+    /// <param name="filePath">The full host path</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The media file, or <see langword="null"/> when the path does not exist</returns>
     Task<MediaFile?> GetByPathAsync(string filePath, CancellationToken cancellationToken = default);
 }

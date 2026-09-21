@@ -613,6 +613,26 @@ describe('SubjectsPage', () => {
             });
         });
 
+        it('navigates every subjects page from the card pager', async () => {
+            // Arrange
+            vi.spyOn(window, 'matchMedia').mockImplementation(createMatchMedia(900));
+            vi.mocked(useSubjects).mockReturnValue({ ...vi.mocked(useSubjects)(), totalItems: 151 });
+            const user = userEvent.setup();
+            renderSubjectsPage();
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Go to next page' }));
+
+            // Assert
+            expect(useSubjects).toHaveBeenLastCalledWith(expect.objectContaining({ pageNumber: 2, pageSize: 50 }));
+            await user.click(screen.getByRole('button', { name: 'Go to last page' }));
+            expect(useSubjects).toHaveBeenLastCalledWith(expect.objectContaining({ pageNumber: 4 }));
+            await user.click(screen.getByRole('button', { name: 'Go to previous page' }));
+            expect(useSubjects).toHaveBeenLastCalledWith(expect.objectContaining({ pageNumber: 3 }));
+            await user.click(screen.getByRole('button', { name: 'Go to first page' }));
+            expect(useSubjects).toHaveBeenLastCalledWith(expect.objectContaining({ pageNumber: 1 }));
+        });
+
         it('renders media-card router links without the desktop table in the card layout', () => {
             vi.spyOn(window, 'matchMedia').mockImplementation(createMatchMedia(900));
             renderSubjectsPage();

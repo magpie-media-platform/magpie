@@ -39,4 +39,14 @@ public sealed record LibraryImportCandidateQuery
     /// The ids of the candidates to exclude from the selection, or <c>null</c> to exclude nothing.
     /// </summary>
     public IReadOnlyList<Guid>? ExcludeIds { get; init; }
+
+    /// <summary>
+    /// The key of the candidate group to match, as returned by the candidate-groups query.
+    /// </summary>
+    public string? GroupKey { get; init; }
+
+    /// <summary>
+    /// The keys of the candidate groups to exclude from a group-level bulk action, or <c>null</c> to exclude none.
+    /// </summary>
+    public IReadOnlyList<string>? ExcludeGroupKeys { get; init; }
 }

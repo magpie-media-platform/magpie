@@ -2,44 +2,161 @@ namespace Magpie.Core.Jobs;
 
 internal static class MagpieJobs
 {
+    internal static class Settings
+    {
+        internal const string DiagnosticsGroup = "diagnostics";
+
+        internal const string LastScannedAt = "last-scanned-at";
+    }
+
     internal static class Types
     {
+        internal const string ContentFulfillmentReconciliation = "ContentFulfillmentReconciliation";
+
+        internal const string ContentMetadataRefreshItem = "ContentMetadataRefreshItem";
+
+        internal const string ContentMetadataRefreshScan = "ContentMetadataRefreshScan";
+
+        internal const string DatabaseBackup = "DatabaseBackup";
+
+        internal const string DatabaseMaintenance = "DatabaseMaintenance";
+
+        internal const string DiagnosticCheck = "DiagnosticCheck";
+
+        internal const string DownloadCleanup = "DownloadCleanup";
+
+        internal const string DownloadImportItem = "DownloadImportItem";
+
+        internal const string DownloadImportScan = "DownloadImportScan";
+
+        internal const string DownloadRefresh = "DownloadRefresh";
+
+        internal const string DownloadStuckDetection = "DownloadStuckDetection";
+
+        internal const string IndexerFeedSyncItem = "IndexerFeedSyncItem";
+
+        internal const string IndexerFeedSyncScan = "IndexerFeedSyncScan";
+
+        internal const string IntegrationHealthCheck = "IntegrationHealthCheck";
+
+        internal const string LibraryImportMatchResolution = "LibraryImportMatchResolution";
+
+        internal const string MediaFileRename = "MediaFileRename";
+
+        internal const string MediaInfoExtractItem = "MediaInfoExtractItem";
+
+        internal const string MediaInfoExtractScan = "MediaInfoExtractScan";
+
+        internal const string MediaServerRefresh = "MediaServerRefresh";
+
+        internal const string MetadataContainerCleanup = "MetadataContainerCleanup";
+
+        internal const string PruneOrphanedSubjects = "PruneOrphanedSubjects";
+
+        internal const string ReleaseAutoGrabItem = "ReleaseAutoGrabItem";
+
+        internal const string ReleaseAutoGrabScan = "ReleaseAutoGrabScan";
+
         internal const string ReleaseDownloadItem = "ReleaseDownloadItem";
 
         internal const string ReleaseSearchItem = "ReleaseSearchItem";
 
+        internal const string ReleaseSearchScan = "ReleaseSearchScan";
+
+        internal const string RetentionCleanup = "RetentionCleanup";
+
+        internal const string RootFolderContentDiscovery = "RootFolderContentDiscovery";
+
         internal const string RootFolderContentImportItem = "RootFolderContentImportItem";
+
+        internal const string SendNotification = "SendNotification";
+
+        internal const string SubjectMetadataRefreshItem = "SubjectMetadataRefreshItem";
+
+        internal const string SubjectMetadataRefreshScan = "SubjectMetadataRefreshScan";
+
+        internal const string WishlistRefreshItem = "WishlistRefreshItem";
+
+        internal const string WishlistRefreshScan = "WishlistRefreshScan";
     }
 
     internal static class Parameters
     {
+        internal const string AuditRetentionDays = "auditRetentionDays";
+
+        internal const string BackpressureThreshold = "backpressureThreshold";
+
+        internal const string BackupEnabled = "backupEnabled";
+
+        internal const string BackupIntervalDays = "backupIntervalDays";
+
+        internal const string BackupRetentionCount = "backupRetentionCount";
+
         internal const string CandidateId = "candidateId";
+
+        internal const string CollisionMode = "collisionMode";
 
         internal const string ContentHierarchyItemId = "contentHierarchyItemId";
 
         internal const string ContentItemId = "contentItemId";
 
+        internal const string DownloadId = "downloadId";
+
+        internal const string DryRun = "dryRun";
+
         internal const string Event = "event";
+
+        internal const string FailedDownloadRetentionDays = "failedDownloadRetentionDays";
 
         internal const string FeedId = "feedId";
 
+        internal const string FetchingMinutes = "fetchingMinutes";
+
         internal const string FilePath = "filePath";
+
+        internal const string Force = "force";
 
         internal const string IgnoreFailedTaint = "ignoreFailedTaint";
 
+        internal const string JobExecutionRetentionDays = "jobExecutionRetentionDays";
+
+        internal const string MatchIndex = "matchIndex";
+
+        internal const string MaxAgeHours = "maxAgeHours";
+
         internal const string MediaFileId = "mediaFileId";
 
+        internal const string MonitoringMode = "monitoringMode";
+
+        internal const string Name = "name";
+
+        internal const string OptimizeEnabled = "optimizeEnabled";
+
+        internal const string OptimizeIntervalDays = "optimizeIntervalDays";
+
         internal const string ReleaseId = "releaseId";
+
+        internal const string ReleaseObservationRetentionDays = "releaseObservationRetentionDays";
 
         internal const string RequireMissingMediaInfo = "requireMissingMediaInfo";
 
         internal const string RetryCooldownHours = "retryCooldownHours";
 
+        internal const string RootFolderId = "rootFolderId";
+
         internal const string RuleId = "ruleId";
 
         internal const string SearchKind = "searchKind";
 
+        internal const string SettleMinutes = "settleMinutes";
+
         internal const string StaleAfterMinutes = "staleAfterMinutes";
+
+        internal const string StalledMinutes = "stalledMinutes";
+
+        internal const string SubjectId = "subjectId";
+
+        internal const string SubjectStalenessDays = "subjectStalenessDays";
 
         internal const string SuspectLastResort = "suspectLastResort";
 

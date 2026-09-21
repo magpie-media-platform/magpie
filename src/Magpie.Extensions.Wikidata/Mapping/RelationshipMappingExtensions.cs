@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 
 using Magpie.Extensions.Wikidata.QueryEngine;
 
@@ -218,7 +217,7 @@ internal static class RelationshipMappingExtensions
                     break;
                 }
 
-                var qid = EntityId(statement.Mainsnak);
+                var qid = statement.Mainsnak.EntityId();
                 if (qid is null)
                 {
                     continue;
@@ -317,7 +316,7 @@ internal static class RelationshipMappingExtensions
         return
         [
             .. from statement in entity.TruthyStatements(propertyId)
-                let value = StringValue(statement.Mainsnak)
+                let value = statement.Mainsnak.StringValue()
                 where value is not null
                 select value!
         ];
@@ -328,7 +327,7 @@ internal static class RelationshipMappingExtensions
         return
         [
             .. from statement in entity.TruthyStatements(propertyId)
-                let value = EntityId(statement.Mainsnak)
+                let value = statement.Mainsnak.EntityId()
                 where value is not null
                 select value!
         ];
@@ -362,7 +361,7 @@ internal static class RelationshipMappingExtensions
 
         var strings =
             from value in values
-            let text = StringValue(value)
+            let text = value.StringValue()
             where text is not null
             select text!;
         return [.. strings.Distinct(StringComparer.Ordinal)];
@@ -377,40 +376,9 @@ internal static class RelationshipMappingExtensions
 
         var qids =
             from value in values
-            let qid = EntityId(value)
+            let qid = value.EntityId()
             where qid is not null
             select qid!;
         return [.. qids.Distinct(StringComparer.OrdinalIgnoreCase)];
-    }
-
-    private static string? StringValue(SnakDto? snak)
-    {
-        var value = snak is { SnakType: null or "value" } ? snak.DataValue?.Value : null;
-        return value is { ValueKind: JsonValueKind.String } element && !string.IsNullOrWhiteSpace(element.GetString())
-            ? element.GetString()!.Trim()
-            : null;
-    }
-
-    private static string? EntityId(SnakDto? snak)
-    {
-        var value = snak is { SnakType: null or "value" } ? snak.DataValue?.Value : null;
-        if (value is not { ValueKind: JsonValueKind.Object } element ||
-            !element.TryGetProperty("id", out var id) ||
-            id.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(id.GetString()))
-        {
-            return null;
-        }
-
-        var qid = id.GetString()!.Trim();
-        if (qid.Length <= 1 ||
-            qid[0] is not ('Q' or 'q') ||
-            qid[1] == '0' ||
-            qid.Skip(1).Any(value => value is < '0' or > '9'))
-        {
-            return null;
-        }
-
-        return qid[0] == 'q' ? "Q" + qid.Substring(1) : qid;
     }
 }

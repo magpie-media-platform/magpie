@@ -10,9 +10,6 @@ namespace Magpie.Models;
 /// </summary>
 public static class MetadataFieldExtensions
 {
-    /// <summary>
-    /// The definitions of the standard metadata fields.
-    /// </summary>
     private static IReadOnlyList<MetadataFieldDefinition> StandardFields { get; } =
     [
         Text(MetadataField.Title, "title", "Title", "the title filter", "a title", true, true),
@@ -55,20 +52,20 @@ public static class MetadataFieldExtensions
         Date(MetadataField.Dissolved, "dissolved", "Dissolved", "the dissolved-date filter", "a dissolved date"),
         Date(MetadataField.BirthDate, "birthDate", "Birth date", "the birth-date filter", "a birth date"),
         Date(MetadataField.DeathDate, "deathDate", "Death date", "the death-date filter", "a death date"),
-        Collection(MetadataField.ExternalIds, "externalIds", "External identifiers", "the external-id filter"),
-        Collection(MetadataField.References, "references", "References", "the reference filter"),
-        Collection(MetadataField.Relationships, "relationships", "Relationships", "the relationship filter"),
-        Collection(MetadataField.Images, "images", "Images", "the image filter"),
-        Collection(MetadataField.Previews, "previews", "Previews", "the preview filter"),
-        Collection(MetadataField.AlternateTexts, "alternateTexts", "Alternate texts", "the alternate-text filter"),
-        Collection(MetadataField.ContentRatings, "contentRatings", "Content ratings", "the content-rating filter"),
-        Collection(MetadataField.Awards, "awards", "Awards", "the award filter"),
-        Collection(MetadataField.Genres, "genres", "Genres", "the genre filter"),
-        Number(MetadataField.SequenceNumber, "sequenceNumber", "Sequence number", "the sequence-number filter")
+        Generic(MetadataField.ExternalIds, "externalIds", "External identifiers", "the external-id filter"),
+        Generic(MetadataField.References, "references", "References", "the reference filter"),
+        Generic(MetadataField.Relationships, "relationships", "Relationships", "the relationship filter"),
+        Generic(MetadataField.Images, "images", "Images", "the image filter"),
+        Generic(MetadataField.Previews, "previews", "Previews", "the preview filter"),
+        Generic(MetadataField.AlternateTexts, "alternateTexts", "Alternate texts", "the alternate-text filter"),
+        Generic(MetadataField.ContentRatings, "contentRatings", "Content ratings", "the content-rating filter"),
+        Generic(MetadataField.Awards, "awards", "Awards", "the award filter"),
+        Generic(MetadataField.Genres, "genres", "Genres", "the genre filter"),
+        Generic(MetadataField.SequenceNumber, "sequenceNumber", "Sequence number", "the sequence-number filter")
     ];
 
     /// <summary>
-    /// Gets the definition of a standard metadata field. If the field has no definition, returns null.
+    /// Gets the definition of a standard metadata field, or null when the field has no definition.
     /// </summary>
     /// <param name="field">The metadata field to look up</param>
     public static MetadataFieldDefinition? GetDefinition(this MetadataField field) =>
@@ -125,21 +122,7 @@ public static class MetadataFieldExtensions
             MissingValueDescription = missingValueDescription
         };
 
-    private static MetadataFieldDefinition Number(
-        MetadataField field,
-        string key,
-        string displayName,
-        string filterDescription) =>
-        new()
-        {
-            Field = field,
-            Key = key,
-            DisplayName = displayName,
-            FilterDescription = filterDescription,
-            MissingValueDescription = "a value"
-        };
-
-    private static MetadataFieldDefinition Collection(
+    private static MetadataFieldDefinition Generic(
         MetadataField field,
         string key,
         string displayName,

@@ -51,8 +51,9 @@ describe('useStartRootFolderContentDiscovery', () => {
         });
 
         expect(mockApiPost).toHaveBeenCalledTimes(1);
-        expect(mockApiPost).toHaveBeenCalledWith('/jobs/execute-immediate', {
+        expect(mockApiPost).toHaveBeenCalledWith('/jobs/enqueue', {
             jobType: 'RootFolderContentDiscovery',
+            mode: 'Queue',
             parameters: { rootFolderId: 'folder-1' },
         });
         expect(returnedExecutionId).toBe(executionId);

@@ -14,9 +14,6 @@ namespace Magpie.Extensions.MusicBrainz.QueryEngine;
 
 internal sealed class QueryPlanner : IQueryPlanner
 {
-    private static readonly string GenreTagApproximationWarning =
-        "musicbrainz genre matching uses the broader tag data returned by search.";
-
     private enum ArtistCompositionParseOutcome
     {
         Success,
@@ -53,7 +50,6 @@ internal sealed class QueryPlanner : IQueryPlanner
         var filters = new List<QueryFilter>();
         var residuals = new List<ResidualCriterion>();
         var artistCompositions = new List<ArtistComposition>();
-        var warningDetails = new List<PlanWarning>();
         var criterionTraces = new List<CriterionTrace>();
         var filterSources = new List<string>();
 
@@ -93,12 +89,8 @@ internal sealed class QueryPlanner : IQueryPlanner
                 artistCompositions.Add(compilation.ArtistComposition);
             }
 
-            if (compilation.Warning is not null)
+            if (compilation.Unsupported)
             {
-                warningDetails.Add(new PlanWarning(
-                    compilation.Source,
-                    compilation.Warning,
-                    compilation.RetainWarningWhenKnownEmpty));
                 refused = filterIndex is null &&
                     residualIndex is null &&
                     artistCompositionIndex is null &&
@@ -116,7 +108,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 Vacuous = filterIndex is null &&
                     residualIndex is null &&
                     artistCompositionIndex is null &&
-                    compilation.Warning is null &&
+                    !compilation.Unsupported &&
                     !compilation.MatchesNothing
             });
         }
@@ -127,23 +119,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                 filter.Kind != QueryFilterKind.LabelRelationship
                 ? filter with { RemoteApplied = false, ReleaseIndexApplied = false }
                 : filter)];
-        }
-
-        if (filters.Count(filter => filter.ReleaseIndexApplied) > 1)
-        {
-            warningDetails.Add(new PlanWarning(
-                string.Join(
-                    ",",
-                    filterSources
-                        .Where((_, index) => filters[index].ReleaseIndexApplied)
-                        .Distinct(StringComparer.Ordinal)),
-                "musicbrainz release-index matching is scoped to one physical release and may omit albums whose " +
-                    "criteria span releases."));
-        }
-
-        if (knownEmpty)
-        {
-            warningDetails.RemoveAll(warning => !warning.RetainWhenKnownEmpty);
         }
 
         var selection = knownEmpty || hasRefusedCriteria
@@ -157,21 +132,6 @@ internal sealed class QueryPlanner : IQueryPlanner
         else if (strategy == QueryStrategy.None)
         {
             RecordPlanRefused("unbounded");
-        }
-
-        if (strategy != QueryStrategy.Lucene)
-        {
-            warningDetails.RemoveAll(warning => warning.Detail == GenreTagApproximationWarning);
-        }
-
-        if (!knownEmpty && !hasRefusedCriteria && strategy == QueryStrategy.None &&
-            compilations.Any(compilation => compilation.Filter is not null || compilation.Residual is not null ||
-                compilation.ArtistComposition is not null ||
-                compilation.Warning is not null))
-        {
-            warningDetails.Add(new PlanWarning(
-                "Boundedness",
-                "musicbrainz requires a positive title, date, duration, genre, identity, or artist seed."));
         }
 
         var directValue = selection.JustifyingFilter?.IdentityValues[0].Value;
@@ -224,7 +184,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             RequestedPage = Math.Max(1, request.RequestedPage),
             MaxResults = Math.Max(1, request.MaxResults),
             Settings = request.Settings,
-            Warnings = [.. warningDetails.Select(warning => warning.Detail).Distinct()],
+            Warnings = [],
             Fingerprint = fingerprint
         };
         plan = plan with
@@ -880,7 +840,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         var (op, negate) = InterpretOperator(criterion.Operator, criterion.Negate);
         if (!IsStringOperator(op))
         {
-            return UnsupportedCompilation("musicbrainz received an unsupported original-title criterion.");
+            return UnsupportedCompilation();
         }
 
         if (op is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
@@ -1015,14 +975,13 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             if (alternative.Ordinal.And.Any() || alternative.DisplayName.And.Any() || alternative.Language.And.Any())
             {
-                return UnsupportedCompilation(
-                    "musicbrainz reference ordinal, display-name, and language criteria cannot be evaluated.");
+                return UnsupportedCompilation();
             }
 
             var predicates = new List<ResidualPredicate>();
             if (!TryCompileStringPredicates(alternative.Kind.And, ResidualField.ReferenceKind, predicates))
             {
-                return UnsupportedCompilation("musicbrainz received an unsupported reference-kind criterion.");
+                return UnsupportedCompilation();
             }
 
             foreach (var criterion in alternative.Url.And)
@@ -1032,7 +991,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 if (!IsStringOperator(op) ||
                     op is not (CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull) && values.Length == 0)
                 {
-                    return UnsupportedCompilation("musicbrainz received an unsupported reference-URL criterion.");
+                    return UnsupportedCompilation();
                 }
 
                 predicates.Add(new ResidualPredicate
@@ -1117,7 +1076,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             if (!TryCompileConceptualImage(alternative, out var matches, out var predicates))
             {
-                return UnsupportedCompilation("musicbrainz received an unsupported album image criterion.");
+                return UnsupportedCompilation();
             }
 
             if (matches)
@@ -1271,7 +1230,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         var locallyAvailable = target == QueryTarget.Track && field == MetadataField.Overview;
         if ((!locallyAvailable && remoteField is null) || !IsStringOperator(op))
         {
-            return UnsupportedCompilation("musicbrainz does not support this text field or operator.");
+            return UnsupportedCompilation();
         }
 
         var values = TextValues(criterion);
@@ -1283,7 +1242,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         var hasValue = op is not CriteriaValueOperator.IsNull and not CriteriaValueOperator.IsNotNull;
         if (hasValue && values.Length == 0)
         {
-            return UnsupportedCompilation("musicbrainz received an empty text criterion.");
+            return UnsupportedCompilation();
         }
 
         return new Compilation
@@ -1315,13 +1274,13 @@ internal sealed class QueryPlanner : IQueryPlanner
         var suppliedValues = TextValues(criterion);
         if (!SupportsLanguage(target))
         {
-            return UnsupportedCompilation("musicbrainz language filtering is available only for albums.");
+            return UnsupportedCompilation();
         }
 
         if (!IsStringOperator(op) ||
             op is not (CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull) && suppliedValues.Length == 0)
         {
-            return UnsupportedCompilation("musicbrainz received an unsupported language criterion.");
+            return UnsupportedCompilation();
         }
 
         var exactOperator = op is CriteriaValueOperator.Equals or CriteriaValueOperator.In;
@@ -1374,10 +1333,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ]
             },
             SelectiveSeed = remoteApplied,
-            RequiresSeed = !remoteApplied,
-            Warning = values.Length < suppliedValues.Length
-                ? "musicbrainz dropped unrecognized language alternatives, so matching candidates may be omitted."
-                : null
+            RequiresSeed = !remoteApplied
         };
     }
 
@@ -1399,7 +1355,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                     predicates) ||
                 !TryCompileStringPredicates(alternative.Text.And, ResidualField.AlternateTextText, predicates))
             {
-                return UnsupportedCompilation("musicbrainz received an unsupported alternate-text criterion.");
+                return UnsupportedCompilation();
             }
 
             residualAlternatives.Add(new ResidualAlternative { Predicates = predicates });
@@ -1424,7 +1380,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             : [];
         if (canSeed && remoteValues.Length == 0)
         {
-            return UnsupportedCompilation("musicbrainz received an empty alternate-text criterion.");
+            return UnsupportedCompilation();
         }
 
         return new Compilation
@@ -1464,11 +1420,10 @@ internal sealed class QueryPlanner : IQueryPlanner
         var (op, negate) = InterpretOperator(criterion.Operator, criterion.Negate);
         var suppliedValues = TemporalValues(criterion);
         var values = suppliedValues.Where(value => value.Precision != TemporalPrecision.Instant).ToArray();
-        var droppedInstant = op == CriteriaValueOperator.In && values.Length < suppliedValues.Count;
         var nullOperator = op is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull;
         if (remoteField is null || !IsOrderedOperator(op) || (!nullOperator && values.Length == 0))
         {
-            return UnsupportedCompilation("musicbrainz does not support this date field or value.");
+            return UnsupportedCompilation();
         }
 
         var ordered = op is CriteriaValueOperator.GreaterThan
@@ -1488,9 +1443,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                 RemoteApplied = !localOnly,
                 VerifyLocally = negate || ordered
             },
-            Warning = droppedInstant
-                ? "musicbrainz cannot represent instant-precision date alternatives and may omit matches."
-                : null,
             SelectiveSeed = !negate && !nullOperator,
             RequiresSeed = localOnly
         };
@@ -1514,7 +1466,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             .ToArray();
         if (field != MetadataField.Duration || !IsOrderedOperator(op) || (!nullOperator && values.Length == 0))
         {
-            return UnsupportedCompilation("musicbrainz does not support this duration criterion.");
+            return UnsupportedCompilation();
         }
 
         if (!negate && ordered && DurationBoundaryMatchesNothing(op, rawValues[0]))
@@ -1553,7 +1505,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (target != QueryTarget.Track)
         {
-            return UnsupportedCompilation("musicbrainz does not support this duration criterion.");
+            return UnsupportedCompilation();
         }
 
         var localOnly = negate;
@@ -1599,7 +1551,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             var predicates = new List<ResidualPredicate>();
             if (!TryCompileStringPredicates(alternative.Name.And, ResidualField.GenreName, predicates))
             {
-                return UnsupportedCompilation("musicbrainz received an unsupported genre criterion.");
+                return UnsupportedCompilation();
             }
 
             residualAlternatives.Add(new ResidualAlternative { Predicates = predicates });
@@ -1616,8 +1568,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 !predicate.Negate && predicate.Operator is CriteriaValueOperator.Equals or CriteriaValueOperator.In);
         if (!canSeed)
         {
-            return ResidualCompilation(ResidualKind.Genre, ResidualNeed.Hit, residualAlternatives, negate) with
-            { Warning = GenreTagApproximationWarning };
+            return ResidualCompilation(ResidualKind.Genre, ResidualNeed.Hit, residualAlternatives, negate);
         }
 
         var normalized = residualAlternatives
@@ -1629,7 +1580,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             .ToArray();
         if (normalized.Length == 0)
         {
-            return UnsupportedCompilation("musicbrainz received an empty genre criterion.");
+            return UnsupportedCompilation();
         }
 
         return new Compilation
@@ -1643,7 +1594,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                 StringValues = normalized,
                 RemoteApplied = true
             },
-            Warning = "MusicBrainz treats genre searches as tag searches, so results may be broader than expected.",
             SelectiveSeed = true
         };
     }
@@ -1654,20 +1604,14 @@ internal sealed class QueryPlanner : IQueryPlanner
         bool negate)
     {
         var identities = new List<IdentityValue>();
-        var droppedInvalidValues = false;
         foreach (var alternative in alternatives)
         {
-            if (!TryCompileExternalAlternative(
-                target,
-                alternative,
-                out var alternativeIdentities,
-                out var alternativeDroppedInvalidValues))
+            if (!TryCompileExternalAlternative(target, alternative, out var alternativeIdentities))
             {
                 return CompileExternalIdResiduals(alternatives, negate);
             }
 
             identities.AddRange(alternativeIdentities);
-            droppedInvalidValues |= alternativeDroppedInvalidValues;
         }
 
         if (identities.Count == 0)
@@ -1692,9 +1636,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                 IdentityValues = identities,
                 RemoteApplied = true
             },
-            Warning = droppedInvalidValues
-                ? "musicbrainz dropped invalid identifier alternatives, so matching candidates may be omitted."
-                : null,
             SelectiveSeed = !negate && identities.Any(identity => identity.Value.Length > 0),
             RequiresSeed = identities.All(identity => identity.Value.Length == 0)
         };
@@ -1709,7 +1650,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             if (!TryCompileStringPredicates(alternative.Source.And, ResidualField.ExternalIdSource, predicates) ||
                 !TryCompileStringPredicates(alternative.Value.And, ResidualField.ExternalIdValue, predicates))
             {
-                return UnsupportedCompilation("musicbrainz received an unsupported identifier source or operator.");
+                return UnsupportedCompilation();
             }
 
             residualAlternatives.Add(new ResidualAlternative { Predicates = predicates });
@@ -1725,11 +1666,9 @@ internal sealed class QueryPlanner : IQueryPlanner
     private bool TryCompileExternalAlternative(
         QueryTarget target,
         ExternalIdCriteria alternative,
-        out IReadOnlyList<IdentityValue> result,
-        out bool droppedInvalidValues)
+        out IReadOnlyList<IdentityValue> result)
     {
         result = [];
-        droppedInvalidValues = false;
         var sourceCriteria = alternative.Source.And.ToArray();
         var valueCriteria = alternative.Value.And.ToArray();
         if (sourceCriteria.Any(criterion => !SimplePositive(criterion)) ||
@@ -1753,7 +1692,6 @@ internal sealed class QueryPlanner : IQueryPlanner
             var sources = requestedSources
                 .Where(source => IdentityField(target, source).Length > 0)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            droppedInvalidValues |= sources.Count != requestedSources.Count;
             if (allowedSources is null)
             {
                 allowedSources = sources;
@@ -1837,7 +1775,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                 }
             }
 
-            droppedInvalidValues |= criterionDroppedInvalidValues;
             if (criterionValues.Count == 0 && criterionDroppedInvalidValues)
             {
                 return false;
@@ -1882,14 +1819,13 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             if (!TryCompileRelationshipAlternative(target, alternative, artistValues, labelValues))
             {
-                return RefusedCompilation("musicbrainz received an unsupported relationship criterion.");
+                return RefusedCompilation();
             }
         }
 
         if (artistValues.Count > 0 && labelValues.Count > 0)
         {
-            return RefusedCompilation(
-                "musicbrainz cannot evaluate a disjunction mixing artist and label relationships.");
+            return RefusedCompilation();
         }
 
         if (labelValues.Count > 0)
@@ -1929,12 +1865,12 @@ internal sealed class QueryPlanner : IQueryPlanner
             alternative.Type.And.Any(criterion => !SimplePositive(criterion)) ||
             alternative.Subject.And.Any(criterion => !SimplePositive(criterion)))
         {
-            return RefusedCompilation("musicbrainz received an unsupported artist relationship criterion.");
+            return RefusedCompilation();
         }
 
         if (!TryIntersectSubjectNames([.. alternative.Subject.And], out var names))
         {
-            return RefusedCompilation("musicbrainz artist relationship names require positive Equals or In criteria.");
+            return RefusedCompilation();
         }
 
         if (names is { Count: 0 })
@@ -1944,7 +1880,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (names is { Count: > 1 })
         {
-            return RefusedCompilation("musicbrainz artist relationship name resolution accepts one exact name.");
+            return RefusedCompilation();
         }
 
         var hasFacets = alternative.Kind.And.Any() || alternative.Type.And.Any();
@@ -1964,8 +1900,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (identityOutcome == ArtistCompositionParseOutcome.Unsupported)
         {
-            return RefusedCompilation(
-                "musicbrainz artist relationship external IDs require one MusicBrainz MBID and source.");
+            return RefusedCompilation();
         }
 
         var entity = facetEntity;
@@ -1974,14 +1909,12 @@ internal sealed class QueryPlanner : IQueryPlanner
             (!hasFacets || !ArtistMembershipFacetIsExplicit(alternative)) ||
             !ArtistCompositionFacetsMatch(alternative, entity.Value))
         {
-            return RefusedCompilation(
-                "musicbrainz artist relationship kind and type do not identify a supported related entity.");
+            return RefusedCompilation();
         }
 
         if (identity is null && names is null)
         {
-            return RefusedCompilation(
-                "musicbrainz artist relationship composition requires a related MBID or exact name.");
+            return RefusedCompilation();
         }
 
         var source = Constants.ProviderType;
@@ -2384,7 +2317,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             var groupMbids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var external in group)
             {
-                if (!TryCompileExternalAlternative(QueryTarget.Artist, external, out var identities, out _) ||
+                if (!TryCompileExternalAlternative(QueryTarget.Artist, external, out var identities) ||
                     identities.Any(identity => identity.Source != Constants.ProviderType))
                 {
                     return false;
@@ -2944,24 +2877,9 @@ internal sealed class QueryPlanner : IQueryPlanner
         };
     }
 
-    private Compilation UnsupportedCompilation(string diagnostic)
-    {
-        return new()
-        {
-            Warning = diagnostic,
-            RetainWarningWhenKnownEmpty = true
-        };
-    }
+    private Compilation UnsupportedCompilation() => new() { Unsupported = true };
 
-    private Compilation RefusedCompilation(string diagnostic)
-    {
-        return new()
-        {
-            Warning = diagnostic,
-            RetainWarningWhenKnownEmpty = true,
-            RefusesTarget = true
-        };
-    }
+    private Compilation RefusedCompilation() => new() { Unsupported = true, RefusesTarget = true };
 
     private bool IsRefusedCompilation(Compilation compilation) => compilation.RefusesTarget;
 
@@ -3105,6 +3023,9 @@ internal sealed class QueryPlanner : IQueryPlanner
                 .Append(':')
                 .Append(composition.FinalStage)
                 .Append(':')
+                .Append(composition.RelatedNameOperator)
+                .Append(':')
+                .Append(composition.RelatedArtistType)
                 .Append(':')
                 .Append(composition.ExpansionCapabilities)
                 .Append(':')
@@ -3293,15 +3214,13 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         public ArtistComposition? ArtistComposition { get; init; }
 
-        public string? Warning { get; init; }
+        public bool Unsupported { get; init; }
 
         public bool SelectiveSeed { get; init; }
 
         public bool RequiresSeed { get; init; }
 
         public bool MatchesNothing { get; init; }
-
-        public bool RetainWarningWhenKnownEmpty { get; init; }
 
         public bool RefusesTarget { get; init; }
     }
@@ -3322,11 +3241,6 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         public bool Vacuous { get; init; }
     }
-
-    private sealed record PlanWarning(
-        string Source,
-        string Detail,
-        bool RetainWhenKnownEmpty = false);
 
     private sealed record ArtistCompositionIdentity(string? Source, string Mbid);
 }

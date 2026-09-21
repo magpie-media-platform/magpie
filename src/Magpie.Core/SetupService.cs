@@ -38,37 +38,21 @@ internal sealed class SetupService(
 
     public async Task<bool> IsCompleteAsync(CancellationToken cancellationToken = default)
     {
-        try
-        {
-            var group = await settingsService.GetSystemGroupAsync(SetupGroup, cancellationToken).ConfigureAwait(false);
-            return string.Equals(
-                group?.Group.Settings.FirstOrDefault(setting => setting.Key == CompleteKey)?.Value,
-                "true",
-                StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "The setup status could not be read");
-            return false;
-        }
+        var group = await settingsService.GetSystemGroupAsync(SetupGroup, cancellationToken).ConfigureAwait(false);
+        return string.Equals(
+            group?.Group.Settings.FirstOrDefault(setting => setting.Key == CompleteKey)?.Value,
+            "true",
+            StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<bool> HasLocalAdministratorAsync(CancellationToken cancellationToken = default)
     {
-        try
-        {
-            var admins = await userService.QueryAsync(
-                new UserQuery { Role = Role.Admin, Enabled = true, ProviderType = "local" },
-                new PagingParameter { PageNumber = 1, PageSize = 1 },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            return admins.TotalItems > 0;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "The administrator accounts could not be read");
-            return false;
-        }
+        var admins = await userService.QueryAsync(
+            new UserQuery { Role = Role.Admin, Enabled = true, ProviderType = "local" },
+            new PagingParameter { PageNumber = 1, PageSize = 1 },
+            null,
+            cancellationToken).ConfigureAwait(false);
+        return admins.TotalItems > 0;
     }
 
     public async Task<bool> CanConnectAsync(CancellationToken cancellationToken = default)

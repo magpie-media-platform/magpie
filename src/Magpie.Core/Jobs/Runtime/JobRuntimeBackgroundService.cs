@@ -35,9 +35,18 @@ internal sealed class JobRuntimeBackgroundService(
     MagpieHostEnvironment hostEnvironment,
     IServiceScopeFactory scopeFactory,
     IEventBus eventBus,
+    JobShutdownSignal shutdownSignal,
     ILogger<JobRuntimeBackgroundService> logger,
-    TimeProvider? timeProvider = null) : BackgroundService
+    TimeProvider timeProvider,
+    DatabaseMigrationState databaseMigration) : BackgroundService
 {
+    private readonly record struct StuckSchedulerJobsHealResult(
+        int HealedCount,
+        TimeSpan? NextSchedulerHealCheck);
+
+    private sealed record SchedulerEligibility(bool Eligible, DateTimeOffset CheckedAt);
+
+    private static readonly TimeSpan MaxDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
     private static readonly TimeSpan AdmissionIdlePoll = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan AdmissionRebalanceInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ErrorBackoff = TimeSpan.FromSeconds(15);
@@ -45,7 +54,7 @@ internal sealed class JobRuntimeBackgroundService(
     private static readonly TimeSpan DefaultNextSchedulerHealCheck = TimeSpan.FromMinutes(30);
     private static readonly DateTime CronIntervalProbeTime = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
-    private static readonly TimeSpan UnrunnableQueuedCutoff = TimeSpan.FromHours(1);
+    private static readonly TimeSpan SchedulerEligibilityCacheDuration = TimeSpan.FromSeconds(30);
 
     private static readonly JobExecutionStatus[] StaleCandidateStatuses =
     [JobExecutionStatus.Running, JobExecutionStatus.CancellationRequested];
@@ -56,8 +65,12 @@ internal sealed class JobRuntimeBackgroundService(
 
     private readonly IReadOnlyList<JobSpec> _jobSpecs = jobRegistry.ListJobSpecs();
 
-    private readonly CancellationTokenSource _shutdownCts = new();
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly HashSet<string> _jobTypes =
+        [.. jobRegistry.ListJobSpecs().Select(spec => spec.JobType)];
+
+    private readonly ConcurrentDictionary<string, byte> _unavailableJobTypes = new(StringComparer.Ordinal);
+
+    private SchedulerEligibility? _schedulerEligibility;
 
     private static async Task<StuckSchedulerJobsHealResult> HealStuckSchedulerJobsAsync(
         IScheduleTriggerRepository scheduleTriggers,
@@ -101,8 +114,12 @@ internal sealed class JobRuntimeBackgroundService(
                 continue;
             }
 
-            trigger.NextRunAt = nextRun;
-            await scheduleTriggers.UpdateAsync(trigger, null, cancellationToken).ConfigureAwait(false);
+            await scheduleTriggers
+                .PatchAsync(
+                    new ScheduleTriggerPatch { Id = trigger.Id, NextRunAt = new() { Value = nextRun } },
+                    null,
+                    cancellationToken)
+                .ConfigureAwait(false);
             healed++;
         }
 
@@ -175,8 +192,9 @@ internal sealed class JobRuntimeBackgroundService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await databaseMigration.Completion.WaitAsync(stoppingToken).ConfigureAwait(false);
+
         await runtime.InitializeAsync(hostEnvironment.NodeId, stoppingToken).ConfigureAwait(false);
-        await ReconcileUnregisteredJobsAsync(stoppingToken).ConfigureAwait(false);
 
         logger.LogInformation(
             "The job runtime worker started for node {NodeId} (general pool {General} of hard ceiling {Total})",
@@ -199,6 +217,18 @@ internal sealed class JobRuntimeBackgroundService(
         logger.LogInformation("The job runtime worker stopped");
     }
 
+    private async Task SleepAsync(TimeSpan delay, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(delay > MaxDelay ? MaxDelay : delay, timeProvider, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
     private async Task AdmissionLoopAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -217,102 +247,59 @@ internal sealed class JobRuntimeBackgroundService(
             catch (Exception ex)
             {
                 logger.LogError(ex, "The job runtime worker failed to admit work");
-                await TaskHelpers.SleepAsync(ErrorBackoff, _time, stoppingToken).ConfigureAwait(false);
+                await SleepAsync(ErrorBackoff, stoppingToken).ConfigureAwait(false);
                 continue;
             }
 
-            await TaskHelpers
-                .SleepAsync(admittedThisPass ? AdmissionRebalanceInterval : AdmissionIdlePoll, _time, stoppingToken)
+            await SleepAsync(admittedThisPass ? AdmissionRebalanceInterval : AdmissionIdlePoll, stoppingToken)
                 .ConfigureAwait(false);
-        }
-    }
-
-    private async Task ReconcileUnregisteredJobsAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            var registeredJobTypes = _jobSpecs
-                .Select(spec => spec.JobType)
-                .ToHashSet(StringComparer.Ordinal);
-
-            var scope = scopeFactory.CreateAsyncScope();
-            await using var scopeHandle = scope.ConfigureAwait(false);
-            var scheduleTriggers = scope.ServiceProvider.GetRequiredService<IScheduleTriggerRepository>();
-            var executions = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
-            var transactionManager = scope.ServiceProvider.GetRequiredService<ITransactionManager>();
-
-            const int pageSize = 500;
-            var triggers = new List<ScheduleTrigger>();
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await scheduleTriggers.QueryAsync(
-                    new(),
-                    new() { PageNumber = pageNumber, PageSize = pageSize },
-                    null,
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                triggers.AddRange(pageItems);
-                if (pageItems.Count < pageSize)
-                {
-                    break;
-                }
-
-                pageNumber++;
-            }
-
-            var orphanedTriggers = triggers
-                .Where(trigger => !registeredJobTypes.Contains(trigger.JobType))
-                .ToList();
-
-            if (orphanedTriggers.Count == 0)
-            {
-                return;
-            }
-
-            var orphanedJobTypes = orphanedTriggers.Select(trigger => trigger.JobType).Distinct().ToList();
-
-            await transactionManager.ExecuteWithTransactionAsync(
-                async ct =>
-                {
-                    var removedTriggers = 0;
-                    foreach (var trigger in orphanedTriggers)
-                    {
-                        if (await scheduleTriggers.DeleteAsync(trigger.Id, null, ct).ConfigureAwait(false))
-                        {
-                            removedTriggers++;
-                        }
-                    }
-
-                    var removedExecutions = await executions
-                        .DeleteWhereAsync(new JobExecutionQuery { JobTypes = orphanedJobTypes }, ct)
-                        .ConfigureAwait(false);
-
-                    logger.LogInformation(
-                        "The job runtime worker deleted {OrphanedTriggerCount} trigger(s) and " +
-                        "{OrphanedExecutionCount} execution(s) orphaned by unregistered {OrphanedJobTypes}",
-                        removedTriggers,
-                        removedExecutions,
-                        string.Join(", ", orphanedJobTypes));
-                },
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "The job runtime worker failed to reconcile schedule triggers against " +
-                "the registered job catalog");
-            throw;
         }
     }
 
     private async Task<bool> IsSchedulerEligibleAsync(CancellationToken cancellationToken)
     {
+        var now = timeProvider.GetUtcNow();
+        var cached = _schedulerEligibility;
+        if (cached is not null && now - cached.CheckedAt < SchedulerEligibilityCacheDuration)
+        {
+            return cached.Eligible;
+        }
+
         var scope = scopeFactory.CreateAsyncScope();
         await using var scopeHandle = scope.ConfigureAwait(false);
         var repository = scope.ServiceProvider.GetRequiredService<IExtensionNodeStatusRepository>();
         var status = await repository.GetByNodeIdAsync(hostEnvironment.NodeId, cancellationToken)
             .ConfigureAwait(false);
-        return status?.SchedulerEligible ?? !hostEnvironment.IsClustered;
+        var eligible = status?.SchedulerEligible ?? !hostEnvironment.IsClustered;
+        if (cached is null || cached.Eligible != eligible)
+        {
+            logger.LogInformation(
+                "Node {NodeId} scheduler eligibility is now {SchedulerEligible}",
+                hostEnvironment.NodeId,
+                eligible);
+        }
+
+        _schedulerEligibility = new(eligible, now);
+        return eligible;
+    }
+
+    private bool IsJobTypeRunnableHere(string jobType)
+    {
+        if (_jobTypes.Contains(jobType))
+        {
+            return true;
+        }
+
+        if (_unavailableJobTypes.TryAdd(jobType, 0))
+        {
+            logger.LogWarning(
+                "No handler is registered for job type {JobType} on node {NodeId}, so its triggers and" +
+                " executions are skipped",
+                jobType,
+                hostEnvironment.NodeId);
+        }
+
+        return false;
     }
 
     internal async Task<bool> TryAdmitAsync(CancellationToken stoppingToken)
@@ -324,9 +311,6 @@ internal sealed class JobRuntimeBackgroundService(
 
         if (!await IsSchedulerEligibleAsync(stoppingToken).ConfigureAwait(false))
         {
-            logger.LogInformation(
-                "Because node {NodeId} is not scheduler eligible, the job runtime worker skipped admission",
-                hostEnvironment.NodeId);
             return false;
         }
 
@@ -334,23 +318,13 @@ internal sealed class JobRuntimeBackgroundService(
         await using var scopeHandle = scope.ConfigureAwait(false);
         var executions = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
         const int pageSize = 500;
-        var candidates = new List<JobClaimCandidate>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await executions
-                .GetClaimableCandidatesAsync(
-                    new() { PageNumber = pageNumber, PageSize = pageSize },
-                    stoppingToken)
-                .ConfigureAwait(false);
-            candidates.AddRange(page);
-            if (page.Count < pageSize)
-            {
-                break;
-            }
 
-            pageNumber++;
-        }
+        var claimable = await executions
+            .GetClaimableCandidatesAsync(new() { PageNumber = 1, PageSize = pageSize }, stoppingToken)
+            .ConfigureAwait(false);
+        var candidates = claimable
+            .Where(candidate => IsJobTypeRunnableHere(candidate.JobType))
+            .ToList();
 
         if (candidates.Count == 0)
         {
@@ -374,7 +348,7 @@ internal sealed class JobRuntimeBackgroundService(
             }
 
             JobsTelemetry.AdmissionWaitTime.Record(
-                Math.Max(0, (_time.GetUtcNow().UtcDateTime - claimed.CreatedAt).TotalMilliseconds),
+                Math.Max(0, (timeProvider.GetUtcNow().UtcDateTime - claimed.CreatedAt).TotalMilliseconds),
                 new KeyValuePair<string, object?>("job.type", claimed.JobType));
 
             concurrencyScheduler.CommitAdmission(selected);
@@ -393,7 +367,7 @@ internal sealed class JobRuntimeBackgroundService(
                 await Task.Yield();
                 try
                 {
-                    await runtime.ExecuteAsync(executionId, _shutdownCts.Token).ConfigureAwait(false);
+                    await runtime.ExecuteAsync(executionId, shutdownSignal.Cancellation.Token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -414,8 +388,8 @@ internal sealed class JobRuntimeBackgroundService(
         {
             try
             {
-                await RunOnceAsync(_time.GetUtcNow().UtcDateTime, stoppingToken).ConfigureAwait(false);
-                await TaskHelpers.SleepAsync(DueTriggerPollInterval, _time, stoppingToken).ConfigureAwait(false);
+                await RunOnceAsync(timeProvider.GetUtcNow().UtcDateTime, stoppingToken).ConfigureAwait(false);
+                await SleepAsync(DueTriggerPollInterval, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -424,7 +398,7 @@ internal sealed class JobRuntimeBackgroundService(
             catch (Exception ex)
             {
                 logger.LogError(ex, "The job scheduler failed to process the due triggers");
-                await TaskHelpers.SleepAsync(ErrorBackoff, _time, stoppingToken).ConfigureAwait(false);
+                await SleepAsync(ErrorBackoff, stoppingToken).ConfigureAwait(false);
             }
         }
     }
@@ -436,10 +410,10 @@ internal sealed class JobRuntimeBackgroundService(
             try
             {
                 var nextSchedulerHealCheck = await RunSchedulerHealOnceAsync(
-                    _time.GetUtcNow().UtcDateTime,
+                    timeProvider.GetUtcNow().UtcDateTime,
                     stoppingToken)
                     .ConfigureAwait(false);
-                await TaskHelpers.SleepAsync(nextSchedulerHealCheck, _time, stoppingToken).ConfigureAwait(false);
+                await SleepAsync(nextSchedulerHealCheck, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -448,7 +422,7 @@ internal sealed class JobRuntimeBackgroundService(
             catch (Exception ex)
             {
                 logger.LogError(ex, "The job scheduler failed to heal the stuck scheduler jobs");
-                await TaskHelpers.SleepAsync(ErrorBackoff, _time, stoppingToken).ConfigureAwait(false);
+                await SleepAsync(ErrorBackoff, stoppingToken).ConfigureAwait(false);
             }
         }
     }
@@ -457,9 +431,6 @@ internal sealed class JobRuntimeBackgroundService(
     {
         if (!await IsSchedulerEligibleAsync(cancellationToken).ConfigureAwait(false))
         {
-            logger.LogInformation(
-                "Because node {NodeId} is not scheduler eligible, the job scheduler skipped the due triggers",
-                hostEnvironment.NodeId);
             return;
         }
 
@@ -476,25 +447,9 @@ internal sealed class JobRuntimeBackgroundService(
             null,
             cancellationToken).ConfigureAwait(false);
         var systemUserId = systemUsers.Items.SingleOrDefault()?.Id;
-        const int pageSize = 500;
-        var triggers = new List<ScheduleTrigger>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await scheduleTriggers.QueryAsync(
-                new ScheduleTriggerQuery { DueAsOf = asOfUtc, Enabled = true },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            triggers.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var triggers = await scheduleTriggers.QueryAllAsync(
+            new ScheduleTriggerQuery { DueAsOf = asOfUtc, Enabled = true },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         foreach (var trigger in triggers)
         {
@@ -521,6 +476,11 @@ internal sealed class JobRuntimeBackgroundService(
         DateTime asOfUtc,
         CancellationToken cancellationToken)
     {
+        if (!IsJobTypeRunnableHere(trigger.JobType))
+        {
+            return;
+        }
+
         if (trigger.NextRunAt is not { } expectedNextRun)
         {
             return;
@@ -586,39 +546,20 @@ internal sealed class JobRuntimeBackgroundService(
             return;
         }
 
-        await TryDispatchImmediateAsync(executions, created.Id, cancellationToken).ConfigureAwait(false);
+        DispatchImmediate(created.Id, cancellationToken);
     }
 
-    private async Task<bool> TryDispatchImmediateAsync(
-        IJobExecutionRepository executions,
-        Guid executionId,
-        CancellationToken cancellationToken)
+    private void DispatchImmediate(Guid executionId, CancellationToken cancellationToken)
     {
-        var reservation = await concurrencyScheduler.AcquireImmediateSlotAsync(cancellationToken)
-            .ConfigureAwait(false);
-        bool started;
-        try
-        {
-            started = await executions
-                .TryStartAsync(executionId, hostEnvironment.NodeId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            reservation.Dispose();
-            throw;
-        }
-
-        if (!started)
-        {
-            reservation.Dispose();
-            return false;
-        }
-
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _immediateOutstanding[executionId] = completion.Task;
-        _ = ExecuteImmediateDetachedAsync(executionId, reservation, completion, cancellationToken);
-        return true;
+        _ = ExecuteImmediateDetachedAsync(executionId, completion, cancellationToken);
+    }
+
+    private Task WaitForShutdownOutstandingAsync()
+    {
+        var outstanding = shutdownSignal.Outstanding.Values.Select(completion => completion.Task).ToArray();
+        return outstanding.Length == 0 ? Task.CompletedTask : Task.WhenAll(outstanding);
     }
 
     private Task WaitForImmediateOutstandingAsync()
@@ -629,13 +570,28 @@ internal sealed class JobRuntimeBackgroundService(
 
     private async Task ExecuteImmediateDetachedAsync(
         Guid executionId,
-        IDisposable reservation,
         TaskCompletionSource completion,
         CancellationToken cancellationToken)
     {
         try
         {
-            await runtime.ExecuteAsync(executionId, cancellationToken).ConfigureAwait(false);
+            await Task.Yield();
+            using var reservation = await concurrencyScheduler
+                .AcquireImmediateSlotAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var scope = scopeFactory.CreateAsyncScope();
+            await using var scopeHandle = scope.ConfigureAwait(false);
+            var executions = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
+            if (await executions
+                .TryStartAsync(executionId, hostEnvironment.NodeId, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                await runtime.ExecuteAsync(executionId, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -643,7 +599,6 @@ internal sealed class JobRuntimeBackgroundService(
         }
         finally
         {
-            reservation.Dispose();
             _immediateOutstanding.TryRemove(executionId, out _);
             completion.SetResult();
         }
@@ -653,10 +608,6 @@ internal sealed class JobRuntimeBackgroundService(
     {
         if (!await IsSchedulerEligibleAsync(cancellationToken).ConfigureAwait(false))
         {
-            logger.LogInformation(
-                "Because node {NodeId} is not scheduler eligible, the job scheduler skipped stuck scheduler job " +
-                "healing",
-                hostEnvironment.NodeId);
             return DueTriggerPollInterval;
         }
 
@@ -699,8 +650,7 @@ internal sealed class JobRuntimeBackgroundService(
                 logger.LogError(ex, "The stale job execution cleanup failed");
             }
 
-            await TaskHelpers
-                .SleepAsync(jobRuntimeOptions.StaleJobCleanupInterval, _time, stoppingToken)
+            await SleepAsync(jobRuntimeOptions.StaleJobCleanupInterval, stoppingToken)
                 .ConfigureAwait(false);
         }
     }
@@ -724,8 +674,7 @@ internal sealed class JobRuntimeBackgroundService(
                 logger.LogError(ex, "The timed-out job execution reaping failed");
             }
 
-            await TaskHelpers
-                .SleepAsync(jobRuntimeOptions.TimedOutJobReapInterval, _time, stoppingToken)
+            await SleepAsync(jobRuntimeOptions.TimedOutJobReapInterval, stoppingToken)
                 .ConfigureAwait(false);
         }
     }
@@ -742,33 +691,17 @@ internal sealed class JobRuntimeBackgroundService(
         var jobManager = scope.ServiceProvider.GetRequiredService<IJobManager>();
         var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
 
-        const int pageSize = 500;
         foreach (var status in StaleCandidateStatuses)
         {
-            var staleJobs = new List<JobExecution>();
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await jobExecutionRepository.QueryAsync(
-                    query: new()
-                    {
-                        Status = status,
-                        LastHeartbeat = new(
-                            Min: null,
-                            Max: _time.GetUtcNow().UtcDateTime - jobRuntimeOptions.RunningStaleCutoff)
-                    },
-                    paging: new() { PageNumber = pageNumber, PageSize = pageSize },
-                    sort: null,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                staleJobs.AddRange(pageItems);
-                if (pageItems.Count < pageSize)
+            var staleJobs = await jobExecutionRepository.QueryAllAsync(
+                query: new()
                 {
-                    break;
-                }
-
-                pageNumber++;
-            }
+                    Status = status,
+                    LastHeartbeat = new(
+                        Min: null,
+                        Max: timeProvider.GetUtcNow().UtcDateTime - jobRuntimeOptions.RunningStaleCutoff)
+                },
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             foreach (var job in staleJobs)
             {
@@ -793,9 +726,6 @@ internal sealed class JobRuntimeBackgroundService(
                 }
             }
         }
-
-        await AgeOutUnrunnableQueuedJobsAsync(jobExecutionRepository, cancellationToken)
-            .ConfigureAwait(false);
     }
 
     internal async Task RunTimedOutJobReapOnceAsync(CancellationToken cancellationToken)
@@ -826,30 +756,14 @@ internal sealed class JobRuntimeBackgroundService(
         IJobRetryPolicy retryPolicy,
         CancellationToken cancellationToken)
     {
-        var now = _time.GetUtcNow().UtcDateTime;
-        const int pageSize = 500;
-        var timedOut = new List<JobExecution>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await repository.QueryAsync(
-                query: new()
-                {
-                    Status = JobExecutionStatus.Running,
-                    TimeoutAt = new(Min: null, Max: now)
-                },
-                paging: new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            timedOut.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
+        var reapCutoff = timeProvider.GetUtcNow().UtcDateTime - jobRuntimeOptions.RunningStaleCutoff;
+        var timedOut = await repository.QueryAllAsync(
+            query: new()
             {
-                break;
-            }
-
-            pageNumber++;
-        }
+                Status = JobExecutionStatus.Running,
+                TimeoutAt = new(Min: null, Max: reapCutoff)
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         foreach (var job in timedOut)
         {
@@ -857,8 +771,8 @@ internal sealed class JobRuntimeBackgroundService(
             {
                 var reason = $"Exceeded maximum run time (timed out at {job.TimeoutAt:O})";
                 logger.LogWarning(
-                    "The job runtime worker will reap timed-out Running job execution {JobExecutionId} ({JobType}). " +
-                    "The timeout deadline was {TimeoutAt:O} and the last heartbeat was {LastHeartbeat:O}",
+                    "The job runtime worker will reap timed-out job execution {JobExecutionId} ({JobType}) with" +
+                    " timeout deadline {TimeoutAt:O} and last heartbeat {LastHeartbeat:O}",
                     job.Id,
                     job.JobType,
                     job.TimeoutAt,
@@ -924,81 +838,6 @@ internal sealed class JobRuntimeBackgroundService(
                     "Cancellation not acknowledged before node crash",
                     cancellationToken)
                 .ConfigureAwait(false);
-        }
-    }
-
-    private async Task AgeOutUnrunnableQueuedJobsAsync(
-        IJobExecutionRepository repository,
-        CancellationToken cancellationToken)
-    {
-        var registeredJobTypes = _jobSpecs
-            .Select(spec => spec.JobType)
-            .ToHashSet(StringComparer.Ordinal);
-
-        const int pageSize = 500;
-        var queuedJobs = new List<JobExecution>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await repository.QueryAsync(
-                query: new()
-                {
-                    Status = JobExecutionStatus.Queued,
-                    Timestamp = new(
-                        Min: null,
-                        Max: _time.GetUtcNow().UtcDateTime - UnrunnableQueuedCutoff)
-                },
-                paging: new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            queuedJobs.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        foreach (var job in queuedJobs)
-        {
-            if (registeredJobTypes.Contains(job.JobType))
-            {
-                continue;
-            }
-
-            try
-            {
-                var reason = $"No registered handler for job type {job.JobType}";
-                JobsTelemetry.FailuresTotal.Add(
-                    1,
-                    new KeyValuePair<string, object?>("job.type", job.JobType),
-                    new KeyValuePair<string, object?>("reason_kind", "no_handler"));
-                logger.LogWarning(
-                    "The job runtime worker will mark stale Queued job execution {JobExecutionId} Failed. " +
-                    "No handler exists for {JobType}",
-                    job.Id,
-                    job.JobType);
-                var failedByThisRun = await repository
-                    .TryMarkQueuedFailedAsync(job.Id, reason, cancellationToken)
-                    .ConfigureAwait(false);
-                if (failedByThisRun)
-                {
-                    await eventBus.PublishAsync(
-                        JobEventBuilder.BuildJobExecutionFailedEvent(job.Id, job.JobType, reason),
-                        cancellationToken).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(
-                    ex,
-                    "The job runtime worker failed to age out un-runnable Queued job execution " +
-                    "{JobExecutionId} ({JobType})",
-                    job.Id,
-                    job.JobType);
-            }
         }
     }
 
@@ -1068,29 +907,13 @@ internal sealed class JobRuntimeBackgroundService(
             var jobManager = scope.ServiceProvider.GetRequiredService<IJobManager>();
             var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
 
-            const int pageSize = 500;
-            var orphans = new List<JobExecution>();
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await executions.QueryAsync(
-                    new()
-                    {
-                        NodeId = hostEnvironment.NodeId,
-                        Status = JobExecutionStatus.Running
-                    },
-                    new() { PageNumber = pageNumber, PageSize = pageSize },
-                    null,
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                orphans.AddRange(pageItems);
-                if (pageItems.Count < pageSize)
+            var orphans = await executions.QueryAllAsync(
+                new()
                 {
-                    break;
-                }
-
-                pageNumber++;
-            }
+                    NodeId = hostEnvironment.NodeId,
+                    Statuses = StaleCandidateStatuses
+                },
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (orphans.Count == 0)
             {
@@ -1098,7 +921,7 @@ internal sealed class JobRuntimeBackgroundService(
             }
 
             logger.LogInformation(
-                "At startup the job runtime worker will reclaim {OrphanCount} orphaned Running execution(s) " +
+                "At startup the job runtime worker will reclaim {OrphanCount} orphaned execution(s) " +
                 "owned by node {NodeId}",
                 orphans.Count,
                 hostEnvironment.NodeId);
@@ -1107,6 +930,15 @@ internal sealed class JobRuntimeBackgroundService(
             {
                 try
                 {
+                    if (orphan.Status is JobExecutionStatus.CancellationRequested)
+                    {
+                        await executions.TryMarkCancellationRequestedCancelledAsync(
+                            orphan.Id,
+                            $"Node {hostEnvironment.NodeId} restarted while this execution awaited cancellation",
+                            cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
                     var reason = $"Node {hostEnvironment.NodeId} restarted while this execution was Running";
                     await ReclaimAsync(
                         executions,
@@ -1139,6 +971,70 @@ internal sealed class JobRuntimeBackgroundService(
         }
     }
 
+    private static async Task<JobFailureTransitionResult> TransitionRunningToFailureAsync(
+        IJobExecutionRepository executions,
+        IAuditRecordRepository auditRecords,
+        ITransactionManager transactionManager,
+        IJobManager jobManager,
+        IJobRetryPolicy retryPolicy,
+        JobExecution failed,
+        JobSpec? spec,
+        JobFailurePolicy policy,
+        string reason,
+        bool timeoutAudit)
+    {
+        var result = new JobFailureTransitionResult(false, false, null);
+        await transactionManager.ExecuteWithTransactionAsync(
+            async transactionToken =>
+            {
+                var transitioned = await executions
+                    .TryMarkRunningFailedAsync(failed.Id, reason, transactionToken)
+                    .ConfigureAwait(false);
+                if (!transitioned)
+                {
+                    return;
+                }
+
+                if (timeoutAudit)
+                {
+                    await auditRecords.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Jobs,
+                            Operation = "JobTimeout",
+                            EntityId = failed.Id.ToString(),
+                            EntityType = nameof(JobExecution),
+                            Detail = $"Job execution {failed.Id} ({failed.JobType}) timed out. {reason}",
+                            UserId = failed.CreatedByUserId,
+                            CorrelationId = failed.CorrelationId
+                        },
+                        transactionToken).ConfigureAwait(false);
+                }
+
+                if (policy is JobFailurePolicy.Fail ||
+                    (policy is JobFailurePolicy.Retry && failed.ExecutionMode is JobExecutionMode.Immediate))
+                {
+                    result = new(true, PublishFailure: true, Retry: null);
+                    return;
+                }
+
+                var retry = await retryPolicy.BuildRetryAsync(failed, transactionToken).ConfigureAwait(false);
+                if (retry is null)
+                {
+                    result = new(true, PublishFailure: true, Retry: null);
+                    return;
+                }
+
+                retry.LockPartition = failed.LockPartition
+                    ?? jobManager.ResolveLockPartition(failed.JobType, BuildLockPartitionParameters(failed, spec));
+                await executions.CreateAsync(retry, failed.CreatedByUserId, transactionToken).ConfigureAwait(false);
+                result = new(true, PublishFailure: false, retry);
+            },
+            default).ConfigureAwait(false);
+
+        return result;
+    }
+
     private async Task ReclaimAsync(
         IJobExecutionRepository executions,
         IAuditRecordRepository auditRecords,
@@ -1155,57 +1051,17 @@ internal sealed class JobRuntimeBackgroundService(
             : _jobSpecs.FirstOrDefault(candidate =>
                 string.Equals(candidate.JobType, orphan.JobType, StringComparison.Ordinal));
         var policy = spec?.FailurePolicy ?? JobFailurePolicy.Fail;
-        var result = new JobFailureTransitionResult(false, false, null);
-        await transactionManager.ExecuteWithTransactionAsync(
-            async transactionToken =>
-            {
-                var transitioned = await executions
-                    .TryMarkRunningFailedAsync(orphan.Id, reason, transactionToken)
-                    .ConfigureAwait(false);
-                if (!transitioned)
-                {
-                    return;
-                }
-
-                if (timeoutAudit)
-                {
-                    await auditRecords.CreateAsync(
-                        new()
-                        {
-                            Category = AuditCategories.Jobs,
-                            Operation = "JobTimeout",
-                            EntityId = orphan.Id.ToString(),
-                            EntityType = nameof(JobExecution),
-                            Detail = $"Job execution {orphan.Id} ({orphan.JobType}) timed out. {reason}",
-                            UserId = orphan.CreatedByUserId,
-                            CorrelationId = orphan.CorrelationId
-                        },
-                        transactionToken).ConfigureAwait(false);
-                }
-
-                if (policy is JobFailurePolicy.Fail ||
-                    (policy is JobFailurePolicy.Retry &&
-                        orphan.ExecutionMode is JobExecutionMode.Immediate))
-                {
-                    result = new(true, PublishFailure: true, Retry: null);
-                    return;
-                }
-
-                var retry = await retryPolicy.BuildRetryAsync(orphan, transactionToken).ConfigureAwait(false);
-                if (retry is null)
-                {
-                    result = new(true, PublishFailure: true, Retry: null);
-                    return;
-                }
-
-                retry.LockPartition = orphan.LockPartition
-                    ?? jobManager.ResolveLockPartition(
-                        orphan.JobType,
-                        orphan.GetLockPartitionFor(spec));
-                await executions.CreateAsync(retry, orphan.CreatedByUserId, transactionToken).ConfigureAwait(false);
-                result = new(true, PublishFailure: false, retry);
-            },
-            default).ConfigureAwait(false);
+        var result = await TransitionRunningToFailureAsync(
+            executions,
+            auditRecords,
+            transactionManager,
+            jobManager,
+            retryPolicy,
+            orphan,
+            spec,
+            policy,
+            reason,
+            timeoutAudit).ConfigureAwait(false);
         if (!result.Transitioned)
         {
             logger.LogDebug(
@@ -1248,7 +1104,10 @@ internal sealed class JobRuntimeBackgroundService(
         else if (result.PublishFailure)
         {
             await eventBus.PublishAsync(
-                JobEventBuilder.BuildJobExecutionFailedEvent(orphan.Id, orphan.JobType, reason),
+                JobEventBuilder.BuildJobExecutionFailedEvent(orphan.Id, orphan.JobType, reason) with
+                {
+                    CorrelationId = orphan.CorrelationId
+                },
                 default).ConfigureAwait(false);
         }
     }
@@ -1256,35 +1115,57 @@ internal sealed class JobRuntimeBackgroundService(
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         await base.StopAsync(cancellationToken).ConfigureAwait(false);
-        await _shutdownCts.CancelAsync().ConfigureAwait(false);
+        await shutdownSignal.Cancellation.CancelAsync().ConfigureAwait(false);
 
         var inFlight = _inFlight.Values.Where(t => !t.IsCompleted).ToArray();
-        if (inFlight.Length == 0)
+        var outstanding = WaitForShutdownOutstandingAsync();
+        if (inFlight.Length == 0 && outstanding.IsCompleted)
         {
             return;
         }
 
         logger.LogInformation(
-            "The job runtime worker sent a cancellation signal to {InFlightCount} in-flight " +
-            "execution(s) for shutdown and will wait for them to stop",
+            "The job runtime worker is waiting for {InFlightCount} in-flight execution(s) to stop",
             inFlight.Length);
 
         try
         {
-            await Task.WhenAll(inFlight).WaitAsync(cancellationToken).ConfigureAwait(false);
+            await Task.WhenAll(Task.WhenAll(inFlight), outstanding)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
         }
     }
 
-    public override void Dispose()
+    private static Dictionary<string, string?> BuildLockPartitionParameters(JobExecution execution, JobSpec? spec)
     {
-        _shutdownCts.Dispose();
-        base.Dispose();
-    }
+        var parameters = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var parameter in execution.Parameters)
+        {
+            parameters[parameter.Key] = parameter.Value;
+        }
 
-    private readonly record struct StuckSchedulerJobsHealResult(
-        int HealedCount,
-        TimeSpan? NextSchedulerHealCheck);
+        if (spec is null || spec.LockPartitionEventContextKeys.Count == 0)
+        {
+            return parameters;
+        }
+
+        foreach (var (field, eventContextKey) in spec.LockPartitionEventContextKeys)
+        {
+            if (parameters.TryGetValue(field, out var existing) && !string.IsNullOrWhiteSpace(existing))
+            {
+                continue;
+            }
+
+            if (execution.TriggerContext.TryGetValue(eventContextKey.ToEventContextKey(), out var value) &&
+                !string.IsNullOrWhiteSpace(value))
+            {
+                parameters[field] = value;
+            }
+        }
+
+        return parameters;
+    }
 }

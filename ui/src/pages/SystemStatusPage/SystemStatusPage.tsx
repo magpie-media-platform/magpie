@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowClockwiseIcon, FolderIcon, GaugeIcon, HardDrivesIcon, StethoscopeIcon } from '@phosphor-icons/react';
 
 import { Card } from '@/components/ui/Card';
-import { DiskSpaceWidget, type DiskSpaceInfo } from '@/components/ui/DiskSpaceWidget';
+import { DiskSpaceWidget } from '@/components/ui/DiskSpaceWidget';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SystemStatusSlot } from '@/components/ui/Slot/SystemSlots';
@@ -48,13 +48,6 @@ export function SystemStatusPage() {
     useDocumentTitle('System Status');
     const navigate = useNavigate();
     const statusData = useSystemStatus();
-
-    const handleFolderClick = useCallback(
-        (folder: DiskSpaceInfo) => {
-            void navigate(`/admin/root-folders?id=${folder.id}`);
-        },
-        [navigate],
-    );
 
     const handleViewAllFolders = useCallback(() => {
         void navigate('/admin/root-folders');
@@ -140,7 +133,7 @@ export function SystemStatusPage() {
                             folders={statusData.diskSpace}
                             totals={statusData.diskSpaceTotals}
                             loading={statusData.isLoading}
-                            onFolderClick={handleFolderClick}
+                            onFolderClick={handleViewAllFolders}
                             onViewAllClick={handleViewAllFolders}
                             headingLevel={3}
                         />

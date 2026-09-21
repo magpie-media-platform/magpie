@@ -78,17 +78,27 @@ function hasValidationErrors(errors: JobRetryFormErrors): boolean {
 export function JobRetryPolicyPanel() {
     const [showValidationErrors, setShowValidationErrors] = useState(false);
     const [showStaleSaveConfirmation, setShowStaleSaveConfirmation] = useState(false);
-    const { values, handleChange, hasChanges, isLoading, loadError, isUncreated, isUpdating, conflictState, save } =
-        useSettingsGroupForm<JobRetryFormValues>({
-            settingsGroup: SETTINGS_GROUP,
-            defaultValues,
-            fromRecord: (record) => ({
-                baseSeconds: record['base-seconds'] ?? '',
-                factor: record['factor'] ?? '',
-                capSeconds: record['cap-seconds'] ?? '',
-                maxAttempts: record['max-attempts'] ?? '',
-            }),
-        });
+    const {
+        values,
+        handleChange,
+        hasChanges,
+        isLoading,
+        loadError,
+        refetch,
+        isUncreated,
+        isUpdating,
+        conflictState,
+        save,
+    } = useSettingsGroupForm<JobRetryFormValues>({
+        settingsGroup: SETTINGS_GROUP,
+        defaultValues,
+        fromRecord: (record) => ({
+            baseSeconds: record['base-seconds'] ?? '',
+            factor: record['factor'] ?? '',
+            capSeconds: record['cap-seconds'] ?? '',
+            maxAttempts: record['max-attempts'] ?? '',
+        }),
+    });
 
     const validationErrors = validate(values);
 
@@ -146,7 +156,10 @@ export function JobRetryPolicyPanel() {
                         icon={<WarningCircleIcon weight="duotone" />}
                         data-testid="job-retry-error"
                     >
-                        Failed to load retry settings. Try again.
+                        <p>Failed to load retry settings.</p>
+                        <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                            Retry
+                        </Button>
                     </Alert>
                 ) : (
                     <>

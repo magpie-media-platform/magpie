@@ -9,8 +9,9 @@ import {
     useState,
     type ComponentPropsWithoutRef,
 } from 'react';
+import { useLocation } from 'react-router-dom';
 
-import { Button } from '../Button';
+import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 
 import './Shell.css';
 
@@ -62,10 +63,10 @@ const Shell = forwardRef<HTMLDivElement, ShellProps>(
         const sidebarCollapsed = controlledCollapsed ?? internalCollapsed;
         const setSidebarCollapsed = useCallback(
             (collapsed: boolean) => {
-                setInternalCollapsed(collapsed);
+                if (controlledCollapsed === undefined) setInternalCollapsed(collapsed);
                 onSidebarCollapsedChange?.(collapsed);
             },
-            [onSidebarCollapsedChange],
+            [controlledCollapsed, onSidebarCollapsedChange],
         );
 
         const toggleSidebarOpen = useCallback(() => {
@@ -73,10 +74,8 @@ const Shell = forwardRef<HTMLDivElement, ShellProps>(
         }, []);
 
         const toggleSidebarCollapsed = useCallback(() => {
-            const next = !sidebarCollapsed;
-            setInternalCollapsed(next);
-            onSidebarCollapsedChange?.(next);
-        }, [sidebarCollapsed, onSidebarCollapsedChange]);
+            setSidebarCollapsed(!sidebarCollapsed);
+        }, [sidebarCollapsed, setSidebarCollapsed]);
 
         const classes = [classPrefix, className].filter(Boolean).join(' ');
         const contextValue = useMemo<ShellContextValue>(
@@ -126,7 +125,7 @@ const ShellHeader = forwardRef<HTMLDivElement, ShellHeaderProps>(
             }
 
             const update = () => {
-                const shell = el.closest(`.${classPrefix}`);
+                const shell = el.closest(`[data-component="${classPrefix}"]`);
                 if (shell instanceof HTMLElement) {
                     shell.style.setProperty('--header-height', `${el.offsetHeight}px`);
                 }
@@ -173,26 +172,20 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
             navId = 'navigation-menu',
             classPrefix = 'shell',
             children,
-            onKeyDown,
             ...props
         },
         ref,
     ) => {
         const { sidebarOpen, setSidebarOpen, sidebarCollapsed } = useShellContext();
+        const { pathname } = useLocation();
         const classes = [`${classPrefix}__sidebar`, className].filter(Boolean).join(' ');
         const navRef = useRef<HTMLElement | null>(null);
         const invocationTargetRef = useRef<HTMLElement | null>(null);
-        const [isMobile, setIsMobile] = useState(
-            () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
-        );
+        const isMobile = useMediaQuery('(max-width: 767px)');
 
         useEffect(() => {
-            const query = window.matchMedia('(max-width: 767px)');
-            const handleChange = (event: MediaQueryListEvent) => setIsMobile(event.matches);
-            setIsMobile(query.matches);
-            query.addEventListener('change', handleChange);
-            return () => query.removeEventListener('change', handleChange);
-        }, []);
+            setSidebarOpen(false);
+        }, [pathname, setSidebarOpen]);
 
         useEffect(() => {
             if (!sidebarOpen || !isMobile) {
@@ -205,13 +198,12 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
             }
 
             invocationTargetRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-            const shell = nav.closest<HTMLElement>(`.${classPrefix}`);
+            const shell = nav.closest<HTMLElement>(`[data-component="${classPrefix}"]`);
+            // The header is not in this list: it holds the toggle that closes this drawer.
             const background = shell
                 ? Array.from(
                       shell.querySelectorAll<HTMLElement>(
-                          `[data-component="${classPrefix}-header"], ` +
-                              `[data-component="${classPrefix}-main"], ` +
-                              `[data-component="${classPrefix}-bottom-nav"]`,
+                          `[data-component="${classPrefix}-main"], [data-component="${classPrefix}-bottom-nav"]`,
                       ),
                   )
                 : [];
@@ -249,39 +241,6 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
             };
         }, [classPrefix, isMobile, setSidebarOpen, sidebarOpen]);
 
-        const handleKeyDown: ComponentPropsWithoutRef<'nav'>['onKeyDown'] = (event) => {
-            onKeyDown?.(event);
-            if (event.defaultPrevented || !sidebarOpen || !isMobile || event.key !== 'Tab') {
-                return;
-            }
-
-            const nav = navRef.current;
-            if (!nav) {
-                return;
-            }
-            const focusable = Array.from(
-                nav.querySelectorAll<HTMLElement>(
-                    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
-                        'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-                ),
-            );
-            if (focusable.length === 0) {
-                event.preventDefault();
-                nav.focus();
-                return;
-            }
-
-            const first = focusable[0];
-            const last = focusable[focusable.length - 1];
-            if (event.shiftKey && document.activeElement === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (!event.shiftKey && document.activeElement === last) {
-                event.preventDefault();
-                first.focus();
-            }
-        };
-
         return (
             <>
                 <div
@@ -306,21 +265,8 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
                     data-open={sidebarOpen}
                     data-collapsed={sidebarCollapsed}
                     {...props}
-                    role={isMobile && sidebarOpen ? 'dialog' : undefined}
-                    aria-modal={isMobile && sidebarOpen ? true : undefined}
                     tabIndex={isMobile && sidebarOpen ? -1 : undefined}
-                    onKeyDown={handleKeyDown}
                 >
-                    {isMobile && sidebarOpen && (
-                        <Button
-                            variant="ghost"
-                            size="md"
-                            className={`${classPrefix}__sidebar-close`}
-                            onClick={() => setSidebarOpen(false)}
-                        >
-                            Collapse sidebar
-                        </Button>
-                    )}
                     {children}
                 </nav>
             </>
@@ -345,10 +291,13 @@ const ShellMain = forwardRef<HTMLElement, ShellMainProps>(
                 id={mainId}
                 className={classes}
                 data-component={`${classPrefix}-main`}
+                data-scroll-container=""
                 tabIndex={-1}
                 {...props}
             >
-                <div className={`${classPrefix}__main-wrapper`}>{children}</div>
+                <div className={`${classPrefix}__main-wrapper`} data-component={`${classPrefix}-main-wrapper`}>
+                    {children}
+                </div>
             </main>
         );
     },
@@ -373,17 +322,19 @@ ShellBottomNav.displayName = 'ShellBottomNav';
 function useShell() {
     const context = useShellContext();
 
+    const isDesktop = useMediaQuery('(min-width: 768px)');
+
     const closeSidebar = useCallback(() => {
         context.setSidebarOpen(false);
     }, [context]);
 
     const toggleSidebar = useCallback(() => {
-        if (window.matchMedia('(min-width: 768px)').matches) {
+        if (isDesktop) {
             context.toggleSidebarCollapsed();
         } else {
             context.toggleSidebarOpen();
         }
-    }, [context]);
+    }, [context, isDesktop]);
 
     return {
         sidebarOpen: context.sidebarOpen,

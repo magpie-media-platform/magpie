@@ -9,6 +9,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Observability;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
 using Magpie.Sdk.Jobs;
 
@@ -31,6 +32,47 @@ internal sealed class DefaultJobRetryPolicy(
     private const string FactorKey = "factor";
     private const string CapKey = "cap-seconds";
     private const string MaxAttemptsKey = "max-attempts";
+
+    private static JobExecution BuildRetry(JobExecution source, Guid originalId, int attempt, DateTime notBeforeAt)
+    {
+        var retry = BuildRequeue(source, originalId);
+        retry.Attempt = attempt;
+        retry.NotBeforeAt = notBeforeAt;
+        return retry;
+    }
+
+    private static JobExecution BuildRequeue(JobExecution source, Guid originalId)
+    {
+        return new JobExecution
+        {
+            JobType = source.JobType,
+            ExtensionId = source.ExtensionId,
+            ScheduleTriggerId = source.ScheduleTriggerId,
+            EventTriggerId = source.EventTriggerId,
+            Scope = source.Scope,
+            Parameters = new(source.Parameters),
+            TriggerContext = new(source.TriggerContext),
+            Status = JobExecutionStatus.Queued,
+            OriginalExecutionId = originalId,
+            ParentExecutionId = source.ParentExecutionId,
+            CorrelationId = source.CorrelationId,
+            LockPartition = source.LockPartition,
+        };
+    }
+
+    private static void InjectCurrentTrace(IDictionary<string, string> triggerContext)
+    {
+        if (Activity.Current is not { } activity ||
+            DistributedContextPropagator.Current.Fields.Any(triggerContext.ContainsKey))
+        {
+            return;
+        }
+
+        DistributedContextPropagator.Current.Inject(
+            activity,
+            triggerContext,
+            static (carrier, key, value) => ((IDictionary<string, string>)carrier!)[key] = value);
+    }
 
     private static DateTime ComputeNotBeforeAt(JobRetryPolicy policy, int nextAttempt, DateTime nowUtc)
     {
@@ -99,14 +141,8 @@ internal sealed class DefaultJobRetryPolicy(
 
         var originalId = failed.OriginalExecutionId ?? failed.Id;
         var notBeforeAt = ComputeNotBeforeAt(resolvedPolicy, nextAttempt, timeProvider.GetUtcNow().UtcDateTime);
-        var retry = failed.ToRetry(originalId, nextAttempt, notBeforeAt);
-        if (Activity.Current is { } currentActivity)
-        {
-            DistributedContextPropagator.Current.Inject(
-                currentActivity,
-                retry.TriggerContext,
-                static (carrier, key, value) => ((IDictionary<string, string>)carrier!)[key] = value);
-        }
+        var retry = BuildRetry(failed, originalId, nextAttempt, notBeforeAt);
+        InjectCurrentTrace(retry.TriggerContext);
 
         return retry;
     }
@@ -132,7 +168,7 @@ internal sealed class DefaultJobRetryPolicy(
         {
             logger.LogWarning(
                 ex,
-                "The policy failed to read the job-retry settings. The policy will use the compiled defaults");
+                "The policy failed to read the job-retry settings, so it will use the compiled defaults");
             return new JobRetryPolicy(DefaultBase, DefaultFactor, DefaultCap, DefaultMaxAttempts);
         }
     }

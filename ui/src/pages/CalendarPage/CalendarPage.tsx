@@ -11,6 +11,7 @@ import {
 } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
+import { Alert } from '@/components/ui/Alert';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { CalendarMainSlot } from '@/components/ui/Slot/CalendarSlots';
@@ -90,7 +91,7 @@ export function CalendarPage() {
         }
     }, [view, currentDate]);
 
-    const { events, isLoading, refetch } = useCalendar(dateRange);
+    const { events, isLoading, isTruncated, refetch } = useCalendar(dateRange);
 
     const getEventsForDate = useCallback(
         (date: Date): CalendarEvent[] => {
@@ -100,43 +101,22 @@ export function CalendarPage() {
     );
 
     const viewEvents = useMemo(() => {
-        switch (view) {
-            case 'day':
-                return getEventsForDate(currentDate);
-            case 'week': {
-                const weekStart = getWeekStart(currentDate);
-                const weekEndExclusive = new Date(weekStart);
-                weekEndExclusive.setDate(weekStart.getDate() + 7);
-                return events.filter((event) => {
-                    const eventDate = parseCalendarDate(event.date);
-                    return eventDate >= weekStart && eventDate < weekEndExclusive;
-                });
-            }
-            case 'list': {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                const weekEndExclusive = new Date(today);
-                weekEndExclusive.setDate(today.getDate() + 7);
-                return events
-                    .filter((event) => {
-                        const eventDate = parseCalendarDate(event.date);
-                        return eventDate >= today && eventDate < weekEndExclusive;
-                    })
-                    .sort((a, b) => parseCalendarDate(a.date).getTime() - parseCalendarDate(b.date).getTime());
-            }
-            case 'month': {
-                const monthDays = getMonthDays(currentDate.getFullYear(), currentDate.getMonth());
-                const monthStart = monthDays[0];
-                const monthEndExclusive = new Date(monthDays[monthDays.length - 1]);
-                monthEndExclusive.setDate(monthEndExclusive.getDate() + 1);
-                return events.filter((event) => {
-                    const eventDate = parseCalendarDate(event.date);
-                    return eventDate >= monthStart && eventDate < monthEndExclusive;
-                });
-            }
-            default:
-                return events;
+        if (view === 'day') {
+            return getEventsForDate(currentDate);
         }
+        if (view !== 'list') {
+            return [];
+        }
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const endExclusive = new Date(today);
+        endExclusive.setDate(today.getDate() + 7);
+        return events
+            .filter((event) => {
+                const eventDate = parseCalendarDate(event.date);
+                return eventDate >= today && eventDate < endExclusive;
+            })
+            .sort((a, b) => parseCalendarDate(a.date).getTime() - parseCalendarDate(b.date).getTime());
     }, [view, currentDate, events, getEventsForDate]);
 
     const handlePrev = useCallback(() => {
@@ -231,22 +211,41 @@ export function CalendarPage() {
                 />
 
                 <CalendarMainSlot>
+                    {isTruncated && (
+                        <Alert variant="warning" title="Not every calendar event is listed">
+                            Only part of this date range was loaded. Select a shorter date range.
+                        </Alert>
+                    )}
                     <section className="calendar-page__controls" aria-label="Calendar navigation">
                         <div className="calendar-page__nav">
                             <Button
                                 variant="ghost"
                                 size="sm"
                                 onClick={handlePrev}
+                                disabled={view === 'list'}
                                 aria-label="Previous"
                                 data-action="prev"
                             >
                                 <CaretLeftIcon weight="bold" />
                             </Button>
                             <span className="calendar-page__nav-title">{headerTitle}</span>
-                            <Button variant="ghost" size="sm" onClick={handleNext} aria-label="Next" data-action="next">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={handleNext}
+                                disabled={view === 'list'}
+                                aria-label="Next"
+                                data-action="next"
+                            >
                                 <CaretRightIcon weight="bold" />
                             </Button>
-                            <Button variant="secondary" size="sm" onClick={handleToday} data-action="today">
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={handleToday}
+                                disabled={view === 'list'}
+                                data-action="today"
+                            >
                                 Today
                             </Button>
                         </div>

@@ -8,7 +8,7 @@ import type {
 } from '@/hooks/useQualityTierLists';
 
 import type { Criterion } from './TierForm';
-import { operatorsForField } from './criterionOperators';
+import { CRITERION_OPERATORS } from './criterionOperators';
 import {
     mapCriteriaToApi,
     mapCriteriaToDisplay,
@@ -185,13 +185,10 @@ describe('mapOperator preserves operators the value-bearing editor cannot repres
 
 describe('value-bearing editor scoping', () => {
     it('never offers the unary null-check operators as selectable operators', () => {
-        const fields = ['source', 'resolution', 'Title', 'group', 'size', 'age'];
+        const offered = CRITERION_OPERATORS.map((option) => option.value);
 
-        for (const field of fields) {
-            const offered = operatorsForField(field).map((option) => option.value);
-            expect(offered).not.toContain('IsNull');
-            expect(offered).not.toContain('IsNotNull');
-        }
+        expect(offered).not.toContain('IsNull');
+        expect(offered).not.toContain('IsNotNull');
     });
 });
 

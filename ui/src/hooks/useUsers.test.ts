@@ -29,7 +29,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
-import { useUsers, useCurrentUser, useUser } from './useUsers';
+import { useUsers, useCurrentUser } from './useUsers';
 import type { UserItem } from '@/types';
 
 const mockUsers: UserItem[] = [
@@ -172,7 +172,7 @@ describe('useUsers', () => {
                 expect(result.current.isLoading).toBe(false);
             });
 
-            expect(mockApiGet).toHaveBeenCalledWith(expect.stringContaining('/users'));
+            expect(mockApiGet).toHaveBeenCalledWith('/users?role=Admin&enabled=true&pageNumber=1');
         });
 
         it('should return empty array on error', async () => {
@@ -253,7 +253,7 @@ describe('useUsers', () => {
             expect(mockApiPost).toHaveBeenCalledWith('/users', {
                 username: 'newuser',
                 password: 'password123',
-                role: Role.Viewer,
+                role: 'Viewer',
                 enabled: true,
             });
         });
@@ -335,7 +335,7 @@ describe('useUsers', () => {
             });
 
             expect(mockApiPatch).toHaveBeenCalledWith('/users/user-1', {
-                role: { value: Role.Manager },
+                role: { value: 'Manager' },
             });
         });
 
@@ -558,7 +558,6 @@ describe('useUsers', () => {
             expect(userQueryKeys.all).toEqual(['users']);
             expect(userQueryKeys.list()).toEqual(['users', 'list', undefined]);
             expect(userQueryKeys.list({ role: Role.Admin })).toEqual(['users', 'list', { role: Role.Admin }]);
-            expect(userQueryKeys.detail('user-1')).toEqual(['users', 'detail', 'user-1']);
             expect(userQueryKeys.me()).toEqual(['users', 'me']);
         });
     });
@@ -604,58 +603,5 @@ describe('useCurrentUser', () => {
         });
 
         expect(result.current.currentUser).toBeNull();
-    });
-});
-
-describe('useUser', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
-
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
-
-    it('should fetch a specific user from the API', async () => {
-        mockApiGet.mockResolvedValue(mockUsers[1]);
-
-        const { result } = renderHook(() => useUser('user-2'), {
-            wrapper: createWrapper(),
-        });
-
-        expect(result.current.isLoading).toBe(true);
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        expect(mockApiGet).toHaveBeenCalledWith('/users/user-2');
-        expect(result.current.user?.username).toBe('manager');
-    });
-
-    it('should not fetch when id is null', async () => {
-        const { result } = renderHook(() => useUser(null), {
-            wrapper: createWrapper(),
-        });
-
-        expect(result.current.isLoading).toBe(false);
-        expect(result.current.user).toBeNull();
-        expect(mockApiGet).not.toHaveBeenCalled();
-    });
-
-    it('should return null when user not found', async () => {
-        mockApiGet.mockRejectedValue({ status: 404, message: 'Not found' });
-
-        const { result } = renderHook(() => useUser('user-999'), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        expect(result.current.user).toBeNull();
     });
 });

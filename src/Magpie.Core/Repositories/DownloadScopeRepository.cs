@@ -10,6 +10,7 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 
 using Microsoft.EntityFrameworkCore;
@@ -22,9 +23,9 @@ internal sealed class DownloadScopeRepository(
     ITransactionManager transactionManager,
     IAuditRecordRepository auditRecordRepository,
     ILogger<DownloadScopeRepository> logger,
-    TimeProvider? timeProvider = null) : IDownloadScopeRepository
+    TimeProvider timeProvider) : IDownloadScopeRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     public async Task<IEnumerable<DownloadScope>> ListAllAsync(CancellationToken cancellationToken = default)
     {
@@ -79,15 +80,29 @@ internal sealed class DownloadScopeRepository(
             }
 
             var totalItems = await filtered.CountAsync(cancellationToken).ConfigureAwait(false);
-            IQueryable<DownloadScope> results = filtered
+            var results = filtered
                 .OrderBy(scope => scope.DownloadId)
                 .ThenBy(scope => scope.ContentHierarchyItemId)
                 .ThenBy(scope => scope.Id);
-            results = results.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
+            var sortProperty = context.Model.FindEntityType(typeof(DownloadScope))!.GetProperties()
+                .Where(property => !property.IsShadowProperty() &&
+                    (property.ClrType.IsValueType || property.ClrType == typeof(string) ||
+                        property.ClrType == typeof(Uri)))
+                .Select(property => property.Name)
+                .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
+            if (sort is not null && sortProperty is not null)
+            {
+                results = sort.Direction == SortDirection.Ascending
+                    ? filtered.OrderBy(scope => EF.Property<object>(scope, sortProperty)).ThenBy(scope => scope.Id)
+                    : filtered.OrderByDescending(scope => EF.Property<object>(scope, sortProperty))
+                        .ThenBy(scope => scope.Id);
+            }
+
+            var page = results.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
             return new()
             {
-                Items = await results.ToListAsync(cancellationToken).ConfigureAwait(false),
+                Items = await page.ToListAsync(cancellationToken).ConfigureAwait(false),
                 PageNumber = paging.PageNumber,
                 PageSize = paging.PageSize,
                 TotalItems = totalItems
@@ -113,6 +128,9 @@ internal sealed class DownloadScopeRepository(
                     context.DownloadScopes.Add(model);
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                     await WriteAuditAsync("Create", model, createdByUserId, cancellationToken).ConfigureAwait(false);
+                    await RecomputeAcquisitionStatusAsync(
+                        [model.ContentHierarchyItemId], createdByUserId, cancellationToken)
+                        .ConfigureAwait(false);
                     return model;
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -134,6 +152,15 @@ internal sealed class DownloadScopeRepository(
             return await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
+                    var priorHierarchyItemId = await context.DownloadScopes.AsNoTracking()
+                        .Where(scope => scope.Id == model.Id)
+                        .Select(scope => (Guid?)scope.ContentHierarchyItemId)
+                        .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+                    if (priorHierarchyItemId is null)
+                    {
+                        return false;
+                    }
+
                     var updated = await context.DownloadScopes.Where(scope => scope.Id == model.Id)
                         .ExecuteUpdateAsync(
                             setters => setters
@@ -144,6 +171,11 @@ internal sealed class DownloadScopeRepository(
                     if (updated > 0)
                     {
                         await WriteAuditAsync("Update", model, modifiedByUserId, cancellationToken)
+                            .ConfigureAwait(false);
+                        await RecomputeAcquisitionStatusAsync(
+                            [priorHierarchyItemId.Value, model.ContentHierarchyItemId],
+                            modifiedByUserId,
+                            cancellationToken)
                             .ConfigureAwait(false);
                     }
 
@@ -179,6 +211,9 @@ internal sealed class DownloadScopeRepository(
                     await context.DownloadScopes.Where(scope => scope.Id == id)
                         .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                     await WriteAuditAsync("Delete", model, deletedByUserId, cancellationToken).ConfigureAwait(false);
+                    await RecomputeAcquisitionStatusAsync(
+                        [model.ContentHierarchyItemId], deletedByUserId, cancellationToken)
+                        .ConfigureAwait(false);
                     return true;
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -187,6 +222,66 @@ internal sealed class DownloadScopeRepository(
         {
             logger.LogError(ex, "The download scope repository failed to delete scope {DownloadScopeId}.", id);
             throw;
+        }
+    }
+
+    private async Task RecomputeAcquisitionStatusAsync(
+        IReadOnlyCollection<Guid> hierarchyItemIds,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var contentItemIds = await context.ContentItems.AsNoTracking()
+            .Where(item => hierarchyItemIds.Contains(item.ContentHierarchyItemId))
+            .Select(item => item.Id)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        await RecomputeActiveAcquisitionStatusAsync(
+            contentItemIds, _time.GetUtcNow().UtcDateTime, userId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RecomputeActiveAcquisitionStatusAsync(
+        IReadOnlyCollection<Guid> contentItemIds,
+        DateTime now,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        if (contentItemIds.Count == 0)
+        {
+            return;
+        }
+
+        var distinctIds = contentItemIds.Distinct().ToList();
+
+        var inFlight = await (
+            from d in context.Downloads.AsNoTracking()
+            join scope in context.DownloadScopes.AsNoTracking() on d.Id equals scope.DownloadId
+            join ci in context.ContentItems.AsNoTracking()
+                on scope.ContentHierarchyItemId equals ci.ContentHierarchyItemId
+            where distinctIds.Contains(ci.Id) &&
+                d.Status != DownloadStatus.Imported &&
+                d.Status != DownloadStatus.Failed &&
+                d.Status != DownloadStatus.Cancelled
+            select new { ContentItemId = ci.Id, d.Status, Anchor = d.ModifiedAt ?? d.CreatedAt })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var statusByContentItem = inFlight
+            .GroupBy(x => x.ContentItemId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Anchor).First().Status);
+
+        foreach (var contentItemId in distinctIds)
+        {
+            var next = statusByContentItem.TryGetValue(contentItemId, out var status)
+                ? (DownloadStatus?)status
+                : null;
+            await context.ContentItems
+                .Where(ci => ci.Id == contentItemId && ci.ActiveAcquisitionStatus != next)
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(ci => ci.ActiveAcquisitionStatus, next)
+                        .SetProperty(ci => ci.ModifiedAt, now)
+                        .SetProperty(ci => ci.ModifiedByUserId, userId),
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 

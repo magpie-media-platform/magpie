@@ -50,15 +50,15 @@ internal sealed class SetupPrerequisitesDiagnostic(
         {
             findings.Add(Error(
                 "No indexers are configured",
-                "No indexer connection exists, so searches return nothing. Add one on the " +
-                "Settings -> Indexers page."));
+                "No indexer connection exists, so searches return nothing. Add one under " +
+                "Admin > Indexers."));
         }
         else if (!connections.Any(c => c.Enabled))
         {
             findings.Add(Error(
                 "All indexers are disabled",
-                "Every indexer connection is disabled, so searches return nothing. Enable at least one on " +
-                "the Settings -> Indexers page."));
+                "Every indexer connection is disabled, so searches return nothing. Enable at least one under " +
+                "Admin > Indexers."));
         }
 
         var clients = context.DownloadClients;

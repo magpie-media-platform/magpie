@@ -11,8 +11,6 @@ public sealed class PagingParameterTests
     [TestCase(-1)]
     public void Initialization_NormalizesValues_WhenNonPositive(int value)
     {
-        // Arrange
-
         // Act
         var subject = new PagingParameter { PageNumber = value, PageSize = value };
 
@@ -24,15 +22,15 @@ public sealed class PagingParameterTests
         }
     }
 
-    [Test]
-    public void Initialization_PreservesPageSize_WhenAbovePreviousLimit()
+    [TestCase(1001)]
+    [TestCase(100000000)]
+    [TestCase(int.MaxValue)]
+    public void Initialization_ClampsPageSize_WhenAboveLimit(int pageSize)
     {
-        // Arrange
-
         // Act
-        var subject = new PagingParameter { PageNumber = 1, PageSize = 1001 };
+        var subject = new PagingParameter { PageNumber = 1, PageSize = pageSize };
 
         // Assert
-        Assert.That(subject.PageSize, Is.EqualTo(1001));
+        Assert.That(subject.PageSize, Is.EqualTo(1000));
     }
 }

@@ -6,22 +6,20 @@ using System.Threading.Tasks;
 
 using Magpie.Models.UI;
 using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 using Magpie.Sdk.UI;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class UIEndpointGroup(
-    IEnumerable<IUIExtensionProvider> uiExtensionProviders,
-    IEnumerable<IAssetProvider> assetProviders,
-    ILogger<UIEndpointGroup> logger) : IApiEndpointGroup
+internal sealed class UIEndpointGroup : IApiEndpointGroup
 {
-    private readonly object _indexLock = new();
-    private Dictionary<Guid, IAssetProvider>? _extensionIndex;
+    private Dictionary<Guid, IAssetProvider>? _assetOwners;
 
     public string Name => "ui";
 
@@ -55,29 +53,42 @@ internal sealed class UIEndpointGroup(
         return true;
     }
 
-    private static string GuessContentType(string relativePath)
+    private static Dictionary<Guid, IAssetProvider> BuildAssetOwners(
+        IEnumerable<IAssetProvider> assetProviders,
+        ILogger logger)
     {
-        var ext = Path.GetExtension(relativePath).ToLowerInvariant();
-        return ext switch
+        var owners = new Dictionary<Guid, IAssetProvider>();
+        foreach (var provider in assetProviders)
         {
-            ".js" or ".mjs" => "application/javascript",
-            ".css" => "text/css",
-            ".json" => "application/json",
-            ".html" or ".htm" => "text/html",
-            ".svg" => "image/svg+xml",
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".webp" => "image/webp",
-            ".ico" => "image/x-icon",
-            ".woff" => "font/woff",
-            ".woff2" => "font/woff2",
-            ".ttf" => "font/ttf",
-            ".otf" => "font/otf",
-            ".map" => "application/json",
-            ".txt" => "text/plain",
-            _ => "application/octet-stream"
-        };
+            IEnumerable<Asset> assets;
+            try
+            {
+                assets = provider.ListAssets();
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "The asset provider {Provider} failed to list assets, so the endpoint skipped it",
+                    provider.GetType().FullName);
+                continue;
+            }
+
+            foreach (var asset in assets)
+            {
+                owners.TryAdd(asset.ExtensionId, provider);
+            }
+        }
+
+        return owners;
+    }
+
+    private IAssetProvider? ResolveOwningProvider(
+        IEnumerable<IAssetProvider> assetProviders,
+        Guid extensionId,
+        ILogger logger)
+    {
+        return (_assetOwners ??= BuildAssetOwners(assetProviders, logger)).GetValueOrDefault(extensionId);
     }
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
@@ -95,7 +106,10 @@ internal sealed class UIEndpointGroup(
             .RequireViewer();
     }
 
-    internal IResult GetManifest()
+    internal IResult GetManifest(
+        [FromServices] IEnumerable<IUIExtensionProvider> uiExtensionProviders,
+        [FromServices] IEnumerable<IAssetProvider> assetProviders,
+        [FromServices] ILogger<UIEndpointGroup> logger)
     {
         var extensions = new List<UIExtension>();
         foreach (var provider in uiExtensionProviders)
@@ -108,8 +122,7 @@ internal sealed class UIEndpointGroup(
             {
                 logger.LogWarning(
                     ex,
-                    "The UI extension provider {Provider} threw an exception during the extension list. " +
-                    "The endpoint skipped this provider",
+                    "The UI extension provider {Provider} failed to list extensions, so the endpoint skipped it",
                     provider.GetType().FullName);
             }
         }
@@ -125,8 +138,7 @@ internal sealed class UIEndpointGroup(
             {
                 logger.LogWarning(
                     ex,
-                    "The asset provider {Provider} threw an exception during the asset list. " +
-                    "The endpoint skipped this provider",
+                    "The asset provider {Provider} failed to list assets, so the endpoint skipped it",
                     provider.GetType().FullName);
             }
         }
@@ -139,6 +151,9 @@ internal sealed class UIEndpointGroup(
     }
 
     internal async Task<IResult> GetAssetAsync(
+        [FromServices] IEnumerable<IAssetProvider> assetProviders,
+        [FromServices] IFileSystem fileSystem,
+        [FromServices] ILogger<UIEndpointGroup> logger,
         Guid extensionId,
         string relativePath,
         CancellationToken cancellationToken)
@@ -161,83 +176,36 @@ internal sealed class UIEndpointGroup(
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var owningProvider = GetExtensionIndex().GetValueOrDefault(extensionId);
-
-        var providersToProbe = owningProvider is not null
-            ? [owningProvider]
-            : assetProviders;
-
-        foreach (var provider in providersToProbe)
+        var owningProvider = ResolveOwningProvider(assetProviders, extensionId, logger);
+        if (owningProvider is null)
         {
-            Stream? stream;
-            try
-            {
-                stream = await provider.GetAssetStreamAsync(relativePath, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(
-                    ex,
-                    "The asset provider {Provider} failed to resolve {RelativePath} and threw an exception. " +
-                    "The endpoint skipped this provider",
-                    provider.GetType().FullName,
-                    relativePath);
-                continue;
-            }
-
-            if (stream is null)
-            {
-                continue;
-            }
-
-            var contentType = GuessContentType(relativePath);
-            return Results.Stream(stream, contentType);
+            return Results.NotFound();
         }
 
-        return Results.NotFound();
-    }
-
-    private Dictionary<Guid, IAssetProvider> GetExtensionIndex()
-    {
-        if (_extensionIndex is { } cached)
+        Stream? stream;
+        try
         {
-            return cached;
+            stream = await owningProvider.GetAssetStreamAsync(relativePath, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "The asset provider {Provider} failed to resolve {RelativePath}",
+                owningProvider.GetType().FullName,
+                relativePath);
+            return Results.NotFound();
         }
 
-        lock (_indexLock)
+        if (stream is null)
         {
-            if (_extensionIndex is { } existing)
-            {
-                return existing;
-            }
-
-            var index = new Dictionary<Guid, IAssetProvider>();
-            foreach (var provider in assetProviders)
-            {
-                IEnumerable<Asset> assets;
-                try
-                {
-                    assets = provider.ListAssets();
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(
-                        ex,
-                        "The asset provider {Provider} threw an exception during the asset list. " +
-                        "The endpoint skipped this provider",
-                        provider.GetType().FullName);
-                    continue;
-                }
-
-                foreach (var asset in assets)
-                {
-                    index.TryAdd(asset.ExtensionId, provider);
-                }
-            }
-
-            _extensionIndex = index;
-            return index;
+            return Results.NotFound();
         }
+
+        var contentType = await fileSystem.LookupMimeTypeAsync(relativePath, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Stream(stream, contentType ?? "application/octet-stream");
     }
 }

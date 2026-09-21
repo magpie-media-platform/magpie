@@ -6,6 +6,22 @@ namespace Magpie.Sdk.Events;
 public static class MagpieEvents
 {
     /// <summary>
+    /// The stable field names that a changed-field context value lists.
+    /// </summary>
+    public static class Fields
+    {
+        /// <summary>
+        /// The changed-field name for the enabled state of a user.
+        /// </summary>
+        public const string UserEnabled = "enabled";
+
+        /// <summary>
+        /// The changed-field name for the role of a user.
+        /// </summary>
+        public const string UserRole = "role";
+    }
+
+    /// <summary>
     /// The stable event-name strings for the Magpie domain events.
     /// </summary>
     public static class Names
@@ -174,6 +190,11 @@ public static class MagpieEvents
         /// The event name for an updated event trigger.
         /// </summary>
         public const string EventTriggerUpdated = "eventTrigger.updated";
+
+        /// <summary>
+        /// The event name for a change of the activation state of the extensions.
+        /// </summary>
+        public const string ExtensionActivationChanged = "extension.activation.changed";
 
         /// <summary>
         /// The event name for a disabled extension.
@@ -379,6 +400,16 @@ public static class MagpieEvents
         /// The event name for a rejected release grab.
         /// </summary>
         public const string ReleaseGrabRejected = "releaseGrab.rejected";
+
+        /// <summary>
+        /// The event name for a release that matches the item that a search started from.
+        /// </summary>
+        public const string ReleaseMatched = "release.matched";
+
+        /// <summary>
+        /// The event name for a release that matches items other than the item that a search started from.
+        /// </summary>
+        public const string ReleaseScopeMatched = "release.scopeMatched";
 
         /// <summary>
         /// The event name for a completed release search.
@@ -840,6 +871,11 @@ public static class MagpieEvents
         /// The context key for the file path of the extension.
         /// </summary>
         public const string ExtensionFilePath = "extension.filePath";
+
+        /// <summary>
+        /// The context key for the generation of the activation state of the extensions.
+        /// </summary>
+        public const string ExtensionGeneration = "extension.generation";
 
         /// <summary>
         /// The context key for the reason for an extension state change.

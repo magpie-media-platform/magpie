@@ -109,13 +109,16 @@ export function TagsChipStrip({
         [entityId, isPending, pendingInput, tagNames, toast, updateTags],
     );
 
-    if (!entityId || (!canEdit && tagNames.length === 0)) {
+    if (!entityId) {
         return null;
     }
 
     const strip = (
         <div className="tags-chip-strip" data-component="tags-chip-strip" data-testid="tags-chip-strip">
             <ul className="tags-chip-strip__list" role="list">
+                {tagNames.length === 0 && (
+                    <li className="tags-chip-strip__empty">{isLoading ? 'Loading tags...' : 'No tags'}</li>
+                )}
                 {tagNames.map((name) => (
                     <li key={name}>
                         <span className="tags-chip-strip__chip" data-tag={name}>

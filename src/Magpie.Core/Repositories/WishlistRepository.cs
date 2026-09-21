@@ -26,9 +26,22 @@ internal sealed class WishlistRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<WishlistRepository> logger,
-    TimeProvider? timeProvider = null) : IWishlistRepository
+    TimeProvider timeProvider) : IWishlistRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private static readonly (string Name, Func<Wishlist, Wishlist, bool> Changed)[] UpdateFields =
+    [
+        ("contentFilterId", (current, model) => !Equals(current.ContentFilterId, model.ContentFilterId)),
+        ("qualityTierListId", (current, model) => !Equals(current.QualityTierListId, model.QualityTierListId)),
+        ("rootFolderId", (current, model) => !Equals(current.RootFolderId, model.RootFolderId)),
+        ("ownerUserId", (current, model) => !Equals(current.OwnerUserId, model.OwnerUserId)),
+        ("name", (current, model) => !Equals(current.Name, model.Name)),
+        ("ownerLock", (current, model) => !Equals(current.OwnerLock, model.OwnerLock)),
+        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
+        ("monitoring", (current, model) => !Equals(current.Monitoring, model.Monitoring)),
+        ("lastSyncedAt", (current, model) => !Equals(current.LastSyncedAt, model.LastSyncedAt)),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
 
     private static IReadOnlyCollection<string> ChangedFields(WishlistPatch patch)
     {
@@ -61,6 +74,11 @@ internal sealed class WishlistRepository(
         if (patch.Enabled is not null)
         {
             fields.Add("enabled");
+        }
+
+        if (patch.Monitoring is not null)
+        {
+            fields.Add("monitoring");
         }
 
         if (patch.LastSyncedAt is not null)
@@ -143,14 +161,21 @@ internal sealed class WishlistRepository(
 
             var totalCount = await wishlists.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(Wishlist).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(Wishlist.Id), nameof(Wishlist.ContentFilterId), nameof(Wishlist.QualityTierListId),
+                nameof(Wishlist.RootFolderId), nameof(Wishlist.OwnerUserId), nameof(Wishlist.Name),
+                nameof(Wishlist.OwnerLock), nameof(Wishlist.Enabled), nameof(Wishlist.Monitoring),
+                nameof(Wishlist.LastSyncedAt), nameof(Wishlist.CreatedAt), nameof(Wishlist.CreatedByUserId),
+                nameof(Wishlist.ModifiedAt), nameof(Wishlist.ModifiedByUserId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 wishlists = sort.Direction == SortDirection.Ascending
-                    ? wishlists.OrderBy(w => EF.Property<Wishlist>(w, sortProperty)).ThenBy(w => w.Id)
-                    : wishlists.OrderByDescending(w => EF.Property<Wishlist>(w, sortProperty)).ThenBy(w => w.Id);
+                    ? wishlists.OrderBy(w => EF.Property<object>(w, sortProperty)).ThenBy(w => w.Id)
+                    : wishlists.OrderByDescending(w => EF.Property<object>(w, sortProperty)).ThenBy(w => w.Id);
             }
             else
             {
@@ -210,6 +235,23 @@ internal sealed class WishlistRepository(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
+                    var current = await context.Wishlists.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    var changedFields = new List<string>();
+                    foreach (var (name, changed) in UpdateFields)
+                    {
+                        if (changed(current, model))
+                        {
+                            changedFields.Add(name);
+                        }
+                    }
+
                     var updated = await context.Wishlists
                         .Where(w => w.Id == model.Id)
                         .ExecuteUpdateAsync(
@@ -221,6 +263,7 @@ internal sealed class WishlistRepository(
                                 .SetProperty(w => w.Name, model.Name)
                                 .SetProperty(w => w.OwnerLock, model.OwnerLock)
                                 .SetProperty(w => w.Enabled, model.Enabled)
+                                .SetProperty(w => w.Monitoring, model.Monitoring)
                                 .SetProperty(w => w.LastSyncedAt, model.LastSyncedAt)
                                 .SetProperty(w => w.ModifiedAt, now)
                                 .SetProperty(w => w.ModifiedByUserId, modifiedByUserId),
@@ -239,6 +282,14 @@ internal sealed class WishlistRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                WishlistEventBuilder.BuildWishlistUpdatedEvent(model.Id, changedFields), token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -358,6 +409,11 @@ internal sealed class WishlistRepository(
                     if (patch.Enabled is not null)
                     {
                         model.Enabled = patch.Enabled.Value;
+                    }
+
+                    if (patch.Monitoring is not null)
+                    {
+                        model.Monitoring = patch.Monitoring.Value;
                     }
 
                     if (patch.LastSyncedAt is not null)

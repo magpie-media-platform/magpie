@@ -12,7 +12,7 @@ public sealed record DiagnosticContext
     /// <summary>
     /// A context with no configured entities.
     /// </summary>
-    public static DiagnosticContext Empty { get; } = new();
+    public static DiagnosticContext Empty => new();
 
     /// <summary>
     /// The configured media servers.

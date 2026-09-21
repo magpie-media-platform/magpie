@@ -25,8 +25,13 @@ namespace Magpie.Test.Extensions.Wikidata;
 [TestFixture]
 internal sealed class ContentMetadataSearcherTests
 {
-    [Test]
-    public async Task SearchAsync_ReturnsMappedHits_WhenSearchTermMatchesSupportedLevel()
+    [TestCase("movie", EntityKind.Movie)]
+    [TestCase("show", EntityKind.Show)]
+    [TestCase("season", EntityKind.Season)]
+    [TestCase("episode", EntityKind.Episode)]
+    public async Task SearchAsync_ReturnsMappedHits_WhenSearchTermMatchesSupportedLevel(
+        string levelSlug,
+        EntityKind kind)
     {
         // Arrange
         var settingsResolver = new Mock<ISettingsResolver>();
@@ -40,7 +45,7 @@ internal sealed class ContentMetadataSearcherTests
         var searchEngine = new Mock<ISearchEngine>();
         searchEngine.Setup(engine => engine.SearchAsync(
             It.Is<QueryRequest>(request =>
-                request.EntityKind == EntityKind.Movie && request.OrdinaryTerm == "Matrix"),
+                request.EntityKind == kind && request.OrdinaryTerm == "Matrix"),
             It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult
             {
@@ -55,7 +60,7 @@ internal sealed class ContentMetadataSearcherTests
             NullLogger<ContentMetadataSearcher>.Instance);
         var level = new ContentHierarchyLevelDefinition
         {
-            Slug = Constants.MovieLevel,
+            Slug = levelSlug,
             DisplayName = "Movie",
             CustomMetadataFields = []
         };
@@ -68,7 +73,7 @@ internal sealed class ContentMetadataSearcherTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Single().Title, Is.EqualTo("The Matrix"));
-            Assert.That(result.Single().ProviderType, Is.EqualTo(Constants.ProviderType));
+            Assert.That(result.Single().ProviderType, Is.EqualTo("wikidata"));
         }
     }
 
@@ -433,13 +438,7 @@ internal sealed class ContentMetadataSearcherTests
         {
             Assert.That(result.Supported, Is.True);
             Assert.That(result.Matches.Single().Level, Is.EqualTo("show"));
-            Assert.That(result.Warnings, Has.Count.EqualTo(2));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("searches for shows only"));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Does.Contain("execution warning"));
+            Assert.That(result.Warnings, Is.EqualTo(["execution warning"]));
         }
     }
 

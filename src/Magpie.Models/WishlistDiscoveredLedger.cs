@@ -11,10 +11,10 @@ public sealed record WishlistDiscoveredLedger
     /// <summary>
     /// The requested page of discovered rows.
     /// </summary>
-    public required PagedList<WishlistDiscoveredEnrichedRow> Page { get; set; }
+    public required PagedList<WishlistDiscoveredEnrichedRow> Page { get; init; }
 
     /// <summary>
     /// The aggregate counts across all discovered rows.
     /// </summary>
-    public required WishlistDiscoveredCounts Counts { get; set; }
+    public required WishlistDiscoveredCounts Counts { get; init; }
 }

@@ -29,4 +29,9 @@ public static class ParsedFileSignalKeys
     /// The signal key of the title token for metadata search.
     /// </summary>
     public const string TitleToken = "titleToken";
+
+    /// <summary>
+    /// The signal key of the title of the root-level item of a multi-level content type.
+    /// </summary>
+    public const string RootTitle = "rootTitle";
 }

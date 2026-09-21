@@ -420,26 +420,28 @@ internal static class MappingExtensions
         DateTime utcNow)
     {
         var result = new List<SubjectRelationshipDefinition>();
-        (show.Embedded?.Cast).AppendCastRelationships(utcNow, result);
-        (show.Embedded?.Crew).AppendCrewRelationships(utcNow, result);
+        (show.Embedded?.Cast).AppendCastRelationships(RelationshipKinds.Cast, utcNow, result);
+        (show.Embedded?.Crew)?.Select(entry => (entry?.Person, entry?.Type))
+            .AppendCrewRelationships(utcNow, result);
         show.Network.AppendNetworkRelationship("tvmaze:network:", utcNow, result);
         show.WebChannel.AppendNetworkRelationship("tvmaze:webchannel:", utcNow, result);
         return result;
     }
 
     public static IReadOnlyList<SubjectRelationshipDefinition> ToGuestSubjectRelationships(
-        this IReadOnlyList<GuestCastEntryDto>? cast,
+        this IReadOnlyList<CastEntryDto>? cast,
         IReadOnlyList<GuestCrewEntryDto>? crew,
         DateTime utcNow)
     {
         var result = new List<SubjectRelationshipDefinition>();
-        cast.AppendGuestCastRelationships(utcNow, result);
-        crew.AppendGuestCrewRelationships(utcNow, result);
+        cast.AppendCastRelationships(RelationshipKinds.GuestCast, utcNow, result);
+        crew?.Select(entry => (entry?.Person, entry?.Type)).AppendCrewRelationships(utcNow, result);
         return result;
     }
 
     private static void AppendCastRelationships(
         this IReadOnlyList<CastEntryDto>? cast,
+        string relationshipKind,
         DateTime utcNow,
         List<SubjectRelationshipDefinition> result)
     {
@@ -464,45 +466,7 @@ internal static class MappingExtensions
 
             result.Add(new SubjectRelationshipDefinition
             {
-                RelationshipKind = RelationshipKinds.Cast,
-                RelationshipQualifier = (entry!.Character?.Name).ToCastQualifier(entry.Self, entry.Voice),
-                RelationshipOrdinal = result.Count,
-                SubjectKind = RelationshipKinds.PersonSubject,
-                SubjectName = person.Name!.Trim(),
-                SubjectExternalIds = person.Id.ToPersonExternalIds(),
-                InitialSubjectContribution = person.ToContribution(utcNow)
-            });
-            emitted++;
-        }
-    }
-
-    private static void AppendGuestCastRelationships(
-        this IReadOnlyList<GuestCastEntryDto>? cast,
-        DateTime utcNow,
-        List<SubjectRelationshipDefinition> result)
-    {
-        if (cast is null || cast.Count == 0)
-        {
-            return;
-        }
-
-        var emitted = 0;
-        foreach (var entry in cast)
-        {
-            if (emitted >= Constants.CastCap)
-            {
-                break;
-            }
-
-            var person = entry?.Person;
-            if (person is null || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
-            {
-                continue;
-            }
-
-            result.Add(new SubjectRelationshipDefinition
-            {
-                RelationshipKind = RelationshipKinds.GuestCast,
+                RelationshipKind = relationshipKind,
                 RelationshipQualifier = (entry!.Character?.Name).ToCastQualifier(entry.Self, entry.Voice),
                 RelationshipOrdinal = result.Count,
                 SubjectKind = RelationshipKinds.PersonSubject,
@@ -515,15 +479,10 @@ internal static class MappingExtensions
     }
 
     private static void AppendCrewRelationships(
-        this IReadOnlyList<CrewEntryDto>? crew,
+        this IEnumerable<(PersonDto? Person, string? Type)> crew,
         DateTime utcNow,
         List<SubjectRelationshipDefinition> result)
     {
-        if (crew is null || crew.Count == 0)
-        {
-            return;
-        }
-
         var emitted = 0;
         foreach (var entry in crew)
         {
@@ -532,7 +491,7 @@ internal static class MappingExtensions
                 break;
             }
 
-            var person = entry?.Person;
+            var person = entry.Person;
             if (person is null || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
             {
                 continue;
@@ -540,45 +499,7 @@ internal static class MappingExtensions
 
             result.Add(new SubjectRelationshipDefinition
             {
-                RelationshipKind = entry!.Type.ToRelationshipKind(),
-                RelationshipQualifier = entry.Type.NullIfBlank(),
-                RelationshipOrdinal = result.Count,
-                SubjectKind = RelationshipKinds.PersonSubject,
-                SubjectName = person.Name!.Trim(),
-                SubjectExternalIds = person.Id.ToPersonExternalIds(),
-                InitialSubjectContribution = person.ToContribution(utcNow)
-            });
-            emitted++;
-        }
-    }
-
-    private static void AppendGuestCrewRelationships(
-        this IReadOnlyList<GuestCrewEntryDto>? crew,
-        DateTime utcNow,
-        List<SubjectRelationshipDefinition> result)
-    {
-        if (crew is null || crew.Count == 0)
-        {
-            return;
-        }
-
-        var emitted = 0;
-        foreach (var entry in crew)
-        {
-            if (emitted >= Constants.CrewCap)
-            {
-                break;
-            }
-
-            var person = entry?.Person;
-            if (person is null || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
-            {
-                continue;
-            }
-
-            result.Add(new SubjectRelationshipDefinition
-            {
-                RelationshipKind = entry!.Type.ToRelationshipKind(),
+                RelationshipKind = entry.Type.ToRelationshipKind(),
                 RelationshipQualifier = entry.Type.NullIfBlank(),
                 RelationshipOrdinal = result.Count,
                 SubjectKind = RelationshipKinds.PersonSubject,
@@ -617,7 +538,7 @@ internal static class MappingExtensions
         });
         contribution.AddCountryFact(network.Country);
 
-        if (TryUri(network.OfficialSite, out var officialSite))
+        if (TryUri(network.OfficialSite) is { } officialSite)
         {
             contribution.References.Add(new Reference
             {
@@ -677,19 +598,6 @@ internal static class MappingExtensions
         }
 
         return qualifier is null ? name : name + " (" + qualifier + ")";
-    }
-
-    private static bool TryUri(string? value, out Uri uri)
-    {
-        if (Uri.TryCreate(value, UriKind.Absolute, out var candidate) &&
-            (candidate.Scheme == Uri.UriSchemeHttp || candidate.Scheme == Uri.UriSchemeHttps))
-        {
-            uri = candidate;
-            return true;
-        }
-
-        uri = null!;
-        return false;
     }
 
     private static IReadOnlyDictionary<string, string> ToPersonExternalIds(this long personId)
@@ -756,13 +664,7 @@ internal static class MappingExtensions
 
     private static Uri? ToThumbnail(this ImageReferenceDto? image)
     {
-        var url = image?.Medium ?? image?.Original;
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            return null;
-        }
-
-        return Uri.TryCreate(url!.Trim(), UriKind.Absolute, out var uri) ? uri : null;
+        return TryUri(image?.Medium) ?? TryUri(image?.Original);
     }
 
     public static IReadOnlyList<ProviderMetadataSearchSubjectReference> ToSearchSubjectReferences(this ShowDto show)
@@ -1019,6 +921,7 @@ internal static class MappingExtensions
             return null;
         }
 
-        return Uri.TryCreate(value!.Trim(), UriKind.Absolute, out var uri) ? uri : null;
+        return Uri.TryCreate(value!.Trim(), UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) ? uri : null;
     }
 }

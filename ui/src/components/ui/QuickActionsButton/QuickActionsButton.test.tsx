@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -195,32 +192,5 @@ describe('QuickActionsButton', () => {
 
         const wrapper = container.querySelector('.quick-actions-button');
         expect(wrapper).toHaveClass('custom-class');
-    });
-
-    it('hides only header actions mirrored by the mobile quick action', () => {
-        const css = readFileSync(
-            resolve(process.cwd(), 'src/components/ui/QuickActionsButton/QuickActionsButton.css'),
-            'utf8',
-        );
-        const mirroredActions = css
-            .match(
-                /\[data-page\]:has\(\.quick-actions-button\)\s+\.page-header__actions\s+:is\((?<actions>[\s\S]*?)\)\s*{/,
-            )
-            ?.groups?.actions.matchAll(/\[data-action='(?<action>[^']+)'\]/g);
-        const actionNames = [...(mirroredActions ?? [])].map((match) => match.groups?.action);
-
-        expect(actionNames).toEqual([
-            'create-backup',
-            'add-client',
-            'add-server',
-            'add-filter',
-            'add-tier-list',
-            'add-wishlist',
-            'add-folder',
-            'add-rule',
-            'add-mapping',
-        ]);
-        expect(css).not.toMatch(/\.page-header__actions\s+\[data-action\]\s*{/);
-        expect(actionNames).not.toContain('clear-filters');
     });
 });

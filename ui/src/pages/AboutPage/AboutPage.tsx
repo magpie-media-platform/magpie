@@ -60,7 +60,10 @@ function BuildInfoItem({ label, value, mono = false, loading, icon }: BuildInfoI
     if (loading) {
         return (
             <div className="about-page__info-item">
-                <span className="about-page__info-label">{label}</span>
+                <span className="about-page__info-label">
+                    {icon}
+                    {label}
+                </span>
                 <Skeleton width={120} height={16} />
             </div>
         );

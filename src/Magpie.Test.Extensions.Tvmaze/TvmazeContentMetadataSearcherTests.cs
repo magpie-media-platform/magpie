@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,6 +8,7 @@ using Magpie.Extensions.Tvmaze.Mapping;
 using Magpie.Extensions.Tvmaze.Pipeline;
 using Magpie.Models;
 using Magpie.Models.Data;
+using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
 using Magpie.Sdk.Content;
 
@@ -147,26 +149,34 @@ public class TvmazeContentMetadataSearcherTests
     }
 
     [Test]
-    public async Task AdvancedSearchAsync_ReturnsNotSupported_WhenLevelIsNotShow()
+    public async Task AdvancedSearchAsync_ReturnsEmpty_WhenLevelIsNotShow()
     {
         // Arrange
+        var searcher = new ContentMetadataSearcher(
+            _client.Object,
+            new SearchPlanner(NullLogger<SearchPlanner>.Instance),
+            new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance),
+            NullLogger<ContentMetadataSearcher>.Instance);
+        var query = new ContentHierarchyItemCriteria
+        {
+            Level = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Value = "episode" }]
+            }
+        };
 
         // Act
-        var result = await ((ContentMetadataSearcher)_subject).AdvancedSearchAsync(
-            EpisodeLevel,
-            new MetadataCriteria(),
-            page: 1,
-            defaultLanguagePreference: "en",
-            default).ConfigureAwait(false);
+        var result = await searcher.AdvancedSearchAsync("tv", query, 25, "en", default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Supported, Is.False);
-        _planner.Verify(
-            planner => planner.Plan(It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>()),
-            Times.Never);
-        _executor.Verify(
-            executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Supported, Is.True);
+            Assert.That(result.Matches, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        _client.VerifyNoOtherCalls();
     }
 
     [Test]
@@ -189,7 +199,6 @@ public class TvmazeContentMetadataSearcherTests
                     new SearchSeed.Lookup(Constants.ImdbSource, "tt0944947", null)
                 ])
             },
-            Warnings = [],
             Dispositions = []
         };
         _planner
@@ -217,10 +226,17 @@ public class TvmazeContentMetadataSearcherTests
             });
 
         // Act
-        var result = await ((ContentMetadataSearcher)_subject).AdvancedSearchAsync(
-            ShowLevel,
-            criteria,
-            page: 1,
+        var result = await _subject.AdvancedSearchAsync(
+            "tv",
+            new ContentHierarchyItemCriteria
+            {
+                Level = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Value = "show" }]
+                },
+                Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+            },
+            maxResults: 25,
             defaultLanguagePreference: "en",
             default).ConfigureAwait(false);
 
@@ -251,7 +267,6 @@ public class TvmazeContentMetadataSearcherTests
                 AnchorKind = SearchAnchorKind.NativeId,
                 Seed = new SearchSeed.IdLookup([new SearchSeed.Lookup(Constants.ProviderType, "82", 82)])
             },
-            Warnings = [],
             Dispositions = []
         };
         _planner.Setup(planner => planner.Plan(query, 10)).Returns(plan);
@@ -298,7 +313,7 @@ public class TvmazeContentMetadataSearcherTests
     {
         // Arrange
         _client
-            .Setup(client => client.GetShowWithCreditsAsync(82, It.IsAny<CancellationToken>()))
+            .Setup(client => client.GetShowWithEmbedsAsync(82, new[] { "cast", "crew" }, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
                 Id = 82,
@@ -337,9 +352,11 @@ public class TvmazeContentMetadataSearcherTests
                 reference.DisplayName == "Peter Dinklage" &&
                 reference.SubjectKind == "person" &&
                 reference.RelationshipKind == "cast"));
-        _client.Verify(client => client.GetShowWithCreditsAsync(82, It.IsAny<CancellationToken>()), Times.Once);
+        _client.Verify(client => client.GetShowWithEmbedsAsync(
+            82, new[] { "cast", "crew" }, It.IsAny<CancellationToken>()), Times.Once);
         _client.Verify(
-            client => client.GetShowByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            client => client.GetShowWithEmbedsAsync(
+                It.IsAny<int>(), Array.Empty<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

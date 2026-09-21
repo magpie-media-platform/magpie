@@ -45,29 +45,14 @@ internal sealed class RunCommand : Command
         builder.Services.AddMagpieAuthenticationScheme();
         builder.AddMagpieSystem(hostStatus);
 
-        await builder.MigrateMagpieDatabaseAsync(cancellationToken).ConfigureAwait(false);
+        await builder.PrepareMagpieDatabaseAsync(cancellationToken).ConfigureAwait(false);
         await builder.AddMagpieExtensionsAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var app = builder.Build();
 
         app.EnsureMagpieClusterBackplane();
 
-        app.UseExceptionHandler();
-
-        app.UseCors(policy => policy
-            .SetIsOriginAllowed(_ => true)
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials());
-
-        app.UseStaticFiles();
-        app.UseAuthentication();
-        app.UseAuthorization();
-        app.UseMagpieSetupRedirect();
-        app.MapMagpieEndpoints();
-        app.MapFallbackToFile("index.html").AllowAnonymous();
-
-        await app.DispatchLifecycleEventsAsync(cancellationToken).ConfigureAwait(false);
+        app.UseMagpieRequestPipeline();
 
         await app.RunAsync().ConfigureAwait(false);
 

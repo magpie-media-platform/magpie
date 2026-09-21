@@ -47,19 +47,19 @@ describe('HealthCard', () => {
 
         expect(screen.queryByText('Stale')).not.toBeInTheDocument();
 
-        const healthyRow = screen.getByText('Healthy').closest('.health-card__row');
+        const healthyRow = screen.getByText('Healthy').closest('.status-row');
         expect(healthyRow).toHaveTextContent('5');
 
-        const unhealthyRow = screen.getByText('Unhealthy').closest('.health-card__row');
+        const unhealthyRow = screen.getByText('Unhealthy').closest('.status-row');
         expect(unhealthyRow).toHaveTextContent('2');
 
-        const degradedRow = screen.getByText('Degraded').closest('.health-card__row');
+        const degradedRow = screen.getByText('Degraded').closest('.status-row');
         expect(degradedRow).toHaveTextContent('3');
 
-        const stabilizingRow = screen.getByText('Stabilizing').closest('.health-card__row');
+        const stabilizingRow = screen.getByText('Stabilizing').closest('.status-row');
         expect(stabilizingRow).toHaveTextContent('1');
 
-        const unknownRow = screen.getByText('Unknown').closest('.health-card__row');
+        const unknownRow = screen.getByText('Unknown').closest('.status-row');
         expect(unknownRow).toHaveTextContent('1');
     });
 
@@ -119,7 +119,7 @@ describe('HealthCard loading state', () => {
     it('shows skeleton rows when loading', () => {
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} loading />);
 
-        const skeletonRows = document.querySelectorAll('.health-card__row--skeleton');
+        const skeletonRows = document.querySelectorAll('.status-row [data-component="skeleton"]');
         expect(skeletonRows.length).toBe(2);
     });
 
@@ -140,7 +140,7 @@ describe('HealthCard interactions', () => {
     it('renders status rows as links when getStatusUrl is provided', () => {
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} getStatusUrl={getStatusUrl} />);
 
-        const healthyRow = screen.getByText('Healthy').closest('.health-card__row');
+        const healthyRow = screen.getByText('Healthy').closest('.status-row');
         expect(healthyRow?.tagName).toBe('A');
         expect(healthyRow).toHaveAttribute('href', '/indexers?status=healthy');
     });
@@ -174,7 +174,7 @@ describe('HealthCard interactions', () => {
     it('makes row a link when count is greater than 0', () => {
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} getStatusUrl={getStatusUrl} />);
 
-        const healthyRow = screen.getByText('Healthy').closest('.health-card__row');
+        const healthyRow = screen.getByText('Healthy').closest('.status-row');
         expect(healthyRow?.tagName).toBe('A');
         expect(healthyRow).toHaveAttribute('data-clickable');
     });
@@ -184,7 +184,7 @@ describe('HealthCard interactions', () => {
 
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} />);
 
-        const healthyRow = screen.getByText('Healthy').closest('.health-card__row');
+        const healthyRow = screen.getByText('Healthy').closest('.status-row');
         expect(healthyRow?.tagName).toBe('DIV');
         expect(healthyRow).not.toHaveAttribute('data-clickable');
 
@@ -196,14 +196,12 @@ describe('HealthCard data attributes', () => {
     it('applies data-status to each rendered status row', () => {
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} />);
 
-        expect(screen.getByText('Healthy').closest('.health-card__row')).toHaveAttribute('data-status', 'healthy');
-        expect(screen.getByText('Unhealthy').closest('.health-card__row')).toHaveAttribute('data-status', 'unhealthy');
-        expect(screen.getByText('Degraded').closest('.health-card__row')).toHaveAttribute('data-status', 'degraded');
-        expect(screen.getByText('Stabilizing').closest('.health-card__row')).toHaveAttribute(
-            'data-status',
-            'stabilizing',
-        );
-        expect(screen.getByText('Unknown').closest('.health-card__row')).toHaveAttribute('data-status', 'unknown');
+        expect(screen.getByText('Healthy').closest('.status-row')).toHaveAttribute('data-status', 'healthy');
+        expect(screen.getByText('Healthy').closest('.status-row')).toHaveAttribute('data-status', 'healthy');
+        expect(screen.getByText('Unhealthy').closest('.status-row')).toHaveAttribute('data-status', 'unhealthy');
+        expect(screen.getByText('Degraded').closest('.status-row')).toHaveAttribute('data-status', 'degraded');
+        expect(screen.getByText('Stabilizing').closest('.status-row')).toHaveAttribute('data-status', 'stabilizing');
+        expect(screen.getByText('Unknown').closest('.status-row')).toHaveAttribute('data-status', 'unknown');
     });
 });
 
@@ -223,7 +221,7 @@ describe('HealthCard accessibility', () => {
     it('clickable rows have aria-label', () => {
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} getStatusUrl={getStatusUrl} />);
 
-        const healthyRow = screen.getByText('Healthy').closest('.health-card__row');
+        const healthyRow = screen.getByText('Healthy').closest('.status-row');
         expect(healthyRow).toHaveAttribute('aria-label', 'View 5 healthy items');
     });
 
@@ -238,7 +236,7 @@ describe('HealthCard accessibility', () => {
     it('status indicators are hidden from screen readers', () => {
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} />);
 
-        const indicators = document.querySelectorAll('.health-card__indicator');
+        const indicators = document.querySelectorAll('.status-row__indicator');
         indicators.forEach((indicator) => {
             expect(indicator).toHaveAttribute('aria-hidden', 'true');
         });

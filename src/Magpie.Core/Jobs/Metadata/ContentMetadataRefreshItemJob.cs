@@ -38,11 +38,28 @@ internal sealed class ContentMetadataRefreshItemJob(
     ISubjectKindRegistry subjectKindRegistry,
     TimeProvider timeProvider,
     ILogger<ContentMetadataRefreshItemJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
+    private sealed record ContributionReplacement(
+        IReadOnlyList<MetadataContribution> ExistingProviderContributions,
+        MetadataContribution Contribution,
+        IReadOnlyList<SubjectRelationshipDefinition> SubjectRelationships);
+
+    private sealed record ResolvedSubject(
+        SubjectRelationshipDefinition Definition,
+        Guid MetadataContainerId,
+        IReadOnlyList<(string Source, string Value)> ExternalIds);
+
+    private sealed record ProviderChildDefinition(string ProviderType, ChildHierarchyDefinition Definition);
+
+    private sealed record ProviderFetchResult(
+        IContentHierarchyMetadataProvider Provider,
+        ContentHierarchyMetadataResult? Result,
+        Exception? Exception);
+
     public static readonly JobSpec Spec = new()
     {
-        JobType = "ContentMetadataRefreshItem",
+        JobType = MagpieJobs.Types.ContentMetadataRefreshItem,
         DisplayName = "Content metadata refresh item",
         Description = "Refreshes metadata for one content item.",
         Category = "Content",
@@ -70,8 +87,18 @@ internal sealed class ContentMetadataRefreshItemJob(
         ],
     };
 
+    private const string PathOriginSetting = "content.path.origin";
+
+    private const string GeneratedPathOrigin = "Generated";
+
     private const string NoMetadataReturnedStatus =
-        "The provider returned no metadata, so the refresh will try again.";
+        "No metadata provider returned metadata, so the refresh made no changes.";
+
+    private const string NoProviderMatchedStatus =
+        "No metadata provider handles this content type, so the refresh made no changes.";
+
+    private const string ProviderFailedStatus =
+        "A metadata provider failed, so the refresh will try again.";
 
     private const MetadataField NameLikeFallbackIdentityFields =
         MetadataField.Title | MetadataField.OriginalTitle | MetadataField.SortTitle;
@@ -161,6 +188,16 @@ internal sealed class ContentMetadataRefreshItemJob(
             string.Equals(child.Slug, definition.Slug, StringComparison.Ordinal));
     }
 
+    private static string NormalizePathSegment(string source)
+    {
+        var characters = source.Trim().Select(character =>
+            character is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' || char.IsControl(character)
+                ? ' '
+                : character).ToArray();
+        return string.Join(' ', new string(characters).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .TrimEnd('.');
+    }
+
     private static void InitializeContentPath(
         ContentHierarchyItem item,
         IContentTypeRegistry registry,
@@ -168,28 +205,22 @@ internal sealed class ContentMetadataRefreshItemJob(
     {
         var level = registry.GetDefinitionFor(item.ContentType)?.LevelDefinitions
             .FirstOrDefault(definition => definition.Slug == item.Level);
-        var origin = item.Settings.TryGetValue("content.path.origin", out var value) ? value : null;
+        var origin = item.Settings.TryGetValue(PathOriginSetting, out var value) ? value : null;
         if (level?.Subfolder is null ||
-            !(string.Equals(origin, "Generated", StringComparison.OrdinalIgnoreCase) ||
+            !(string.Equals(origin, GeneratedPathOrigin, StringComparison.OrdinalIgnoreCase) ||
                 origin is null && item.Path is null))
         {
             return;
         }
 
-        var source = string.IsNullOrWhiteSpace(item.Name) ? item.Slug : item.Name;
-        var characters = source.Trim().Select(character =>
-            character is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' || char.IsControl(character)
-                ? ' '
-                : character).ToArray();
-        var segment = string.Join(' ', new string(characters)
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)).TrimEnd('.');
+        var segment = NormalizePathSegment(string.IsNullOrWhiteSpace(item.Name) ? item.Slug : item.Name);
         if (segment.Length == 0)
         {
             segment = item.Slug;
         }
 
         item.Path = year is null ? segment : $"{segment} ({year.Value})";
-        item.Settings["content.path.origin"] = "Generated";
+        item.Settings[PathOriginSetting] = GeneratedPathOrigin;
     }
 
     private static async Task<ProviderFetchResult> InvokeProviderAsync(
@@ -218,7 +249,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 cancellationToken).ConfigureAwait(false);
             if (result?.Contribution is null)
             {
-                logger.LogInformation("Provider {ProviderType} returned no contribution", provider.ProviderType);
+                logger.LogDebug("Provider {ProviderType} returned no contribution", provider.ProviderType);
             }
 
             activity?.SetTag("magpie.result.contribution_found", result?.Contribution is not null);
@@ -349,6 +380,7 @@ internal sealed class ContentMetadataRefreshItemJob(
             context.ManualTriggerUserId,
             context.CorrelationId,
             progressReporter,
+            context.ExecutionMode == JobExecutionMode.Immediate,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -356,7 +388,8 @@ internal sealed class ContentMetadataRefreshItemJob(
         Guid contentHierarchyItemId,
         Guid? userId,
         Guid? correlationId,
-        IProgressReporter? progress,
+        IProgressReporter progress,
+        bool operatorRequested = false,
         CancellationToken cancellationToken = default)
     {
         using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.refresh");
@@ -371,6 +404,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 userId,
                 correlationId,
                 progress,
+                operatorRequested,
                 activity,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -388,18 +422,19 @@ internal sealed class ContentMetadataRefreshItemJob(
         Guid contentHierarchyItemId,
         Guid? userId,
         Guid? correlationId,
-        IProgressReporter? progress,
+        IProgressReporter progress,
+        bool operatorRequested,
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        progress?.Report(0, "The refresh will load the content item.");
+        progress.Report(0, "The refresh will load the content item.");
 
         var item = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
         if (item is null)
         {
             logger.LogInformation("The refresh skipped missing item {ContentHierarchyItemId}", contentHierarchyItemId);
-            progress?.Report(1, "The refresh stopped because the content item does not exist.");
+            progress.Report(1, "The refresh stopped because the content item does not exist.");
             return null;
         }
 
@@ -413,7 +448,7 @@ internal sealed class ContentMetadataRefreshItemJob(
             logger.LogInformation(
                 "The refresh skipped item {ContentHierarchyItemId} because it has no metadata container",
                 item.Id);
-            progress?.Report(1, "The refresh stopped because the metadata container does not exist.");
+            progress.Report(1, "The refresh stopped because the metadata container does not exist.");
             return item.ContentType;
         }
 
@@ -422,7 +457,7 @@ internal sealed class ContentMetadataRefreshItemJob(
             logger.LogWarning(
                 "The refresh skipped item {ContentHierarchyItemId} because its content type is not registered",
                 item.Id);
-            progress?.Report(1, "The refresh stopped because the content type is not registered.");
+            progress.Report(1, "The refresh stopped because the content type is not registered.");
             return item.ContentType;
         }
 
@@ -443,8 +478,8 @@ internal sealed class ContentMetadataRefreshItemJob(
 
             var typeNames = string.Join(", ", members.Select(p => p.GetType().FullName));
             logger.LogWarning(
-                "Two or more types use ProviderType {ProviderType}: {TypeNames}. The refresh will run all " +
-                "of them and their contributions will overwrite each other",
+                "Two or more types use ProviderType {ProviderType}: {TypeNames}, so their contributions " +
+                "will overwrite each other",
                 group.Key,
                 typeNames);
         }
@@ -456,7 +491,7 @@ internal sealed class ContentMetadataRefreshItemJob(
         var (ancestorLanguagePreferences, ancestorMetadata) =
             await WalkAncestorsAsync(item, cancellationToken).ConfigureAwait(false);
 
-        progress?.Report(0, "The refresh will get metadata from the providers.");
+        progress.Report(0, "The refresh will get metadata from the providers.");
 
         var providerTasks = new List<Task<ProviderFetchResult>>(providers.Length);
         foreach (var provider in providers)
@@ -482,7 +517,7 @@ internal sealed class ContentMetadataRefreshItemJob(
         foreach (var provider in providers)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report(
+            progress.Report(
                 providers.Length == 0 ? 0.5 : Math.Min(0.95, completedProviders / (double)providers.Length),
                 $"The refresh will merge metadata from provider {provider.ProviderType}.");
 
@@ -576,25 +611,47 @@ internal sealed class ContentMetadataRefreshItemJob(
         var childDefinitionsAreComplete = childDefinitions.Count > 0 &&
             !fetchResults.Any(result => result.Exception is not null);
         var stillPlaceholder = string.IsNullOrWhiteSpace(resolvedTitle) &&
-            providers.Length > 0 &&
             item.PendingMetadataRefresh &&
             !childDefinitionsAreComplete;
         if (stillPlaceholder)
         {
+            if (providers.Length == 0)
+            {
+                logger.LogInformation(
+                    "No metadata provider handles the content type of item {ContentHierarchyItemId}",
+                    item.Id);
+                progress.Report(1, NoProviderMatchedStatus);
+                return item.ContentType;
+            }
+
+            if (!operatorRequested)
+            {
+                await contentHierarchyItemRepository
+                    .PatchAsync(
+                        new ContentHierarchyItemPatch
+                        {
+                            Id = item.Id,
+                            DateLastRefreshed = new() { Value = timeProvider.GetUtcNow().UtcDateTime }
+                        },
+                        userId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             var anyProviderFailedTransiently = fetchResults.Any(r => r.Exception is not null);
             if (anyProviderFailedTransiently)
             {
-                logger.LogInformation(
-                    "The refresh got no metadata for item {ContentHierarchyItemId} and will retry",
+                logger.LogWarning(
+                    "A metadata provider failed for item {ContentHierarchyItemId} and the refresh will retry",
                     item.Id);
-                progress?.Report(1, NoMetadataReturnedStatus);
-                throw new MetadataNotReturnedException(NoMetadataReturnedStatus);
+                progress.Report(1, ProviderFailedStatus);
+                throw new MetadataNotReturnedException(ProviderFailedStatus);
             }
 
             logger.LogInformation(
-                "The refresh got no metadata for item {ContentHierarchyItemId}",
+                "No provider returned metadata for item {ContentHierarchyItemId}",
                 item.Id);
-            progress?.Report(1, NoMetadataReturnedStatus);
+            progress.Report(1, NoMetadataReturnedStatus);
             return item.ContentType;
         }
 
@@ -627,7 +684,10 @@ internal sealed class ContentMetadataRefreshItemJob(
                         Monitoring = item.EffectiveMonitoring,
                         MetadataSourceContainerId = container.Id,
                         MetadataAddedContainerIds = addedRelationshipContainerIds
-                    }),
+                    }) with
+                    {
+                        CorrelationId = correlationId
+                    },
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -643,7 +703,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 item.Id);
         }
 
-        progress?.Report(1, "The metadata refresh completed.");
+        progress.Report(1, "The metadata refresh completed.");
 
         return item.ContentType;
     }
@@ -733,6 +793,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                     await MarkRefreshedAsync(item, resolvedTitle, resolvedYear, userId, ct).ConfigureAwait(false);
                     var directChildren = await ListDirectChildrenAsync(item.Id, ct).ConfigureAwait(false);
                     var childIds = new HashSet<Guid>();
+                    var recursedIds = new HashSet<Guid>();
                     if (childDefinitions.Count > 0)
                     {
                         await MaterializeDeclaredChildrenAsync(
@@ -740,6 +801,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                             childDefinitions,
                             directChildren,
                             childIds,
+                            recursedIds,
                             userId,
                             ct).ConfigureAwait(false);
                     }
@@ -748,6 +810,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                         .Where(child => child.MetadataContainer?.Contributions.Any(
                             contribution => contribution.ExternalIds.Count > 0) == true)
                         .Select(child => child.Id));
+                    childIds.ExceptWith(recursedIds);
 
                     using var cascadeActivity = ContentTelemetry.Source.StartActivity("magpie.metadata.cascade");
                     cascadeActivity?.SetTag("magpie.cascade.child_count", childIds.Count);
@@ -783,6 +846,7 @@ internal sealed class ContentMetadataRefreshItemJob(
         IReadOnlyList<ProviderChildDefinition> providerDefinitions,
         List<ContentHierarchyItem> existingChildren,
         ISet<Guid> refreshIds,
+        ISet<Guid> recursedIds,
         Guid? userId,
         CancellationToken cancellationToken)
     {
@@ -862,7 +926,25 @@ internal sealed class ContentMetadataRefreshItemJob(
                 providerType,
                 userId,
                 cancellationToken).ConfigureAwait(false);
-            refreshIds.Add(child.Id);
+
+            if (definition.Children.Count > 0)
+            {
+                recursedIds.Add(child.Id);
+                var grandchildren = await ListDirectChildrenAsync(child.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                await MaterializeDeclaredChildrenAsync(
+                    child,
+                    [.. definition.Children.Select(nested => new ProviderChildDefinition(providerType, nested))],
+                    grandchildren,
+                    refreshIds,
+                    recursedIds,
+                    userId,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                refreshIds.Add(child.Id);
+            }
         }
     }
 
@@ -929,33 +1011,17 @@ internal sealed class ContentMetadataRefreshItemJob(
         Guid parentId,
         CancellationToken cancellationToken)
     {
-        const int pageSize = 500;
-        var children = new List<ContentHierarchyItem>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new ContentHierarchyItemCriteria
-                {
-                    ParentId = new CriteriaSet<PropertyCriterion<Guid>>
-                    {
-                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = parentId }]
-                    }
-                },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            children.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
+        var children = await contentHierarchyItemRepository.QueryAllAsync(
+            new ContentHierarchyItemCriteria
             {
-                break;
-            }
+                ParentId = new CriteriaSet<PropertyCriterion<Guid>>
+                {
+                    And = [new() { Operator = CriteriaValueOperator.Equals, Value = parentId }]
+                }
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            pageNumber++;
-        }
-
-        return children;
+        return [.. children];
     }
 
     private async Task<IReadOnlyList<Guid>> UpsertSubjectRelationshipsAsync(
@@ -1085,13 +1151,6 @@ internal sealed class ContentMetadataRefreshItemJob(
         Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        var existingContainerId = await FindExistingSubjectContainerIdAsync(definition, cancellationToken)
-            .ConfigureAwait(false);
-        if (existingContainerId is not null)
-        {
-            return existingContainerId;
-        }
-
         var subject = await subjectRepository.CreateAsync(
             new Subject
             {
@@ -1120,10 +1179,10 @@ internal sealed class ContentMetadataRefreshItemJob(
             await jobManager.ExecuteAsync(
                 new JobEnqueueRequest
                 {
-                    JobType = "SubjectMetadataRefreshItem",
+                    JobType = MagpieJobs.Types.SubjectMetadataRefreshItem,
                     Parameters = new Dictionary<string, string>()
                     {
-                        ["subjectId"] = subject.Id.ToString("D"),
+                        [MagpieJobs.Parameters.SubjectId] = subject.Id.ToString("D"),
                     },
                     CorrelationId = correlationId,
                     UserId = userId,
@@ -1131,7 +1190,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "The metadata refresh enqueued a refresh for subject {SubjectId} of kind {Kind}",
                 subject.Id,
                 subject.Kind);
@@ -1216,58 +1275,66 @@ internal sealed class ContentMetadataRefreshItemJob(
     {
         var now = timeProvider.GetUtcNow().UtcDateTime;
 
-        var shouldWriteName = !string.IsNullOrWhiteSpace(resolvedTitle) &&
-            (string.IsNullOrWhiteSpace(item.Name) || item.PendingMetadataRefresh);
-        static string NormalizeSegment(string source)
-        {
-            var characters = source.Select(character =>
-                character is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' ||
-                    char.IsControl(character)
-                    ? ' '
-                    : character).ToArray();
-            return string.Join(' ', new string(characters).Split(' ', StringSplitOptions.RemoveEmptyEntries))
-                .TrimEnd('.');
-        }
+        var current = await contentHierarchyItemRepository.GetByIdAsync(item.Id, cancellationToken)
+            .ConfigureAwait(false) ?? item;
 
-        var origin = item.Settings.TryGetValue("content.path.origin", out var pathOrigin) ? pathOrigin : null;
-        var isAbsolute = item.Path is not null && Path.IsPathFullyQualified(
-            item.Path.Trim().Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar));
+        var shouldWriteName = !string.IsNullOrWhiteSpace(resolvedTitle) &&
+            (string.IsNullOrWhiteSpace(current.Name) || current.PendingMetadataRefresh);
+        var origin = current.Settings.TryGetValue(PathOriginSetting, out var pathOrigin) ? pathOrigin : null;
+        var isAbsolute = current.Path is not null && Path.IsPathFullyQualified(
+            current.Path.Trim().Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar));
         var shouldReplacePlaceholderPath = shouldWriteName &&
-            item.PendingMetadataRefresh &&
-            string.Equals(origin, "Generated", StringComparison.OrdinalIgnoreCase) &&
+            current.PendingMetadataRefresh &&
+            string.Equals(origin, GeneratedPathOrigin, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(
-                item.Path,
-                NormalizeSegment(item.Slug.Trim()),
+                current.Path,
+                NormalizePathSegment(current.Slug),
                 StringComparison.Ordinal) &&
             !isAbsolute &&
-            item.ContentItem is not { MediaFiles.Count: > 0 };
-        if (shouldWriteName)
-        {
-            item.Name = resolvedTitle!;
-        }
-
+            current.ContentItem is not { MediaFiles.Count: > 0 };
+        var name = shouldWriteName ? resolvedTitle! : null;
+        string? path = null;
         if (shouldReplacePlaceholderPath)
         {
-            var level = contentTypeRegistry.GetDefinitionFor(item.ContentType)?.LevelDefinitions
-                .FirstOrDefault(definition => definition.Slug == item.Level);
+            var level = contentTypeRegistry.GetDefinitionFor(current.ContentType)?.LevelDefinitions
+                .FirstOrDefault(definition => definition.Slug == current.Level);
             if (level?.Subfolder is not null)
             {
-                var segment = NormalizeSegment(item.Name.Trim());
-                item.Path = resolvedYear is null
+                var segment = NormalizePathSegment(name ?? current.Name);
+                path = resolvedYear is null
                     ? segment
                     : $"{segment} ({resolvedYear.Value.ToString(CultureInfo.InvariantCulture)})";
-                item.Settings["content.path.origin"] = "Generated";
             }
         }
 
-        item.PendingMetadataRefresh = false;
-        item.DateLastRefreshed = now;
-
         await contentHierarchyItemRepository
-            .UpdateAsync(item, userId, cancellationToken)
+            .PatchAsync(
+                new ContentHierarchyItemPatch
+                {
+                    Id = current.Id,
+                    Name = name is null ? null : new() { Value = name },
+                    Path = path is null ? null : new() { Value = path },
+                    Settings = path is null
+                        ? null
+                        : new()
+                        {
+                            Add = new Dictionary<string, string> { [PathOriginSetting] = GeneratedPathOrigin }
+                        },
+                    PendingMetadataRefresh = new() { Value = false },
+                    DateLastRefreshed = new() { Value = now }
+                },
+                userId,
+                cancellationToken)
             .ConfigureAwait(false);
         await metadataContainerRepository
-            .UpdateLastRefreshedAsync(item.MetadataContainerId, now, cancellationToken)
+            .PatchAsync(
+                new MetadataContainerPatch
+                {
+                    ContainerId = current.MetadataContainerId,
+                    DateLastRefreshed = new() { Value = now }
+                },
+                userId,
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -1307,21 +1374,4 @@ internal sealed class ContentMetadataRefreshItemJob(
 
         return (languagePreferences, metadata);
     }
-
-    private sealed record ContributionReplacement(
-        IReadOnlyList<MetadataContribution> ExistingProviderContributions,
-        MetadataContribution Contribution,
-        IReadOnlyList<SubjectRelationshipDefinition> SubjectRelationships);
-
-    private sealed record ResolvedSubject(
-        SubjectRelationshipDefinition Definition,
-        Guid MetadataContainerId,
-        IReadOnlyList<(string Source, string Value)> ExternalIds);
-
-    private sealed record ProviderChildDefinition(string ProviderType, ChildHierarchyDefinition Definition);
-
-    private sealed record ProviderFetchResult(
-        IContentHierarchyMetadataProvider Provider,
-        ContentHierarchyMetadataResult? Result,
-        Exception? Exception);
 }

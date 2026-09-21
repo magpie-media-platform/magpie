@@ -33,10 +33,10 @@ public interface IPasswordHasher
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Hashes a password without a salt.
+    /// Computes the deterministic keyed hash of a secret that an equality lookup matches on.
     /// </summary>
-    /// <param name="password">The plaintext password to hash</param>
+    /// <param name="password">The plaintext secret to hash</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>The hash of the password</returns>
+    /// <returns>The keyed hash of the secret</returns>
     Task<string> HashPasswordUnsaltedAsync(string password, CancellationToken cancellationToken = default);
 }

@@ -6,6 +6,7 @@ using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace Magpie.Data;
 
@@ -53,7 +54,7 @@ public static class FilteringQueryableExtensions
     }
 
     /// <summary>
-    /// Applies string property criteria to a query.
+    /// Applies case-insensitive string property criteria to a query.
     /// </summary>
     /// <typeparam name="TEntity">
     /// The entity type of the query.
@@ -79,7 +80,80 @@ public static class FilteringQueryableExtensions
 
         foreach (var c in criteria.And)
         {
-            query = query.Where(BuildPredicate<TEntity>(c, property));
+            query = query.Where(BuildStringPredicate<TEntity>(c, property, ignoreCase: true));
+        }
+
+        return query;
+    }
+
+    /// <summary>
+    /// Applies string property criteria to a query of a column that holds normalized values.
+    /// </summary>
+    /// <typeparam name="TEntity">
+    /// The entity type of the query.
+    /// </typeparam>
+    /// <param name="query">
+    /// The query to filter.
+    /// </param>
+    /// <param name="criteria">
+    /// The criteria to apply to the property.
+    /// </param>
+    /// <param name="property">
+    /// The name of the property to filter on.
+    /// </param>
+    public static IQueryable<TEntity> ApplyNormalizedCriteriaSet<TEntity>(
+        this IQueryable<TEntity> query,
+        CriteriaSet<PropertyCriterion<string>>? criteria,
+        string property) where TEntity : class
+    {
+        if (criteria?.And is null || !criteria.And.Any())
+        {
+            return query;
+        }
+
+        foreach (var c in criteria.And)
+        {
+            var lowered = new PropertyCriterion<string>
+            {
+                Operator = c.Operator,
+                Negate = c.Negate,
+                Value = c.Value?.ToLowerInvariant(),
+                Values = c.Values?.Select(value => value.ToLowerInvariant()).ToList()
+            };
+            query = query.Where(BuildStringPredicate<TEntity>(lowered, property, ignoreCase: false));
+        }
+
+        return query;
+    }
+
+    /// <summary>
+    /// Applies case-sensitive string property criteria to a query.
+    /// </summary>
+    /// <typeparam name="TEntity">
+    /// The entity type of the query.
+    /// </typeparam>
+    /// <param name="query">
+    /// The query to filter.
+    /// </param>
+    /// <param name="criteria">
+    /// The criteria to apply to the property.
+    /// </param>
+    /// <param name="property">
+    /// The name of the property to filter on.
+    /// </param>
+    public static IQueryable<TEntity> ApplyExactCriteriaSet<TEntity>(
+        this IQueryable<TEntity> query,
+        CriteriaSet<PropertyCriterion<string>>? criteria,
+        string property) where TEntity : class
+    {
+        if (criteria?.And is null || !criteria.And.Any())
+        {
+            return query;
+        }
+
+        foreach (var c in criteria.And)
+        {
+            query = query.Where(BuildStringPredicate<TEntity>(c, property, ignoreCase: false));
         }
 
         return query;
@@ -119,7 +193,7 @@ public static class FilteringQueryableExtensions
     }
 
     /// <summary>
-    /// Applies date and time property criteria to a query.
+    /// Applies date property criteria to a query.
     /// </summary>
     /// <typeparam name="TEntity">
     /// The entity type of the query.
@@ -226,6 +300,45 @@ public static class FilteringQueryableExtensions
     }
 
     /// <summary>
+    /// Applies a case-insensitive string criterion to a selected column of a query.
+    /// </summary>
+    /// <typeparam name="T">
+    /// The entity type of the query.
+    /// </typeparam>
+    /// <param name="query">
+    /// The query to filter.
+    /// </param>
+    /// <param name="criterion">
+    /// The criterion to apply to the column.
+    /// </param>
+    /// <param name="selector">
+    /// The selector of the column to filter on.
+    /// </param>
+    public static IQueryable<T> ApplyStringPredicate<T>(
+        this IQueryable<T> query,
+        PropertyCriterion<string> criterion,
+        Expression<Func<T, string?>> selector)
+    {
+        return query.Where(
+            BuildStringPredicate<T>(criterion, selector.Parameters[0], selector.Body, ignoreCase: true));
+    }
+
+    /// <summary>
+    /// Converts a negative string criterion into its positive form.
+    /// </summary>
+    /// <param name="criterion">
+    /// The criterion to convert.
+    /// </param>
+    public static PropertyCriterion<string> ToInnerPositive(this PropertyCriterion<string> criterion) =>
+        criterion.Operator switch
+        {
+            CriteriaValueOperator.NotContainsString =>
+                criterion with { Operator = CriteriaValueOperator.ContainsString },
+            CriteriaValueOperator.NotEquals => criterion with { Operator = CriteriaValueOperator.Equals },
+            _ => criterion,
+        };
+
+    /// <summary>
     /// Builds a temporal predicate expression.
     /// </summary>
     /// <param name="value">
@@ -240,6 +353,56 @@ public static class FilteringQueryableExtensions
     {
         var predicate = BuildTemporalComparison(value, criterion);
         return criterion.Negate ? Expression.Not(predicate) : predicate;
+    }
+
+    private static Expression<Func<T, bool>> BuildStringPredicate<T>(
+        PropertyCriterion<string> criterion,
+        ParameterExpression parameter,
+        Expression accessor,
+        bool ignoreCase)
+    {
+        var value = ignoreCase ? criterion.Value?.ToLowerInvariant() : criterion.Value;
+        var values = ignoreCase
+            ? criterion.Values?.Select(item => item.ToLowerInvariant()).ToList()
+            : criterion.Values?.ToList();
+        Expression<Func<string?, bool>> test = criterion.Operator switch
+        {
+            CriteriaValueOperator.Equals => v => value != null && v != null && v == value,
+            CriteriaValueOperator.NotEquals => v => value == null || v == null || v != value,
+            CriteriaValueOperator.In => v => values != null && v != null && values.Contains(v),
+            CriteriaValueOperator.NotIn => v => values == null || v == null || !values.Contains(v),
+            CriteriaValueOperator.ContainsString => v => value != null && v != null && v.Contains(value),
+            CriteriaValueOperator.NotContainsString => v => value == null || v == null || !v.Contains(value),
+            CriteriaValueOperator.StartsWithString => v => value != null && v != null && v.StartsWith(value),
+            CriteriaValueOperator.NotStartsWithString => v => value == null || v == null || !v.StartsWith(value),
+            CriteriaValueOperator.EndsWithString => v => value != null && v != null && v.EndsWith(value),
+            CriteriaValueOperator.NotEndsWithString => v => value == null || v == null || !v.EndsWith(value),
+            CriteriaValueOperator.IsNull => v => v == null,
+            CriteriaValueOperator.IsNotNull => v => v != null,
+            var op => throw new NotSupportedException($"Operator {op} is not supported for string fields")
+        };
+
+        Expression<Func<string?, string?>> lower = v => v!.ToLower();
+        var compared = ignoreCase
+            ? ReplacingExpressionVisitor.Replace(lower.Parameters[0], accessor, lower.Body)
+            : accessor;
+        var body = ReplacingExpressionVisitor.Replace(test.Parameters[0], compared, test.Body);
+        return Expression.Lambda<Func<T, bool>>(body, parameter);
+    }
+
+    private static Expression<Func<TEntity, bool>> BuildStringPredicate<TEntity>(
+        PropertyCriterion<string> criterion,
+        string property,
+        bool ignoreCase) where TEntity : class
+    {
+        var parameter = Expression.Parameter(typeof(TEntity), "e");
+        var accessor = Expression.Call(
+            typeof(EF),
+            nameof(EF.Property),
+            [typeof(string)],
+            parameter,
+            Expression.Constant(property));
+        return BuildStringPredicate<TEntity>(criterion, parameter, accessor, ignoreCase);
     }
 
     private static Expression BuildTemporalComparison(Expression value, PropertyCriterion<TemporalValue> criterion)
@@ -331,40 +494,6 @@ public static class FilteringQueryableExtensions
                 criterion.Values == null ||
                 !criterion.Values.Contains(EF.Property<TProperty>(e, property)),
             var op => throw new NotSupportedException($"Operator {op} is not supported for {typeof(TProperty).Name}")
-        };
-    }
-
-    private static Expression<Func<TEntity, bool>> BuildPredicate<TEntity>(
-        PropertyCriterion<string> criterion,
-        string property) where TEntity : class
-    {
-        return criterion.Operator switch
-        {
-            CriteriaValueOperator.ContainsString => e =>
-                criterion.Value != null &&
-                EF.Property<string>(e, property) != null &&
-                EF.Property<string>(e, property).Contains(criterion.Value),
-            CriteriaValueOperator.NotContainsString => e =>
-                criterion.Value == null ||
-                EF.Property<string>(e, property) == null ||
-                !EF.Property<string>(e, property).Contains(criterion.Value),
-            CriteriaValueOperator.StartsWithString => e =>
-                criterion.Value != null &&
-                EF.Property<string>(e, property) != null &&
-                EF.Property<string>(e, property).StartsWith(criterion.Value),
-            CriteriaValueOperator.NotStartsWithString => e =>
-                criterion.Value == null ||
-                EF.Property<string>(e, property) == null ||
-                !EF.Property<string>(e, property).StartsWith(criterion.Value),
-            CriteriaValueOperator.EndsWithString => e =>
-                criterion.Value != null &&
-                EF.Property<string>(e, property) != null &&
-                EF.Property<string>(e, property).EndsWith(criterion.Value),
-            CriteriaValueOperator.NotEndsWithString => e =>
-                criterion.Value == null ||
-                EF.Property<string>(e, property) == null ||
-                !EF.Property<string>(e, property).EndsWith(criterion.Value),
-            _ => BuildPredicate<TEntity, string>(criterion, property)
         };
     }
 

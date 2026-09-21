@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
@@ -24,9 +25,31 @@ internal sealed class MediaServerRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<MediaServerRepository> logger,
-    TimeProvider? timeProvider = null) : IMediaServerRepository
+    IDataProtectionService protector,
+    TimeProvider timeProvider) : IMediaServerRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private static readonly (string Name, Func<MediaServer, MediaServer, bool> Changed)[] UpdateFields =
+    [
+        ("name", (current, model) => !Equals(current.Name, model.Name)),
+        ("extensionId", (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
+        ("providerType", (current, model) => !Equals(current.ProviderType, model.ProviderType)),
+        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
+        ("status", (current, model) => !Equals(current.Status, model.Status)),
+        ("contentTypes", (current, model) => !current.ContentTypes.SequenceEqual(model.ContentTypes)),
+        ("lastChecked", (current, model) => !Equals(current.LastChecked, model.LastChecked)),
+        ("settings", (current, model) => !SettingsEqual(current.Settings, model.Settings)),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
+
+    private static bool SettingsEqual(
+        IReadOnlyDictionary<string, string> current,
+        IReadOnlyDictionary<string, string> model)
+    {
+        return current.Count == model.Count &&
+            current.All(pair => model.TryGetValue(pair.Key, out var value) &&
+                string.Equals(pair.Value, value, StringComparison.Ordinal));
+    }
 
     private static IReadOnlyCollection<string> ChangedFields(MediaServerPatch patch)
     {
@@ -79,14 +102,25 @@ internal sealed class MediaServerRepository(
         return fields;
     }
 
+    private Dictionary<string, string> ReadSettings(IReadOnlyDictionary<string, string> settings)
+    {
+        return protector.TryGetKeyId(settings, out _) ? protector.Unprotect(settings) : new(settings);
+    }
+
     public async Task<IEnumerable<MediaServer>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
         {
-            return await context.MediaServers
+            var models = await context.MediaServers
                 .AsNoTracking()
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+            foreach (var model in models)
+            {
+                model.Settings = ReadSettings(model.Settings);
+            }
+
+            return models;
         }
         catch (Exception ex)
         {
@@ -99,10 +133,16 @@ internal sealed class MediaServerRepository(
     {
         try
         {
-            return await context.MediaServers
+            var model = await context.MediaServers
                 .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
                 .ConfigureAwait(false);
+            if (model is not null)
+            {
+                model.Settings = ReadSettings(model.Settings);
+            }
+
+            return model;
         }
         catch (Exception ex)
         {
@@ -125,8 +165,10 @@ internal sealed class MediaServerRepository(
                     model.CreatedAt = now;
                     model.CreatedByUserId = createdByUserId;
 
-                    context.MediaServers.Add(model);
+                    var stored = model with { Settings = protector.Protect(model.Settings) };
+                    context.MediaServers.Add(stored);
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    model.Id = stored.Id;
 
                     await auditRecordRepository.CreateAsync(
                         new()
@@ -166,7 +208,26 @@ internal sealed class MediaServerRepository(
             return await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
+                    var encryptedSettings = protector.Protect(model.Settings);
                     var now = _time.GetUtcNow().UtcDateTime;
+                    var current = await context.MediaServers.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    current.Settings = ReadSettings(current.Settings);
+                    var changedFields = new List<string>();
+                    foreach (var (name, changed) in UpdateFields)
+                    {
+                        if (changed(current, model))
+                        {
+                            changedFields.Add(name);
+                        }
+                    }
+
                     var updated = await context.MediaServers
                         .Where(s => s.Id == model.Id)
                         .ExecuteUpdateAsync(
@@ -178,7 +239,7 @@ internal sealed class MediaServerRepository(
                                 .SetProperty(m => m.Status, model.Status)
                                 .SetProperty(m => m.ContentTypes, model.ContentTypes)
                                 .SetProperty(m => m.LastChecked, model.LastChecked)
-                                .SetProperty(m => m.Settings, model.Settings)
+                                .SetProperty(m => m.Settings, encryptedSettings)
                                 .SetProperty(m => m.ModifiedAt, now)
                                 .SetProperty(m => m.ModifiedByUserId, modifiedByUserId),
                             cancellationToken)
@@ -197,6 +258,14 @@ internal sealed class MediaServerRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                IntegrationEventBuilder.BuildMediaServerUpdatedEvent(model.Id, changedFields), token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -330,6 +399,7 @@ internal sealed class MediaServerRepository(
 
                     if (patch.Settings is not null)
                     {
+                        model.Settings = ReadSettings(model.Settings);
                         if (patch.Settings.Add is not null)
                         {
                             foreach (var (key, value) in patch.Settings.Add)
@@ -357,6 +427,7 @@ internal sealed class MediaServerRepository(
                             }
                         }
 
+                        model.Settings = protector.Protect(model.Settings);
                         context.Entry(model).Property(s => s.Settings).IsModified = true;
                     }
 

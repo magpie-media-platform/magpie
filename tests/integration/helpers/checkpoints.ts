@@ -8,8 +8,7 @@ import { waitForJob } from './jobs';
 import { allMocks } from './mocks';
 import { until } from './wait';
 
-export type CheckpointName = 'configured-baseline' | 'rich-library' | 'journey-rich-library';
-type SnapshotName = CheckpointName | 'administration-restore-point';
+type SnapshotName = 'configured-baseline' | 'journey-rich-library' | 'administration-restore-point';
 
 interface BackupInfo {
     id: string;
@@ -95,6 +94,10 @@ export async function restoreCheckpoint(
     for (const [directory, target] of Object.entries(fixtureDirectories)) {
         await restoreDirectory(resolve(source, directory), target);
     }
+    const adopted = await Promise.all(
+        allMocks.map(async (mock) => `${mock.slug}=${(await mock.syncScenario()).scenario}`),
+    );
+    process.stdout.write(`[checkpoint] ${name} adopted fixture scenarios ${adopted.join(' ')}\n`);
 
     const { api: currentApi } = await loginAdmin(
         integrationEnvironment.adminUsername,
@@ -103,7 +106,7 @@ export async function restoreCheckpoint(
     const baselineStartedAt = (await currentApi.get<SystemInfo>('/api/system')).startedAt;
     await currentApi.post(`/api/database/backups/${manifest.backupId}/restore`);
 
-    await until(
+    const api = await until(
         `${name} restore to restart the host`,
         async () => {
             try {
@@ -111,12 +114,12 @@ export async function restoreCheckpoint(
                 if (!setup.ok) {
                     return undefined;
                 }
-                const { api } = await loginAdmin(
+                const { api: restarted } = await loginAdmin(
                     integrationEnvironment.adminUsername,
                     integrationEnvironment.adminPassword,
                 );
-                const info = await api.get<SystemInfo>('/api/system');
-                return info.startedAt !== baselineStartedAt ? api : undefined;
+                const info = await restarted.get<SystemInfo>('/api/system');
+                return info.startedAt !== baselineStartedAt ? restarted : undefined;
             } catch {
                 return undefined;
             }
@@ -125,7 +128,6 @@ export async function restoreCheckpoint(
         500,
     );
 
-    const { api } = await loginAdmin(integrationEnvironment.adminUsername, integrationEnvironment.adminPassword);
     await proveFileAnchors(manifest.fileAnchors);
     await proveDatabaseAnchors(api);
     return api;

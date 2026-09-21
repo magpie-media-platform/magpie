@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Jobs;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -22,10 +23,16 @@ internal sealed class AuditHistoryService(
 {
     private static readonly string DownloadIdTriggerContextKey = MagpieEvents.Keys.DownloadId.ToEventContextKey();
 
-    private static readonly string[] EntityParameterKeys = ["contentHierarchyItemId", "contentItemId"];
+    private static readonly string[] EntityParameterKeys =
+        [MagpieJobs.Parameters.ContentHierarchyItemId, MagpieJobs.Parameters.ContentItemId];
+
+    private static readonly SortParameter ExecutionTimestampDescending = new()
+    {
+        PropertyName = nameof(JobExecutionQuery.ExecutionTimestamp),
+        Direction = SortDirection.Descending
+    };
 
     private const string JobCategory = "Job";
-    private const string DownloadIdParameterKey = "downloadId";
 
     private static AuditHistoryEntry ToEntry(JobExecution job) => new()
     {
@@ -52,35 +59,12 @@ internal sealed class AuditHistoryService(
         Detail = audit.Detail,
         EntityId = audit.EntityId,
         EntityType = audit.EntityType,
-        UserId = audit.UserId
+        UserId = audit.UserId,
+        JobExecutionId = audit.JobExecutionId
     };
 
-    private static bool WithinRange(DateTime timestamp, DateTime? from, DateTime? to)
-        => (from is null || timestamp >= from.Value) && (to is null || timestamp <= to.Value);
-
-    private static bool ReferencesContent(JobExecution job, ContentActivityScope contentScope)
-        => ReferencesContent(job.Parameters, DownloadIdParameterKey, contentScope) ||
-            ReferencesContent(job.TriggerContext, DownloadIdTriggerContextKey, contentScope);
-
-    private static bool ReferencesContent(
-        IReadOnlyDictionary<string, string> values,
-        string downloadIdKey,
-        ContentActivityScope contentScope)
-    {
-        foreach (var key in EntityParameterKeys)
-        {
-            if (values.TryGetValue(key, out var value) &&
-                string.Equals(value, contentScope.ContentId, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return values.TryGetValue(downloadIdKey, out var downloadId) && contentScope.DownloadIds.Contains(downloadId);
-    }
-
     private static string? ResolveEntityId(JobExecution job)
-        => ResolveEntityId(job.Parameters, DownloadIdParameterKey)
+        => ResolveEntityId(job.Parameters, MagpieJobs.Parameters.DownloadId)
             ?? ResolveEntityId(job.TriggerContext, DownloadIdTriggerContextKey);
 
     private static string? ResolveEntityId(IReadOnlyDictionary<string, string> values, string downloadIdKey)
@@ -100,7 +84,7 @@ internal sealed class AuditHistoryService(
         AuditHistoryQuery query,
         CancellationToken cancellationToken = default)
     {
-        var includeJobs = query.Kind is null or AuditHistoryEntryKind.JobExecution;
+        var includeJobs = (query.Kind is null or AuditHistoryEntryKind.JobExecution) && query.JobExecutionId is null;
         var includeAudits = query.Kind is null or AuditHistoryEntryKind.AuditRecord;
 
         JobExecutionStatus? statusFilter = null;
@@ -117,44 +101,61 @@ internal sealed class AuditHistoryService(
             }
         }
 
+        var reach = (long)query.Paging.PageNumber * query.Paging.PageSize;
+        var merged = new PagingParameter
+        {
+            PageNumber = 1,
+            PageSize = (int)Math.Min(reach, int.MaxValue)
+        };
+        if (merged.PageSize < reach)
+        {
+            throw new ArgumentException("The requested audit history page and page size exceed the supported range.");
+        }
+
         var contentScope = includeJobs
             ? await ResolveContentScopeAsync(query.ContentId, query.Paging.PageSize, cancellationToken)
                 .ConfigureAwait(false)
             : null;
 
+        var timestampRange = query.From is null && query.To is null ? null : new Range<DateTime>(query.From, query.To);
+
         var entries = new List<AuditHistoryEntry>();
+        var totalItems = 0;
 
         if (includeJobs)
         {
-            var jobs = await QueryJobsAsync(
-                contentScope,
-                statusFilter,
-                query.From,
-                query.To,
-                query.Paging.PageSize,
+            var jobs = await jobExecutions.QueryAsync(
+                new JobExecutionQuery
+                {
+                    Status = statusFilter,
+                    ParameterValueReferences = contentScope?.EntityIds,
+                    ExecutionTimestamp = timestampRange
+                },
+                merged,
+                ExecutionTimestampDescending,
                 cancellationToken).ConfigureAwait(false);
-            entries.AddRange(jobs
-                .Where(job => contentScope is null || ReferencesContent(job, contentScope))
-                .Select(ToEntry));
+            entries.AddRange(jobs.Items.Select(ToEntry));
+            totalItems += jobs.TotalItems;
         }
 
         if (includeAudits)
         {
-            var audits = await QueryAuditsAsync(
-                query.ContentId?.ToString(),
-                query.From,
-                query.To,
-                query.Paging.PageSize,
+            var audits = await auditRecords.QueryAsync(
+                new AuditRecordQuery
+                {
+                    EntityId = query.ContentId?.ToString(),
+                    JobExecutionId = query.JobExecutionId,
+                    Timestamp = timestampRange
+                },
+                merged,
+                sort: null,
                 cancellationToken).ConfigureAwait(false);
-            entries.AddRange(audits.Select(ToEntry));
+            entries.AddRange(audits.Items.Select(ToEntry));
+            totalItems += audits.TotalItems;
         }
 
-        var ordered = entries
-            .Where(entry => WithinRange(entry.Timestamp, query.From, query.To))
+        var pageItems = entries
             .OrderByDescending(entry => entry.Timestamp)
-            .ToList();
-
-        var pageItems = ordered
             .Skip((query.Paging.PageNumber - 1) * query.Paging.PageSize)
             .Take(query.Paging.PageSize)
             .ToList();
@@ -164,7 +165,7 @@ internal sealed class AuditHistoryService(
             Items = pageItems,
             PageNumber = query.Paging.PageNumber,
             PageSize = query.Paging.PageSize,
-            TotalItems = ordered.Count
+            TotalItems = totalItems
         };
     }
 
@@ -199,72 +200,6 @@ internal sealed class AuditHistoryService(
         }
 
         return new ContentActivityScope(resolvedContentId.ToString("D"), downloadIds);
-    }
-
-    private async Task<IReadOnlyList<JobExecution>> QueryJobsAsync(
-        ContentActivityScope? contentScope,
-        JobExecutionStatus? status,
-        DateTime? from,
-        DateTime? to,
-        int pageSize,
-        CancellationToken cancellationToken)
-    {
-        var jobQuery = new JobExecutionQuery
-        {
-            Status = status,
-            ParameterValueReferences = contentScope?.EntityIds,
-            ExecutionTimestamp = from is null && to is null ? null : new(from, to)
-        };
-
-        var jobs = new List<JobExecution>();
-        for (var pageNumber = 1; ; pageNumber++)
-        {
-            var page = await jobExecutions.QueryAsync(
-                jobQuery,
-                new PagingParameter { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            jobs.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-        }
-
-        return jobs;
-    }
-
-    private async Task<IReadOnlyList<AuditRecord>> QueryAuditsAsync(
-        string? contentId,
-        DateTime? from,
-        DateTime? to,
-        int pageSize,
-        CancellationToken cancellationToken)
-    {
-        var auditQuery = new AuditRecordQuery
-        {
-            EntityId = contentId,
-            Timestamp = from is null && to is null ? null : new(from, to)
-        };
-
-        var audits = new List<AuditRecord>();
-        for (var pageNumber = 1; ; pageNumber++)
-        {
-            var page = await auditRecords.QueryAsync(
-                auditQuery,
-                new PagingParameter { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            audits.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-        }
-
-        return audits;
     }
 
     private sealed record ContentActivityScope(string ContentId, IReadOnlySet<string> DownloadIds)

@@ -9,25 +9,12 @@ function compareText(left: string, right: string): number {
 
 export function buildContentLevelPaths<TLevel extends ContentLevelRelationship>(
     definitions: readonly TLevel[],
-    supportedLevels: readonly TLevel[] = definitions,
 ): TLevel[][] {
     const definitionsBySlug = new Map(definitions.map((level) => [level.slug, level]));
-    const representedSlugs = new Set<string>();
-
-    for (const supported of supportedLevels) {
-        let current = definitionsBySlug.get(supported.slug);
-        const ancestors = new Set<string>();
-        while (current && !ancestors.has(current.slug)) {
-            ancestors.add(current.slug);
-            representedSlugs.add(current.slug);
-            current = current.parentSlug ? definitionsBySlug.get(current.parentSlug) : undefined;
-        }
-    }
 
     const representedChildren = new Map<string, string[]>();
-    for (const slug of representedSlugs) {
-        const level = definitionsBySlug.get(slug);
-        if (!level?.parentSlug || !representedSlugs.has(level.parentSlug)) {
+    for (const [slug, level] of definitionsBySlug) {
+        if (!level.parentSlug || !definitionsBySlug.has(level.parentSlug)) {
             continue;
         }
         const children = representedChildren.get(level.parentSlug) ?? [];
@@ -35,7 +22,7 @@ export function buildContentLevelPaths<TLevel extends ContentLevelRelationship>(
         representedChildren.set(level.parentSlug, children);
     }
 
-    const terminalSlugs = [...representedSlugs]
+    const terminalSlugs = [...definitionsBySlug.keys()]
         .filter((slug) => (representedChildren.get(slug)?.length ?? 0) === 0)
         .sort(compareText);
 
@@ -43,7 +30,7 @@ export function buildContentLevelPaths<TLevel extends ContentLevelRelationship>(
         const path: TLevel[] = [];
         const seen = new Set<string>();
         let current = definitionsBySlug.get(terminalSlug);
-        while (current && representedSlugs.has(current.slug) && !seen.has(current.slug)) {
+        while (current && definitionsBySlug.has(current.slug) && !seen.has(current.slug)) {
             seen.add(current.slug);
             path.push(current);
             current = current.parentSlug ? definitionsBySlug.get(current.parentSlug) : undefined;

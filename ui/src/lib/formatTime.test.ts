@@ -193,10 +193,15 @@ describe('formatDurationFromMinutes', () => {
 });
 
 describe('formatTimeSpanDuration', () => {
-    it('returns undefined for empty, invalid, and zero-minute durations', () => {
+    it('returns undefined for empty, invalid, and zero-length durations', () => {
         expect(formatTimeSpanDuration(null)).toBeUndefined();
         expect(formatTimeSpanDuration('not-a-duration')).toBeUndefined();
-        expect(formatTimeSpanDuration('00:00:30')).toBeUndefined();
+        expect(formatTimeSpanDuration('00:00:00')).toBeUndefined();
+    });
+
+    it('formats sub-minute durations as seconds', () => {
+        expect(formatTimeSpanDuration('00:00:30')).toBe('30s');
+        expect(formatTimeSpanDuration('00:00:07.5000000')).toBe('7s');
     });
 
     it('formats time span strings as runtime', () => {

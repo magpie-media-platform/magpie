@@ -3,30 +3,69 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import { ApiError } from '@/lib/api';
 import type { ApiRootFolder } from '@/hooks/useRootFolders';
-import type { LibraryImportCandidate, LibraryImportCandidateQueryParams } from '@/hooks/useLibraryImportCandidates';
+import type {
+    LibraryImportCandidateGroup,
+    LibraryImportCandidateGroupQueryParams,
+} from '@/hooks/useLibraryImportCandidateGroups';
+import type { ManualMatchTarget } from './ManualMatchDialog';
 import type { ImportScanControllerValue } from './useImportScanController';
 
-const useLibraryImportCandidatesMock = vi.fn();
-const bulkAcceptMutateAsync = vi.fn();
-const refetchMock = vi.fn().mockResolvedValue({});
-let manualMatchProp: LibraryImportCandidate | null = null;
-
-vi.mock('@/hooks/useLibraryImportCandidates', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/hooks/useLibraryImportCandidates')>();
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async () => {
+    const actual = await vi.importActual('react-router-dom');
     return {
         ...actual,
-        useLibraryImportCandidates: (params: LibraryImportCandidateQueryParams) =>
-            useLibraryImportCandidatesMock(params),
+        useNavigate: () => mockNavigate,
     };
 });
 
-vi.mock('@/hooks/useBulkAcceptLibraryImportCandidates', () => ({
-    useBulkAcceptLibraryImportCandidates: () => ({ mutateAsync: bulkAcceptMutateAsync, isPending: false }),
+const useLibraryImportCandidateGroupsMock = vi.fn();
+const useLibraryImportGroupCandidatesMock = vi.fn();
+const acceptGroupMutateAsync = vi.fn();
+const bulkAcceptGroupsMutateAsync = vi.fn();
+const refetchMock = vi.fn().mockResolvedValue({});
+let manualMatchProp: ManualMatchTarget | null = null;
+let autoSelectMonitoring = true;
+
+vi.mock('@/hooks/useLibraryImportCandidateGroups', () => ({
+    useLibraryImportCandidateGroups: (params: LibraryImportCandidateGroupQueryParams) =>
+        useLibraryImportCandidateGroupsMock(params),
+}));
+
+vi.mock('@/hooks/useLibraryImportGroupCandidates', () => ({
+    useLibraryImportGroupCandidates: (params: unknown) => useLibraryImportGroupCandidatesMock(params),
+}));
+
+vi.mock('@/hooks/useAcceptLibraryImportCandidateGroup', () => ({
+    useAcceptLibraryImportCandidateGroup: () => ({
+        mutateAsync: acceptGroupMutateAsync,
+        isPending: false,
+        invalidate: vi.fn(),
+    }),
+}));
+
+vi.mock('@/hooks/useBulkAcceptLibraryImportCandidateGroups', () => ({
+    useBulkAcceptLibraryImportCandidateGroups: () => ({ mutateAsync: bulkAcceptGroupsMutateAsync, isPending: false }),
+}));
+
+vi.mock('./AcceptImportDialog', () => ({
+    AcceptImportDialog: ({ action, onClose }: { action: ((mode: 'Inherit') => void) | null; onClose: () => void }) => {
+        useEffect(() => {
+            if (action && autoSelectMonitoring) action('Inherit');
+        }, [action]);
+        return action && !autoSelectMonitoring ? (
+            <div role="dialog" aria-label="Accept import">
+                <button onClick={() => action('Inherit')}>Choose Inherit and accept</button>
+                <button onClick={onClose}>Cancel</button>
+            </div>
+        ) : null;
+    },
 }));
 
 const moviesFolder: ApiRootFolder = {
@@ -79,14 +118,15 @@ vi.mock('./useImportScanController', () => ({
 }));
 
 vi.mock('./ManualMatchDialog', () => ({
-    ManualMatchDialog: ({ match }: { match: LibraryImportCandidate | null }) => {
-        manualMatchProp = match;
-        return match ? <div data-testid="manual-match-dialog-open">{match.id}</div> : null;
+    ManualMatchDialog: ({ target, onMatched }: { target: ManualMatchTarget | null; onMatched: () => void }) => {
+        manualMatchProp = target;
+        return target ? (
+            <div data-testid="manual-match-dialog-open">
+                {target.kind}
+                <button onClick={onMatched}>Confirm match</button>
+            </div>
+        ) : null;
     },
-}));
-
-vi.mock('@/components/content/PreviewDrawer', () => ({
-    PreviewDrawer: ({ open }: { open: boolean }) => (open ? <div data-testid="preview-drawer-open" /> : null),
 }));
 
 import { LibraryImportPage } from './LibraryImportPage';
@@ -114,44 +154,48 @@ function installMatchMedia(width: number) {
     );
 }
 
-function buildMatched(overrides: Partial<LibraryImportCandidate> = {}): LibraryImportCandidate {
+function buildGroup(overrides: Partial<LibraryImportCandidateGroup> = {}): LibraryImportCandidateGroup {
     return {
-        id: 'match-1',
-        rootFolderId: 'folder-1',
-        scanRunId: 'scan-1',
-        filePath: '/media/movies/Fight.Club.1999.mkv',
-        contentType: 'movie',
-        status: 'Pending',
-        parsedSignals: { title: ['Fight Club'], year: ['1999'] },
-        matches: [
-            {
-                confidence: 0.95,
-                providerType: 'provider-a',
-                externalIdKey: 'provider-a.movie',
-                externalId: '550',
-                title: 'Fight Club',
-                subtitle: '1999',
-            },
-        ],
-        matchCount: 1,
-        createdAt: '2024-01-01T00:00:00Z',
+        groupKey: '/media/tv/Bluey',
+        kind: 'Directory',
+        sourcePath: '/media/tv/Bluey',
+        title: 'Bluey',
+        contentType: 'tv',
+        subtitle: '2018',
+        match: {
+            confidence: 1,
+            providerType: 'tvmaze',
+            externalIdKey: 'tvmaze',
+            externalId: '44796',
+            title: 'Bluey',
+            subtitle: '2018',
+        },
+        leafCount: 157,
+        topLevelSlug: 'show',
+        leafLevelSlug: 'episode',
+        leafLevelDisplayName: 'Episode',
+        childLevelSlug: 'season',
+        childLevelDisplayName: 'Season',
+        statusCounts: { Pending: 157 },
         ...overrides,
     };
 }
 
-function buildUnmatched(overrides: Partial<LibraryImportCandidate> = {}): LibraryImportCandidate {
-    return buildMatched({
-        id: 'empty-1',
-        filePath: '/media/movies/Unknown.File.mkv',
-        parsedSignals: { title: ['Unknown File'] },
-        matches: [],
-        matchCount: 0,
+function buildUnmatchedGroup(overrides: Partial<LibraryImportCandidateGroup> = {}): LibraryImportCandidateGroup {
+    return buildGroup({
+        groupKey: 'query:unknown show',
+        kind: 'Query',
+        sourcePath: null,
+        title: 'Unknown Show',
+        subtitle: null,
+        match: null,
+        statusCounts: { Pending: 3 },
         ...overrides,
     });
 }
 
-function setItems(items: LibraryImportCandidate[], totalItems = items.length) {
-    useLibraryImportCandidatesMock.mockImplementation((params?: LibraryImportCandidateQueryParams) => ({
+function setGroups(items: LibraryImportCandidateGroup[], totalItems = items.length) {
+    useLibraryImportCandidateGroupsMock.mockImplementation((params?: LibraryImportCandidateGroupQueryParams) => ({
         items,
         pagination: { pageNumber: params?.pageNumber ?? 1, pageSize: 25, totalItems },
         isLoading: false,
@@ -162,11 +206,13 @@ function setItems(items: LibraryImportCandidate[], totalItems = items.length) {
     }));
 }
 
-function rowFor(matchId: string): HTMLElement {
-    const cell = document.querySelector(`.library-import-page__file-cell[data-match-id="${matchId}"]`);
+function rowFor(groupKey: string): HTMLElement {
+    const cell = [...document.querySelectorAll('[data-group-key]')].find(
+        (el) => el.getAttribute('data-group-key') === groupKey,
+    );
     const row = cell?.closest('tr');
     if (!row) {
-        throw new Error(`No row found for match ${matchId}`);
+        throw new Error(`No row found for group ${groupKey}`);
     }
     return row as HTMLElement;
 }
@@ -199,8 +245,17 @@ function createTestWrapper(initialEntry = '/library/import') {
 
 describe('LibraryImportPage', () => {
     beforeEach(() => {
+        useLibraryImportGroupCandidatesMock.mockImplementation((params: { groupKey?: string } | null) => ({
+            items: params?.groupKey?.startsWith('query:')
+                ? [
+                      { filePath: '/media/tv/Unknown Show/episode-1.mkv' },
+                      { filePath: '/media/tv/Unknown Show/episode-2.mkv' },
+                  ]
+                : [],
+        }));
         installMatchMedia(1024);
         vi.clearAllMocks();
+        autoSelectMonitoring = true;
         manualMatchProp = null;
         activeFolders = [moviesFolder];
         scanController.isScanning = false;
@@ -208,8 +263,12 @@ describe('LibraryImportPage', () => {
         scanController.progress = null;
         scanController.statusMessage = null;
         scanController.lastSummary = null;
-        bulkAcceptMutateAsync.mockResolvedValue({
-            queued: [{ candidateId: 'match-1', jobExecutionId: 'job-1' }],
+        acceptGroupMutateAsync.mockResolvedValue({
+            queued: [{ candidateId: 'c-1', jobExecutionId: 'job-1' }],
+            skipped: [],
+        });
+        bulkAcceptGroupsMutateAsync.mockResolvedValue({
+            queued: [{ candidateId: 'c-1', jobExecutionId: 'job-1' }],
             skipped: [],
         });
     });
@@ -219,219 +278,343 @@ describe('LibraryImportPage', () => {
         vi.restoreAllMocks();
     });
 
-    it('renders the new single-table heading without the bucket tabs or intro paragraph', async () => {
-        setItems([buildMatched()]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
+    it('shows the scan summary as unavailable when the count request fails', () => {
+        // Arrange
+        setGroups([]);
+        scanController.lastSummary = { rootFolderName: 'Archive', outcome: 'completed', toImport: null };
+
+        // Act
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        // Assert
+        expect(screen.getByText('Scan of "Archive" completed. The import count is unavailable.')).toBeInTheDocument();
+        expect(screen.queryByText(/is up to date/)).not.toBeInTheDocument();
+    });
+
+    it('renders the heading without the old bucket tabs or intro paragraph', async () => {
+        setGroups([buildGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
 
         await waitFor(() => {
             expect(screen.getByRole('heading', { level: 1, name: /library import/i })).toBeInTheDocument();
         });
         expect(document.querySelector('[data-view-tab]')).toBeNull();
-        expect(screen.queryByText(/auto-accept/i)).toBeNull();
-        expect(screen.queryByTestId('candidate-confidence')).toBeNull();
     });
 
-    it('renders a matched row with its candidate, a Detail and Import action, and an enabled checkbox', async () => {
-        setItems([buildMatched()]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => {
-            expect(rowFor('match-1')).toBeInTheDocument();
+    it('renders a matched group row with its title, count, and leaf display name from the DTO', async () => {
+        setGroups([buildGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
         });
-        const row = rowFor('match-1');
-        expect(row).toHaveTextContent('Fight Club');
-        expect(row).toHaveTextContent('provider-a');
-        expect(within(row).getByRole('button', { name: /^Detail$/ })).toBeInTheDocument();
-        expect(within(row).getByRole('button', { name: /^Import$/ })).toBeInTheDocument();
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        const row = rowFor('/media/tv/Bluey');
+        expect(row).toHaveTextContent('Bluey');
+        expect(row).toHaveTextContent('tvmaze');
+        expect(row).toHaveTextContent('Episode: 157');
+        expect(within(row).getByRole('button', { name: /^Accept$/ })).toBeInTheDocument();
+        expect(within(row).getByRole('button', { name: /^Season$/ })).toBeInTheDocument();
         expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
-        const checkbox = within(row).getByRole('checkbox', { name: /select fight\.club/i });
-        expect(checkbox).not.toBeDisabled();
     });
 
-    it('renders an unmatched row as "No match" with only a Match action and a disabled checkbox', async () => {
-        setItems([buildUnmatched()]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
+    it('shows a directory group key as its source path', () => {
+        setGroups([buildGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        expect(within(rowFor('/media/tv/Bluey')).getByTitle('/media/tv/Bluey')).toBeInTheDocument();
+    });
+
+    it('never exposes the match token as a path on a matched group with no directory', () => {
+        setGroups([
+            buildGroup({
+                groupKey: 'match:movies:tmdb:tmdbId:603',
+                kind: 'Match',
+                sourcePath: null,
+                title: 'The Matrix',
+            }),
+        ]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        const row = rowFor('match:movies:tmdb:tmdbId:603');
+        expect(row).not.toHaveTextContent('match:movies:tmdb:tmdbId:603');
+        expect(within(row).queryByTitle('match:movies:tmdb:tmdbId:603')).toBeNull();
+    });
+
+    it('never exposes the synthesized query token as a path on a query group', () => {
+        setGroups([buildUnmatchedGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        const row = rowFor('query:unknown show');
+        expect(row).not.toHaveTextContent('query:unknown show');
+        expect(within(row).queryByTitle('query:unknown show')).toBeNull();
+    });
+
+    it('opens file details for a single-level group', async () => {
+        const user = userEvent.setup();
+        setGroups([
+            buildGroup({
+                groupKey: 'movie-1',
+                title: '127 Hours',
+                topLevelSlug: 'movie',
+                leafLevelSlug: 'movie',
+                leafLevelDisplayName: 'Movie',
+                leafCount: 1,
+            }),
+        ]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('movie-1')).toBeInTheDocument());
+        const row = rowFor('movie-1');
+        expect(within(row).getByRole('button', { name: /^Accept$/ })).toBeInTheDocument();
+        await user.click(within(row).getByRole('button', { name: 'Details' }));
+
+        expect(mockNavigate).toHaveBeenCalledWith('/library/import?key=movie-1&title=127+Hours');
+    });
+
+    it('renders a single-leaf group count without an s (singular DTO display name)', async () => {
+        setGroups([buildGroup({ groupKey: 'movie-1', leafCount: 1, leafLevelDisplayName: 'Movie' })]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('movie-1')).toBeInTheDocument());
+        expect(rowFor('movie-1')).toHaveTextContent('Movie: 1');
+    });
+
+    it('labels the dig-in button with the unchanged DTO child level name', async () => {
+        setGroups([
+            buildGroup({
+                groupKey: 'artist-1',
+                childLevelSlug: 'album',
+                childLevelDisplayName: 'Anthology',
+            }),
+        ]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('artist-1')).toBeInTheDocument());
+        const row = rowFor('artist-1');
+        expect(within(row).getByRole('button', { name: /^Anthology$/ })).toBeInTheDocument();
+        expect(within(row).queryByRole('button', { name: /^Season$/ })).toBeNull();
+    });
+
+    it('leaves a dig-in level name that already ends in s alone instead of doubling it', async () => {
+        setGroups([buildGroup({ groupKey: 'series-1', childLevelSlug: 'series', childLevelDisplayName: 'Series' })]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('series-1')).toBeInTheDocument());
+        const row = rowFor('series-1');
+        expect(within(row).getByRole('button', { name: /^Series$/ })).toBeInTheDocument();
+        expect(within(row).queryByRole('button', { name: /^Seriess$/ })).toBeNull();
+    });
+
+    it('disables Accept for a matched group whose candidates are all already queued', async () => {
+        setGroups([buildGroup({ groupKey: 'all-queued', statusCounts: { Queued: 157 } })]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('all-queued')).toBeInTheDocument());
+        expect(within(rowFor('all-queued')).getByRole('button', { name: /^Accept$/ })).toBeDisabled();
+    });
+
+    it('enables Accept for a matched group with a pending candidate', async () => {
+        setGroups([buildGroup({ groupKey: 'has-pending', statusCounts: { Pending: 1, Queued: 156 } })]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('has-pending')).toBeInTheDocument());
+        expect(within(rowFor('has-pending')).getByRole('button', { name: /^Accept$/ })).not.toBeDisabled();
+    });
+
+    it('enables Accept for a matched group with only a failed candidate', async () => {
+        setGroups([buildGroup({ groupKey: 'has-failed', statusCounts: { Failed: 1 } })]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('has-failed')).toBeInTheDocument());
+        expect(within(rowFor('has-failed')).getByRole('button', { name: /^Accept$/ })).not.toBeDisabled();
+    });
+
+    it('accepting a matched group calls the group-accept endpoint with its key and the active root folder', async () => {
+        const user = userEvent.setup();
+        setGroups([buildGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper('/library/import?rootFolderId=folder-2'),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('button', { name: /^Accept$/ }));
 
         await waitFor(() => {
-            expect(rowFor('empty-1')).toBeInTheDocument();
+            expect(acceptGroupMutateAsync).toHaveBeenCalledWith({
+                groupKey: '/media/tv/Bluey',
+                rootFolderId: 'folder-2',
+                monitoringMode: 'Inherit',
+            });
         });
-        const row = rowFor('empty-1');
-        expect(within(row).getByTestId('library-import-no-match')).toHaveTextContent('No match');
+    });
+
+    it('requires monitoring before accepting and uses the chosen mode', async () => {
+        const user = userEvent.setup();
+        autoSelectMonitoring = false;
+        setGroups([buildGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        const accept = within(rowFor('/media/tv/Bluey')).getByRole('button', { name: /^Accept$/ });
+        await user.click(accept);
+
+        expect(screen.getByRole('dialog', { name: 'Accept import' })).toBeInTheDocument();
+        expect(acceptGroupMutateAsync).not.toHaveBeenCalled();
+
+        await user.click(screen.getByRole('button', { name: 'Choose Inherit and accept' }));
+
+        await waitFor(() => {
+            expect(acceptGroupMutateAsync).toHaveBeenCalledWith({
+                groupKey: '/media/tv/Bluey',
+                monitoringMode: 'Inherit',
+            });
+        });
+    });
+
+    it('shows a gone-group toast when accepting a group 404s (the group no longer exists)', async () => {
+        const user = userEvent.setup();
+        setGroups([buildGroup()]);
+        acceptGroupMutateAsync.mockRejectedValueOnce(new ApiError(404, 'Not Found'));
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('button', { name: /^Accept$/ }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Group is gone')).toBeInTheDocument();
+        });
+    });
+
+    it('keeps the generic failure toast when accepting a group fails with a non-404 status', async () => {
+        const user = userEvent.setup();
+        setGroups([buildGroup()]);
+        acceptGroupMutateAsync.mockRejectedValueOnce(new ApiError(500, 'Internal Server Error'));
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('button', { name: /^Accept$/ }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Import failed')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Group is gone')).not.toBeInTheDocument();
+    });
+
+    it('renders an unmatched group as "No match" with only a Match action, no Accept', async () => {
+        setGroups([buildUnmatchedGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('query:unknown show')).toBeInTheDocument());
+        const row = rowFor('query:unknown show');
+        expect(row).toHaveTextContent('No match');
         expect(within(row).getByRole('button', { name: /^Match$/ })).toBeInTheDocument();
-        expect(within(row).queryByRole('button', { name: /^Import$/ })).toBeNull();
-        expect(within(row).queryByRole('button', { name: /^Detail$/ })).toBeNull();
-        const checkbox = within(row).getByRole('checkbox', { name: /select unknown\.file/i });
-        expect(checkbox).toBeDisabled();
+        expect(within(row).queryByRole('button', { name: /^Accept$/ })).toBeNull();
     });
 
-    it('queues a matched row for import via the shared bulk submission hook', async () => {
+    it('opens the manual-match dialog targeting the group for an unmatched row', async () => {
         const user = userEvent.setup();
-        setItems([buildMatched()]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
+        setGroups([buildUnmatchedGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
 
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
-        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Import$/ }));
+        await waitFor(() => expect(rowFor('query:unknown show')).toBeInTheDocument());
+        await user.click(within(rowFor('query:unknown show')).getByRole('button', { name: /^Match$/ }));
 
         await waitFor(() => {
-            expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'] });
+            expect(screen.getByTestId('manual-match-dialog-open')).toHaveTextContent('group');
         });
-        expect(refetchMock).toHaveBeenCalled();
+        expect(manualMatchProp?.kind).toBe('group');
+        expect(manualMatchProp?.kind === 'group' && manualMatchProp.group.groupKey).toBe('query:unknown show');
     });
 
-    it('shows a disabled queued state for an in-flight candidate and excludes it from selection', async () => {
-        setItems([buildMatched({ id: 'match-1', status: 'Queued' })]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
-        const row = rowFor('match-1');
-        expect(within(row).queryByRole('button', { name: /^Import$/ })).toBeNull();
-        expect(within(row).getByText(/import queued/i)).toBeInTheDocument();
-        expect(within(row).getByRole('checkbox')).toBeDisabled();
-    });
-
-    it('bulk-imports the checked matched rows via the bulk-accept mutation', async () => {
+    it('drops a selected group from the selection once it is matched, so the pick does not outlive its key', async () => {
         const user = userEvent.setup();
-        setItems([buildMatched(), buildMatched({ id: 'match-2', filePath: '/media/movies/Heat.1995.mkv' })]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
+        setGroups([buildUnmatchedGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
 
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
-        await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select fight\.club/i }));
+        await waitFor(() => expect(rowFor('query:unknown show')).toBeInTheDocument());
+        await user.click(within(rowFor('query:unknown show')).getByRole('checkbox', { name: 'Select Unknown Show' }));
+        expect(screen.getByText('1 selected')).toBeInTheDocument();
 
-        const acceptChecked = await screen.findByRole('button', { name: /import checked/i });
-        expect(document.querySelector('[data-component="library-import-bulk-bar"]')).toBeTruthy();
-
-        await user.click(acceptChecked);
-
+        await user.click(within(rowFor('query:unknown show')).getByRole('button', { name: /^Match$/ }));
         await waitFor(() => {
-            expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'] });
+            expect(screen.getByTestId('manual-match-dialog-open')).toBeInTheDocument();
         });
+        await user.click(screen.getByRole('button', { name: 'Confirm match' }));
+
+        expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
     });
 
-    it('extends to select-all-across-pages and bulk-accepts via the filter', async () => {
+    it('renders a matching-pending group honestly, with no Match action', async () => {
+        setGroups([buildUnmatchedGroup({ groupKey: 'pending-group', statusCounts: { MatchingPending: 3 } })]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('pending-group')).toBeInTheDocument());
+        const row = rowFor('pending-group');
+        expect(row).toHaveTextContent('Matching pending');
+        expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
+        expect(within(row).queryByRole('button', { name: /^Accept$/ })).toBeNull();
+        expect(within(row).getByRole('button', { name: /^Season$/ })).toBeInTheDocument();
+    });
+
+    it('digging into a matched group navigates to the drill-down route with the group key and root folder', async () => {
         const user = userEvent.setup();
-        setItems([buildMatched()], 30);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
+        setGroups([buildGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper('/library/import?rootFolderId=folder-2'),
+        });
 
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
-        await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select fight\.club/i }));
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('button', { name: /^Season$/ }));
 
-        const extend = await screen.findByRole('button', { name: /select all 30 across all pages/i });
-        await user.click(extend);
-
-        expect(screen.getByText(/all 30 matching files across all pages are selected/i)).toBeInTheDocument();
-
-        expect(useLibraryImportCandidatesMock).toHaveBeenCalledWith(
-            expect.objectContaining({ status: 'Pending', hasMatches: true, pageSize: 1 }),
+        expect(mockNavigate).toHaveBeenCalledWith(
+            expect.stringMatching(/^\/library\/import\?key=.*rootFolderId=folder-2/),
         );
-
-        await user.click(screen.getByRole('button', { name: /import checked/i }));
-
-        await waitFor(() => {
-            expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({
-                filter: { rootFolderId: undefined, excludeIds: [] },
-            });
-        });
-    });
-
-    it('scopes the across-pages bulk-accept filter to the selected root folder', async () => {
-        const user = userEvent.setup();
-        setItems([buildMatched()], 30);
-        render(<LibraryImportPage />, {
-            wrapper: createTestWrapper('/library/import?rootFolderId=folder-1'),
-        });
-
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
-        await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select fight\.club/i }));
-        await user.click(await screen.findByRole('button', { name: /select all 30 across all pages/i }));
-        await user.click(screen.getByRole('button', { name: /import checked/i }));
-
-        await waitFor(() => {
-            expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({
-                filter: { rootFolderId: 'folder-1', excludeIds: [] },
-            });
-        });
-    });
-
-    it('exposes a card-list select-all control that selects every matched row on the page', async () => {
-        installMatchMedia(900);
-        const user = userEvent.setup();
-        setItems([buildMatched(), buildMatched({ id: 'match-2', filePath: '/media/movies/Heat.1995.mkv' })]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
-        expect(document.querySelector('[data-page="library-import"]')).toHaveAttribute('data-layout', 'card');
-
-        const selectAll = screen.getByRole('checkbox', { name: /select all matched files on this page/i });
-        await user.click(selectAll);
-
-        expect(within(rowFor('match-1')).getByRole('checkbox', { name: /select fight\.club/i })).toBeChecked();
-        expect(within(rowFor('match-2')).getByRole('checkbox', { name: /select heat/i })).toBeChecked();
-
-        await user.click(await screen.findByRole('button', { name: /import checked/i }));
-        await waitFor(() => {
-            expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-1', 'match-2'] });
-        });
-    });
-
-    it('card-list select-all on a full page surfaces the across-pages prompt, then clears', async () => {
-        installMatchMedia(900);
-        const user = userEvent.setup();
-        setItems([buildMatched()], 30);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
-
-        const selectAll = screen.getByRole('checkbox', { name: /select all matched files on this page/i });
-        await user.click(selectAll);
-
-        expect(await screen.findByRole('button', { name: /select all 30 across all pages/i })).toBeInTheDocument();
-
-        await user.click(selectAll);
-        await waitFor(() => {
-            expect(document.querySelector('[data-component="library-import-bulk-bar"]')).toBeNull();
-        });
-    });
-
-    it('does not render the card-list select-all control when there are no matched rows', async () => {
-        installMatchMedia(900);
-        setItems([buildUnmatched()]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => expect(rowFor('empty-1')).toBeInTheDocument());
-        expect(document.querySelector('[data-component="library-import-card-toolbar"]')).toBeNull();
-    });
-
-    it('opens the manual-match modal for an unmatched row', async () => {
-        const user = userEvent.setup();
-        setItems([buildUnmatched()]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => expect(rowFor('empty-1')).toBeInTheDocument());
-        await user.click(within(rowFor('empty-1')).getByRole('button', { name: /^Match$/ }));
-
-        await waitFor(() => {
-            expect(screen.getByTestId('manual-match-dialog-open')).toHaveTextContent('empty-1');
-        });
-        expect(manualMatchProp?.id).toBe('empty-1');
-    });
-
-    it('opens the preview drawer for a matched row Detail action', async () => {
-        const user = userEvent.setup();
-        setItems([buildMatched()]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
-        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Detail$/ }));
-
-        await waitFor(() => {
-            expect(screen.getByTestId('preview-drawer-open')).toBeInTheDocument();
-        });
     });
 
     it('disables the root-folder select and Scan button while scanning, then re-enables both once it finishes', async () => {
-        setItems([]);
+        setGroups([]);
         scanController.isScanning = true;
-        const { rerender } = render(<LibraryImportPage />, { wrapper: createTestWrapper() });
+        const { rerender } = render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
 
         await waitFor(() => {
             expect(screen.getByRole('button', { name: /^Scan$/ })).toBeDisabled();
@@ -439,7 +622,7 @@ describe('LibraryImportPage', () => {
         expect(document.querySelector('[data-filter="root-folder"]')).toBeDisabled();
 
         scanController.isScanning = false;
-        rerender(<LibraryImportPage />);
+        rerender(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />);
 
         await waitFor(() => {
             expect(screen.getByRole('button', { name: /^Scan$/ })).not.toBeDisabled();
@@ -447,79 +630,15 @@ describe('LibraryImportPage', () => {
         expect(document.querySelector('[data-filter="root-folder"]')).not.toBeDisabled();
     });
 
-    it('enables scanning of the sole root folder when none is explicitly selected', async () => {
-        setItems([]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => {
-            expect(screen.getByTestId('library-import-empty')).toBeInTheDocument();
-        });
-
-        expect(screen.getByRole('button', { name: /^Scan$/ })).not.toBeDisabled();
-        expect(screen.queryByTestId('library-import-scan-hint')).toBeNull();
-        expect(screen.getByTestId('library-import-empty')).toHaveTextContent(/run a folder scan/i);
-    });
-
-    it('enables scan and clears the pick-a-folder guidance once a root folder is selected', async () => {
-        setItems([]);
-        render(<LibraryImportPage />, {
-            wrapper: createTestWrapper('/library/import?rootFolderId=folder-1'),
-        });
-
-        await waitFor(() => {
-            expect(screen.getByTestId('library-import-empty')).toBeInTheDocument();
-        });
-
-        expect(screen.getByRole('button', { name: /^Scan$/ })).not.toBeDisabled();
-        expect(screen.queryByTestId('library-import-scan-hint')).toBeNull();
-
-        expect(screen.getByTestId('library-import-empty')).toHaveTextContent(
-            /no files to import\. run a folder scan\./i,
-        );
-    });
-
-    it('enables Scan on the default "All root folders" selection with multiple folders', async () => {
-        activeFolders = [moviesFolder, tvFolder];
-        setItems([]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => {
-            expect(screen.getByTestId('library-import-empty')).toBeInTheDocument();
-        });
-
-        expect(screen.getByRole('button', { name: /^Scan$/ })).not.toBeDisabled();
-        expect(screen.queryByTestId('library-import-scan-hint')).toBeNull();
-        expect(screen.getByTestId('library-import-empty')).not.toHaveTextContent(/select a root folder/i);
-        expect(screen.getByTestId('library-import-empty')).toHaveTextContent(/run a folder scan/i);
-    });
-
-    it('scans every root folder when Scan is clicked on the default "All" selection', async () => {
-        const user = userEvent.setup();
-        activeFolders = [moviesFolder, tvFolder];
-        setItems([]);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
-
-        await waitFor(() => expect(screen.getByTestId('library-import-empty')).toBeInTheDocument());
-        await user.click(screen.getByRole('button', { name: /^Scan$/ }));
-
-        await waitFor(() => {
-            expect(scanController.startScanAll).toHaveBeenCalledWith([
-                { id: 'folder-1', name: 'Movies' },
-                { id: 'folder-2', name: 'TV' },
-            ]);
-        });
-        expect(scanController.startScan).not.toHaveBeenCalled();
-    });
-
     it('scans only the chosen folder when a specific root folder is selected', async () => {
         const user = userEvent.setup();
         activeFolders = [moviesFolder, tvFolder];
-        setItems([]);
-        render(<LibraryImportPage />, {
+        setGroups([]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
             wrapper: createTestWrapper('/library/import?rootFolderId=folder-2'),
         });
 
-        await waitFor(() => expect(screen.getByTestId('library-import-empty')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByTestId('library-import-empty-filtered')).toBeInTheDocument());
         await user.click(screen.getByRole('button', { name: /^Scan$/ }));
 
         await waitFor(() => {
@@ -528,23 +647,206 @@ describe('LibraryImportPage', () => {
         expect(scanController.startScanAll).not.toHaveBeenCalled();
     });
 
+    it('bulk-accepts every selected eligible group and skips a selected ineligible group with a toast', async () => {
+        const user = userEvent.setup();
+        setGroups([
+            buildGroup(),
+            buildGroup({ groupKey: 'all-queued', title: 'Stale Show', statusCounts: { Queued: 157 } }),
+        ]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('checkbox', { name: 'Select Bluey' }));
+        await user.click(within(rowFor('all-queued')).getByRole('checkbox', { name: 'Select Stale Show' }));
+        await user.click(screen.getByRole('button', { name: 'Accept selected' }));
+
+        await waitFor(() => {
+            expect(acceptGroupMutateAsync).toHaveBeenCalledWith({
+                groupKey: '/media/tv/Bluey',
+                rootFolderId: undefined,
+                monitoringMode: 'Inherit',
+            });
+        });
+        expect(acceptGroupMutateAsync).not.toHaveBeenCalledWith(expect.objectContaining({ groupKey: 'all-queued' }));
+        await waitFor(() => {
+            expect(screen.getByText('Import partially queued')).toBeInTheDocument();
+        });
+        expect(screen.getByText('1 file queued for import. 1 group is not ready to import.')).toBeInTheDocument();
+    });
+
+    it('reports one success toast for a page-mode bulk accept where every selected group is queued', async () => {
+        const user = userEvent.setup();
+        setGroups([buildGroup(), buildGroup({ groupKey: 'group-b', title: 'Group B' })]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(screen.getByRole('checkbox', { name: 'Select all groups' }));
+        await user.click(screen.getByRole('button', { name: 'Accept selected' }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Import queued')).toBeInTheDocument();
+        });
+        expect(screen.getByText('2 files queued for import.')).toBeInTheDocument();
+        expect(screen.queryByText('Import partially queued')).not.toBeInTheDocument();
+    });
+
+    it('drops the selection when the page changes, so the toolbar cannot count rows the accept will not reach', async () => {
+        const user = userEvent.setup();
+        setGroups([buildGroup()], 30);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('checkbox', { name: 'Select Bluey' }));
+        expect(screen.getByText('1 selected')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: /go to next page/i }));
+
+        await waitFor(() => {
+            expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+        });
+    });
+
+    it('drops the selection when the root-folder filter changes', async () => {
+        const user = userEvent.setup();
+        setGroups([buildGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper('/library/import?rootFolderId=folder-1'),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('checkbox', { name: 'Select Bluey' }));
+        expect(screen.getByText('1 selected')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: /clear filters/i }));
+
+        await waitFor(() => {
+            expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+        });
+    });
+
+    it('gives the group title the mobile card header role instead of a labelled field row', async () => {
+        setGroups([buildGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        expect(document.querySelector('td[data-column="title"]')).toHaveAttribute('data-mobile-role', 'header');
+    });
+
+    it('offers a filtered empty state with a clear-filters action when a root folder holds nothing', async () => {
+        const user = userEvent.setup();
+        setGroups([]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper('/library/import?rootFolderId=folder-1'),
+        });
+
+        await waitFor(() => expect(screen.getByTestId('library-import-empty-filtered')).toBeInTheDocument());
+        expect(screen.queryByTestId('library-import-empty')).toBeNull();
+
+        await user.click(within(screen.getByTestId('library-import-empty-filtered')).getByRole('button'));
+
+        await waitFor(() => expect(screen.getByTestId('library-import-empty')).toBeInTheDocument());
+    });
+
     it('pages server-side: clicking next requests the next page', async () => {
         const user = userEvent.setup();
-        setItems([buildMatched()], 30);
-        render(<LibraryImportPage />, { wrapper: createTestWrapper() });
+        setGroups([buildGroup()], 30);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
 
-        await waitFor(() => expect(rowFor('match-1')).toBeInTheDocument());
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
 
-        expect(useLibraryImportCandidatesMock).toHaveBeenCalledWith(
+        expect(useLibraryImportCandidateGroupsMock).toHaveBeenCalledWith(
             expect.objectContaining({ pageNumber: 1, pageSize: 25 }),
         );
 
         await user.click(screen.getByRole('button', { name: /go to next page/i }));
 
         await waitFor(() => {
-            expect(useLibraryImportCandidatesMock).toHaveBeenCalledWith(
+            expect(useLibraryImportCandidateGroupsMock).toHaveBeenCalledWith(
                 expect.objectContaining({ pageNumber: 2, pageSize: 25 }),
             );
         });
+    });
+
+    it('accepting one group leaves another group Accept button enabled (concurrent accepts are independent)', async () => {
+        const user = userEvent.setup();
+        setGroups([
+            buildGroup({ groupKey: 'group-a', title: 'Group A' }),
+            buildGroup({ groupKey: 'group-b', title: 'Group B' }),
+        ]);
+        let resolveAccept: (value: { queued: unknown[]; skipped: unknown[] }) => void = () => {};
+        acceptGroupMutateAsync.mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    resolveAccept = resolve;
+                }),
+        );
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('group-a')).toBeInTheDocument());
+        await user.click(within(rowFor('group-a')).getByRole('button', { name: /^Accept$/ }));
+
+        expect(within(rowFor('group-a')).getByRole('button', { name: /^Accept$/ })).toBeDisabled();
+        expect(within(rowFor('group-b')).getByRole('button', { name: /^Accept$/ })).not.toBeDisabled();
+
+        resolveAccept({ queued: [], skipped: [] });
+        await waitFor(() => {
+            expect(within(rowFor('group-a')).getByRole('button', { name: /^Accept$/ })).not.toBeDisabled();
+        });
+    });
+
+    it('offers the select-all-across-pages banner after selecting every group on the loaded page', async () => {
+        const user = userEvent.setup();
+        setGroups([buildGroup()], 30);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(screen.getByRole('checkbox', { name: 'Select all groups' }));
+
+        expect(screen.getByText(/all 1 on this page are selected/i)).toBeInTheDocument();
+        const selectAcrossButton = screen.getByRole('button', { name: /select all 30 across all pages/i });
+        expect(selectAcrossButton).toBeInTheDocument();
+
+        await user.click(selectAcrossButton);
+
+        expect(screen.getByText(/all 30 matching groups across all pages are selected/i)).toBeInTheDocument();
+        expect(screen.getByText('30 selected')).toBeInTheDocument();
+    });
+
+    it('bulk-accepting in select-all-across-pages mode calls the group bulk-accept endpoint with the filter and excluded keys', async () => {
+        const user = userEvent.setup();
+        setGroups([buildGroup(), buildGroup({ groupKey: 'all-queued', title: 'Stale Show' })], 30);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper('/library/import?rootFolderId=folder-2'),
+        });
+
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
+        await user.click(screen.getByRole('checkbox', { name: 'Select all groups' }));
+        await user.click(screen.getByRole('button', { name: /select all 30 across all pages/i }));
+        await user.click(within(rowFor('all-queued')).getByRole('checkbox', { name: 'Select Stale Show' }));
+        await user.click(screen.getByRole('button', { name: 'Accept selected' }));
+
+        await waitFor(() => {
+            expect(bulkAcceptGroupsMutateAsync).toHaveBeenCalledWith({
+                rootFolderId: 'folder-2',
+                excludeGroupKeys: ['all-queued'],
+                monitoringMode: 'Inherit',
+            });
+        });
+        expect(acceptGroupMutateAsync).not.toHaveBeenCalled();
     });
 });

@@ -18,7 +18,7 @@ public interface IExtensionConfigurationTester
     Guid ExtensionId { get; }
 
     /// <summary>
-    /// The settings group name.
+    /// The name of the settings group that this tester validates.
     /// </summary>
     string SettingsGroupName { get; }
 
@@ -26,7 +26,7 @@ public interface IExtensionConfigurationTester
     /// Tests the configuration using the supplied settings values.
     /// </summary>
     /// <param name="settings">The settings values to test</param>
-    /// <param name="cancellationToken">The cancellation token</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<ConfigurationTestResult> TestConfigurationAsync(
         IReadOnlyDictionary<string, string> settings,
         CancellationToken cancellationToken);

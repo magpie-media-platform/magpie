@@ -28,6 +28,7 @@ internal sealed class LibraryImportCandidateConfiguration : IEntityTypeConfigura
                     ?? new())
             .UseJsonComparer();
         builder.Property(e => e.MatchCount).HasDefaultValue(0);
+        builder.HasIndex(e => e.GroupKey);
         builder.HasOne<RootFolder>()
             .WithMany()
             .HasForeignKey(e => e.RootFolderId)

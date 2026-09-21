@@ -44,6 +44,10 @@
         max-width: 400px;
         border-left: 1px solid var(--border-default);
         border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+        padding-top: env(safe-area-inset-top, 0);
+        padding-bottom: env(safe-area-inset-bottom, 0);
+
+        --overlay-close-top: calc(var(--space-md) + env(safe-area-inset-top, 0));
 
         &[data-state='open'] {
             animation-name: sheet-slide-in-right;
@@ -65,6 +69,10 @@
             max-height: 85vh;
             border-left: none;
             border-radius: var(--radius-lg);
+            padding-top: 0;
+            padding-bottom: 0;
+
+            --overlay-close-top: var(--space-md);
 
             &[data-state='open'] {
                 animation-name: sheet-modal-in;
@@ -84,6 +92,10 @@
         max-width: 400px;
         border-right: 1px solid var(--border-default);
         border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+        padding-top: env(safe-area-inset-top, 0);
+        padding-bottom: env(safe-area-inset-bottom, 0);
+
+        --overlay-close-top: calc(var(--space-md) + env(safe-area-inset-top, 0));
 
         &[data-state='open'] {
             animation-name: sheet-slide-in-left;
@@ -105,6 +117,10 @@
             max-height: 85vh;
             border-right: none;
             border-radius: var(--radius-lg);
+            padding-top: 0;
+            padding-bottom: 0;
+
+            --overlay-close-top: var(--space-md);
 
             &[data-state='open'] {
                 animation-name: sheet-modal-in;
@@ -124,6 +140,9 @@
         max-height: 80vh;
         border-bottom: 1px solid var(--border-default);
         border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+        padding-top: env(safe-area-inset-top, 0);
+
+        --overlay-close-top: calc(var(--space-md) + env(safe-area-inset-top, 0));
 
         &[data-state='open'] {
             animation-name: sheet-slide-in-top;
@@ -142,6 +161,7 @@
         max-height: 80vh;
         border-top: 1px solid var(--border-default);
         border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        padding-bottom: env(safe-area-inset-bottom, 0);
 
         &[data-state='open'] {
             animation-name: sheet-slide-in-bottom;

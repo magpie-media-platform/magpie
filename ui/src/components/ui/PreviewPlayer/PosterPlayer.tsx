@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PlayIcon, CornersOutIcon } from '@phosphor-icons/react';
+import { PlayIcon, CornersOutIcon, StopIcon } from '@phosphor-icons/react';
 
 import { Scrubber } from './Scrubber';
 import { VolumeControl } from './VolumeControl';
-import { callPlayer, loadYouTubeIframeApi, type YTPlayer } from './youtubeApi';
 import { formatPlaybackTime } from '@/lib/formatTime';
 
 function requestFullscreenSafe(element: Element | null): void {
@@ -16,11 +15,8 @@ function requestFullscreenSafe(element: Element | null): void {
     }
 }
 
-const YT_POLL_INTERVAL_MS = 250;
-
-const DEFAULT_VOLUME = 100;
-
 export interface PosterPlayerProps {
+    mimeType?: string;
     directUrl: string | null;
     youTubeId: string | null;
     posterUrl?: string;
@@ -28,19 +24,37 @@ export interface PosterPlayerProps {
     fit?: 'wide' | 'poster';
 }
 
-export function PosterPlayer({ directUrl, youTubeId, posterUrl, label, fit = 'wide' }: PosterPlayerProps) {
+export function PosterPlayer({ mimeType, directUrl, youTubeId, posterUrl, label, fit = 'wide' }: PosterPlayerProps) {
     const [playing, setPlaying] = useState(false);
+    const facadeRef = useRef<HTMLButtonElement>(null);
+    const startedRef = useRef(false);
+    useEffect(() => {
+        if (playing) {
+            startedRef.current = true;
+        } else if (startedRef.current) {
+            facadeRef.current?.focus();
+        }
+    }, [playing]);
 
     const handlePlay = useCallback(() => setPlaying(true), []);
     const handleStop = useCallback(() => setPlaying(false), []);
 
     if (playing) {
         return (
-            <div className="preview-player__poster-stage" data-testid="preview-player-poster-stage">
+            <div
+                className="preview-player__poster-stage"
+                data-testid="preview-player-poster-stage"
+                onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                        event.stopPropagation();
+                        handleStop();
+                    }
+                }}
+            >
                 {youTubeId ? (
                     <YouTubePosterPlayer videoId={youTubeId} label={label} onStop={handleStop} />
                 ) : (
-                    <DirectVideoPosterPlayer url={directUrl ?? ''} onStop={handleStop} />
+                    <DirectVideoPosterPlayer mimeType={mimeType} url={directUrl ?? ''} onStop={handleStop} />
                 )}
             </div>
         );
@@ -52,6 +66,7 @@ export function PosterPlayer({ directUrl, youTubeId, posterUrl, label, fit = 'wi
     return (
         <div className="preview-player__poster-stage" data-testid="preview-player-poster-stage">
             <button
+                ref={facadeRef}
                 type="button"
                 className="preview-player__facade"
                 onClick={handlePlay}
@@ -94,6 +109,7 @@ function PosterControls({
     onVolumeChange,
     onToggleMute,
     onFullscreen,
+    onStop,
 }: {
     currentTime: number;
     duration: number;
@@ -104,6 +120,7 @@ function PosterControls({
     onVolumeChange: (volume: number) => void;
     onToggleMute: () => void;
     onFullscreen: () => void;
+    onStop: () => void;
 }) {
     const showTime = duration > 0;
 
@@ -117,6 +134,15 @@ function PosterControls({
         >
             <Scrubber currentTime={currentTime} duration={duration} onSeek={onSeek} />
             <div className="preview-player__controls-row">
+                <button
+                    type="button"
+                    className="preview-player__stop"
+                    onClick={onStop}
+                    aria-label="Stop preview"
+                    autoFocus
+                >
+                    <StopIcon weight="bold" aria-hidden="true" />
+                </button>
                 <VolumeControl
                     volume={volume}
                     muted={muted}
@@ -145,7 +171,7 @@ function PosterControls({
     );
 }
 
-function DirectVideoPosterPlayer({ url, onStop }: { url: string; onStop: () => void }) {
+function DirectVideoPosterPlayer({ url, mimeType, onStop }: { url: string; mimeType?: string; onStop: () => void }) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
@@ -238,7 +264,7 @@ function DirectVideoPosterPlayer({ url, onStop }: { url: string; onStop: () => v
     }, []);
 
     return (
-        <div className="preview-player__stop-target" onClick={handleStop} data-testid="preview-player-stop-target">
+        <div className="preview-player__stop-target">
             <video
                 ref={videoRef}
                 className="preview-player__video"
@@ -260,7 +286,7 @@ function DirectVideoPosterPlayer({ url, onStop }: { url: string; onStop: () => v
                 }}
                 onEnded={onStop}
             >
-                <source src={url} />
+                <source src={url} type={mimeType} />
             </video>
             <PosterControls
                 currentTime={currentTime}
@@ -271,6 +297,7 @@ function DirectVideoPosterPlayer({ url, onStop }: { url: string; onStop: () => v
                 onSeek={handleSeek}
                 onVolumeChange={handleVolumeChange}
                 onToggleMute={handleToggleMute}
+                onStop={handleStop}
                 onFullscreen={handleFullscreen}
             />
         </div>
@@ -278,168 +305,30 @@ function DirectVideoPosterPlayer({ url, onStop }: { url: string; onStop: () => v
 }
 
 function YouTubePosterPlayer({ videoId, label, onStop }: { videoId: string; label: string; onStop: () => void }) {
-    const mountRef = useRef<HTMLDivElement>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
-    const playerRef = useRef<YTPlayer | null>(null);
-    const readyRef = useRef(false);
-    const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const onStopRef = useRef(onStop);
-    onStopRef.current = onStop;
-
-    const [currentTime, setCurrentTime] = useState(0);
-    const [duration, setDuration] = useState(0);
-    const [volume, setVolume] = useState(1);
-    const [muted, setMuted] = useState(false);
-
-    const clearPoll = useCallback(() => {
-        if (intervalRef.current !== null) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-        }
-    }, []);
-
-    const startPoll = useCallback(() => {
-        clearPoll();
-        intervalRef.current = setInterval(() => {
-            if (!readyRef.current) {
-                return;
-            }
-            const p = playerRef.current;
-            const t = callPlayer(p, 'getCurrentTime');
-            if (typeof t === 'number') {
-                setCurrentTime(t);
-            }
-            const d = callPlayer(p, 'getDuration');
-            if (typeof d === 'number' && d > 0) {
-                setDuration(d);
-            }
-            const m = callPlayer(p, 'isMuted');
-            const vol = callPlayer(p, 'getVolume');
-            if (typeof vol === 'number') {
-                setVolume(vol / 100);
-            }
-            if (typeof m === 'boolean') {
-                setMuted(m || vol === 0);
-            }
-        }, YT_POLL_INTERVAL_MS);
-    }, [clearPoll]);
-
-    const teardown = useCallback(() => {
-        clearPoll();
-        readyRef.current = false;
-        const player = playerRef.current;
-        playerRef.current = null;
-        callPlayer(player, 'destroy');
-    }, [clearPoll]);
-
-    useEffect(() => {
-        let cancelled = false;
-
-        loadYouTubeIframeApi()
-            .then((YT) => {
-                if (cancelled || !mountRef.current) {
-                    return;
-                }
-                const player = new YT.Player(mountRef.current, {
-                    host: 'https://www.youtube-nocookie.com',
-                    videoId,
-                    playerVars: {
-                        controls: 0,
-                        modestbranding: 1,
-                        rel: 0,
-                        playsinline: 1,
-                        autoplay: 1,
-                        disablekb: 1,
-                        fs: 1,
-                        iv_load_policy: 3,
-                    },
-                    events: {
-                        onReady: ({ target }) => {
-                            if (cancelled) {
-                                return;
-                            }
-                            readyRef.current = true;
-                            callPlayer(target, 'unMute');
-                            callPlayer(target, 'setVolume', DEFAULT_VOLUME);
-                            const d = callPlayer(target, 'getDuration');
-                            if (typeof d === 'number') {
-                                setDuration(d);
-                            }
-                            setVolume(DEFAULT_VOLUME / 100);
-                            setMuted(false);
-                            callPlayer(target, 'playVideo');
-                            startPoll();
-                        },
-                        onStateChange: ({ data }) => {
-                            if (data === YT.PlayerState.ENDED) {
-                                teardown();
-                                onStopRef.current();
-                            }
-                        },
-                    },
-                });
-                playerRef.current = player;
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    onStopRef.current();
-                }
-            });
-
-        return () => {
-            cancelled = true;
-            teardown();
-        };
-    }, [videoId, teardown, startPoll]);
-
-    const handleSeek = useCallback((seconds: number) => {
-        callPlayer(playerRef.current, 'seekTo', seconds, true);
-        setCurrentTime(seconds);
-    }, []);
-
-    const handleVolumeChange = useCallback((next: number) => {
-        const player = playerRef.current;
-        callPlayer(player, 'unMute');
-        callPlayer(player, 'setVolume', Math.round(next * 100));
-        setVolume(next);
-        setMuted(next === 0);
-    }, []);
-
-    const handleToggleMute = useCallback(() => {
-        const player = playerRef.current;
-        setMuted((prev) => {
-            const next = !prev;
-            callPlayer(player, next ? 'mute' : 'unMute');
-            return next;
-        });
-    }, []);
-
-    const handleStop = useCallback(() => {
-        callPlayer(playerRef.current, 'stopVideo');
-        teardown();
-        onStop();
-    }, [teardown, onStop]);
-
-    const handleFullscreen = useCallback(() => {
-        requestFullscreenSafe(containerRef.current);
-    }, []);
-
     return (
-        <div className="preview-player__stop-target" onClick={handleStop} data-testid="preview-player-stop-target">
-            <div ref={containerRef} className="preview-player__yt-mount" aria-label={label}>
-                <div ref={mountRef} data-testid="preview-player-yt-mount" />
+        <>
+            <div className="preview-player__yt-mount">
+                {/* eslint-disable-next-line react/iframe-missing-sandbox -- allow-same-origin keeps the YouTube player on its own origin, which it needs for playback; the frame is cross-origin, so it still cannot reach Magpie. */}
+                <iframe
+                    title={label}
+                    src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&playsinline=1&rel=0`}
+                    sandbox="allow-scripts allow-same-origin allow-presentation"
+                    allow="autoplay; encrypted-media; fullscreen"
+                    allowFullScreen
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    data-testid="preview-player-iframe"
+                />
             </div>
-            <PosterControls
-                currentTime={currentTime}
-                duration={duration}
-                volume={volume}
-                muted={muted}
-                onSeek={handleSeek}
-                onVolumeChange={handleVolumeChange}
-                onToggleMute={handleToggleMute}
-                onFullscreen={handleFullscreen}
-            />
-        </div>
+            <button
+                type="button"
+                className="preview-player__fullscreen preview-player__youtube-stop"
+                onClick={onStop}
+                aria-label="Stop preview"
+                autoFocus
+            >
+                <StopIcon weight="fill" aria-hidden="true" />
+            </button>
+        </>
     );
 }
 

@@ -412,7 +412,7 @@ public sealed class QueryPlannerTests
         {
             Assert.That(plan.Root.Kind, Is.EqualTo(PlanNodeKind.Fetch));
             Assert.That(plan.Root.State, Is.EqualTo(PlanNodeState.Empty));
-            Assert.That(plan.Root.Reason, Does.Contain("content hierarchy criteria"));
+            Assert.That(plan.Root.Reason, Is.EqualTo("The normalized criteria have an empty result set."));
             Assert.That(plan.MaxResults, Is.EqualTo(37));
         }
     }
@@ -1221,13 +1221,7 @@ public sealed class QueryPlannerTests
         });
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(plan.Root.State, Is.EqualTo(PlanNodeState.Empty));
-            Assert.That(
-                plan.Warnings,
-                Does.Contain("Open Library requires at least one positive search condition."));
-        }
+        Assert.That(plan.Root.State, Is.EqualTo(PlanNodeState.Empty));
     }
 
     [Test]
@@ -1273,5 +1267,239 @@ public sealed class QueryPlannerTests
             Assert.That(plan.Root.Predicates, Is.EqualTo(["Title:Equals"]));
             Assert.That(plan.Root.Children.Single().SourceFields, Is.EqualTo(["title"]));
         }
+    }
+
+    [TestCase(CriteriaValueOperator.Equals, "Ready")]
+    [TestCase(CriteriaValueOperator.ContainsString, "Ready")]
+    [TestCase(CriteriaValueOperator.StartsWithString, "Ready")]
+    [TestCase(CriteriaValueOperator.EndsWithString, "Ready")]
+    [TestCase(CriteriaValueOperator.GreaterThan, "Empty")]
+    public void Plan_SilentState_WhenTitleOperatorIsRequested(CriteriaValueOperator operation, string expectedState)
+    {
+        // Arrange
+        var subject = new QueryPlanner();
+        var request = new QueryRequest
+        {
+            Intent = QueryIntent.AdvancedSearch,
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            MetadataCriteria = new MetadataCriteria
+            {
+                Title = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Operator = operation, Value = "Dune" }]
+                }
+            }
+        };
+
+        // Act
+        var plan = subject.Plan(request);
+
+        // Assert
+        Assert.That(plan.Root.State.ToString(), Is.EqualTo(expectedState));
+    }
+
+    [TestCase("openlibrary", "OL26320A")]
+    [TestCase(null, "OL26320A")]
+    [TestCase("openlibrary", "invalid")]
+    public void Plan_EmptyWithoutWarnings_WhenWorkIdentifierCannotBeServed(string? source, string value)
+    {
+        // Arrange
+        var subject = new QueryPlanner();
+        var request = new QueryRequest
+        {
+            Intent = QueryIntent.AdvancedSearch,
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            MetadataCriteria = new MetadataCriteria
+            {
+                Title = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Value = "Dune" }]
+                },
+                ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+                {
+                    Some =
+                    [
+                        [
+                            new ExternalIdCriteria
+                            {
+                                Source = new CriteriaSet<PropertyCriterion<string>>
+                                {
+                                    And = source is null ? [] : [new PropertyCriterion<string> { Value = source }]
+                                },
+                                Value = new CriteriaSet<PropertyCriterion<string>>
+                                {
+                                    And = [new PropertyCriterion<string> { Value = value }]
+                                }
+                            }
+                        ]
+                    ]
+                }
+            }
+        };
+
+        // Act
+        var plan = subject.Plan(request);
+
+        // Assert
+        Assert.That(plan.Root.State, Is.EqualTo(PlanNodeState.Empty));
+    }
+
+    [TestCase("openlibrary", false, "Ready")]
+    [TestCase("openlibrary", true, "Empty")]
+    [TestCase("isbn", false, "Empty")]
+    [TestCase("isbn", true, "Ready")]
+    [TestCase("openlibrary:work:OL45883W", false, "Empty")]
+    public void Plan_CandidateSourceMatch_WhenSourceCriterionIsRequested(
+        string source,
+        bool negate,
+        string expectedState)
+    {
+        // Arrange
+        var subject = new QueryPlanner();
+        var request = new QueryRequest
+        {
+            Intent = QueryIntent.AdvancedSearch,
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            MetadataCriteria = new MetadataCriteria
+            {
+                Title = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Value = "Dune" }]
+                },
+                Source = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Value = source, Negate = negate }]
+                }
+            }
+        };
+
+        // Act
+        var plan = subject.Plan(request);
+
+        // Assert
+        Assert.That(plan.Root.State.ToString(), Is.EqualTo(expectedState));
+    }
+
+    [TestCase("eng", "Ready")]
+    [TestCase("invalid-language", "Ready")]
+    public void Plan_SilentState_WhenLanguageAlternativesContainAnInvalidValue(string language, string expectedState)
+    {
+        // Arrange
+        var subject = new QueryPlanner();
+        var request = new QueryRequest
+        {
+            Intent = QueryIntent.AdvancedSearch,
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            MetadataCriteria = new MetadataCriteria
+            {
+                Language = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string>
+                    {
+                        Operator = CriteriaValueOperator.In, Values = ["en", language]
+                    }]
+                }
+            }
+        };
+
+        // Act
+        var plan = subject.Plan(request);
+
+        // Assert
+        Assert.That(plan.Root.State.ToString(), Is.EqualTo(expectedState));
+    }
+
+    [TestCase(false, "Empty")]
+    [TestCase(true, "Ready")]
+    public void Plan_SilentState_WhenEveryLanguageValueIsInvalid(bool negate, string expectedState)
+    {
+        // Arrange
+        var subject = new QueryPlanner();
+        var request = new QueryRequest
+        {
+            Intent = QueryIntent.AdvancedSearch,
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            MetadataCriteria = new MetadataCriteria
+            {
+                Title = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Value = "Dune" }]
+                },
+                Language = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string>
+                    {
+                        Operator = CriteriaValueOperator.In, Values = ["invalid-language"], Negate = negate
+                    }]
+                }
+            }
+        };
+
+        // Act
+        var plan = subject.Plan(request);
+
+        // Assert
+        Assert.That(plan.Root.State.ToString(), Is.EqualTo(expectedState));
+    }
+
+    [TestCase("OL1A", "Ready")]
+    [TestCase("invalid", "Empty")]
+    public void Plan_SilentState_WhenExcludedAuthorIdentifiersContainAnInvalidValue(string value, string expectedState)
+    {
+        // Arrange
+        var subject = new QueryPlanner();
+        var request = new QueryRequest
+        {
+            Intent = QueryIntent.AdvancedSearch,
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            MetadataCriteria = new MetadataCriteria
+            {
+                Title = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Value = "Dune" }]
+                },
+                Relationships = new CollectionCriteria<RelationshipCriteria>
+                {
+                    Some =
+                    [
+                        [
+                            new RelationshipCriteria
+                            {
+                                Kind = new CriteriaSet<PropertyCriterion<string>>
+                                {
+                                    And = [new PropertyCriterion<string> { Value = "author" }]
+                                },
+                                ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+                                {
+                                    None =
+                                    [
+                                        new ExternalIdCriteria
+                                        {
+                                            Source = new CriteriaSet<PropertyCriterion<string>>
+                                            {
+                                                And = [new PropertyCriterion<string> { Value = "openlibrary" }]
+                                            },
+                                            Value = new CriteriaSet<PropertyCriterion<string>>
+                                            {
+                                                And = [new PropertyCriterion<string>
+                                                {
+                                                    Operator = CriteriaValueOperator.In, Values = ["OL1A", value]
+                                                }]
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    ]
+                }
+            }
+        };
+
+        // Act
+        var plan = subject.Plan(request);
+
+        // Assert
+        Assert.That(plan.Root.State.ToString(), Is.EqualTo(expectedState));
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Net.Http;
 using System.Text;
@@ -8,6 +9,16 @@ namespace Magpie.CommandLine.Dispatch;
 
 internal sealed record CommandHttpRequest
 {
+    private enum BodyKind
+    {
+        None,
+        RawJson,
+        File
+    }
+
+    private sealed record FileBody(string Path, string FieldName);
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
     private CommandHttpRequest(
         HttpMethod method,
         string uri,
@@ -20,12 +31,6 @@ internal sealed record CommandHttpRequest
         Body = body;
         Kind = bodyKind;
         AllowsAnonymousRemote = allowsAnonymousRemote;
-    }
-    private enum BodyKind
-    {
-        None,
-        RawJson,
-        File
     }
 
     public HttpMethod Method { get; }
@@ -52,8 +57,6 @@ internal sealed record CommandHttpRequest
         string body,
         bool allowsAnonymousRemote = false)
     {
-        ArgumentNullException.ThrowIfNull(body);
-
         return new CommandHttpRequest(method, uri, body, BodyKind.RawJson, allowsAnonymousRemote);
     }
 
@@ -93,6 +96,4 @@ internal sealed record CommandHttpRequest
 
         return message;
     }
-
-    private sealed record FileBody(string Path, string FieldName);
 }

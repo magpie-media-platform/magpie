@@ -286,8 +286,8 @@ dotnet_diagnostic.IDE0090.severity = warning
 dotnet_diagnostic.IDE0300.severity = warning
 dotnet_diagnostic.IDE0301.severity = warning
 
-# pattern matching over chained equality
-dotnet_diagnostic.IDE0078.severity = warning
+# pattern matching over chained equality, kept below the formatter's threshold: expression trees forbid patterns
+dotnet_diagnostic.IDE0078.severity = suggestion
 
 # These enforce the OPPOSITE of house style. Pinned so a bulk enable cannot
 # silently invert a rule.
@@ -553,3 +553,10 @@ dotnet_naming_style.s_camelcase.required_prefix = s_
 dotnet_naming_style.s_camelcase.required_suffix = 
 dotnet_naming_style.s_camelcase.word_separator = 
 dotnet_naming_style.s_camelcase.capitalization = camel_case
+
+[Magpie.Core/Jobs/{*.cs,**/*.cs}]
+dotnet_diagnostic.SA1201.severity = none
+
+[Magpie.Test.*/{*.cs,**/*.cs}]
+dotnet_diagnostic.IDE1006.severity = none
+dotnet_diagnostic.IDE0005.severity = none

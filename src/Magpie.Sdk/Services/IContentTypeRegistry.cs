@@ -18,12 +18,12 @@ public interface IContentTypeRegistry
     /// <summary>
     /// Gets the content type definition with a slug.
     /// </summary>
-    /// <param name="levelSlug">The slug of the content type to return</param>
+    /// <param name="contentType">The slug of the content type to return</param>
     /// <returns>The matching definition, or <see langword="null"/> when none is registered</returns>
-    ContentTypeDefinition? GetDefinitionFor(string levelSlug);
+    ContentTypeDefinition? GetDefinitionFor(string contentType);
 
     /// <summary>
-    /// Gets the registered provider for a content type.
+    /// Finds the registered provider for a content type.
     /// </summary>
     /// <param name="contentType">The slug of the content type</param>
     IContentTypeDefinitionProvider? FindProviderFor(string contentType);
@@ -51,7 +51,7 @@ public interface IContentTypeRegistry
     /// <summary>
     /// Reports whether a content type with a slug is registered.
     /// </summary>
-    /// <param name="levelSlug">The slug of the content type to test</param>
+    /// <param name="contentType">The slug of the content type to test</param>
     /// <returns><see langword="true"/> when a matching definition is registered</returns>
-    bool Exists(string levelSlug);
+    bool Exists(string contentType);
 }

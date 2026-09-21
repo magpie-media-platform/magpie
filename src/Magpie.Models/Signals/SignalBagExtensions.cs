@@ -9,22 +9,12 @@ namespace Magpie.Models.Signals;
 /// </summary>
 public static class SignalBagExtensions
 {
-    private static string NormalizeKey(string key)
-    {
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            throw new ArgumentException("A signal key is required.", nameof(key));
-        }
-
-        return key.Trim();
-    }
-
     /// <summary>
     /// Reads all values for a signal key.
     /// </summary>
     /// <param name="signals">The signal values</param>
     /// <param name="key">The signal key</param>
-    /// <returns>The signal values, or an empty list when the key is absent.</returns>
+    /// <returns>The signal values, or an empty list when the key is absent</returns>
     public static IReadOnlyList<string> GetValues(
         this IReadOnlyDictionary<string, IReadOnlyList<string>> signals,
         string key)
@@ -37,7 +27,7 @@ public static class SignalBagExtensions
     /// </summary>
     /// <param name="signals">The signal values</param>
     /// <param name="key">The signal key</param>
-    /// <returns>The first signal value, or <see langword="null"/> when the key is absent.</returns>
+    /// <returns>The first signal value, or <see langword="null"/> when the key is absent</returns>
     public static string? GetFirstValue(
         this IReadOnlyDictionary<string, IReadOnlyList<string>> signals,
         string key)
@@ -50,7 +40,7 @@ public static class SignalBagExtensions
     /// </summary>
     /// <param name="signals">The signal values</param>
     /// <param name="key">The signal key</param>
-    /// <returns>The first integer signal value, or <see langword="null"/> when unavailable.</returns>
+    /// <returns>The first integer signal value, or <see langword="null"/> when unavailable</returns>
     public static int? GetFirstInt32(
         this IReadOnlyDictionary<string, IReadOnlyList<string>> signals,
         string key)
@@ -59,5 +49,15 @@ public static class SignalBagExtensions
         return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : null;
+    }
+
+    private static string NormalizeKey(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new ArgumentException("A signal key is required.", nameof(key));
+        }
+
+        return key.Trim();
     }
 }

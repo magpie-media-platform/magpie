@@ -50,7 +50,7 @@ export async function drainDownloadRefresh(api: ApiClient): Promise<void> {
         'outstanding DownloadRefresh executions to become terminal',
         async () => {
             const active = await api.get<Paged<JobExecution>>(
-                '/api/jobs?jobType=DownloadRefresh&status=Created&status=Queued&status=Running' +
+                '/api/jobs?jobType=DownloadRefresh&status=Queued&status=Running' +
                     '&status=CancellationRequested&pageSize=100',
             );
             if (active.items.length === 0) {
@@ -71,7 +71,21 @@ export async function drainContentMetadataRefreshItems(api: ApiClient): Promise<
         'outstanding ContentMetadataRefreshItem executions to complete',
         async () => {
             const active = await api.get<Paged<JobExecution>>(
-                '/api/jobs?jobType=ContentMetadataRefreshItem&status=Created&status=Queued&status=Running&pageSize=1',
+                '/api/jobs?jobType=ContentMetadataRefreshItem&status=Queued&status=Running&pageSize=1',
+            );
+            return active.items.length === 0 ? true : undefined;
+        },
+        60_000,
+        250,
+    );
+}
+
+export async function drainLibraryImportMatchResolution(api: ApiClient): Promise<void> {
+    await until(
+        'outstanding LibraryImportMatchResolution executions to complete',
+        async () => {
+            const active = await api.get<Paged<JobExecution>>(
+                '/api/jobs?jobType=LibraryImportMatchResolution&status=Queued&status=Running&pageSize=1',
             );
             return active.items.length === 0 ? true : undefined;
         },

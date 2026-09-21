@@ -41,7 +41,7 @@ internal sealed class JellyfinLibraryMappingDiagnostic(
             if (!server.Enabled ||
                 !string.Equals(
                     server.ProviderType,
-                    JellyfinMediaServerIntegration.ProviderTypeName,
+                    Constants.ProviderTypeName,
                     StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -76,7 +76,9 @@ internal sealed class JellyfinLibraryMappingDiagnostic(
         var paths = new List<string>();
         foreach (var row in server.ToJellyfinMappingRows(logger))
         {
-            var value = row.TryGetValue("rootFolderPath", out var mappedPath) ? mappedPath : null;
+            var value = row.TryGetValue(Constants.MappingRootFolderPathKey, out var mappedPath)
+                ? mappedPath
+                : null;
             if (!string.IsNullOrWhiteSpace(value))
             {
                 paths.Add(value);

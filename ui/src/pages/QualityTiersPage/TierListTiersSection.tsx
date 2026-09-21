@@ -1,51 +1,35 @@
-import { type RefObject } from 'react';
 import { ListNumbersIcon } from '@phosphor-icons/react';
+
+import { type useSortableList } from '@/components/ui/SortableList';
 
 import { TierCard } from './TierCard';
 import { type TierWithCriteria } from './tierListDetailMappers';
 
 interface TierListTiersSectionProps {
     canManage: boolean;
-    displayTiers: TierWithCriteria[];
+    sortable: ReturnType<typeof useSortableList<TierWithCriteria>>;
     deletingTierId: string | null;
     isDeleting: boolean;
     cloningTierId: string | null;
-    draggedTierId: string | null;
-    dropTargetId: string | null;
-    dropPosition: 'before' | 'after' | null;
-    dragImageRef: RefObject<HTMLDivElement | null>;
     onEditTier: (tierId: string) => void;
     onCloneTier: (tierId: string) => void;
     onDeleteTier: (tierId: string, tierName: string) => void;
     onToggleCutoff: (tierId: string) => void;
-    onDragStart: (tierId: string, event: React.DragEvent) => void;
-    onDragEnd: () => void;
-    onDragOver: (tierId: string, event: React.DragEvent) => void;
-    onDragLeave: () => void;
-    onDrop: (tierId: string, event: React.DragEvent) => void;
 }
 
 export function TierListTiersSection({
     canManage,
-    displayTiers,
+    sortable,
     deletingTierId,
     isDeleting,
     cloningTierId,
-    draggedTierId,
-    dropTargetId,
-    dropPosition,
-    dragImageRef,
     onEditTier,
     onCloneTier,
     onDeleteTier,
     onToggleCutoff,
-    onDragStart,
-    onDragEnd,
-    onDragOver,
-    onDragLeave,
-    onDrop,
 }: TierListTiersSectionProps) {
-    const reorderInstructions = canManage ? ' Drag tiers to reorder.' : '';
+    const reorderInstructions = canManage ? ' Drag tiers or use the move buttons to reorder.' : '';
+    const displayTiers = sortable.items;
 
     return (
         <>
@@ -76,24 +60,37 @@ export function TierListTiersSection({
                             isDeleting={isDeleting && deletingTierId === tier.id}
                             isCloning={cloningTierId === tier.id}
                             canManage={canManage}
-                            isDragging={draggedTierId === tier.id}
-                            isDropTarget={dropTargetId === tier.id}
-                            dropPosition={dropTargetId === tier.id ? dropPosition : null}
+                            isMoving={sortable.movingId === tier.id}
+                            isReorderDisabled={sortable.isMoving}
+                            isDragging={sortable.draggedId === tier.id}
+                            isDropTarget={sortable.dropTargetId === tier.id}
+                            dropPosition={sortable.dropTargetId === tier.id ? sortable.dropPosition : null}
+                            focusDirection={
+                                sortable.keyboardFocusTarget?.id === tier.id
+                                    ? sortable.keyboardFocusTarget.direction
+                                    : null
+                            }
                             onEdit={onEditTier}
                             onClone={onCloneTier}
                             onDelete={onDeleteTier}
                             onToggleCutoff={onToggleCutoff}
-                            onDragStart={onDragStart}
-                            onDragEnd={onDragEnd}
-                            onDragOver={onDragOver}
-                            onDragLeave={onDragLeave}
-                            onDrop={onDrop}
+                            onDragStart={sortable.handleDragStart}
+                            onDragEnd={sortable.handleDragEnd}
+                            onDragOver={sortable.handleDragOver}
+                            onDragLeave={sortable.handleDragLeave}
+                            onDrop={sortable.handleDrop}
+                            onTouchStart={sortable.handleTouchStart}
+                            onTouchMove={sortable.handleTouchMove}
+                            onTouchEnd={sortable.handleTouchEnd}
+                            onTouchCancel={sortable.handleTouchCancel}
+                            onMove={sortable.handleMove}
+                            onFocusRestored={sortable.handleFocusRestored}
                         />
                     ))
                 )}
             </div>
 
-            <div ref={dragImageRef} className="tier-list-detail-page__drag-image" aria-hidden="true" />
+            <div ref={sortable.dragImageRef} className="sortable-list__drag-image" aria-hidden="true" />
         </>
     );
 }

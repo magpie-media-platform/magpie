@@ -1,3 +1,4 @@
+import type { ScalarPatch } from '@/types/patch';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
@@ -11,7 +12,7 @@ interface CrudResourceConfig {
 }
 
 interface EnabledPatch {
-    enabled?: { value: boolean };
+    enabled?: ScalarPatch<boolean>;
 }
 
 interface CrudQueryKeys {

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import type { SortingState } from '@tanstack/react-table';
 
 interface UrlTableStateConfig<TFilters extends Record<string, string>> {
@@ -64,17 +65,7 @@ export function useUrlTableState<TFilters extends Record<string, string>>(
         [searchParams, sortParam],
     );
 
-    const filters = useMemo<TFilters>(() => {
-        const defaults = configRef.current.defaultFilters;
-        const result = { ...defaults } as Record<string, string>;
-        for (const key of Object.keys(defaults)) {
-            const value = searchParams.get(key);
-            if (value !== null) {
-                result[key] = value;
-            }
-        }
-        return result as TFilters;
-    }, [searchParams]);
+    const [filters, setFilter] = useUrlFilterState(config.defaultFilters);
 
     const page = useMemo<number>(() => {
         const raw = Number(searchParams.get(pageParam));
@@ -103,25 +94,8 @@ export function useUrlTableState<TFilters extends Record<string, string>>(
     );
 
     const setFilters = useCallback(
-        (updates: Partial<TFilters>) => {
-            const defaults = configRef.current.defaultFilters as Record<string, string>;
-            setSearchParams(
-                (prev) => {
-                    const params = new URLSearchParams(prev);
-                    for (const [key, value] of Object.entries(updates) as [string, string | undefined][]) {
-                        if (!value || value === defaults[key]) {
-                            params.delete(key);
-                        } else {
-                            params.set(key, value);
-                        }
-                    }
-                    params.delete(pageParam);
-                    return params;
-                },
-                { replace: false },
-            );
-        },
-        [setSearchParams, pageParam],
+        (updates: Partial<TFilters>) => setFilter(updates, { resetParams: [pageParam] }),
+        [setFilter, pageParam],
     );
 
     const setPage = useCallback(

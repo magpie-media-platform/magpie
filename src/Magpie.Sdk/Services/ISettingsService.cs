@@ -21,7 +21,7 @@ public interface ISettingsService
     Task<IReadOnlyList<SettingsGroupDetail>> ListGroupsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a system settings group by name.
+    /// A system settings group by name.
     /// </summary>
     /// <param name="name">The name of the settings group</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -30,7 +30,7 @@ public interface ISettingsService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets an extension settings group by extension id and name.
+    /// An extension settings group by extension id and name.
     /// </summary>
     /// <param name="extensionId">The id of the extension that owns the group</param>
     /// <param name="name">The name of the settings group</param>

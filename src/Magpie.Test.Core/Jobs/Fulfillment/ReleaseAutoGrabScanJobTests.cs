@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
-using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -27,12 +26,13 @@ namespace Magpie.Test.Core.Jobs.Fulfillment;
 [TestFixture]
 public sealed class ReleaseAutoGrabScanJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private const int DefaultBackpressureThreshold = 50;
 
     private Mock<IJobManager> _jobManager = null!;
     private Mock<IJobExecutionRepository> _jobExecutionRepository = null!;
     private Mock<IContentHierarchyItemRepository> _hierarchyRepository = null!;
-    private Mock<IContentRepository> _contentRepository = null!;
     private IJob _subject = null!;
     private JobContext _jobContext = null!;
     private Guid _userId;
@@ -48,11 +48,11 @@ public sealed class ReleaseAutoGrabScanJobTests
             .ReturnsAsync(Guid.NewGuid());
         _jobManager
             .Setup(m => m.ResolveLockPartition(
-                ReleaseAutoGrabItemJob.Spec.JobType,
+                "ReleaseAutoGrabItem",
                 It.IsAny<IReadOnlyDictionary<string, string?>>()))
             .Returns((string jobType, IReadOnlyDictionary<string, string?> parameters) =>
-                $"type:{jobType}|{MagpieJobs.Parameters.ContentItemId}=" +
-                parameters[MagpieJobs.Parameters.ContentItemId]);
+                $"type:{jobType}|{"contentItemId"}=" +
+                parameters["contentItemId"]);
 
         _jobExecutionRepository = new Mock<IJobExecutionRepository>();
         _jobExecutionRepository
@@ -78,8 +78,6 @@ public sealed class ReleaseAutoGrabScanJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<ContentHierarchyItem>());
 
-        _contentRepository = new Mock<IContentRepository>();
-
         _jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,
@@ -93,28 +91,9 @@ public sealed class ReleaseAutoGrabScanJobTests
             _jobManager.Object,
             _jobExecutionRepository.Object,
             _hierarchyRepository.Object,
-            _contentRepository.Object,
             TimeProvider.System,
-            NullLogger<ReleaseAutoGrabScanJob>.Instance);
-    }
-
-    [Test]
-    public void Spec_DefinesSweepParameters_WithoutRequesterTriggerModes()
-    {
-        // Arrange
-        // Act
-        var spec = ReleaseAutoGrabScanJob.Spec;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(spec.RequesterTriggerModes, Is.Empty);
-            Assert.That(spec.Parameters, Has.Count.EqualTo(2));
-            Assert.That(spec.Parameters[0].Name, Is.EqualTo("retryCooldownHours"));
-            Assert.That(spec.Parameters[0].DefaultValue, Is.EqualTo("6"));
-            Assert.That(spec.Parameters[1].Name, Is.EqualTo("backpressureThreshold"));
-            Assert.That(spec.Parameters[1].DefaultValue, Is.EqualTo("50"));
-        }
+            NullLogger<ReleaseAutoGrabScanJob>.Instance,
+            _progressReporter);
     }
 
     [Test]
@@ -130,7 +109,7 @@ public sealed class ReleaseAutoGrabScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_FansOutAutoGrabItem_PerEligibleCandidate()
+    public async Task ExecuteAsync_FansOutAutoGrabItem_WhenEligibleCandidatesExist()
     {
         // Arrange
         var contentAId = Guid.NewGuid();
@@ -209,7 +188,7 @@ public sealed class ReleaseAutoGrabScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_FansOutAutoGrabItem_ForUpgradableCandidate()
+    public async Task ExecuteAsync_FansOutAutoGrabItem_WhenAnUpgradableCandidateExists()
     {
         // Arrange
         var contentItemId = Guid.NewGuid();
@@ -301,9 +280,9 @@ public sealed class ReleaseAutoGrabScanJobTests
             _jobManager.Verify(
                 m => m.ExecuteAsync(
                     It.Is<JobEnqueueRequest>(r =>
-                        r.JobType == MagpieJobs.Types.ReleaseSearchItem &&
+                        r.JobType == "ReleaseSearchItem" &&
                         r.Parameters != null &&
-                        r.Parameters[MagpieJobs.Parameters.ContentHierarchyItemId] ==
+                        r.Parameters["contentHierarchyItemId"] ==
                             hierarchyItemId.ToString("D") &&
                         r.Mode == JobExecutionMode.Queue &&
                         r.UserId == _userId),
@@ -313,6 +292,76 @@ public sealed class ReleaseAutoGrabScanJobTests
                 m => m.ExecuteAsync(
                     It.Is<JobEnqueueRequest>(r => r.JobType == "ReleaseAutoGrabItem"),
                     It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_Bails_WhenReleaseAcquisitionBacklogIsOlderThanOneHour()
+    {
+        // Arrange
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
+                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "x",
+                        Name = "X",
+                        EffectiveMonitoring = true,
+                        ContentItem = new ContentItem
+                        {
+                            Id = Guid.NewGuid(),
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    }
+                ]
+            });
+        var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
+            .Select(_ => new JobExecution
+            {
+                JobType = "ReleaseDownloadItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Queued,
+                CreatedAt = DateTime.UtcNow.AddHours(-2)
+            })
+            .ToList();
+        _jobExecutionRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _jobExecutionRepository.Verify(
+                r => r.QueryAsync(
+                    It.Is<JobExecutionQuery>(q =>
+                        q.JobType == "ReleaseDownloadItem" &&
+                        q.Timestamp == null),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _jobManager.Verify(
+                m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
                 Times.Never);
         }
     }
@@ -364,10 +413,35 @@ public sealed class ReleaseAutoGrabScanJobTests
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows });
+            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_Bails_WhenReleaseAcquisitionBacklogExceedsAThresholdAboveThePageSizeLimit()
+    {
+        // Arrange
+        var context = _jobContext with
+        {
+            Parameters = new Dictionary<string, string> { ["backpressureThreshold"] = "2000" }
+        };
+        _jobExecutionRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { TotalItems = 2001 });
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
 
         // Assert
         _jobManager.Verify(
@@ -423,7 +497,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows });
+            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -474,13 +548,13 @@ public sealed class ReleaseAutoGrabScanJobTests
             });
         _jobExecutionRepository
             .Setup(r => r.GetLastAttemptTimesByLockPartitionAsync(
-                ReleaseAutoGrabItemJob.Spec.JobType,
+                "ReleaseAutoGrabItem",
                 It.IsAny<IReadOnlyCollection<string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<string, DateTime>(StringComparer.Ordinal)
             {
-                [$"type:{ReleaseAutoGrabItemJob.Spec.JobType}|" +
-                    $"{MagpieJobs.Parameters.ContentItemId}={contentItemId}"] =
+                [$"type:{"ReleaseAutoGrabItem"}|" +
+                    $"{"contentItemId"}={contentItemId}"] =
                     DateTime.UtcNow.AddHours(-1)
             });
 
@@ -530,13 +604,13 @@ public sealed class ReleaseAutoGrabScanJobTests
             });
         _jobExecutionRepository
             .Setup(r => r.GetLastAttemptTimesByLockPartitionAsync(
-                ReleaseAutoGrabItemJob.Spec.JobType,
+                "ReleaseAutoGrabItem",
                 It.IsAny<IReadOnlyCollection<string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<string, DateTime>(StringComparer.Ordinal)
             {
-                [$"type:{ReleaseAutoGrabItemJob.Spec.JobType}|" +
-                    $"{MagpieJobs.Parameters.ContentItemId}={contentItemId}"] =
+                [$"type:{"ReleaseAutoGrabItem"}|" +
+                    $"{"contentItemId"}={contentItemId}"] =
                     DateTime.UtcNow.AddHours(-7)
             });
 
@@ -589,13 +663,13 @@ public sealed class ReleaseAutoGrabScanJobTests
             });
         _jobExecutionRepository
             .Setup(r => r.GetLastAttemptTimesByLockPartitionAsync(
-                ReleaseAutoGrabItemJob.Spec.JobType,
+                "ReleaseAutoGrabItem",
                 It.IsAny<IReadOnlyCollection<string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<string, DateTime>(StringComparer.Ordinal)
             {
-                [$"type:{ReleaseAutoGrabItemJob.Spec.JobType}|" +
-                    $"{MagpieJobs.Parameters.ContentItemId}={contentItemId}"] =
+                [$"type:{"ReleaseAutoGrabItem"}|" +
+                    $"{"contentItemId"}={contentItemId}"] =
                     DateTime.UtcNow.AddHours(-2)
             });
         var context = _jobContext with
@@ -652,13 +726,13 @@ public sealed class ReleaseAutoGrabScanJobTests
             });
         _jobExecutionRepository
             .Setup(r => r.GetLastAttemptTimesByLockPartitionAsync(
-                ReleaseAutoGrabItemJob.Spec.JobType,
+                "ReleaseAutoGrabItem",
                 It.IsAny<IReadOnlyCollection<string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<string, DateTime>(StringComparer.Ordinal)
             {
-                [$"type:{ReleaseAutoGrabItemJob.Spec.JobType}|" +
-                    $"{MagpieJobs.Parameters.ContentItemId}={contentItemId}"] =
+                [$"type:{"ReleaseAutoGrabItem"}|" +
+                    $"{"contentItemId"}={contentItemId}"] =
                     DateTime.UtcNow.AddMinutes(-1)
             });
         var context = _jobContext with

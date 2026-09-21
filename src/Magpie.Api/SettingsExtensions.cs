@@ -11,6 +11,11 @@ internal static class SettingsExtensions
         this Dictionary<string, string> settings,
         IReadOnlyList<SettingSchemaDefinition> schema)
     {
+        if (schema.Count == 0)
+        {
+            return [];
+        }
+
         var secretKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var definition in schema)
         {

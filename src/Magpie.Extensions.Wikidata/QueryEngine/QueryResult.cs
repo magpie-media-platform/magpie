@@ -13,6 +13,4 @@ internal sealed record QueryResult
     public required ProviderSearchPageInfo PageInfo { get; init; }
 
     public IReadOnlyList<string> Warnings { get; init; } = [];
-
-    public IReadOnlyList<CriterionDisposition> CriterionDispositions { get; init; } = [];
 }

@@ -10,12 +10,12 @@ public sealed class JobRuntimeOptions
     /// <summary>
     /// The configuration section name for these options.
     /// </summary>
-    public const string SectionName = "Magpie:Jobs";
+    public const string SectionName = "Jobs";
 
     /// <summary>
-    /// The maximum number of concurrent job executions.
+    /// The number of workers in the job pool.
     /// </summary>
-    public int MaxConcurrentJobs { get; set; } = 30;
+    public int PoolSize { get; set; } = 50;
 
     /// <summary>
     /// The heartbeat age after which a running job becomes stale.
@@ -31,6 +31,11 @@ public sealed class JobRuntimeOptions
     /// The interval between passes that reclaim running executions past <c>TimeoutAt</c>.
     /// </summary>
     public TimeSpan TimedOutJobReapInterval { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The time the progress reporter waits for its outstanding writes when the job scope closes.
+    /// </summary>
+    public TimeSpan ProgressFlushTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// The per-level MLFQ quantum overrides, indexed by level.

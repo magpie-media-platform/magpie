@@ -33,7 +33,7 @@ public interface IJobConcurrencyScheduler
     int InFlight { get; }
 
     /// <summary>
-    /// Gets whether a free slot is available.
+    /// Determines whether a free slot is available.
     /// </summary>
     bool HasAdmissionCapacity();
 
@@ -78,8 +78,6 @@ public interface IJobConcurrencyScheduler
     /// <summary>
     /// Takes a slot for immediate use and gets the handle that frees it.
     /// </summary>
-    /// <param name="cancellationToken">
-    /// The token that cancels the operation
-    /// </param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<IDisposable> AcquireImmediateSlotAsync(CancellationToken cancellationToken = default);
 }

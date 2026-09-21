@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -73,6 +73,9 @@ describe('ContentDetailsHeader', () => {
         const poster = screen.getByAltText('Test Movie artwork');
         expect(poster).toBeInTheDocument();
         expect(poster).toHaveAttribute('src', mockContent.posterUrl);
+        fireEvent.error(poster);
+        expect(screen.queryByAltText('Test Movie artwork')).not.toBeInTheDocument();
+        expect(document.querySelector('.content-details-header__poster--placeholder')).toBeInTheDocument();
     });
 
     it('renders placeholder when no poster URL provided', () => {

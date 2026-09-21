@@ -4,8 +4,16 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { AuthProvider, Role, type User } from '@/auth';
+import { deriveOnboardingSteps, type OnboardingStatus } from '@/hooks/useOnboardingStatus';
 import { testEffectivePermissions } from '@/test/permissions';
 import { DashboardPage } from './DashboardPage';
+
+const mockOnboardingStatus = vi.fn();
+
+vi.mock('@/hooks/useOnboardingStatus', async () => {
+    const actual = await vi.importActual<typeof import('@/hooks/useOnboardingStatus')>('@/hooks/useOnboardingStatus');
+    return { ...actual, useOnboardingStatus: () => mockOnboardingStatus() };
+});
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
@@ -32,7 +40,7 @@ vi.mock('@/hooks/useDashboard', () => ({
         jobs: ['dashboard', 'jobs'],
         contentStats: ['dashboard', 'content-stats'],
         recentContent: ['dashboard', 'recent-content'],
-        upcomingContent: ['dashboard', 'upcoming-content'],
+        upcomingContent: (today: string) => ['dashboard', 'upcoming-content', today],
     },
     useDownloadClientHealth: () => mockClientHealthResult(),
     useMediaServerHealth: () => mockServerHealthResult(),
@@ -174,6 +182,20 @@ function createTestQueryClient() {
 
 const adminUser: User = { id: 'admin-1', username: 'admin', role: Role.Admin };
 const viewerUser: User = { id: 'viewer-1', username: 'viewer', role: Role.Viewer };
+const completeOnboarding: OnboardingStatus = {
+    hasIndexer: true,
+    hasDownloadClient: true,
+    hasRootFolder: true,
+    hasMonitoredContent: true,
+    isComplete: true,
+};
+const partialOnboarding: OnboardingStatus = {
+    hasIndexer: false,
+    hasDownloadClient: true,
+    hasRootFolder: true,
+    hasMonitoredContent: false,
+    isComplete: false,
+};
 
 async function renderDashboard(user: User = adminUser) {
     const queryClient = createTestQueryClient();
@@ -196,6 +218,20 @@ async function renderDashboard(user: User = adminUser) {
 }
 
 describe('DashboardPage', () => {
+    it.each([
+        { isLoading: true, error: null, errorCount: 0 },
+        { isLoading: false, error: new Error('Upcoming unavailable'), errorCount: 1 },
+    ])('keeps content statistics when upcoming is unavailable: %j', async ({ isLoading, error, errorCount }) => {
+        // Arrange
+        mockUpcomingContentResult.mockReturnValue({ data: undefined, isLoading, error });
+        // Act
+        await renderDashboard();
+        // Assert
+        expect(screen.getByText('Shogun (2024)')).toBeInTheDocument();
+        expect(screen.getByText('The Gentlemen')).toBeInTheDocument();
+        expect(screen.queryAllByText('Failed to load')).toHaveLength(errorCount);
+    });
+
     const defaultContext = {
         apiBaseUrl: '/api',
         userId: 'user-123',
@@ -212,6 +248,14 @@ describe('DashboardPage', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         setDefaultMocks();
+        mockOnboardingStatus.mockReturnValue({
+            status: completeOnboarding,
+            steps: deriveOnboardingSteps(completeOnboarding),
+            isComplete: true,
+            isLoading: false,
+            error: null,
+            refetch: vi.fn(),
+        });
         mockUseExtensions.mockReturnValue(defaultContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
     });
@@ -531,7 +575,9 @@ describe('DashboardPage', () => {
             const healthSkeletons = screen.getAllByTestId('service-health-bar__segment--skeleton');
             expect(healthSkeletons.length).toBe(3);
 
-            const downloadSkeletons = screen.getAllByTestId('download-queue-widget__row--skeleton');
+            const downloadSkeletons = document.querySelectorAll(
+                '[data-component="download-queue-widget"] .status-row [data-component="skeleton"]',
+            );
             expect(downloadSkeletons.length).toBe(4);
 
             const jobSkeletons = screen.getAllByTestId('recent-jobs-widget__item--skeleton');
@@ -559,6 +605,56 @@ describe('DashboardPage', () => {
             const healthBar = document.querySelector('[data-component="service-health-bar"]')!;
             expect(within(healthBar as HTMLElement).queryByText('Download Clients')).not.toBeInTheDocument();
             expect(within(healthBar as HTMLElement).queryByText('Media Servers')).not.toBeInTheDocument();
+        });
+    });
+
+    describe('Onboarding checklist', () => {
+        it('keeps the checklist and the resolved steps when one probe fails', async () => {
+            // Arrange
+            mockOnboardingStatus.mockReturnValue({
+                status: partialOnboarding,
+                steps: deriveOnboardingSteps(partialOnboarding).map((step) => ({
+                    ...step,
+                    failed: step.key === 'indexer',
+                })),
+                isComplete: false,
+                isLoading: false,
+                error: null,
+                refetch: vi.fn(),
+            });
+
+            // Act
+            await renderDashboard();
+
+            // Assert
+            const checklist = document.querySelector('[data-component="onboarding-checklist"]') as HTMLElement;
+            expect(checklist).toBeInTheDocument();
+            expect(
+                within(checklist).getByText('Magpie could not check this step. It may already be done.'),
+            ).toBeInTheDocument();
+            expect(checklist.querySelector('[data-step="indexer"]')).toHaveAttribute('data-state', 'unknown');
+            expect(checklist.querySelector('[data-step="downloadClient"]')).toHaveAttribute('data-state', 'done');
+            expect(checklist.querySelector('[data-step="rootFolder"]')).toHaveAttribute('data-state', 'done');
+            expect(checklist.querySelector('[data-step="monitoredContent"]')).toHaveAttribute('data-state', 'todo');
+            expect(within(checklist).getByLabelText('2 of 4 steps complete')).toBeInTheDocument();
+        });
+
+        it('hides the checklist when every probe fails', async () => {
+            // Arrange
+            mockOnboardingStatus.mockReturnValue({
+                status: partialOnboarding,
+                steps: deriveOnboardingSteps(partialOnboarding).map((step) => ({ ...step, failed: true })),
+                isComplete: false,
+                isLoading: false,
+                error: new Error('Host unreachable'),
+                refetch: vi.fn(),
+            });
+
+            // Act
+            await renderDashboard();
+
+            // Assert
+            expect(document.querySelector('[data-component="onboarding-checklist"]')).not.toBeInTheDocument();
         });
     });
 

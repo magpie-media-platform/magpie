@@ -16,6 +16,7 @@ import { RestartRequiredProvider, useRestartRequired } from '@/components/ui/Res
 import {
     useExtensionManagement,
     useExtensionActions,
+    useExtensionVersions,
     type ApiExtension,
     type ExtensionUpdateInfo,
 } from './useExtensionManagement';
@@ -572,5 +573,87 @@ describe('useExtensionActions', () => {
         await waitFor(() => {
             expect(result.current.isInstalling).toBe(false);
         });
+    });
+});
+
+describe('useExtensionVersions', () => {
+    const mockApiGet = vi.mocked(apiGet);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockApiGet.mockResolvedValue([
+            makeExtensionListItem({
+                id: 'ext-a-new',
+                packageId: 'Magpie.PackageA',
+                version: '2.0.0',
+                name: 'Shared Display Name',
+                filePath: '/extensions/a-new',
+                assemblyName: 'Magpie.PackageA',
+                installed: true,
+                enabled: true,
+                loadOrder: 100,
+                managed: true,
+                autoUpgrade: false,
+                createdAt: '2024-03-01T00:00:00Z',
+            }),
+            makeExtensionListItem({
+                id: 'ext-b-new',
+                packageId: 'Magpie.PackageB',
+                version: '5.0.0',
+                name: 'Shared Display Name',
+                filePath: '/extensions/b-new',
+                assemblyName: 'Magpie.PackageB',
+                installed: true,
+                enabled: true,
+                loadOrder: 200,
+                managed: true,
+                autoUpgrade: false,
+                createdAt: '2024-02-01T00:00:00Z',
+            }),
+            makeExtensionListItem({
+                id: 'ext-a-old',
+                packageId: 'Magpie.PackageA',
+                version: '1.0.0',
+                name: 'Shared Display Name',
+                filePath: '/extensions/a-old',
+                assemblyName: 'Magpie.PackageA',
+                installed: true,
+                enabled: true,
+                loadOrder: 100,
+                managed: true,
+                autoUpgrade: false,
+                createdAt: '2024-01-01T00:00:00Z',
+            }),
+        ]);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('lists only older versions of the same package when another package shares the display name', async () => {
+        const { result } = renderHook(() => useExtensionVersions('Magpie.PackageA'), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(result.current.isLoading).toBe(false);
+        });
+
+        expect(result.current.versions).toEqual([
+            { id: 'ext-a-old', version: '1.0.0', createdAt: '2024-01-01T00:00:00Z' },
+        ]);
+    });
+
+    it('lists no versions for a package whose only build is the newest one', async () => {
+        const { result } = renderHook(() => useExtensionVersions('Magpie.PackageB'), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(result.current.isLoading).toBe(false);
+        });
+
+        expect(result.current.versions).toEqual([]);
     });
 });

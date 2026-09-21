@@ -1,3 +1,5 @@
+import type { apiFetchResponse } from '../lib/api';
+
 export type AssetKindName = 'Script' | 'Style' | 'Link';
 
 export type AssetKind = AssetKindName | 0 | 1 | 2;
@@ -25,6 +27,8 @@ export interface Asset {
 }
 
 export interface ExtensionAssetContext {
+    readonly fetch: typeof apiFetchResponse;
+
     readonly apiBaseUrl: string;
 
     readonly extensionId: string;
@@ -60,8 +64,6 @@ export interface UIContext {
     username: string | null;
 
     role: string | null;
-
-    theme: 'light' | 'dark' | null;
 }
 
 export interface UIManifest {

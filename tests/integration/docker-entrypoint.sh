@@ -16,6 +16,20 @@ for package_id in "${required_extension_packages[@]}"; do
     fi
 done
 
+echo "[entrypoint] trusting the package feed certificate"
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if openssl s_client -connect package-feed:8081 -servername package-feed </dev/null 2>/dev/null |
+        openssl x509 >/usr/local/share/ca-certificates/package-feed.crt; then
+        break
+    fi
+    if [[ "$attempt" -eq 10 ]]; then
+        echo "[entrypoint] the package feed did not present a certificate" >&2
+        exit 1
+    fi
+    sleep 2
+done
+update-ca-certificates >/dev/null
+
 echo "[entrypoint] installing required extensions through the CLI"
 for package_id in "${required_extension_packages[@]}"; do
     if find /app/data/extensions -mindepth 1 -maxdepth 1 -type d -name "${package_id}.*" -print -quit | grep -q .; then

@@ -160,11 +160,11 @@
         }
     }
 
-    :is(.calendar-page__day-cell, .calendar-page__week-col):hover {
+    :is(.calendar-page__day-cell, .calendar-page__weekday-col, .calendar-page__week-day-heading):hover {
         background-color: var(--bg-tertiary);
     }
 
-    :is(.calendar-page__day-cell, .calendar-page__week-col):focus-visible {
+    :is(.calendar-page__day-cell, .calendar-page__weekday-col, .calendar-page__week-day-heading):focus-visible {
         outline: var(--focus-ring-width) solid var(--focus-ring-color);
         outline-offset: calc(-1 * var(--focus-ring-offset));
         z-index: var(--z-raised);
@@ -268,7 +268,13 @@
         padding: var(--space-sm) var(--space-xs);
         min-width: 0;
         text-align: center;
+        background: none;
+        border: none;
         border-right: 1px solid var(--border-default);
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+        transition: background-color var(--duration-fast) var(--easing-default);
 
         &:last-child {
             border-right: none;
@@ -317,7 +323,6 @@
         font: inherit;
         color: inherit;
         text-align: left;
-        cursor: pointer;
         transition: background-color var(--duration-fast) var(--easing-default);
 
         &:last-child {
@@ -329,7 +334,17 @@
         background-color: color-mix(in srgb, var(--accent-primary) 5%, transparent);
     }
 
-    .calendar-page__week-day-heading,
+    .calendar-page__week-day-heading {
+        display: none;
+        padding: var(--space-xs);
+        background: none;
+        border: none;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+    }
+
     .calendar-page__week-day-empty {
         display: none;
     }

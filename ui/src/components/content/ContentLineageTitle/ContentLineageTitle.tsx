@@ -10,6 +10,8 @@ import {
     type ReactNode,
 } from 'react';
 
+import { useQueryClient } from '@tanstack/react-query';
+
 import { useEventStream, type EventStreamPayload } from '@/hooks/useEventStream';
 import { apiGet, isApiError } from '@/lib/api';
 import { magpieEventNames } from '@/lib/magpieEventNames';
@@ -18,7 +20,6 @@ import type { ApiContentHierarchyItem } from '@/types/content';
 
 import './ContentLineageTitle.css';
 
-const CONTENT_LINEAGE_CACHE_CAPACITY = 256;
 const MAX_ANCESTOR_DEPTH = 32;
 
 interface ContentLineageQualifiedName {
@@ -34,75 +35,6 @@ interface ContentLineageTitleFallback {
 }
 
 type ContentLineageQualifiedNameLoader = (id: string) => Promise<ContentLineageQualifiedName | null>;
-
-class ContentLineageCache {
-    private readonly resolved = new Map<string, ContentLineageQualifiedName | null>();
-    private readonly inFlight = new Map<string, Promise<ContentLineageQualifiedName | null>>();
-
-    constructor(
-        private readonly loadQualifiedName: ContentLineageQualifiedNameLoader,
-        private readonly capacity = CONTENT_LINEAGE_CACHE_CAPACITY,
-    ) {
-        if (!Number.isInteger(capacity) || capacity < 1) {
-            throw new RangeError('Content lineage cache capacity must be a positive integer.');
-        }
-    }
-
-    get size(): number {
-        return this.resolved.size;
-    }
-
-    resolve(id: string): Promise<ContentLineageQualifiedName | null> {
-        if (this.resolved.has(id)) {
-            const value = this.resolved.get(id) ?? null;
-            this.resolved.delete(id);
-            this.resolved.set(id, value);
-            return Promise.resolve(value);
-        }
-
-        const pending = this.inFlight.get(id);
-        if (pending) {
-            return pending;
-        }
-
-        const request: Promise<ContentLineageQualifiedName | null> = this.loadQualifiedName(id)
-            .then((value) => {
-                if (this.inFlight.get(id) === request) {
-                    this.store(id, value);
-                }
-                return value;
-            })
-            .finally(() => {
-                if (this.inFlight.get(id) === request) {
-                    this.inFlight.delete(id);
-                }
-            });
-        this.inFlight.set(id, request);
-        return request;
-    }
-
-    invalidate(id: string): void {
-        this.resolved.delete(id);
-        this.inFlight.delete(id);
-    }
-
-    clear(): void {
-        this.resolved.clear();
-        this.inFlight.clear();
-    }
-
-    private store(id: string, value: ContentLineageQualifiedName | null): void {
-        this.resolved.delete(id);
-        this.resolved.set(id, value);
-        while (this.resolved.size > this.capacity) {
-            const oldest = this.resolved.keys().next().value as string | undefined;
-            if (oldest === undefined) {
-                return;
-            }
-            this.resolved.delete(oldest);
-        }
-    }
-}
 
 interface ContentLineageContextValue {
     refresh: ContentLineageRefresh;
@@ -137,36 +69,28 @@ async function fetchContentLineageQualifiedName(id: string): Promise<ContentLine
 interface ContentLineageProviderProps {
     children: ReactNode;
     contentTypes: readonly LibraryTypeDefinition[];
-    cacheCapacity?: number;
-    loadQualifiedName?: ContentLineageQualifiedNameLoader;
 }
 
-export function ContentLineageProvider({
-    children,
-    contentTypes,
-    cacheCapacity = CONTENT_LINEAGE_CACHE_CAPACITY,
-    loadQualifiedName = fetchContentLineageQualifiedName,
-}: ContentLineageProviderProps) {
-    const cache = useMemo(
-        () => new ContentLineageCache(loadQualifiedName, cacheCapacity),
-        [cacheCapacity, loadQualifiedName],
-    );
+export function ContentLineageProvider({ children, contentTypes }: ContentLineageProviderProps) {
+    const queryClient = useQueryClient();
     const [refresh, setRefresh] = useState<ContentLineageRefresh>({ all: false, itemId: null });
 
     const handleEvent = useCallback(
         (event: EventStreamPayload) => {
             if (event.name === 'stream.reconnected' || event.name === 'library.scan.completed') {
-                cache.clear();
+                void queryClient.cancelQueries({ queryKey: ['content-lineage'] });
+                void queryClient.invalidateQueries({ queryKey: ['content-lineage'] });
                 setRefresh({ all: true, itemId: null });
             } else {
                 const itemId = event.context['content.hierarchyItemId'];
                 if (itemId) {
-                    cache.invalidate(itemId);
+                    void queryClient.cancelQueries({ queryKey: ['content-lineage', itemId], exact: true });
+                    void queryClient.invalidateQueries({ queryKey: ['content-lineage', itemId], exact: true });
                     setRefresh({ all: false, itemId });
                 }
             }
         },
-        [cache],
+        [queryClient],
     );
 
     useEventStream(handleEvent, {
@@ -181,7 +105,15 @@ export function ContentLineageProvider({
         owner: 'content-lineage-provider',
     });
 
-    const resolve = useCallback((id: string) => cache.resolve(id), [cache]);
+    const resolve = useCallback(
+        (id: string) =>
+            queryClient.fetchQuery({
+                queryKey: ['content-lineage', id],
+                queryFn: () => fetchContentLineageQualifiedName(id),
+                staleTime: Infinity,
+            }),
+        [queryClient],
+    );
     const fallbackTitles = useMemo(() => {
         const types = new Map<string, string>();
         const levels = new Map<string, string>();

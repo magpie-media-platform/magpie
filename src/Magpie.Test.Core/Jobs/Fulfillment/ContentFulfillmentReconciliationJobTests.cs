@@ -30,6 +30,8 @@ namespace Magpie.Test.Core.Jobs.Fulfillment;
 [TestFixture]
 public sealed class ContentFulfillmentReconciliationJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IContentService> _contentService = null!;
     private Mock<IContentHierarchyItemRepository> _hierarchyRepository = null!;
     private Mock<IContentRepository> _contentRepository = null!;
@@ -63,7 +65,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ContentItem());
 
-        _hierarchyRepository = new Mock<IContentHierarchyItemRepository>();
+        _hierarchyRepository = new Mock<IContentHierarchyItemRepository> { CallBase = true };
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<ContentHierarchyItemCriteria>(),
@@ -72,7 +74,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<ContentHierarchyItem>());
 
-        _contentRepository = new Mock<IContentRepository>();
+        _contentRepository = new Mock<IContentRepository> { CallBase = true };
         _contentRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<ContentItemQuery>(),
@@ -81,7 +83,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<ContentItem>());
 
-        _downloadRepository = new Mock<IDownloadRepository>();
+        _downloadRepository = new Mock<IDownloadRepository> { CallBase = true };
         _downloadRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<DownloadQuery>(),
@@ -90,7 +92,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<Download>());
 
-        _releaseRepository = new Mock<IReleaseRepository>();
+        _releaseRepository = new Mock<IReleaseRepository> { CallBase = true };
         _qualityService = new Mock<IQualityService>();
         _releaseEvaluationService = new Mock<IReleaseEvaluationService>();
 
@@ -112,11 +114,13 @@ public sealed class ContentFulfillmentReconciliationJobTests
             _qualityService.Object,
             _releaseEvaluationService.Object,
             TimeProvider.System,
-            NullLogger<ContentFulfillmentReconciliationJob>.Instance);
+            NullLogger<ContentFulfillmentReconciliationJob>.Instance,
+            _progressReporter);
     }
 
-    [Test]
-    public async Task MaterializeFulfillmentStatusAsync_PreservesLeafAndRollsUpParent_WhenSelfIsExcluded()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task MaterializeFulfillmentStatusAsync_RollsUpParent_WhenLeafIsFulfilled(bool includeSelf)
     {
         // Arrange
         var leaf = new ContentHierarchyItem
@@ -148,7 +152,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
             ContentHierarchyItemId = parent.Id,
             Fulfillment = FulfillmentStatus.Missing
         };
-        var hierarchyRepository = new Mock<IContentHierarchyItemRepository>();
+        var hierarchyRepository = new Mock<IContentHierarchyItemRepository> { CallBase = true };
         hierarchyRepository
             .Setup(repository => repository.GetLineageAsync(leaf.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync([leaf, parent]);
@@ -169,7 +173,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
         hierarchyRepository
             .Setup(repository => repository.GetByIdAsync(leaf.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(leaf);
-        var contentRepository = new Mock<IContentRepository>();
+        var contentRepository = new Mock<IContentRepository> { CallBase = true };
         contentRepository
             .Setup(repository => repository.QueryAsync(
                 It.IsAny<ContentItemQuery>(),
@@ -179,7 +183,10 @@ public sealed class ContentFulfillmentReconciliationJobTests
             .ReturnsAsync((ContentItemQuery query, PagingParameter _, SortParameter? _, CancellationToken _) =>
                 new PagedList<ContentItem>
                 {
-                    Items = query.ContentHierarchyItemId == leaf.Id ? [leafContent] : [parentContent]
+                    Items = query.ContentHierarchyItemId == leaf.Id ||
+                        query.ContentHierarchyItemIds?.Contains(leaf.Id) == true
+                        ? [leafContent]
+                        : [parentContent]
                 });
         contentRepository
             .Setup(repository => repository.UpdateAsync(
@@ -194,11 +201,18 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 It.IsAny<CancellationToken>()))
             .Returns((Func<CancellationToken, Task> operation, CancellationToken cancellationToken) =>
                 operation(cancellationToken));
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<bool>> operation, CancellationToken cancellationToken) =>
+                operation(cancellationToken));
         var subject = new ContentService(
             hierarchyRepository.Object,
             contentRepository.Object,
             Mock.Of<IAuditRecordRepository>(),
             Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
             Mock.Of<IMetadataContainerRepository>(),
             [],
             Mock.Of<IDownloadRepository>(),
@@ -211,7 +225,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
             NullLogger<ContentService>.Instance);
 
         // Act
-        await subject.MaterializeFulfillmentStatusAsync(leaf.Id, _userId, includeSelf: false).ConfigureAwait(false);
+        await subject.MaterializeFulfillmentStatusAsync(leaf.Id, _userId, includeSelf).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -236,7 +250,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_RecomputesStoredEffectiveValues_BeforeReconciling()
+    public async Task ExecuteAsync_RecomputesStoredEffectiveValues_WhenReconciliationStarts()
     {
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -246,31 +260,161 @@ public sealed class ContentFulfillmentReconciliationJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_MaterializesFulfillment_WhenEachLeafIsProcessed()
+    public async Task ExecuteAsync_QueriesOneLatestImportPerLeaf_WhenManyReconciledLeavesExist()
     {
         // Arrange
-        var leafA = Guid.NewGuid();
-        var leafB = Guid.NewGuid();
+        var parentId = Guid.NewGuid();
+        var leaves = Enumerable.Range(0, 200)
+            .Select(index => new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ParentId = parentId,
+                ContentType = "tv",
+                Level = "episode",
+                Slug = $"e{index}",
+                Name = $"E{index}",
+                ContentItem = new ContentItem
+                {
+                    Id = Guid.NewGuid(),
+                    Fulfillment = FulfillmentStatus.Fulfilled
+                }
+            })
+            .ToList();
+        var items = new List<ContentHierarchyItem>
+        {
+            new()
+            {
+                Id = parentId,
+                ContentType = "tv",
+                Level = "season",
+                Slug = "s1",
+                Name = "S1",
+                ContentItem = new ContentItem
+                {
+                    Id = Guid.NewGuid(),
+                    Fulfillment = FulfillmentStatus.Fulfilled
+                }
+            }
+        };
+        items.AddRange(leaves);
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.LeafOnly == true),
+                It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = items, TotalItems = items.Count });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _hierarchyRepository.Verify(
+                r => r.QueryAsync(
+                    It.IsAny<ContentHierarchyItemCriteria>(),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _hierarchyRepository.Verify(
+                r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            _contentRepository.Verify(
+                r => r.QueryAsync(
+                    It.IsAny<ContentItemQuery>(),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _contentRepository.Verify(
+                r => r.UpdateAsync(It.IsAny<ContentItem>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            _contentService.Verify(
+                s => s.GetOrCreateContentItemAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<DateTime>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _contentService.Verify(
+                s => s.MaterializeFulfillmentStatusAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _downloadRepository.Verify(
+                r => r.QueryAsync(
+                    It.Is<DownloadQuery>(query => query.Status == DownloadStatus.Imported &&
+                        query.ContentHierarchyItemIds!.Count == 1 &&
+                        leaves.Any(leaf => leaf.Id == query.ContentHierarchyItemIds.Single())),
+                    It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 1),
+                    It.Is<SortParameter>(sort => sort.PropertyName == "DateCompleted" &&
+                        sort.Direction == SortDirection.Descending),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(200));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_MaterializesFulfillmentForTheStaleParentOnly_WhenAnotherParentAgrees()
+    {
+        // Arrange
+        var staleParentId = Guid.NewGuid();
+        var currentParentId = Guid.NewGuid();
+        var staleLeafId = Guid.NewGuid();
+        var currentLeafId = Guid.NewGuid();
+        var items = new List<ContentHierarchyItem>
+        {
+            new()
             {
-                Items =
-                [
-                    new ContentHierarchyItem
-                    {
-                        Id = leafA, ContentType = "movie", Level = "movie", Slug = "a", Name = "A"
-                    },
-                    new ContentHierarchyItem
-                    {
-                        Id = leafB, ContentType = "movie", Level = "movie", Slug = "b", Name = "B"
-                    }
-                ]
-            });
+                Id = staleParentId,
+                ContentType = "tv",
+                Level = "season",
+                Slug = "s1",
+                Name = "S1",
+                ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = FulfillmentStatus.Missing }
+            },
+            new()
+            {
+                Id = currentParentId,
+                ContentType = "tv",
+                Level = "season",
+                Slug = "s2",
+                Name = "S2",
+                ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = FulfillmentStatus.Missing }
+            },
+            new()
+            {
+                Id = staleLeafId,
+                ParentId = staleParentId,
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "e1",
+                Name = "E1",
+                ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = FulfillmentStatus.Fulfilled }
+            },
+            new()
+            {
+                Id = currentLeafId,
+                ParentId = currentParentId,
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "e2",
+                Name = "E2",
+                ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = FulfillmentStatus.Missing }
+            }
+        };
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = items, TotalItems = items.Count });
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -279,40 +423,43 @@ public sealed class ContentFulfillmentReconciliationJobTests
         using (Assert.EnterMultipleScope())
         {
             _contentService.Verify(
-                s => s.MaterializeFulfillmentStatusAsync(leafA, _userId, false, It.IsAny<CancellationToken>()),
+                s => s.MaterializeFulfillmentStatusAsync(staleLeafId, _userId, false, It.IsAny<CancellationToken>()),
                 Times.Once);
             _contentService.Verify(
-                s => s.MaterializeFulfillmentStatusAsync(leafB, _userId, false, It.IsAny<CancellationToken>()),
-                Times.Once);
+                s => s.MaterializeFulfillmentStatusAsync(currentLeafId, _userId, false, It.IsAny<CancellationToken>()),
+                Times.Never);
         }
     }
 
     [Test]
-    public async Task ExecuteAsync_CreatesMissingContentItems_WhenEachLeafIsProcessed()
+    public async Task ExecuteAsync_CreatesMissingContentItems_WhenALeafHasNone()
     {
         // Arrange
         var leafA = Guid.NewGuid();
         var leafB = Guid.NewGuid();
+        var items = new List<ContentHierarchyItem>
+        {
+            new()
+            {
+                Id = leafA, ContentType = "tv", Level = "episode", Slug = "a", Name = "A"
+            },
+            new()
+            {
+                Id = leafB,
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "b",
+                Name = "B",
+                ContentItem = new ContentItem { Id = Guid.NewGuid() }
+            }
+        };
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.LeafOnly == true),
+                It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items =
-                [
-                    new ContentHierarchyItem
-                    {
-                        Id = leafA, ContentType = "tv", Level = "episode", Slug = "a", Name = "A"
-                    },
-                    new ContentHierarchyItem
-                    {
-                        Id = leafB, ContentType = "tv", Level = "episode", Slug = "b", Name = "B"
-                    }
-                ]
-            });
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = items, TotalItems = items.Count });
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -335,7 +482,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
                     _userId,
                     null,
                     It.IsAny<CancellationToken>()),
-                Times.Once);
+                Times.Never);
         }
     }
 
@@ -362,10 +509,11 @@ public sealed class ContentFulfillmentReconciliationJobTests
         var leafId = Guid.NewGuid();
         var contentItemId = Guid.NewGuid();
         var releaseId = Guid.NewGuid();
+        var downloadId = Guid.NewGuid();
         var tierListId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.LeafOnly == true),
+                It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -375,17 +523,20 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 [
                     new ContentHierarchyItem
                     {
-                        Id = leafId, ContentType = "movie", Level = "movie", Slug = "a", Name = "A"
+                        Id = leafId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "a",
+                        Name = "A",
+                        EffectiveQualityTierListId = tierListId,
+                        ContentItem = new ContentItem { Id = contentItemId }
                     }
-                ]
+                ],
+                TotalItems = 1
             });
         _contentRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<ContentItemQuery>(),
-                It.IsAny<PagingParameter>(),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentItem> { Items = [new ContentItem { Id = contentItemId }] });
+            .Setup(r => r.GetByIdAsync(contentItemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentItem { Id = contentItemId });
         _downloadRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<DownloadQuery>(),
@@ -398,7 +549,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 [
                     new Download
                     {
-                        Id = Guid.NewGuid(),
+                        Id = downloadId,
                         ReleaseId = releaseId,
                         DownloadClientId = Guid.NewGuid(),
                         ExternalId = Guid.NewGuid().ToString("N"),
@@ -406,7 +557,8 @@ public sealed class ContentFulfillmentReconciliationJobTests
                         Status = DownloadStatus.Imported,
                         CreatedAt = DateTime.UtcNow
                     }
-                ]
+                ],
+                TotalItems = 1
             });
         _releaseRepository
             .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
@@ -430,17 +582,6 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 MatchResult = ReleaseMatchResult.Indeterminate,
                 IsAcceptable = true,
                 IsCutoffMet = false
-            });
-        _hierarchyRepository
-            .Setup(r => r.GetByIdAsync(leafId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ContentHierarchyItem
-            {
-                Id = leafId,
-                ContentType = "movie",
-                Level = "movie",
-                Slug = "a",
-                Name = "A",
-                EffectiveQualityTierListId = tierListId
             });
         _qualityService
             .Setup(service => service.GetTierListAsync(tierListId, It.IsAny<CancellationToken>()))
@@ -466,9 +607,10 @@ public sealed class ContentFulfillmentReconciliationJobTests
         var leafId = Guid.NewGuid();
         var contentItemId = Guid.NewGuid();
         var releaseId = Guid.NewGuid();
+        var downloadId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.LeafOnly == true),
+                It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -478,17 +620,19 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 [
                     new ContentHierarchyItem
                     {
-                        Id = leafId, ContentType = "movie", Level = "movie", Slug = "a", Name = "A"
+                        Id = leafId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "a",
+                        Name = "A",
+                        ContentItem = new ContentItem { Id = contentItemId }
                     }
-                ]
+                ],
+                TotalItems = 1
             });
         _contentRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<ContentItemQuery>(),
-                It.IsAny<PagingParameter>(),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentItem> { Items = [new ContentItem { Id = contentItemId }] });
+            .Setup(r => r.GetByIdAsync(contentItemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentItem { Id = contentItemId });
         _downloadRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<DownloadQuery>(),
@@ -501,7 +645,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 [
                     new Download
                     {
-                        Id = Guid.NewGuid(),
+                        Id = downloadId,
                         ReleaseId = releaseId,
                         DownloadClientId = Guid.NewGuid(),
                         ExternalId = Guid.NewGuid().ToString("N"),
@@ -509,7 +653,8 @@ public sealed class ContentFulfillmentReconciliationJobTests
                         Status = DownloadStatus.Imported,
                         CreatedAt = DateTime.UtcNow
                     }
-                ]
+                ],
+                TotalItems = 1
             });
         _releaseRepository
             .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
@@ -547,15 +692,18 @@ public sealed class ContentFulfillmentReconciliationJobTests
             Times.Once);
     }
 
-    [Test]
-    public async Task ExecuteAsync_ClearsQualityStatus_WhenNoImportedDownloadExists()
+    [TestCase(QualityStatus.Met, 1)]
+    [TestCase(null, 0)]
+    public async Task ExecuteAsync_ClearsQualityStatusOnlyWhenItChanges_WhenNoImportedDownloadExists(
+        QualityStatus? storedQualityStatus,
+        int expectedUpdateCount)
     {
         // Arrange
         var leafId = Guid.NewGuid();
         var contentItemId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.LeafOnly == true),
+                It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -565,17 +713,23 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 [
                     new ContentHierarchyItem
                     {
-                        Id = leafId, ContentType = "movie", Level = "movie", Slug = "a", Name = "A"
+                        Id = leafId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "a",
+                        Name = "A",
+                        ContentItem = new ContentItem
+                        {
+                            Id = contentItemId,
+                            QualityStatus = storedQualityStatus
+                        }
                     }
-                ]
+                ],
+                TotalItems = 1
             });
         _contentRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<ContentItemQuery>(),
-                It.IsAny<PagingParameter>(),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentItem> { Items = [new ContentItem { Id = contentItemId }] });
+            .Setup(r => r.GetByIdAsync(contentItemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentItem { Id = contentItemId, QualityStatus = storedQualityStatus });
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -584,6 +738,112 @@ public sealed class ContentFulfillmentReconciliationJobTests
         _contentRepository.Verify(
             r => r.UpdateAsync(
                 It.Is<ContentItem>(item => item.Id == contentItemId && item.QualityStatus == null),
+                _userId,
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedUpdateCount));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsTheStoredFulfillmentAndSearchTime_WhenAnImportLandsAfterTheSnapshot()
+    {
+        // Arrange
+        var leafId = Guid.NewGuid();
+        var contentItemId = Guid.NewGuid();
+        var releaseId = Guid.NewGuid();
+        var downloadId = Guid.NewGuid();
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = leafId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "a",
+                        Name = "A",
+                        ContentItem = new ContentItem
+                        {
+                            Id = contentItemId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = null
+                        }
+                    }
+                ],
+                TotalItems = 1
+            });
+        _contentRepository
+            .Setup(r => r.GetByIdAsync(contentItemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentItem
+            {
+                Id = contentItemId,
+                Fulfillment = FulfillmentStatus.Fulfilled,
+                DateLastSearched = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc)
+            });
+        _downloadRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = downloadId,
+                        ReleaseId = releaseId,
+                        DownloadClientId = Guid.NewGuid(),
+                        ExternalId = Guid.NewGuid().ToString("N"),
+                        Title = "dl",
+                        Status = DownloadStatus.Imported,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                ],
+                TotalItems = 1
+            });
+        _releaseRepository
+            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release
+            {
+                Id = releaseId,
+                Protocol = "torrent",
+                Title = "Imported",
+                ExternalId = Guid.NewGuid().ToString("N"),
+                PublishDate = DateTime.UtcNow,
+                CreatedAt = DateTime.UtcNow
+            });
+        _releaseEvaluationService
+            .Setup(s => s.ScoreForContentAsync(
+                It.IsAny<Release>(),
+                leafId,
+                It.IsAny<int?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReleaseAssessment
+            {
+                MatchResult = ReleaseMatchResult.Indeterminate,
+                IsAcceptable = true,
+                IsCutoffMet = true
+            });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _contentRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<ContentItem>(item =>
+                    item.Id == contentItemId &&
+                    item.QualityStatus == QualityStatus.Met &&
+                    item.Fulfillment == FulfillmentStatus.Fulfilled &&
+                    item.DateLastSearched == new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc)),
                 _userId,
                 It.IsAny<CancellationToken>()),
             Times.Once);

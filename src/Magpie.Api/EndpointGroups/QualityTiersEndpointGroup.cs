@@ -71,7 +71,7 @@ internal sealed class QualityTiersEndpointGroup : IApiEndpointGroup
     {
         var created = await qualityService.CreateTierAsync(request, user.Id, cancellationToken).ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Created($"/api/{Name}/{created.Id}", created);
     }
 
     [MagpieCommand("get", "GET", "{id:guid}", "Show a quality tier")]

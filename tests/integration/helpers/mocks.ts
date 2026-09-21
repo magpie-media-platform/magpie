@@ -1,6 +1,7 @@
 import {
     clearAuditRecords,
     MOCK_SLUGS,
+    readActiveScenario,
     readAuditRecords,
     setActiveScenario,
     slugify,
@@ -64,6 +65,11 @@ class MockController {
     async useScenario(name: string): Promise<this> {
         this.scenarioName = name;
         await setActiveScenario(this.slug, name);
+        return this;
+    }
+
+    async syncScenario(): Promise<this> {
+        this.scenarioName = await readActiveScenario(this.slug);
         return this;
     }
 

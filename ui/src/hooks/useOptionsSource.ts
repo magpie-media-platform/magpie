@@ -195,13 +195,12 @@ function useDebouncedState(state: Record<string, string>): DebouncedState {
 export function useOptionsSource(
     source: SettingSchemaOptionsSource | undefined | null,
     context: OptionsSourceContext,
-    sourceEnabled = true,
 ): UseQueryResult<SettingSchemaOption[]> {
     const { state: extensionState } = useExtensions();
     const { extensionId, entityId, state } = context;
     const debounced = useDebouncedState(state);
     const assetsSettled = extensionState === 'ready' || extensionState === 'error';
-    const enabled = sourceEnabled && !!source && (source.kind !== 'JSFunction' || assetsSettled);
+    const enabled = !!source && (source.kind !== 'JSFunction' || assetsSettled);
     const resolvedContext = useMemo<OptionsSourceContext>(
         () => ({ extensionId, entityId, state: debounced.state }),
         [extensionId, entityId, debounced.state],

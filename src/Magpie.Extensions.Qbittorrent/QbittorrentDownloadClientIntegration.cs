@@ -26,20 +26,16 @@ internal sealed class QbittorrentDownloadClientIntegration(
     IPausableDownloadClient,
     IResumableDownloadClient,
     IForcableDownloadClient,
-    IValidatesIntegrationSettings,
-    IDisposable
+    IValidatesIntegrationSettings
 {
     private static readonly string[] SupportedProtocolsArray = ["torrent"];
-    public const string ProviderTypeId = "qbittorrent";
     public const string TorrentFileHttpClientName = "magpie.qbittorrent.torrentfile";
 
     private readonly ILogger<QbittorrentDownloadClientIntegration> _logger = logger;
 
     private readonly IQbittorrentClient _client = client;
 
-    private readonly HttpClient _torrentDownloadHttpClient = httpClientFactory.CreateClient(TorrentFileHttpClientName);
-
-    public string ProviderType => ProviderTypeId;
+    public string ProviderType => Constants.ProviderTypeId;
 
     public IEnumerable<string> SupportedProtocols => SupportedProtocolsArray;
 
@@ -47,7 +43,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
     [
         new()
         {
-            Key = "host",
+            Key = QbittorrentSettings.HostKey,
             Type = DataType.String,
             DisplayName = "Host",
             Description = "Base URL of the qBittorrent WebUI (e.g. http://localhost:8080).",
@@ -56,14 +52,14 @@ internal sealed class QbittorrentDownloadClientIntegration(
         },
         new()
         {
-            Key = "username",
+            Key = QbittorrentSettings.UsernameKey,
             Type = DataType.String,
             DisplayName = "Username",
             Description = "Optional. Required when the WebUI enforces authentication.",
         },
         new()
         {
-            Key = "password",
+            Key = QbittorrentSettings.PasswordKey,
             Type = DataType.String,
             DisplayName = "Password",
             Secret = true,
@@ -71,7 +67,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         },
         new()
         {
-            Key = "category",
+            Key = QbittorrentSettings.CategoryKey,
             Type = DataType.String,
             DisplayName = "Category",
             DefaultValue = QbittorrentSettings.DefaultCategory,
@@ -79,7 +75,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         },
         new()
         {
-            Key = "paused",
+            Key = QbittorrentSettings.PausedKey,
             Type = DataType.Boolean,
             DisplayName = "Add as paused",
             DefaultValue = "false",
@@ -164,32 +160,32 @@ internal sealed class QbittorrentDownloadClientIntegration(
     {
         var issues = new List<IntegrationSettingsValidationIssue>();
 
-        if (settings.TryGetValue("host", out var host) && !string.IsNullOrWhiteSpace(host))
+        if (settings.TryGetValue(QbittorrentSettings.HostKey, out var host) && !string.IsNullOrWhiteSpace(host))
         {
             if (!Uri.TryCreate(host, UriKind.Absolute, out var uri) ||
                 !(uri.Scheme is "http" or "https"))
             {
                 issues.Add(new IntegrationSettingsValidationIssue(
-                    "host",
+                    QbittorrentSettings.HostKey,
                     "Host must be an absolute http(s) URL."));
             }
         }
 
-        var hasUsername = settings.TryGetValue("username", out var username) &&
+        var hasUsername = settings.TryGetValue(QbittorrentSettings.UsernameKey, out var username) &&
             !string.IsNullOrEmpty(username);
-        var hasPassword = settings.TryGetValue("password", out var password) &&
+        var hasPassword = settings.TryGetValue(QbittorrentSettings.PasswordKey, out var password) &&
             !string.IsNullOrEmpty(password);
 
         if (hasUsername && !hasPassword)
         {
             issues.Add(new IntegrationSettingsValidationIssue(
-                "password",
+                QbittorrentSettings.PasswordKey,
                 "Username and password must be supplied together (anonymous mode requires both empty)."));
         }
         else if (!hasUsername && hasPassword)
         {
             issues.Add(new IntegrationSettingsValidationIssue(
-                "username",
+                QbittorrentSettings.UsernameKey,
                 "Username and password must be supplied together (anonymous mode requires both empty)."));
         }
 
@@ -217,8 +213,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         if (release.InfoUrl is null)
         {
             throw new InvalidOperationException(
-                $"Release {release.Title} has no InfoUrl. qBittorrent expects a magnet URI " +
-                "or a .torrent download URL.");
+                $"Release {release.Title} has no InfoUrl.");
         }
 
         var tags = string.IsNullOrWhiteSpace(context.ContentType) ? null : context.ContentType;
@@ -235,8 +230,8 @@ internal sealed class QbittorrentDownloadClientIntegration(
             {
                 _logger.LogWarning(
                     ex,
-                    "The qBittorrent integration cannot parse the info hash of the magnet URI for release " +
-                    "{Title}. The integration will find the torrent by name.",
+                    "The qBittorrent integration failed to parse the info hash from the magnet URI for " +
+                    "release {Title}.",
                     release.Title);
             }
 
@@ -267,9 +262,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
             if (magnetHash is null)
             {
                 throw new InvalidOperationException(
-                    $"Failed to determine the info-hash of magnet release {release.Title} after " +
-                    "adding it to qBittorrent. The magnet used an unsupported hash form and the " +
-                    "client did not return a matching entry on lookup.");
+                    $"Failed to determine the info-hash of magnet release {release.Title}.");
             }
 
             return new DownloadInfo
@@ -283,8 +276,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
             !(release.InfoUrl.Scheme is "http" or "https"))
         {
             throw new InvalidOperationException(
-                $"Release {release.Title} InfoUrl scheme {release.InfoUrl.Scheme} is not " +
-                "supported. qBittorrent expects 'magnet:', 'http:', or 'https:'.");
+                $"Release {release.Title} InfoUrl scheme {release.InfoUrl.Scheme} is not supported.");
         }
 
         var torrentBytes = await DefaultDownloadTorrentBytesAsync(release.InfoUrl, cancellationToken)
@@ -300,8 +292,8 @@ internal sealed class QbittorrentDownloadClientIntegration(
         {
             _logger.LogWarning(
                 ex,
-                "The qBittorrent integration cannot compute the v1 info hash from the .torrent bytes for " +
-                "release {Title}. The integration will find the torrent by name.",
+                "The qBittorrent integration failed to compute the v1 info hash from the .torrent bytes for " +
+                "release {Title}.",
                 release.Title);
         }
 
@@ -321,9 +313,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         if (resolvedHash is null)
         {
             throw new InvalidOperationException(
-                $"Failed to determine the info-hash of release {release.Title} after " +
-                "adding it to qBittorrent. The .torrent payload was not parseable and the " +
-                "client did not return a matching entry on lookup.");
+                $"Failed to determine the info-hash of release {release.Title}.");
         }
 
         return new DownloadInfo
@@ -336,7 +326,8 @@ internal sealed class QbittorrentDownloadClientIntegration(
     private async Task<byte[]> DefaultDownloadTorrentBytesAsync(
         Uri torrentUrl, CancellationToken cancellationToken)
     {
-        using var response = await _torrentDownloadHttpClient.GetAsync(torrentUrl, cancellationToken)
+        using var client = httpClientFactory.CreateClient(TorrentFileHttpClientName);
+        using var response = await client.GetAsync(torrentUrl, cancellationToken)
             .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
@@ -375,7 +366,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         IReadOnlyDictionary<string, string> settings,
         CancellationToken cancellationToken = default)
     {
-        var requested = new HashSet<string>();
+        var requested = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var id in externalIds)
         {
             if (!string.IsNullOrEmpty(id))
@@ -384,8 +375,8 @@ internal sealed class QbittorrentDownloadClientIntegration(
             }
         }
 
-        var statuses = new Dictionary<string, DownloadInfo>();
-        var failures = new Dictionary<string, Exception>();
+        var statuses = new Dictionary<string, DownloadInfo>(StringComparer.OrdinalIgnoreCase);
+        var failures = new Dictionary<string, Exception>(StringComparer.OrdinalIgnoreCase);
         if (requested.Count == 0)
         {
             return new BatchDownloadStatusResult(statuses, failures);
@@ -414,12 +405,12 @@ internal sealed class QbittorrentDownloadClientIntegration(
 
         foreach (var torrent in torrents)
         {
-            if (string.IsNullOrEmpty(torrent.Hash) || !requested.Contains(torrent.Hash))
+            if (string.IsNullOrEmpty(torrent.Hash) || !requested.TryGetValue(torrent.Hash, out var requestedId))
             {
                 continue;
             }
 
-            statuses[torrent.Hash] = ProjectTorrent(torrent.Hash, torrent);
+            statuses[requestedId] = ProjectTorrent(requestedId, torrent);
         }
 
         foreach (var id in requested)
@@ -570,11 +561,6 @@ internal sealed class QbittorrentDownloadClientIntegration(
                 FailureKind = ConfigurationFailureKind.Transient
             };
         }
-    }
-
-    public void Dispose()
-    {
-        _torrentDownloadHttpClient.Dispose();
     }
 
     internal static string ExtractV1InfoHash(string magnetUri)

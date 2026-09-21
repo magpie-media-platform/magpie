@@ -19,6 +19,6 @@ public interface IContentTypeDefinitionProvider
     /// </summary>
     /// <param name="filePath">The file path to parse</param>
     /// <param name="levelSlug">The parsed hierarchy level slug, when any</param>
-    /// <returns>The parsed signals, or <c>null</c> for a path that the provider cannot parse.</returns>
+    /// <returns>The parsed signals, or <see langword="null"/> for a path that the provider cannot parse.</returns>
     IReadOnlyDictionary<string, IReadOnlyList<string>>? Parse(string filePath, out string? levelSlug);
 }

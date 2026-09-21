@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -154,7 +153,7 @@ internal sealed class QualityService(
         return targetMimeTypes;
     }
 
-    private async Task ValidateReferencedDefaultsAsync(
+    private async Task<string?> ValidateReferencedDefaultsAsync(
         Guid qualityTierListId,
         IReadOnlyList<string> mimeTypes,
         CancellationToken cancellationToken)
@@ -175,10 +174,8 @@ internal sealed class QualityService(
                 }
                 catch (ArgumentException)
                 {
-                    throw new MagpieException(
-                        $"Quality tier list {qualityTierListId} is referenced by stale level " +
-                            $"{levelDefault.Key} on root folder {rootFolder.Name}. Reconfigure that root " +
-                            "folder before changing the list.");
+                    return $"Quality tier list {qualityTierListId} is referenced by stale level " +
+                        $"{levelDefault.Key} on root folder {rootFolder.Name}.";
                 }
 
                 if (mimeTypes.Count == 0 || MimePatternsIntersect(mimeTypes, acceptedMimeTypes))
@@ -190,12 +187,12 @@ internal sealed class QualityService(
                 var accepted = acceptedMimeTypes.Count == 0
                     ? "no MIME types"
                     : string.Join(", ", acceptedMimeTypes);
-                throw new MagpieException(
-                    $"Quality tier list {qualityTierListId} cannot use MIME patterns {formattedMimeTypes} because " +
-                        "root " +
-                        $"folder {rootFolder.Name} level {levelDefault.Key} accepts {accepted}.");
+                return $"Quality tier list {qualityTierListId} cannot use MIME patterns {formattedMimeTypes} " +
+                    $"because root folder {rootFolder.Name} level {levelDefault.Key} accepts {accepted}.";
             }
         }
+
+        return null;
     }
 
     public async Task<IReadOnlyList<QualityTierList>> ListTierListsAsync(CancellationToken cancellationToken = default)
@@ -249,10 +246,14 @@ internal sealed class QualityService(
                 }
             };
 
-            await ValidateReferencedDefaultsAsync(
+            var conflict = await ValidateReferencedDefaultsAsync(
                 tierListId,
                 patch.MimeTypes.Value,
                 cancellationToken).ConfigureAwait(false);
+            if (conflict is not null)
+            {
+                return new() { ValidationError = conflict };
+            }
         }
 
         var updated = await tierListRepository

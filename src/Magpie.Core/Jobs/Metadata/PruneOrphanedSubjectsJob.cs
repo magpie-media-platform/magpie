@@ -10,7 +10,6 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Jobs;
-using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
 
@@ -18,14 +17,14 @@ namespace Magpie.Core.Jobs.Metadata;
 
 internal sealed class PruneOrphanedSubjectsJob(
     ISubjectRepository subjectRepository,
-    ISubjectService subjectService,
+    IMetadataContainerRepository metadataContainerRepository,
     ITransactionManager transactionManager,
     IProgressReporter progressReporter,
     ILogger<PruneOrphanedSubjectsJob> logger) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "PruneOrphanedSubjects",
+        JobType = MagpieJobs.Types.PruneOrphanedSubjects,
         DisplayName = "Prune orphaned subjects",
         Description = "Removes subjects that have no content relationships or user-specified metadata.",
         Category = "Metadata",
@@ -38,114 +37,68 @@ internal sealed class PruneOrphanedSubjectsJob(
         Parameters = [],
     };
 
+    private const int PageSize = 500;
+
+    private const int DeleteBatchSize = 100;
+
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
         progressReporter.Report(0, "The cleanup will find subjects that have no owner.");
-        const int pageSize = 500;
-        var subjectIds = new List<Guid>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await subjectRepository.QueryAsync(
-                OrphanQuery(),
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            subjectIds.AddRange(pageItems.Select(subject => subject.Id));
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
 
-            pageNumber++;
-        }
-
-        var contentLinkedSubjectIds = await QueryIdsAsync(
-            new() { HasContentRelationships = true },
-            cancellationToken).ConfigureAwait(false);
-        var userContributedSubjectIds = await QueryIdsAsync(
-            new() { HasUserContributions = true },
-            cancellationToken).ConfigureAwait(false);
-        var taggedSubjectIds = await QueryIdsAsync(
-            new() { HasTags = true },
-            cancellationToken).ConfigureAwait(false);
-        var userCreatedSubjectIds = await QueryIdsAsync(
-            new() { IsUserCreated = true },
-            cancellationToken).ConfigureAwait(false);
+        var subjectIds = await QueryIdsAsync(OrphanQuery(), cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation("Subject pruning selected {CandidateCount} candidate(s)", subjectIds.Count);
-        logger.LogInformation(
-            "Subject pruning skipped {SkippedCount} subject(s) with content relationships. Subject ids: {SubjectIds}",
-            contentLinkedSubjectIds.Count,
-            string.Join(", ", contentLinkedSubjectIds));
-        logger.LogInformation(
-            "Subject pruning skipped {SkippedCount} subject(s) with user contributions. Subject ids: {SubjectIds}",
-            userContributedSubjectIds.Count,
-            string.Join(", ", userContributedSubjectIds));
-        logger.LogInformation(
-            "Subject pruning skipped {SkippedCount} subject(s) with user tags. Subject ids: {SubjectIds}",
-            taggedSubjectIds.Count,
-            string.Join(", ", taggedSubjectIds));
-        logger.LogInformation(
-            "Subject pruning skipped {SkippedCount} subject(s) created by real users. Subject ids: {SubjectIds}",
-            userCreatedSubjectIds.Count,
-            string.Join(", ", userCreatedSubjectIds));
 
         var pruned = 0;
-        foreach (var subjectId in subjectIds)
+        foreach (var batch in subjectIds.Chunk(DeleteBatchSize))
         {
-            var result = await transactionManager.ExecuteWithTransactionAsync(
+            cancellationToken.ThrowIfCancellationRequested();
+
+            pruned += await transactionManager.ExecuteWithTransactionAsync(
                 async ct =>
                 {
-                    var stillPrunable = false;
-                    var pageNumber = 1;
-                    while (!stillPrunable)
+                    var page = await subjectRepository.QueryAsync(
+                        OrphanQuery() with { Ids = batch },
+                        new() { PageNumber = 1, PageSize = DeleteBatchSize },
+                        null,
+                        ct).ConfigureAwait(false);
+                    var prunable = page.Items.ToList();
+                    if (prunable.Count == 0)
                     {
-                        var page = await subjectRepository.QueryAsync(
-                            OrphanQuery(),
-                            new() { PageNumber = pageNumber, PageSize = pageSize },
+                        return 0;
+                    }
+
+                    var prunableIds = prunable.Select(subject => subject.Id).ToList();
+                    var deleted = await subjectRepository.DeleteWhereAsync(
+                        OrphanQuery() with { Ids = prunableIds },
+                        ct).ConfigureAwait(false);
+
+                    var containerIds = prunable.Select(subject => subject.MetadataContainerId).ToList();
+                    if (deleted < prunable.Count)
+                    {
+                        var survivors = await subjectRepository.QueryAsync(
+                            new SubjectQuery { Ids = prunableIds },
+                            new() { PageNumber = 1, PageSize = prunable.Count },
                             null,
                             ct).ConfigureAwait(false);
-                        var pageItems = page.Items.ToList();
-                        stillPrunable = pageItems.Any(subject => subject.Id == subjectId);
-                        if (stillPrunable || pageItems.Count < pageSize)
-                        {
-                            break;
-                        }
-
-                        pageNumber++;
+                        var survivingContainerIds = survivors.Items
+                            .Select(subject => subject.MetadataContainerId)
+                            .ToHashSet();
+                        containerIds = [.. containerIds.Where(id => !survivingContainerIds.Contains(id))];
                     }
 
-                    if (!stillPrunable)
-                    {
-                        return (StillPrunable: false, Deleted: false);
-                    }
+                    await metadataContainerRepository.RemoveContainersAsync(containerIds, ct)
+                        .ConfigureAwait(false);
 
-                    var deleted = await subjectService.DeleteAsync(subjectId, null, ct).ConfigureAwait(false);
-                    return (StillPrunable: true, Deleted: deleted);
+                    return deleted;
                 },
                 cancellationToken).ConfigureAwait(false);
-
-            if (result.Deleted)
-            {
-                pruned++;
-            }
-            else if (!result.StillPrunable)
-            {
-                logger.LogInformation(
-                    "Subject pruning skipped candidate {SubjectId} because it no longer qualifies",
-                    subjectId);
-            }
-            else
-            {
-                logger.LogInformation(
-                    "Subject pruning skipped candidate {SubjectId} because it no longer exists",
-                    subjectId);
-            }
         }
 
-        logger.LogInformation("Subject pruning removed {PrunedCount} subject(s)", pruned);
+        logger.LogInformation(
+            "Subject pruning removed {PrunedCount} of {CandidateCount} candidate subject(s)",
+            pruned,
+            subjectIds.Count);
         progressReporter.Report(1, $"The subject cleanup completed. Deleted subjects: {pruned}.");
     }
 
@@ -164,19 +117,18 @@ internal sealed class PruneOrphanedSubjectsJob(
         SubjectQuery query,
         CancellationToken cancellationToken)
     {
-        const int pageSize = 500;
         var ids = new List<Guid>();
         var pageNumber = 1;
         while (true)
         {
             var page = await subjectRepository.QueryAsync(
                 query,
-                new() { PageNumber = pageNumber, PageSize = pageSize },
+                new() { PageNumber = pageNumber, PageSize = PageSize },
                 null,
                 cancellationToken).ConfigureAwait(false);
             var pageItems = page.Items.ToList();
             ids.AddRange(pageItems.Select(subject => subject.Id));
-            if (pageItems.Count < pageSize)
+            if (pageItems.Count < PageSize)
             {
                 break;
             }

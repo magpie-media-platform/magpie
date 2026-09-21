@@ -9,6 +9,7 @@ import { useSubjects, useSubject, type ApiSubject } from '@/hooks/useSubjects';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { extractTitle } from '@/lib/metadata';
+import { magpieQlString } from '@/lib/magpieQl';
 
 const RESULT_LIMIT = 20;
 
@@ -45,8 +46,7 @@ export function SubjectPicker({ value, onChange, error }: SubjectPickerProps) {
         if (!trimmed) {
             return undefined;
         }
-        const escaped = trimmed.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        return `title contains "${escaped}"`;
+        return `title contains ${magpieQlString(trimmed)}`;
     }, [debouncedQuery]);
 
     const { subjects, isLoading } = useSubjects({
@@ -128,7 +128,7 @@ export function SubjectPicker({ value, onChange, error }: SubjectPickerProps) {
                             Selected: {selectedExistingName}
                         </p>
                     )}
-                    <ul className="metadata-inspector__subject-results" role="listbox" aria-label="Subjects">
+                    <ul className="metadata-inspector__subject-results" aria-label="Subjects">
                         {isLoading ? (
                             <li className="metadata-inspector__empty">Loading...</li>
                         ) : matches.length === 0 ? (
@@ -140,8 +140,7 @@ export function SubjectPicker({ value, onChange, error }: SubjectPickerProps) {
                                     <li key={entry.subject.id}>
                                         <button
                                             type="button"
-                                            role="option"
-                                            aria-selected={selected}
+                                            aria-pressed={selected}
                                             className="metadata-inspector__subject-result"
                                             data-selected={selected || undefined}
                                             onClick={() => onChange({ mode: 'existing', subjectId: entry.subject.id })}

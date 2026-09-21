@@ -199,7 +199,47 @@ public class MoviesContentTypeDefinitionProviderTests
         }
     }
 
+    [TestCase("/lib/Final.Cut.1080p.BluRay.x264.mkv", "Final Cut")]
+    [TestCase("/lib/Open.WEBRip.x264.mkv", "Open")]
+    [TestCase("/lib/Extended.mkv", "Extended")]
+    [TestCase("/lib/Movie.Name.1080p.HD.mkv", "Movie Name")]
+    [TestCase("/lib/Movie.Name.DVD.mkv", "Movie Name")]
+    [TestCase("/lib/Movie.Name.SD.REPACK.mkv", "Movie Name")]
+    [TestCase("/lib/Movie.Name.RERIP.mkv", "Movie Name")]
+    [TestCase("/lib/Sample Size.mkv", "Sample Size")]
+    [TestCase("/lib/The Sample.mkv", "The Sample")]
+    [TestCase("/lib/The Sample Show.mkv", "The Sample Show")]
+    [TestCase("/lib/Sampler.mkv", "Sampler")]
+    [TestCase("/lib/Resample.mkv", "Resample")]
+    public void Parse_StripsTheTrailingReleaseTags_WhenTheReleaseNameHasNoYear(string path, string expected)
+    {
+        // Arrange
+        // Act
+        var query = _subject.Parse(path, out _);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(query, Is.Not.Null);
+            Assert.That(query!.GetFirstValue(ParsedFileSignalKeys.Title), Is.EqualTo(expected));
+        }
+    }
+
     [TestCase("/lib/Movie.sample.mkv")]
+    [TestCase("/lib/Movie-SAMPLE.mkv")]
+    [TestCase("/lib/Movie_sample.mkv")]
+    [TestCase("/lib/Movie [sample].mkv")]
+    [TestCase("/lib/sample-Movie.Name.2020.mkv")]
+    [TestCase("/lib/sample.Movie.Name.mkv")]
+    [TestCase("/lib/SAMPLE_Movie.Name.mkv")]
+    [TestCase("/lib/Movie.Name.sample.1080p.mkv")]
+    [TestCase("/lib/Movie.Name-SAMPLE-1080p.mkv")]
+    [TestCase("/lib/Movie.Name_sample_1080p.mkv")]
+    [TestCase("/lib/[sample] Movie.Name.mkv")]
+    [TestCase("/lib/Movie.Name [sample] 1080p.mkv")]
+    [TestCase("/lib/Sample.Size.mkv")]
+    [TestCase("/lib/sample.mkv")]
+    [TestCase("/lib/Sample.mkv")]
     [TestCase("/lib/")]
     public void Parse_ReturnsNull_WhenFileIsNotAUsableMovie(string path)
     {

@@ -1,12 +1,15 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -16,6 +19,7 @@ using Magpie.Sdk.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -24,8 +28,10 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class ExtensionPackageSourceRepositoryTests
+public sealed class ExtensionPackageSourceRepositoryTests
 {
+    private Mock<IEventBus> _updateEvents = null!;
+
     private MagpieDbContext _context = null!;
     private IExtensionPackageSourceRepository _subject = null!;
     private IDataProtectionService _dataProtectionService = null!;
@@ -35,9 +41,9 @@ public class ExtensionPackageSourceRepositoryTests
     [SetUp]
     public void SetUp()
     {
-        _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
-            .Options);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>().UseSqlite("Data Source=:memory:");
+        options.UseMagpieSeeding([], []);
+        _context = new MagpieDbContext(options.Options);
 
         _context.Database.OpenConnection();
         _context.Database.EnsureCreated();
@@ -70,16 +76,20 @@ public class ExtensionPackageSourceRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             _loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
+        _updateEvents = new Mock<IEventBus>();
         _subject = new ExtensionPackageSourceRepository(
             _context,
             auditRecordRepository,
             transactionManager,
-            Mock.Of<IEventBus>(),
+            _updateEvents.Object,
             _loggerFactory.CreateLogger<ExtensionPackageSourceRepository>(),
-            _dataProtectionService);
+            _dataProtectionService,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -87,11 +97,10 @@ public class ExtensionPackageSourceRepositoryTests
     {
         _context.Database.CloseConnection();
         _context.Dispose();
-        _loggerFactory.Dispose();
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsSeededNugetSource_ForFreshDatabase()
+    public async Task ListAllAsync_ReturnsSeededNugetSource_WhenTheDatabaseIsNew()
     {
         // Act
         var result = (await _subject.ListAllAsync().ConfigureAwait(false)).ToArray();
@@ -205,6 +214,12 @@ public class ExtensionPackageSourceRepositoryTests
             Assert.That(roundTripped!.EncryptedSecret, Is.EqualTo("plain-secret"));
             Assert.That(roundTripped.Enabled, Is.False);
         }
+
+        _updateEvents.Verify(bus => bus.PublishAsync(
+            It.Is<MagpieEvent>(e =>
+                e.Name == "extensionPackageSource.updated" &&
+                e.Context["extensionPackageSource.changedFields"] == "enabled"),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]

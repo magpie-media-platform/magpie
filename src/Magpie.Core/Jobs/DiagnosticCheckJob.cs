@@ -37,7 +37,7 @@ internal sealed class DiagnosticCheckJob(
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "DiagnosticCheck",
+        JobType = MagpieJobs.Types.DiagnosticCheck,
         DisplayName = "Diagnostic check",
         Description = "Runs all system diagnostics and saves the results.",
         Category = "System",
@@ -50,9 +50,6 @@ internal sealed class DiagnosticCheckJob(
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters = [],
     };
-
-    private const string SettingsGroupName = "diagnostics";
-    private const string LastScannedAtSettingKey = "last-scanned-at";
 
     private static string FindingKey(DiagnosticFinding finding) =>
         $"{finding.DiagnosticCheckId}|{finding.AffectedEntity}|{finding.Title}";
@@ -88,10 +85,9 @@ internal sealed class DiagnosticCheckJob(
             {
                 logger.LogError(
                     ex,
-                    "Diagnostic {DiagnosticId} threw an exception. The job skipped this diagnostic",
+                    "Diagnostic {DiagnosticId} threw an exception, so the job skipped this diagnostic",
                     diagnostic.DiagnosticCheckId);
 
-                await SaveFindingsAsync(diagnostic.DiagnosticCheckId, [], cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -157,25 +153,9 @@ internal sealed class DiagnosticCheckJob(
         return transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
-                const int pageSize = 500;
-                var existing = new List<DiagnosticFinding>();
-                var pageNumber = 1;
-                while (true)
-                {
-                    var page = await findingRepository.QueryAsync(
-                        new DiagnosticFindingQuery { DiagnosticCheckId = diagnosticCheckId },
-                        new() { PageNumber = pageNumber, PageSize = pageSize },
-                        null,
-                        ct).ConfigureAwait(false);
-                    var pageItems = page.Items.ToList();
-                    existing.AddRange(pageItems);
-                    if (pageItems.Count < pageSize)
-                    {
-                        break;
-                    }
-
-                    pageNumber++;
-                }
+                var existing = await findingRepository.QueryAllAsync(
+                    new DiagnosticFindingQuery { DiagnosticCheckId = diagnosticCheckId },
+                    cancellationToken: ct).ConfigureAwait(false);
 
                 foreach (var finding in existing)
                 {
@@ -205,16 +185,16 @@ internal sealed class DiagnosticCheckJob(
     {
         var value = lastScannedAtUtc.ToString("O", CultureInfo.InvariantCulture);
         var group = await settingsRepository
-            .GetByIdAsync(new SettingsGroupLookupKey(null, SettingsGroupName), cancellationToken)
+            .GetByIdAsync(new SettingsGroupLookupKey(null, MagpieJobs.Settings.DiagnosticsGroup), cancellationToken)
             .ConfigureAwait(false);
-        var exists = group?.Settings.Any(s => s.Key == LastScannedAtSettingKey) ?? false;
+        var exists = group?.Settings.Any(s => s.Key == MagpieJobs.Settings.LastScannedAt) ?? false;
 
-        var entry = new Dictionary<string, string>() { [LastScannedAtSettingKey] = value };
+        var entry = new Dictionary<string, string>() { [MagpieJobs.Settings.LastScannedAt] = value };
         await settingsRepository.PatchAsync(
             new SettingsGroupPatch
             {
                 ExtensionId = null,
-                Name = SettingsGroupName,
+                Name = MagpieJobs.Settings.DiagnosticsGroup,
                 Settings = new DictionaryPatch<string, string, string>
                 {
                     Add = exists ? null : entry,

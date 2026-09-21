@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -20,6 +19,9 @@ namespace Magpie.Extensions.Cardigann.Engine.Session;
 internal sealed class CardigannSessionManager(
     IHttpClientFactory clientFactory,
     IResultParser resultParser,
+    ICloudflareSolver solver,
+    CardigannSessionState state,
+    TimeProvider timeProvider,
     ILogger<CardigannSessionManager> logger) : ICardigannSessionManager
 {
     public const string HttpClientName = "magpie.cardigann";
@@ -32,11 +34,17 @@ internal sealed class CardigannSessionManager(
     private const string AcceptHeader = "text/html, application/xhtml+xml, */*; q=0.8";
     private const int MaxRedirects = 5;
 
+    private static readonly TimeSpan TlsBindingLifetime = TimeSpan.FromMinutes(10);
+
     private readonly HtmlParser _htmlParser = new();
-    private readonly ConcurrentDictionary<string, TrackerSession> _sessions = [];
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = [];
 
     private static bool IsRedirect(HttpStatusCode statusCode) => (int)statusCode is 301 or 302 or 303 or 307 or 308;
+
+    private static bool IsCloudflareCookie(string name)
+    {
+        return string.Equals(name, "cf_clearance", StringComparison.Ordinal) ||
+            name.StartsWith("__cf", StringComparison.Ordinal);
+    }
 
     private static bool SameAuthority(Uri a, Uri b)
     {
@@ -104,29 +112,14 @@ internal sealed class CardigannSessionManager(
         return new Uri(uri.AbsoluteUri + separator + query);
     }
 
-    private static (string? Name, string Value) ParseSetCookie(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return (null, string.Empty);
-        }
-
-        var firstPart = raw.Split(';', 2)[0];
-        var separator = firstPart.IndexOf('=', StringComparison.Ordinal);
-        if (separator <= 0)
-        {
-            return (null, string.Empty);
-        }
-
-        return (firstPart[..separator].Trim(), firstPart[(separator + 1)..].Trim());
-    }
-
     public void InvalidateSession(string sessionKey)
     {
-        if (_sessions.TryGetValue(sessionKey, out var session))
+        if (state.Sessions.TryGetValue(sessionKey, out var session))
         {
             session.Authenticated = false;
-            session.Cookies.Clear();
+            session.ClearanceUserAgent = null;
+            session.Cookies = new CookieContainer();
+            session.ClearTlsBinding();
         }
     }
 
@@ -190,13 +183,13 @@ internal sealed class CardigannSessionManager(
             return FailedOutcome("captcha login not supported in this build.", ConfigurationFailureKind.Auth);
         }
 
-        var session = _sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
+        var session = state.Sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
         if (!forceRefresh && session.Authenticated)
         {
             return SuccessfulOutcome();
         }
 
-        var gate = _locks.GetOrAdd(sessionKey, _ => new SemaphoreSlim(1, 1));
+        var gate = state.LoginGates.GetOrAdd(sessionKey, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -206,7 +199,8 @@ internal sealed class CardigannSessionManager(
             }
 
             session.Authenticated = false;
-            session.Cookies.Clear();
+            session.Cookies = new CookieContainer();
+            session.ClearTlsBinding();
 
             CardigannLoginOutcome outcome;
             try
@@ -224,7 +218,7 @@ internal sealed class CardigannSessionManager(
             }
             catch (HttpRequestException ex)
             {
-                logger.LogWarning(ex, "Cardigann login had a network error for {SessionKey}", sessionKey);
+                logger.LogWarning(ex, "Cardigann login had a network error for {SessionKey}.", sessionKey);
                 return FailedOutcome($"Network error during login: {ex.Message}", ConfigurationFailureKind.Fatal);
             }
             catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
@@ -235,11 +229,11 @@ internal sealed class CardigannSessionManager(
             if (outcome.Success)
             {
                 session.Authenticated = true;
-                logger.LogDebug("Cardigann login succeeded for {SessionKey}", sessionKey);
+                logger.LogDebug("Cardigann login succeeded for {SessionKey}.", sessionKey);
             }
             else
             {
-                logger.LogWarning("Cardigann login failed for {SessionKey}. {Reason}", sessionKey, outcome.Message);
+                logger.LogWarning("Cardigann login failed for {SessionKey}: {Reason}", sessionKey, outcome.Message);
             }
 
             return outcome;
@@ -339,11 +333,20 @@ internal sealed class CardigannSessionManager(
             var value = part[(separator + 1)..].Trim();
             if (name.Length > 0)
             {
-                session.Cookies[name] = value;
+                try
+                {
+                    session.Cookies.Add(baseUri, new Cookie(name, value, "/"));
+                }
+                catch (CookieException)
+                {
+                    return FailedOutcome(
+                        $"Configured cookie {name} is not a valid cookie.",
+                        ConfigurationFailureKind.Auth);
+                }
             }
         }
 
-        if (session.Cookies.IsEmpty)
+        if (session.Cookies.Count == 0)
         {
             return FailedOutcome(
                 "Configured cookie value contained no name=value pairs.",
@@ -624,30 +627,30 @@ internal sealed class CardigannSessionManager(
         return null;
     }
 
-    private string? BuildCookieHeader(string sessionKey)
+    private string? BuildCookieHeader(string sessionKey, Uri requestUri)
     {
-        if (!_sessions.TryGetValue(sessionKey, out var session) || session.Cookies.IsEmpty)
-        {
-            return null;
-        }
-
-        return string.Join("; ", session.Cookies.Select(pair => $"{pair.Key}={pair.Value}"));
+        return state.Sessions.TryGetValue(sessionKey, out var session)
+            ? session.Cookies.GetCookieHeader(requestUri)
+            : null;
     }
 
-    private void CaptureCookies(string sessionKey, HttpResponseMessage response)
+    private void CaptureCookies(string sessionKey, Uri requestUri, HttpResponseMessage response)
     {
         if (!response.Headers.TryGetValues("Set-Cookie", out var setCookies))
         {
             return;
         }
 
-        var session = _sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
+        var session = state.Sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
         foreach (var raw in setCookies)
         {
-            var (name, value) = ParseSetCookie(raw);
-            if (name is not null)
+            try
             {
-                session.Cookies[name] = value;
+                session.Cookies.SetCookies(requestUri, raw);
+            }
+            catch (CookieException ex)
+            {
+                logger.LogWarning(ex, "The tracker returned an invalid cookie for {Host}.", requestUri.Host);
             }
         }
     }
@@ -664,21 +667,33 @@ internal sealed class CardigannSessionManager(
         CancellationToken cancellationToken)
     {
         var client = clientFactory.CreateClient(HttpClientName);
+        var contentType = content?.Headers.ContentType;
+
+        var body = content is null
+            ? null
+            : await content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
         var currentMethod = method;
         var currentUri = requestUri;
-        var currentContent = content;
+        var currentBody = body;
+        var clearanceRetried = false;
+        var clearanceApplied = false;
+        var clearanceReused = false;
+        var clearanceRefreshed = false;
         for (var hop = 0; ; hop++)
         {
+            var onCookieScope = SameAuthority(currentUri, cookieScope);
             using var request = new HttpRequestMessage(currentMethod, currentUri);
-            request.Headers.TryAddWithoutValidation("User-Agent", userAgent);
+            request.Headers.TryAddWithoutValidation(
+                "User-Agent",
+                ResolveUserAgent(sessionKey, userAgent, onCookieScope));
             request.Headers.TryAddWithoutValidation("Accept", AcceptHeader);
-            var cookieHeader = BuildCookieHeader(sessionKey);
-            if (!string.IsNullOrEmpty(cookieHeader) && SameAuthority(currentUri, cookieScope))
+            var cookieHeader = BuildCookieHeader(sessionKey, currentUri);
+            if (!string.IsNullOrEmpty(cookieHeader) && onCookieScope)
             {
                 request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
             }
 
-            if (headers is not null)
+            if (headers is not null && onCookieScope)
             {
                 foreach (var (name, values) in headers)
                 {
@@ -689,35 +704,180 @@ internal sealed class CardigannSessionManager(
                 }
             }
 
-            if (currentContent is not null)
+            if (currentBody is not null)
             {
-                request.Content = currentContent;
+                request.Content = new ByteArrayContent(currentBody);
+                request.Content.Headers.ContentType = contentType;
             }
 
             var response = await client
                 .SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken)
                 .ConfigureAwait(false);
-            if (captureCookies)
+            if (captureCookies && onCookieScope)
             {
-                CaptureCookies(sessionKey, response);
+                CaptureCookies(sessionKey, currentUri, response);
             }
 
             if (hop < MaxRedirects && IsRedirect(response.StatusCode) && response.Headers.Location is not null)
             {
                 currentUri = new Uri(currentUri, response.Headers.Location);
                 currentMethod = HttpMethod.Get;
-                currentContent = null;
+                currentBody = null;
                 response.Dispose();
                 continue;
+            }
+
+            if (onCookieScope && response.DetectCloudflareChallenge() is not null)
+            {
+                var session = state.Sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
+                if (clearanceReused && !clearanceRefreshed)
+                {
+                    solver.Forget(cookieScope);
+                    clearanceRetried = false;
+                    clearanceReused = false;
+                    clearanceRefreshed = true;
+                    logger.LogDebug(
+                        "The tracker of {SessionKey} refused Cardigann's stored clearance cookie.",
+                        sessionKey);
+                }
+
+                if (!clearanceRetried && !session.ClearanceIsTlsBound(timeProvider.GetUtcNow()))
+                {
+                    clearanceRetried = true;
+                    (clearanceApplied, clearanceReused) =
+                        await TryAcquireClearanceAsync(sessionKey, cookieScope, cancellationToken)
+                            .ConfigureAwait(false);
+                    if (clearanceApplied)
+                    {
+                        response.Dispose();
+                        continue;
+                    }
+                }
+
+                if (currentMethod == HttpMethod.Get)
+                {
+                    if (clearanceApplied && !clearanceReused)
+                    {
+                        session.BindClearanceToTls(timeProvider.GetUtcNow() + TlsBindingLifetime);
+                        logger.LogDebug(
+                            "The tracker of {SessionKey} rejected the clearance cookie.",
+                            sessionKey);
+                    }
+
+                    if (await FetchThroughSolverAsync(currentUri, cancellationToken).ConfigureAwait(false)
+                        is { } solved)
+                    {
+                        response.Dispose();
+                        return solved;
+                    }
+                }
             }
 
             return response;
         }
     }
 
-    private sealed class TrackerSession
+    private async Task<HttpResponseMessage?> FetchThroughSolverAsync(
+        Uri requestUri,
+        CancellationToken cancellationToken)
     {
-        public volatile bool Authenticated;
-        public ConcurrentDictionary<string, string> Cookies { get; } = [];
+        var solved = await solver.SolveAsync(requestUri, reuse: false, cancellationToken).ConfigureAwait(false);
+        if (solved?.Body is not { Length: > 0 } solvedBody || solved.Status is < 200 or > 299)
+        {
+            return null;
+        }
+
+        var unwrapped = UnwrapSolvedPayload(solvedBody);
+        return new HttpResponseMessage((HttpStatusCode)solved.Status)
+        {
+            Content = new StringContent(
+                unwrapped ?? solvedBody,
+                Encoding.UTF8,
+                unwrapped is null ? "text/html" : "application/json"),
+        };
+    }
+
+    private string? UnwrapSolvedPayload(string solvedBody)
+    {
+        using var document = _htmlParser.ParseDocument(solvedBody);
+        if (document.Body?.QuerySelectorAll("pre") is not { Length: 1 } preformatted)
+        {
+            return null;
+        }
+
+        var payload = preformatted[0].TextContent.Trim();
+        return payload.StartsWith('{') || payload.StartsWith('[') ? payload : null;
+    }
+
+    private async Task<(bool Applied, bool Reused)> TryAcquireClearanceAsync(
+        string sessionKey,
+        Uri scopeUri,
+        CancellationToken cancellationToken)
+    {
+        var session = state.Sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
+        var stamp = session.ClearanceStamp;
+        await session.ClearanceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (session.ClearanceStamp != stamp)
+            {
+                return (true, true);
+            }
+
+            var clearance = await solver.SolveAsync(scopeUri, reuse: true, cancellationToken).ConfigureAwait(false);
+            if (clearance is null)
+            {
+                return (false, false);
+            }
+
+            var applied = 0;
+            foreach (var (name, value) in clearance.Cookies)
+            {
+                if (!IsCloudflareCookie(name))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    session.Cookies.Add(scopeUri, new Cookie(name, value, "/"));
+                    applied++;
+                }
+                catch (CookieException exception)
+                {
+                    logger.LogWarning(
+                        exception, "The solver returned an invalid cookie for {Host}.", scopeUri.Host);
+                }
+            }
+
+            if (applied == 0)
+            {
+                logger.LogWarning(
+                    "FlareSolverr returned no Cloudflare cookie for the unsolved challenge of {SessionKey}.",
+                    sessionKey);
+                return (false, false);
+            }
+
+            session.ClearanceUserAgent = clearance.UserAgent;
+            session.ClearanceStamp++;
+            logger.LogDebug(
+                "FlareSolverr solved the Cloudflare challenge for {SessionKey} and kept {CookieCount} cookies.",
+                sessionKey,
+                applied);
+            return (true, clearance.Reused);
+        }
+        finally
+        {
+            session.ClearanceGate.Release();
+        }
+    }
+
+    private string ResolveUserAgent(string sessionKey, string userAgent, bool onCookieScope)
+    {
+        return onCookieScope &&
+            state.Sessions.TryGetValue(sessionKey, out var session) &&
+            session.ClearanceUserAgent is { Length: > 0 } clearanceUserAgent
+                ? clearanceUserAgent
+                : userAgent;
     }
 }

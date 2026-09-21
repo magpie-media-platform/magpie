@@ -68,3 +68,42 @@ describe('ColumnHeaderFilter', () => {
         expect(trigger).toBeDisabled();
     });
 });
+
+it.each(['text', 'dateRange', 'numberRange'] as const)('uses different IDs for separate %s filters', async (type) => {
+    const user = userEvent.setup();
+    render(
+        <>
+            <ColumnHeaderFilter
+                type={type}
+                label="First"
+                active={false}
+                value=""
+                from=""
+                to=""
+                min=""
+                max=""
+                onChange={vi.fn()}
+            />
+            <ColumnHeaderFilter
+                type={type}
+                label="Second"
+                active={false}
+                value=""
+                from=""
+                to=""
+                min=""
+                max=""
+                onChange={vi.fn()}
+            />
+        </>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Filter by First' }));
+    const first = document.querySelector<HTMLInputElement>('.column-header-filter__form input')!;
+    expect(first.labels?.[0]).toHaveTextContent('First');
+    const firstId = first.id;
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: 'Filter by Second' }));
+    const second = document.querySelector<HTMLInputElement>('.column-header-filter__form input')!;
+    expect(second.labels?.[0]).toHaveTextContent('Second');
+    expect(second.id).not.toBe(firstId);
+});

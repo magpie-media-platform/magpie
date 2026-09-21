@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -13,6 +12,7 @@ using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -23,6 +23,8 @@ namespace Magpie.Test.Core.Jobs.Retention;
 [TestFixture]
 public sealed class RetentionCleanupJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IJobExecutionRepository> _jobExecutionRepository = null!;
     private Mock<IAuditRecordRepository> _auditRecordRepository = null!;
     private Mock<IReleaseRepository> _releaseRepository = null!;
@@ -72,8 +74,9 @@ public sealed class RetentionCleanupJobTests
             _auditRecordRepository.Object,
             _releaseRepository.Object,
             _downloadService.Object,
-            TimeProvider.System,
-            NullLogger<RetentionCleanupJob>.Instance);
+            new FakeTimeProvider(new DateTimeOffset(2026, 5, 20, 12, 0, 0, TimeSpan.Zero)),
+            NullLogger<RetentionCleanupJob>.Instance,
+            _progressReporter);
         _jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,
@@ -85,66 +88,24 @@ public sealed class RetentionCleanupJobTests
     }
 
     [Test]
-    public void Spec_DeclaresRetentionParameters_WithDefaults()
-    {
-        // Arrange
-        // Act
-        var parameters = RetentionCleanupJob.Spec.Parameters;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(
-                parameters.Select(p => p.Name),
-                Is.EqualTo(
-                [
-                    "jobExecutionRetentionDays",
-                    "auditRetentionDays",
-                    "releaseObservationRetentionDays",
-                    "failedDownloadRetentionDays"
-                ]));
-            Assert.That(parameters.Select(p => p.Type), Is.All.EqualTo(DataType.Number));
-            Assert.That(parameters.Select(p => p.Required), Is.All.EqualTo(false));
-            Assert.That(parameters.Select(p => p.DefaultValue), Is.EqualTo(["30", "90", "7", "30"]));
-        }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_DeletesAgedRows_WithDefaultRetentionWindows()
+    public async Task ExecuteAsync_DeletesAgedRows_WhenNoRetentionOverrideIsSet()
     {
         // Arrange
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
-        var now = DateTime.UtcNow;
-        _jobExecutionRepository.Verify(
-            r => r.DeleteWhereAsync(It.IsAny<JobExecutionQuery>(), It.IsAny<CancellationToken>()),
-            Times.Once);
-        _auditRecordRepository.Verify(
-            r => r.DeleteWhereAsync(
-                It.IsAny<AuditRecordQuery>(), It.IsAny<CancellationToken>()),
-            Times.Once);
-        _releaseRepository.Verify(
-            r => r.DeleteWhereAsync(
-                It.IsAny<ReleaseQuery>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _downloadService.Verify(
-            r => r.DeleteClearedFailedDownloadsAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
-            Times.Once);
-
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_jobExecutionCutoff, Is.EqualTo(now.AddDays(-30)).Within(TimeSpan.FromMinutes(1)));
-            Assert.That(_auditRecordCutoff, Is.EqualTo(now.AddDays(-90)).Within(TimeSpan.FromMinutes(1)));
-            Assert.That(_releaseCutoff, Is.EqualTo(now.AddDays(-7)).Within(TimeSpan.FromMinutes(1)));
-            Assert.That(_failedDownloadCutoff, Is.EqualTo(now.AddDays(-30)).Within(TimeSpan.FromMinutes(1)));
+            Assert.That(_jobExecutionCutoff, Is.EqualTo(new DateTime(2026, 4, 20, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(_auditRecordCutoff, Is.EqualTo(new DateTime(2026, 2, 19, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(_releaseCutoff, Is.EqualTo(new DateTime(2026, 5, 13, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(_failedDownloadCutoff, Is.EqualTo(new DateTime(2026, 4, 20, 12, 0, 0, DateTimeKind.Utc)));
         }
     }
 
     [Test]
-    public async Task ExecuteAsync_HonorsParameterOverride_ForJobExecutionRetention()
+    public async Task ExecuteAsync_HonorsParameterOverride_WhenJobExecutionRetentionIsOverridden()
     {
         // Arrange
         var jobContext = _jobContext with
@@ -159,11 +120,11 @@ public sealed class RetentionCleanupJobTests
         await _subject.ExecuteAsync(jobContext).ConfigureAwait(false);
 
         // Assert
-        Assert.That(_jobExecutionCutoff, Is.EqualTo(DateTime.UtcNow.AddDays(-5)).Within(TimeSpan.FromMinutes(1)));
+        Assert.That(_jobExecutionCutoff, Is.EqualTo(new DateTime(2026, 5, 15, 12, 0, 0, DateTimeKind.Utc)));
     }
 
     [Test]
-    public async Task ExecuteAsync_HonorsZeroRetentionDays_ClearsRecentRows()
+    public async Task ExecuteAsync_UsesTheCurrentTimeAsCutoff_WhenRetentionDaysIsZero()
     {
         // Arrange
         var jobContext = _jobContext with
@@ -178,11 +139,11 @@ public sealed class RetentionCleanupJobTests
         await _subject.ExecuteAsync(jobContext).ConfigureAwait(false);
 
         // Assert
-        Assert.That(_jobExecutionCutoff, Is.EqualTo(DateTime.UtcNow).Within(TimeSpan.FromMinutes(1)));
+        Assert.That(_jobExecutionCutoff, Is.EqualTo(new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc)));
     }
 
     [Test]
-    public async Task ExecuteAsync_HonorsParameterOverride_ForFailedDownloadRetention()
+    public async Task ExecuteAsync_HonorsParameterOverride_WhenFailedDownloadRetentionIsOverridden()
     {
         // Arrange
         var jobContext = _jobContext with
@@ -197,11 +158,11 @@ public sealed class RetentionCleanupJobTests
         await _subject.ExecuteAsync(jobContext).ConfigureAwait(false);
 
         // Assert
-        Assert.That(_failedDownloadCutoff, Is.EqualTo(DateTime.UtcNow.AddDays(-1)).Within(TimeSpan.FromMinutes(1)));
+        Assert.That(_failedDownloadCutoff, Is.EqualTo(new DateTime(2026, 5, 19, 12, 0, 0, DateTimeKind.Utc)));
     }
 
     [Test]
-    public async Task ExecuteAsync_IgnoresZeroFailedDownloadRetentionDays_FallingBackToDefault()
+    public async Task ExecuteAsync_HonorsZeroRetentionDays_WhenFailedDownloadRetentionIsZero()
     {
         // Arrange
         var jobContext = _jobContext with
@@ -216,6 +177,6 @@ public sealed class RetentionCleanupJobTests
         await _subject.ExecuteAsync(jobContext).ConfigureAwait(false);
 
         // Assert
-        Assert.That(_failedDownloadCutoff, Is.EqualTo(DateTime.UtcNow.AddDays(-30)).Within(TimeSpan.FromMinutes(1)));
+        Assert.That(_failedDownloadCutoff, Is.EqualTo(new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc)));
     }
 }

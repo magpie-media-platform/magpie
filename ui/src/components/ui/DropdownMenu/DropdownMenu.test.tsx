@@ -12,12 +12,10 @@ import {
     DropdownMenuRadioGroup,
     DropdownMenuLabel,
     DropdownMenuSeparator,
-    DropdownMenuGroup,
     DropdownMenuSub,
     DropdownMenuSubTrigger,
     DropdownMenuSubContent,
     DropdownMenuShortcut,
-    DropdownMenuPortal,
 } from './DropdownMenu';
 
 describe('DropdownMenu', () => {
@@ -371,14 +369,6 @@ describe('DropdownMenu', () => {
         await user.click(screen.getByRole('button', { name: 'Open Menu' }));
 
         expect(handleOpenChange).toHaveBeenCalledWith(true);
-    });
-
-    it('exports DropdownMenuGroup', () => {
-        expect(DropdownMenuGroup).toBeDefined();
-    });
-
-    it('exports DropdownMenuPortal', () => {
-        expect(DropdownMenuPortal).toBeDefined();
     });
 });
 

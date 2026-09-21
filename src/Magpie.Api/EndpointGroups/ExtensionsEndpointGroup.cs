@@ -173,7 +173,7 @@ internal sealed class ExtensionsEndpointGroup : IApiEndpointGroup
 
         SetRestartRequiredHeader(httpContext, result.RestartRequired);
 
-        return Results.Created($"api/{Name}/{result.Extension.Id}", result);
+        return Results.Created($"/api/{Name}/{result.Extension.Id}", result);
     }
 
     [MagpieCommand("upload", "POST", "upload", "Upload an extension package")]
@@ -200,7 +200,7 @@ internal sealed class ExtensionsEndpointGroup : IApiEndpointGroup
 
         SetRestartRequiredHeader(httpContext, result.RestartRequired);
 
-        return Results.Created($"api/{Name}/{result.Extension.Id}", result);
+        return Results.Created($"/api/{Name}/{result.Extension.Id}", result);
     }
 
     [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on an extension")]
@@ -340,7 +340,7 @@ internal sealed class ExtensionsEndpointGroup : IApiEndpointGroup
         var created = await extensionService.CreatePackageSourceAsync(create, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/package-sources/{created.Id}", CreateResponse(created));
+        return Results.Created($"/api/{Name}/package-sources/{created.Id}", CreateResponse(created));
     }
 
     [MagpieCommand(

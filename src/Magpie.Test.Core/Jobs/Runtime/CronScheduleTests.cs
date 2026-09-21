@@ -31,7 +31,7 @@ public sealed class CronScheduleTests
     [TestCase("0 * * * *", true)]
     [TestCase("", false)]
     [TestCase("99 99 * * *", false)]
-    public void IsValid_Result_WhenScheduleIsValid(string schedule, bool expected)
+    public void IsValid_ReportsValidity_WhenScheduleSyntaxVaries(string schedule, bool expected)
     {
         // Act
         var valid = CronSchedule.IsValid(schedule);

@@ -551,6 +551,50 @@ describe('TierListForm', () => {
         expect(screen.getByDisplayValue('Second List')).toBeInTheDocument();
     });
 
+    it('keeps an in-progress edit when the same list is refetched', async () => {
+        const user = userEvent.setup();
+        const { rerender } = render(
+            <TestWrapper>
+                <TierListForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={{
+                        id: 'qtl-1',
+                        name: 'First List',
+                        mimeTypes: [],
+                        upgradeAllowed: false,
+                        tags: [],
+                    }}
+                    tags={mockTags}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        await user.clear(screen.getByLabelText(/^Name/));
+        await user.type(screen.getByLabelText(/^Name/), 'My Edit');
+
+        rerender(
+            <TestWrapper>
+                <TierListForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={{
+                        id: 'qtl-1',
+                        name: 'First List',
+                        mimeTypes: [],
+                        upgradeAllowed: false,
+                        tags: ['Movies'],
+                    }}
+                    tags={mockTags}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByDisplayValue('My Edit')).toBeInTheDocument();
+    });
+
     it('resets to empty form when opening for add after edit', async () => {
         const { rerender } = render(
             <TestWrapper>
@@ -757,8 +801,6 @@ describe('TierListForm unsaved-changes guard', () => {
         await user.click(screen.getByRole('button', { name: /save/i }));
         expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ name: 'HD Standard' }));
 
-        // the parent flips isSubmitting while the create is in flight, so the guard
-        // disarms before the parent navigates on success
         rerender(
             <TestWrapper>
                 <TierListForm
@@ -792,7 +834,6 @@ describe('TierListForm unsaved-changes guard', () => {
         await user.type(screen.getByLabelText(/name/i), 'HD Standard');
         await user.click(screen.getByRole('button', { name: /save/i }));
 
-        // save in flight
         rerender(
             <TestWrapper>
                 <TierListForm
@@ -804,8 +845,6 @@ describe('TierListForm unsaved-changes guard', () => {
                 />
             </TestWrapper>,
         );
-        // save failed: the parent resets isSubmitting, the form stays open with unsaved
-        // data, so the guard must re-arm
         rerender(
             <TestWrapper>
                 <TierListForm

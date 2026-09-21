@@ -131,32 +131,4 @@ describe('useDebouncedValue', () => {
 
         expect(result.current).toBe('');
     });
-
-    it('fires onFlush on unmount with the latest pending value', () => {
-        const onFlush = vi.fn();
-        const { rerender, unmount } = renderHook(({ value }) => useDebouncedValue(value, 300, onFlush), {
-            initialProps: { value: 'initial' },
-        });
-
-        rerender({ value: 'pending' });
-        unmount();
-
-        expect(onFlush).toHaveBeenCalledTimes(1);
-        expect(onFlush).toHaveBeenCalledWith('pending');
-    });
-
-    it('does not fire onFlush on unmount when the timer already settled', () => {
-        const onFlush = vi.fn();
-        const { rerender, unmount } = renderHook(({ value }) => useDebouncedValue(value, 300, onFlush), {
-            initialProps: { value: 'initial' },
-        });
-
-        rerender({ value: 'updated' });
-        act(() => {
-            vi.advanceTimersByTime(300);
-        });
-        unmount();
-
-        expect(onFlush).not.toHaveBeenCalled();
-    });
 });

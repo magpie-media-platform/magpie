@@ -13,54 +13,16 @@ export const SETUP_STEP_ORDER: readonly SetupStepId[] = [
     'done',
 ] as const;
 
-interface SetupStepDescriptor {
-    id: SetupStepId;
-    title: string;
-    subtitle: string;
-}
-
-export const SETUP_STEPS: Record<SetupStepId, SetupStepDescriptor> = {
-    db: {
-        id: 'db',
-        title: 'Choose a database',
-        subtitle: 'Database Magpie will use.',
-    },
-    admin: {
-        id: 'admin',
-        title: 'Claim the administrator account',
-        subtitle: 'Create the first administrator account to get started.',
-    },
-    metadata: {
-        id: 'metadata',
-        title: 'Add metadata providers',
-        subtitle: 'Provide API keys so Magpie can fetch art and details.',
-    },
-    indexer: {
-        id: 'indexer',
-        title: 'Add your first indexer',
-        subtitle: 'Connect a release source so Magpie can search for content.',
-    },
-    download: {
-        id: 'download',
-        title: 'Add a download client',
-        subtitle: 'Connect a downloader so Magpie can grab releases.',
-    },
-    server: {
-        id: 'server',
-        title: 'Add a media server',
-        subtitle: 'Tell Magpie about your media server so library refreshes work.',
-    },
-    root: {
-        id: 'root',
-        title: 'Add a root folder',
-        subtitle: 'Choose the folder where Magpie organizes imported files.',
-    },
-    done: {
-        id: 'done',
-        title: 'Setup complete',
-        subtitle: 'Review what you configured and finish setup.',
-    },
-} as const;
+export const SETUP_STEPS: Record<SetupStepId, string> = {
+    db: 'Database Magpie will use.',
+    admin: 'Create the first administrator account to get started.',
+    metadata: 'Provide API keys so Magpie can fetch art and details.',
+    indexer: 'Connect a release source so Magpie can search for content.',
+    download: 'Connect a downloader so Magpie can grab releases.',
+    server: 'Tell Magpie about your media server so library refreshes work.',
+    root: 'Choose the folder where Magpie organizes imported files.',
+    done: 'Review what you configured and finish setup.',
+};
 
 export interface SetupStepAvailability {
     includeMetadata: boolean;

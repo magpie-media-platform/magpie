@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -191,4 +191,21 @@ describe('JobRetryPolicyPanel', () => {
             });
         });
     });
+});
+
+it('loads settings on retry after the initial request fails', async () => {
+    // Arrange
+    const user = userEvent.setup();
+    mockApiGet.mockRejectedValue(new Error('Unavailable'));
+    render(<JobRetryPolicyPanel />, { wrapper: createWrapper() });
+    const alert = await screen.findByTestId('job-retry-error');
+    expect(within(alert).getByRole('paragraph')).toHaveTextContent(/^Failed to load retry settings\.$/);
+    expect(alert).not.toHaveTextContent('save the settings');
+    expect(screen.queryByLabelText('Base delay (seconds)')).not.toBeInTheDocument();
+    // Act
+    mockApiGet.mockResolvedValue([mockGroup]);
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    // Assert
+    expect(await screen.findByLabelText('Base delay (seconds)')).toHaveValue(15);
+    expect(screen.queryByTestId('job-retry-error')).not.toBeInTheDocument();
 });

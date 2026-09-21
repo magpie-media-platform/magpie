@@ -25,24 +25,33 @@ async function probeStartedAt(): Promise<string | null> {
     }
 }
 
-async function probeRestartedHost(baselineStartedAt: string | null): Promise<boolean> {
+const STARTUP_FAILED_STATUS = 'StartupFailed';
+const RECONNECT_TIMEOUT_MS = 120_000;
+
+type HostProbeOutcome = 'restarted' | 'failed' | 'waiting';
+
+async function probeRestartedHost(baselineStartedAt: string | null): Promise<HostProbeOutcome> {
     try {
         const health = await apiGet<ApiHealthResponse>('/system/health', {
             skipAuth: true,
             cache: 'no-store',
         });
+        if (health.status === STARTUP_FAILED_STATUS) {
+            return 'failed';
+        }
+
         if (health.status !== 'Healthy') {
-            return false;
+            return 'waiting';
         }
 
         if (baselineStartedAt === null) {
-            return true;
+            return 'restarted';
         }
 
         const startedAt = await probeStartedAt();
-        return startedAt !== null && startedAt !== baselineStartedAt;
+        return startedAt !== null && startedAt !== baselineStartedAt ? 'restarted' : 'waiting';
     } catch {
-        return false;
+        return 'waiting';
     }
 }
 
@@ -56,12 +65,25 @@ export function useHostRestart() {
     const [error, setError] = useState<string | null>(null);
 
     const baselineStartedAt = useRef<string | null>(null);
+    const reconnectDeadline = useRef<number>(0);
 
     const checkRecovered = useCallback(() => {
-        void probeRestartedHost(baselineStartedAt.current).then((restarted) => {
-            if (restarted) {
+        void probeRestartedHost(baselineStartedAt.current).then((outcome) => {
+            if (outcome === 'restarted') {
                 setError(null);
                 setPhase('recovered');
+                return;
+            }
+
+            if (outcome === 'failed') {
+                setError('Magpie could not start. Check the host log for the cause.');
+                setPhase('error');
+                return;
+            }
+
+            if (Date.now() > reconnectDeadline.current) {
+                setError('Magpie did not come back online. Read the host log.');
+                setPhase('error');
             }
         });
     }, []);
@@ -101,6 +123,7 @@ export function useHostRestart() {
             return;
         }
 
+        reconnectDeadline.current = Date.now() + RECONNECT_TIMEOUT_MS;
         setPhase('reconnecting');
     }, [systemInfoQuery.data?.startedAt]);
 
@@ -132,7 +155,6 @@ export function useHostRestart() {
     return {
         capabilityLoading: systemInfoQuery.isLoading,
         canRestart,
-        unavailableReason: null,
         phase,
         error,
         openConfirm,

@@ -3,7 +3,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
     calculateHealthCounts,
     mapDownloadState,
-    calculateDownloadCounts,
     mapDownloadStatusCounts,
     mapActiveDownloads,
     mapJobStatus,
@@ -239,24 +238,11 @@ describe('mapDownloadState', () => {
     });
 });
 
-describe('calculateDownloadCounts', () => {
-    it('returns all zeros for empty array', () => {
-        expect(calculateDownloadCounts([])).toEqual({ downloading: 0, queued: 0, paused: 0, stalled: 0 });
-    });
-
-    it('counts download states correctly', () => {
-        const downloads = [
-            makeDownload({ id: 'd1', status: 'Downloading' }),
-            makeDownload({ id: 'd2', status: 'Grabbed' }),
-            makeDownload({ id: 'd3', status: 'Queued' }),
-            makeDownload({ id: 'd4', status: 'Stalled' }),
-            makeDownload({ id: 'd5', status: 'Paused' }),
-        ];
-        expect(calculateDownloadCounts(downloads)).toEqual({ downloading: 1, queued: 2, paused: 1, stalled: 1 });
-    });
-});
-
 describe('mapDownloadStatusCounts', () => {
+    it('returns zero counts when no statuses are present', () => {
+        expect(mapDownloadStatusCounts({})).toEqual({ downloading: 0, queued: 0, paused: 0, stalled: 0 });
+    });
+
     it('maps whole-queue status totals to dashboard states', () => {
         expect(
             mapDownloadStatusCounts({
@@ -597,6 +583,129 @@ describe('mapUpcomingContent', () => {
 
     it('keeps an item dated exactly today', () => {
         const result = mapUpcomingContent([withPublishDate('2025-06-01')]);
+        expect(result).toHaveLength(1);
+    });
+});
+
+describe('mapUpcomingContent across a local day boundary', () => {
+    beforeEach(() => {
+        vi.stubEnv('TZ', 'America/Los_Angeles');
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2025-06-02T03:00:00Z'));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+    });
+
+    it('keeps an item dated the current local day when UTC has already rolled over', () => {
+        const result = mapUpcomingContent([
+            makeContentItemWithMetadata({
+                metadataContainer: { id: 'mc-1', contributions: [{ ordinal: 0, publishDate: '2025-06-01' }] },
+            }),
+        ]);
+
+        expect(result).toHaveLength(1);
+        expect(result[0].date).toBe('2025-06-01');
+    });
+
+    it('drops an item dated the previous local day when UTC has already rolled over', () => {
+        const result = mapUpcomingContent([
+            makeContentItemWithMetadata({
+                metadataContainer: { id: 'mc-1', contributions: [{ ordinal: 0, publishDate: '2025-05-31' }] },
+            }),
+        ]);
+
+        expect(result).toEqual([]);
+    });
+
+    it('keeps an item whose offsetless midnight publish date is the current local day', () => {
+        const result = mapUpcomingContent([
+            makeContentItemWithMetadata({
+                metadataContainer: {
+                    id: 'mc-1',
+                    contributions: [{ ordinal: 0, publishDate: '2025-06-01T00:00:00.0000000' }],
+                },
+            }),
+        ]);
+
+        expect(result).toHaveLength(1);
+    });
+
+    it('drops an item whose zoned publish timestamp falls on the previous local day', () => {
+        const result = mapUpcomingContent([
+            makeContentItemWithMetadata({
+                metadataContainer: {
+                    id: 'mc-1',
+                    contributions: [{ ordinal: 0, publishDate: '2025-06-01T02:00:00Z' }],
+                },
+            }),
+        ]);
+
+        expect(result).toEqual([]);
+    });
+});
+
+describe('mapUpcomingContent east of UTC', () => {
+    beforeEach(() => {
+        vi.stubEnv('TZ', 'Asia/Tokyo');
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2025-06-01T01:00:00Z'));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+    });
+
+    it('keeps an item whose offsetless midnight publish date is the current local day', () => {
+        const result = mapUpcomingContent([
+            makeContentItemWithMetadata({
+                metadataContainer: {
+                    id: 'mc-1',
+                    contributions: [{ ordinal: 0, publishDate: '2025-06-01T00:00:00.0000000' }],
+                },
+            }),
+        ]);
+
+        expect(result).toHaveLength(1);
+        expect(result[0].date).toBe('2025-06-01T00:00:00.0000000');
+    });
+
+    it('drops an item whose offsetless midnight publish date is the previous local day', () => {
+        const result = mapUpcomingContent([
+            makeContentItemWithMetadata({
+                metadataContainer: {
+                    id: 'mc-1',
+                    contributions: [{ ordinal: 0, publishDate: '2025-05-31T00:00:00.0000000' }],
+                },
+            }),
+        ]);
+
+        expect(result).toEqual([]);
+    });
+
+    it('keeps an item whose zoned publish timestamp falls on the next local day', () => {
+        const result = mapUpcomingContent([
+            makeContentItemWithMetadata({
+                metadataContainer: {
+                    id: 'mc-1',
+                    contributions: [{ ordinal: 0, publishDate: '2025-06-01T23:00:00Z' }],
+                },
+            }),
+        ]);
+
+        expect(result).toHaveLength(1);
+    });
+
+    it('keeps an item dated the current local day as a bare date', () => {
+        const result = mapUpcomingContent([
+            makeContentItemWithMetadata({
+                metadataContainer: { id: 'mc-1', contributions: [{ ordinal: 0, publishDate: '2025-06-01' }] },
+            }),
+        ]);
+
         expect(result).toHaveLength(1);
     });
 });

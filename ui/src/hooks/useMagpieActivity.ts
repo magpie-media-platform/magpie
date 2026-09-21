@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { skipToken, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 
 import { apiGet, buildUrl } from '@/lib/api';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
@@ -24,6 +24,7 @@ export interface MagpieActivityEntry {
     entityId?: string | null;
     entityType?: string | null;
     userId?: string | null;
+    jobExecutionId?: string | null;
 }
 
 interface MagpieActivityResponse {
@@ -33,6 +34,7 @@ interface MagpieActivityResponse {
     capped: boolean;
     page: number;
     pageSize: number;
+    tree?: JobExecutionTreeNode | null;
 }
 
 interface MagpieActivityQueryParams {
@@ -47,10 +49,13 @@ interface MagpieActivityQueryParams {
     pageSize?: number;
 }
 
+const AUDIT_PAGE_SIZE = 100;
+
 const magpieActivityQueryKeys = {
     forContent: (contentId: string, params?: MagpieActivityQueryParams) =>
         ['magpie-activity', 'content', contentId, params ?? {}] as const,
     forExecutionTree: (executionId: string) => ['magpie-activity', 'execution-tree', executionId] as const,
+    forExecutionAudits: (executionId: string) => ['magpie-activity', 'execution-audits', executionId] as const,
 };
 
 const ACTIVITY_APPEND_EVENTS = [
@@ -65,7 +70,7 @@ const ACTIVITY_APPEND_EVENTS = [
     'job.execution.cancelled',
 ] as const;
 
-type JobExecutionTreeNode = {
+export type JobExecutionTreeNode = {
     id: string;
     correlationId?: string | null;
     jobType: string;
@@ -79,6 +84,7 @@ type JobExecutionTreeNode = {
 type JobExecutionTree = {
     root: JobExecutionTreeNode | null;
     totalCount: number;
+    truncated?: boolean;
 };
 
 function toMagpieActivityResponse(page: PagedList<MagpieActivityEntry>): MagpieActivityResponse {
@@ -139,9 +145,10 @@ function toExecutionTreeMagpieActivityResponse(tree: JobExecutionTree): MagpieAc
         entries,
         correlationIds: entries.flatMap((entry) => (entry.correlationId ? [entry.correlationId] : [])),
         totalCount: tree.totalCount,
-        capped: false,
+        capped: tree.truncated ?? false,
         page: 1,
         pageSize: entries.length,
+        tree: tree.root,
     };
 }
 
@@ -178,6 +185,66 @@ export function useContentMagpieActivity(contentId: string | null | undefined, p
         isLoading: query.isLoading,
         error: queryErrorOrNull(query),
         refetch: query.refetch,
+    };
+}
+
+async function fetchJobExecutionAudits(
+    executionId: string,
+    pageNumber: number,
+): Promise<PagedList<MagpieActivityEntry>> {
+    const url = buildUrl('/audit-history', {
+        jobExecutionId: executionId,
+        kind: MagpieActivityEntryKind.AuditRecord,
+        pageNumber,
+        pageSize: AUDIT_PAGE_SIZE,
+    });
+    const page = await apiGet<PagedList<MagpieActivityEntry>>(url);
+    return page ?? { items: [], pageNumber, pageSize: AUDIT_PAGE_SIZE, totalItems: 0 };
+}
+
+export function useJobExecutionAudits(executionId: string | null | undefined) {
+    const query = useInfiniteQuery({
+        queryKey: magpieActivityQueryKeys.forExecutionAudits(executionId ?? ''),
+        queryFn: executionId ? ({ pageParam }) => fetchJobExecutionAudits(executionId, pageParam) : skipToken,
+        initialPageParam: 1,
+        maxPages: 5,
+        getPreviousPageParam: (_firstPage, _pages, firstPageParam) =>
+            firstPageParam > 1 ? firstPageParam - 1 : undefined,
+        getNextPageParam: (lastPage, _pages, lastPageParam) =>
+            lastPage.items.length > 0 &&
+            (lastPageParam - 1) * AUDIT_PAGE_SIZE + lastPage.items.length < lastPage.totalItems
+                ? lastPageParam + 1
+                : undefined,
+    });
+
+    useInvalidateQueriesOnEvents(
+        executionId ? ['audit.record.created'] : [],
+        [magpieActivityQueryKeys.forExecutionAudits(executionId ?? '')],
+        {
+            debounceMs: 200,
+            exact: true,
+            maxWaitMs: 800,
+            owner: 'activity:execution-audits',
+        },
+    );
+    const lastPage = query.data?.pages[query.data.pages.length - 1];
+    const lastPageNumber = Number(query.data?.pageParams[query.data.pageParams.length - 1] ?? 1);
+
+    return {
+        audits: query.data?.pages.flatMap((page) => page.items) ?? null,
+        totalCount: query.data?.pages[0]?.totalItems ?? 0,
+        remainingCount: Math.max(
+            0,
+            (lastPage?.totalItems ?? 0) - (lastPageNumber - 1) * AUDIT_PAGE_SIZE - (lastPage?.items.length ?? 0),
+        ),
+        hasPrevious: query.hasPreviousPage,
+        loadPrevious: query.fetchPreviousPage,
+        isLoadingPrevious: query.isFetchingPreviousPage,
+        hasMore: query.hasNextPage,
+        loadMore: query.fetchNextPage,
+        isLoadingMore: query.isFetchingNextPage,
+        isLoading: query.isLoading,
+        error: queryErrorOrNull(query),
     };
 }
 

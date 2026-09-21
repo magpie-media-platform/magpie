@@ -10,7 +10,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
-using Magpie.Core.Jobs.Downloads;
+using Magpie.Core.Jobs;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -38,6 +38,7 @@ internal sealed class ReleaseService(
     IReleaseScopeRepository releaseScopeRepository,
     IDownloadScopeRepository downloadScopeRepository,
     IDownloadRepository downloadRepository,
+    ReleaseBlockList releaseBlockList,
     IDownloadClientRepository downloadClientRepository,
     IEnumerable<IDownloadClientIntegration> downloadClientIntegrations,
     IDownloadService downloadService,
@@ -55,8 +56,6 @@ internal sealed class ReleaseService(
 
     private static readonly TimeSpan DownloadBackoffCap = TimeSpan.FromMinutes(30);
 
-    private static readonly TimeSpan LeafImportSuppressionWindow = TimeSpan.FromHours(12);
-
     private static readonly DownloadFailureReason[] NonAttemptFailureReasons =
     [
         DownloadFailureReason.AmbiguousDispatchFailure
@@ -71,8 +70,67 @@ internal sealed class ReleaseService(
     private enum DownloadDecision
     {
         Proceed,
-        Skip,
         RetryAfter
+    }
+
+    private static bool RefersToSameRelease(Release left, Release right)
+    {
+        var leftKeys = NormalizedIdentityKeys(left);
+        var rightKeys = NormalizedIdentityKeys(right);
+        var leftImmutableKeys = ImmutableIdentityKeys(leftKeys);
+        var rightImmutableKeys = ImmutableIdentityKeys(rightKeys);
+        if (leftImmutableKeys.Count > 0 && rightImmutableKeys.Count > 0)
+        {
+            return leftImmutableKeys.Overlaps(rightImmutableKeys);
+        }
+
+        return leftKeys.Overlaps(rightKeys) || SourceIdentities(left).Overlaps(SourceIdentities(right));
+    }
+
+    private static HashSet<(string Authority, string Value)> NormalizedIdentityKeys(Release release) =>
+        release.IdentityKeys
+            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
+            .Select(key => (
+                key.Authority.Trim().ToLowerInvariant(),
+                key.Value.Trim().ToLowerInvariant()))
+            .ToHashSet();
+
+    private static HashSet<(string Authority, string Value)> ImmutableIdentityKeys(
+        HashSet<(string Authority, string Value)> keys) =>
+        keys.Where(key => key.Authority != "fallback" &&
+            !key.Authority.StartsWith("indexer:", StringComparison.Ordinal)).ToHashSet();
+
+    private static HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> SourceIdentities(Release release)
+    {
+        var identities = new HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)>();
+        foreach (var source in release.Sources)
+        {
+            AddSourceIdentity(identities, source.IndexerId, source.ExternalId, source.InfoUrl);
+        }
+
+        AddSourceIdentity(identities, release.IndexerId, release.ExternalId, release.InfoUrl);
+        return identities;
+    }
+
+    private static void AddSourceIdentity(
+        HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> identities,
+        Guid? indexerId,
+        string? externalId,
+        Uri? infoUrl)
+    {
+        if (indexerId is not { } value)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(externalId))
+        {
+            identities.Add((value, externalId, null));
+        }
+        else if (infoUrl is not null)
+        {
+            identities.Add((value, null, infoUrl));
+        }
     }
 
     private static ContentEventImpact? GrabScopeImpact(IReadOnlyCollection<Guid> contentScopeIds)
@@ -90,8 +148,6 @@ internal sealed class ReleaseService(
 
     private static IReadOnlyList<DownloadClient> FilterEligibleClients(IEnumerable<DownloadClient> clients)
     {
-        ArgumentNullException.ThrowIfNull(clients);
-
         return [.. clients
             .Where(c => c.Enabled && c.Status != IntegrationHealthStatus.Unhealthy)
             .OrderBy(c => c.Priority)
@@ -320,7 +376,7 @@ internal sealed class ReleaseService(
             EnsureViewSource(release);
             var matchingGroupIndexes = Enumerable.Range(0, groups.Count)
                 .Where(index => groups[index].Observations.Any(existing =>
-                    existing.RefersToSameRelease(release)))
+                    RefersToSameRelease(existing, release)))
                 .ToArray();
             if (matchingGroupIndexes.Length == 0)
             {
@@ -422,24 +478,10 @@ internal sealed class ReleaseService(
             cancellationToken)
             .ConfigureAwait(false);
 
-        var releases = new List<Release>();
-        var releasesPageNumber = 1;
-        while (true)
-        {
-            var page = await releaseRepository.QueryAsync(
-                new ReleaseQuery { ContentHierarchyItemIds = contentHierarchyItemIds },
-                new() { PageNumber = releasesPageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            releases.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            releasesPageNumber++;
-        }
+        var releases = await releaseRepository.QueryAllAsync(
+            new ReleaseQuery { ContentHierarchyItemIds = contentHierarchyItemIds },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         if (releases.Count == 0)
         {
@@ -510,7 +552,7 @@ internal sealed class ReleaseService(
                     logger.LogDebug(
                         ex,
                         "The evaluation service failed to score release {ReleaseId} against tier list " +
-                        "{QualityTierListId}. The row has no score",
+                        "{QualityTierListId}",
                         release.Id,
                         evaluationContext.QualityTierListId);
                 }
@@ -619,31 +661,6 @@ internal sealed class ReleaseService(
         return selection;
     }
 
-    private static bool IsSameGroup(string? left, string? right)
-        => !string.IsNullOrWhiteSpace(left) &&
-            !string.IsNullOrWhiteSpace(right) &&
-            string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsAcceptableUpgradeOverCurrentFile(
-        Release release,
-        ReleaseAssessment score,
-        ReleaseEvaluationContext context)
-    {
-        if (context.CurrentFileQualityRank is not { } floor)
-        {
-            return true;
-        }
-
-        var isHigherTier = score.MatchedRankOrdinal is { } ordinal && ordinal < floor;
-        var parsedTitle = new ParsedReleaseTitle(release.Title);
-        var isSameTierProperUpgrade = score.MatchedRankOrdinal == floor &&
-            context.CurrentFileRevision is { } importedRevision &&
-            parsedTitle.Revision.Version > importedRevision.Version &&
-            IsSameGroup(parsedTitle.Group, context.CurrentFileGroup);
-
-        return isHigherTier || isSameTierProperUpgrade;
-    }
-
     private async Task<string> MissingQualityTierListMessageAsync(
         ContentHierarchyItem item,
         CancellationToken cancellationToken)
@@ -653,27 +670,7 @@ internal sealed class ReleaseService(
             .ConfigureAwait(false);
         var rootFolderName = rootFolder?.Name ?? item.EffectiveRootFolderId.ToString();
 
-        return $"Root folder '{rootFolderName}' has no quality tier list configured for level '{item.Level}'. " +
-            "Configure a default quality tier list for this level in the root folder settings.";
-    }
-
-    private int EffectiveQualityRankFor(ReleaseAssessment result, ReleaseEvaluationContext context)
-    {
-        var actual = result.MatchedRankOrdinal ?? int.MaxValue;
-        var cutoffs = context.QualityTierList?.QualityTierRanks
-            .Where(rank => rank.IsCutoff)
-            .Select(rank => rank.Ordinal)
-            .ToList() ?? [];
-        var rankOrdinal = actual;
-        if (cutoffs.Count > 0)
-        {
-            var ceiling = context.CurrentFileQualityRank is { } current
-                ? cutoffs.Where(cutoff => cutoff < current).DefaultIfEmpty(cutoffs.Min()).Max()
-                : cutoffs.Max();
-            rankOrdinal = Math.Max(actual, ceiling);
-        }
-
-        return rankOrdinal;
+        return $"Root folder '{rootFolderName}' has no quality tier list configured for level '{item.Level}'.";
     }
 
     private async Task<Download?> AcquireAsync(
@@ -724,7 +721,8 @@ internal sealed class ReleaseService(
         if (enabledClients.Count == 0)
         {
             logger.LogDebug(
-                "No enabled download client is configured. The release service did not grab release {ReleaseId}",
+                "The release service did not grab release {ReleaseId} because no enabled download client " +
+                "is configured",
                 release.Id);
             progress?.Report(1, "The acquisition stopped because no enabled download client is configured.");
             return null;
@@ -747,7 +745,8 @@ internal sealed class ReleaseService(
         if (eligible.Count == 0)
         {
             logger.LogDebug(
-                "The release service did not grab release {ReleaseId}. No enabled download client supports {Protocol}",
+                "The release service did not grab release {ReleaseId} because no enabled download client " +
+                "supports {Protocol}",
                 release.Id,
                 release.Protocol);
             progress?.Report(
@@ -781,30 +780,16 @@ internal sealed class ReleaseService(
             var previousAttempt = await GetPreviousAttemptAsync(release.Id, downloadClient.Id, cancellationToken)
                 .ConfigureAwait(false);
             var decision = EvaluateDownloadBackoff(previousAttempt, downloadClient, timeProvider);
-            switch (decision.Kind)
+            if (decision.Kind == DownloadDecision.RetryAfter)
             {
-                case DownloadDecision.Skip:
-                    logger.LogInformation(
-                        "The download policy skipped release {ReleaseId} on client {DownloadClientId}. " +
-                        "Reason: {Reason}",
-                        release.Id,
-                        downloadClient.Id,
-                        decision.Reason);
-                    progress?.Report(1, "The download policy rejected the release.");
-                    var existing = await GetOrThrowExistingDownloadAsync(release.Id, cancellationToken)
-                        .ConfigureAwait(false);
-                    await QueueDownloadRefreshIfNeededAsync(existing, cancellationToken).ConfigureAwait(false);
-                    return existing;
-
-                case DownloadDecision.RetryAfter:
-                    logger.LogInformation(
-                        "The download policy deferred release {ReleaseId} on client {DownloadClientId} by " +
-                        "{RetryAfter}. Reason: {Reason}",
-                        release.Id,
-                        downloadClient.Id,
-                        decision.RetryAfter,
-                        decision.Reason);
-                    throw new InvalidOperationException(decision.Reason ?? "Deferred by download policy.");
+                logger.LogInformation(
+                    "The download policy deferred release {ReleaseId} on client {DownloadClientId} by " +
+                    "{RetryAfter} because {Reason}",
+                    release.Id,
+                    downloadClient.Id,
+                    decision.RetryAfter,
+                    decision.Reason);
+                throw new InvalidOperationException(decision.Reason ?? "Deferred by download policy.");
             }
 
             Download? acquiredDownload = null;
@@ -825,7 +810,7 @@ internal sealed class ReleaseService(
                     taintedClientIds.Add(downloadClient.Id);
                     logger.LogDebug(
                         "The download service suppressed the grab of release {ReleaseId} on client " +
-                        "{DownloadClientId} ({DownloadClientName}). Reason: {Reason}",
+                        "{DownloadClientId} ({DownloadClientName}) because {Reason}",
                         release.Id,
                         downloadClient.Id,
                         downloadClient.Name,
@@ -875,9 +860,8 @@ internal sealed class ReleaseService(
                 ambiguousDispatch = true;
                 logger.LogError(
                     ex,
-                    "The grab of release {ReleaseId} failed on client {DownloadClientId} ({DownloadClientName}) " +
-
-                    "after dispatch. The release service will not retry. A retry can write a duplicate download",
+                    "The grab of release {ReleaseId} failed on client {DownloadClientId} " +
+                    "({DownloadClientName}) after dispatch",
                     release.Id,
                     downloadClient.Id,
                     downloadClient.Name);
@@ -893,8 +877,8 @@ internal sealed class ReleaseService(
         if (ambiguousDispatch)
         {
             var ambiguousReason =
-                $"Grab dispatched to a client then threw for release {release.Id}; outcome ambiguous. " +
-                (lastFailure?.Message ?? string.Empty);
+                $"The grab of release {release.Id} failed after dispatch to a client; the outcome is " +
+                "unknown. " + (lastFailure?.Message ?? string.Empty);
             await RecordFailedDownloadAsync(
                 lastAttemptRelease,
                 lastSourceId,
@@ -918,9 +902,8 @@ internal sealed class ReleaseService(
         if (lastFailure is null && taintedClientCount > 0)
         {
             logger.LogInformation(
-                "The release service suppressed the grab of release {ReleaseId}. All {TaintedCount} eligible " +
-                "clients rejected an active Failed taint. The service wrote no download row. " +
-                "A retry follows the cooldown",
+                "The release service suppressed the grab of release {ReleaseId} because all {TaintedCount} " +
+                "eligible clients have an active Failed taint",
                 release.Id,
                 taintedClientCount);
             await TryWriteSuppressedAuditAsync(release, taintedClientCount, request.UserId, cancellationToken)
@@ -929,8 +912,7 @@ internal sealed class ReleaseService(
                 ReleaseEventBuilder.BuildReleaseGrabRejectedEvent(
                     release.Id,
                     release.IndexerId ?? Guid.Empty,
-                    $"All {taintedClientCount} eligible download client(s) refused via the taint gate " +
-                    "(prior Failed grab still active).",
+                    $"All {taintedClientCount} eligible download clients have an active Failed taint.",
                     GrabScopeImpact(downloadScopeNodeIds)),
                 cancellationToken).ConfigureAwait(false);
             progress?.Report(1, "The acquisition stopped because a prior failed grab marked the release as unusable.");
@@ -938,7 +920,7 @@ internal sealed class ReleaseService(
         }
 
         var allFailedReason = lastFailure?.Message is { Length: > 0 } message
-            ? $"All eligible download clients rejected the release. Last error: {message}"
+            ? $"All eligible download clients rejected the release: {message}"
             : "All eligible download clients rejected the release.";
         await RecordFailedDownloadAsync(
             lastAttemptRelease,
@@ -973,7 +955,7 @@ internal sealed class ReleaseService(
             await jobManager.ExecuteAsync(
                 new JobEnqueueRequest
                 {
-                    JobType = DownloadRefreshJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.DownloadRefresh,
                     Mode = JobExecutionMode.Queue,
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -996,26 +978,14 @@ internal sealed class ReleaseService(
         Guid? grabTargetContentHierarchyItemId,
         CancellationToken cancellationToken)
     {
-        var releaseScopeNodeIds = new List<Guid>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await releaseScopeRepository.QueryAsync(
-                new ReleaseScopeQuery { ReleaseId = releaseId },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            releaseScopeNodeIds.AddRange(pageItems.Select(scope => scope.ContentHierarchyItemId));
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        releaseScopeNodeIds = [.. releaseScopeNodeIds.Distinct()];
+        var releaseScopes = await releaseScopeRepository.QueryAllAsync(
+            new ReleaseScopeQuery { ReleaseId = releaseId },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+        var releaseScopeNodeIds = releaseScopes
+            .Select(scope => scope.ContentHierarchyItemId)
+            .Distinct()
+            .ToList();
 
         var needyNodeIds = await ListNodeIdsNeedingAcquisitionAsync(releaseScopeNodeIds, cancellationToken)
             .ConfigureAwait(false);
@@ -1047,25 +1017,30 @@ internal sealed class ReleaseService(
             return [];
         }
 
-        var page = await contentHierarchyItemRepository.QueryAsync(
-            new ContentHierarchyItemCriteria
-            {
-                Ids = nodeIds,
-                EffectiveMonitoring = true,
-                Fulfillment = new()
+        var result = new HashSet<Guid>();
+        foreach (var batch in nodeIds.Chunk(500))
+        {
+            var page = await contentHierarchyItemRepository.QueryAsync(
+                new ContentHierarchyItemCriteria
                 {
-                    And = [new()
+                    Ids = batch,
+                    EffectiveMonitoring = true,
+                    Fulfillment = new()
                     {
-                        Operator = CriteriaValueOperator.In,
-                        Values = [FulfillmentStatus.Missing, FulfillmentStatus.Upgradable],
-                    }],
+                        And = [new()
+                        {
+                            Operator = CriteriaValueOperator.In,
+                            Values = [FulfillmentStatus.Missing, FulfillmentStatus.Upgradable],
+                        }],
+                    },
                 },
-            },
-            new() { PageNumber = 1, PageSize = Math.Max(1, nodeIds.Count) },
-            sort: null,
-            cancellationToken).ConfigureAwait(false);
+                new() { PageNumber = 1, PageSize = batch.Length },
+                sort: null,
+                cancellationToken).ConfigureAwait(false);
+            result.UnionWith(page.Items.Select(item => item.Id));
+        }
 
-        return [.. page.Items.Select(item => item.Id)];
+        return result;
     }
 
     private async Task EnsureDownloadScopeAsync(
@@ -1100,26 +1075,14 @@ internal sealed class ReleaseService(
 
     private async Task<string?> ResolveContentTypeAsync(Release release, CancellationToken cancellationToken)
     {
-        var scopeNodeIds = new List<Guid>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await releaseScopeRepository.QueryAsync(
-                new ReleaseScopeQuery { ReleaseId = release.Id },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            scopeNodeIds.AddRange(pageItems.Select(scope => scope.ContentHierarchyItemId));
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        scopeNodeIds = [.. scopeNodeIds.Distinct()];
+        var releaseScopes = await releaseScopeRepository.QueryAllAsync(
+            new ReleaseScopeQuery { ReleaseId = release.Id },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+        var scopeNodeIds = releaseScopes
+            .Select(scope => scope.ContentHierarchyItemId)
+            .Distinct()
+            .ToList();
         foreach (var scopeNodeId in scopeNodeIds)
         {
             var node = await contentHierarchyItemRepository
@@ -1139,24 +1102,10 @@ internal sealed class ReleaseService(
         Guid downloadClientId,
         CancellationToken cancellationToken)
     {
-        var downloads = new List<Download>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await downloadRepository.QueryAsync(
-                new DownloadQuery { ReleaseId = releaseId, DownloadClientId = downloadClientId },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            downloads.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var downloads = await downloadRepository.QueryAllAsync(
+            new DownloadQuery { ReleaseId = releaseId, DownloadClientId = downloadClientId },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         var rows = downloads
             .Where(d => !(d.FailureReason is { } reason && NonAttemptFailureReasons.Contains(reason)))
@@ -1172,60 +1121,12 @@ internal sealed class ReleaseService(
         return new DownloadAttempt(prior.Id, prior.Status, rows.Count, prior.ModifiedAt ?? prior.CreatedAt);
     }
 
-    private async Task<Download> GetOrThrowExistingDownloadAsync(Guid releaseId, CancellationToken cancellationToken)
-    {
-        var downloads = new List<Download>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await downloadRepository.QueryAsync(
-                new DownloadQuery { ReleaseId = releaseId },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            downloads.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        var existing = downloads.FirstOrDefault(d =>
-            d.Status is not DownloadStatus.Failed
-                and not DownloadStatus.Imported)
-            ?? downloads.FirstOrDefault();
-        if (existing is null)
-        {
-            throw new InvalidOperationException(
-                $"Download policy returned Skip for release {releaseId} but no prior download row exists.");
-        }
-
-        return existing;
-    }
-
     private async Task<Download?> GetCurrentDownloadAsync(Guid releaseId, CancellationToken cancellationToken)
     {
-        var downloads = new List<Download>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await downloadRepository.QueryAsync(
-                new DownloadQuery { ReleaseId = releaseId },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            downloads.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var downloads = await downloadRepository.QueryAllAsync(
+            new DownloadQuery { ReleaseId = releaseId },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         return downloads.FirstOrDefault(d => IsActiveDownloadStatus(d.Status));
     }
@@ -1249,24 +1150,10 @@ internal sealed class ReleaseService(
                 : $"{SuspectLastResortNote} {downloadInfo.StatusReason}"
             : downloadInfo.StatusReason;
 
-        var existingDownloads = new List<Download>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await downloadRepository.QueryAsync(
-                new DownloadQuery { ReleaseId = release.Id },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            existingDownloads.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var existingDownloads = await downloadRepository.QueryAllAsync(
+            new DownloadQuery { ReleaseId = release.Id },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         var existing = existingDownloads.FirstOrDefault(d =>
             d.Status is not DownloadStatus.Failed
@@ -1387,8 +1274,7 @@ internal sealed class ReleaseService(
                     Operation = "GrabSuppressed",
                     EntityType = nameof(Release),
                     EntityId = release.Id.ToString(),
-                    Detail = $"All {taintedClientCount} eligible client(s) refused via the taint gate " +
-                        "(prior Failed row still active); no download row written.",
+                    Detail = $"All {taintedClientCount} eligible clients have an active Failed taint.",
                     Timestamp = timeProvider.GetUtcNow().UtcDateTime,
                     UserId = userId
                 },
@@ -1411,26 +1297,12 @@ internal sealed class ReleaseService(
         Guid contentHierarchyItemId,
         CancellationToken cancellationToken)
     {
-        var descendantIds = new List<Guid>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new ContentHierarchyItemCriteria { AncestorId = contentHierarchyItemId },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            descendantIds.AddRange(pageItems.Select(item => item.Id));
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
+        var descendants = await contentHierarchyItemRepository.QueryAllAsync(
+            new ContentHierarchyItemCriteria { AncestorId = contentHierarchyItemId },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
-            pageNumber++;
-        }
-
-        return [.. descendantIds.Prepend(contentHierarchyItemId).Distinct()];
+        return [.. descendants.Select(item => item.Id).Prepend(contentHierarchyItemId).Distinct()];
     }
 
     private async Task<Dictionary<Guid, Download>> LoadDownloadsByReleaseIdAsync(
@@ -1441,27 +1313,14 @@ internal sealed class ReleaseService(
         var downloads = new List<Download>();
         if (contentHierarchyItemIds.Count > 0)
         {
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await downloadRepository.QueryAsync(
-                    new DownloadQuery { ContentHierarchyItemIds = contentHierarchyItemIds },
-                    new() { PageNumber = pageNumber, PageSize = PageSize },
-                    new()
-                    {
-                        PropertyName = nameof(Download.CreatedAt),
-                        Direction = SortDirection.Descending
-                    },
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                downloads.AddRange(pageItems);
-                if (pageItems.Count < PageSize)
+            downloads.AddRange(await downloadRepository.QueryAllAsync(
+                new DownloadQuery { ContentHierarchyItemIds = contentHierarchyItemIds },
+                new()
                 {
-                    break;
-                }
-
-                pageNumber++;
-            }
+                    PropertyName = nameof(Download.CreatedAt),
+                    Direction = SortDirection.Descending
+                },
+                cancellationToken).ConfigureAwait(false));
         }
 
         var downloadsByReleaseId = LatestDownloadsByReleaseId(downloads);
@@ -1473,28 +1332,14 @@ internal sealed class ReleaseService(
             .ToList();
         if (missingReleaseIds.Count > 0)
         {
-            var missingDownloads = new List<Download>();
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await downloadRepository.QueryAsync(
-                    new DownloadQuery { ReleaseIds = missingReleaseIds },
-                    new() { PageNumber = pageNumber, PageSize = PageSize },
-                    new()
-                    {
-                        PropertyName = nameof(Download.CreatedAt),
-                        Direction = SortDirection.Descending
-                    },
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                missingDownloads.AddRange(pageItems);
-                if (pageItems.Count < PageSize)
+            var missingDownloads = await downloadRepository.QueryAllAsync(
+                new DownloadQuery { ReleaseIds = missingReleaseIds },
+                new()
                 {
-                    break;
-                }
-
-                pageNumber++;
-            }
+                    PropertyName = nameof(Download.CreatedAt),
+                    Direction = SortDirection.Descending
+                },
+                cancellationToken).ConfigureAwait(false);
 
             var latestByReleaseId = LatestDownloadsByReleaseId(missingDownloads);
             foreach (var releaseId in missingReleaseIds)
@@ -1541,7 +1386,7 @@ internal sealed class ReleaseService(
             logger.LogDebug(
                 ex,
                 "The evaluation service failed to match release {ReleaseId} to content hierarchy item " +
-                "{ContentHierarchyItemId}. The row has an unknown match",
+                "{ContentHierarchyItemId}",
                 release.Id,
                 contentHierarchyItemId);
             return (null, null);
@@ -1570,26 +1415,12 @@ internal sealed class ReleaseService(
 
         var releasesById = releases.ToDictionary(release => release.Id);
 
-        var downloads = new List<Download>();
-        var downloadsPageNumber = 1;
-        while (true)
-        {
-            var page = await downloadRepository.QueryAsync(
-                new DownloadQuery { ContentItemId = candidate.ContentHierarchyItemId },
-                new() { PageNumber = downloadsPageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            downloads.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
+        var downloads = await downloadRepository.QueryAllAsync(
+            new DownloadQuery { ContentItemId = candidate.ContentHierarchyItemId },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
-            downloadsPageNumber++;
-        }
-
-        var failedReleaseIds = await ResolveBlockedReleaseIdsAsync(
+        var failedReleaseIds = await releaseBlockList.ResolveAsync(
             releases,
             candidate.ContentHierarchyItemId,
             cancellationToken)
@@ -1616,13 +1447,12 @@ internal sealed class ReleaseService(
         if (scored.Releases.Count == 0)
         {
             logger.LogInformation(
-                "Content {ContentItemId} has no acceptable release with tier list {QualityTierListId}. " +
-                "The release service evaluated {ReleaseCount} releases. {NotMatched} do not match the target. " +
-                "{NotAcceptable} do not match the tier. {NotAnUpgrade} are not an upgrade. " +
-                "{Failed} have an active Failed record",
+                "Content {ContentItemId} has no acceptable release among {ReleaseCount} evaluated with " +
+                "tier list {QualityTierListId}: {NotMatched} target mismatches, {NotAcceptable} tier " +
+                "mismatches, {NotAnUpgrade} non-upgrades, {Failed} failed",
                 candidate.ContentItemId,
-                qualityTierListId,
                 releases.Count,
+                qualityTierListId,
                 scored.NotMatched,
                 scored.NotAcceptable,
                 scored.NotAnUpgrade,
@@ -1650,7 +1480,7 @@ internal sealed class ReleaseService(
         var primaryGroups = scored.Releases
             .GroupBy(release => (
                 release.Result.MatchResult,
-                EffectiveQualityRank: EffectiveQualityRankFor(release.Result, evaluationContext)))
+                EffectiveQualityRank: releaseEvaluationService.EffectiveQualityRank(release.Result, evaluationContext)))
             .OrderByDescending(group => group.Key.MatchResult)
             .ThenBy(group => group.Key.EffectiveQualityRank);
 
@@ -1766,7 +1596,9 @@ internal sealed class ReleaseService(
                         release.Release.Title,
                         MatchResult = release.Result.MatchResult.ToString(),
                         ActualQualityRank = release.Result.MatchedRankOrdinal,
-                        EffectiveQualityRank = EffectiveQualityRankFor(release.Result, evaluationContext),
+                        EffectiveQualityRank = releaseEvaluationService.EffectiveQualityRank(
+                            release.Result,
+                            evaluationContext),
                     }),
                 }));
         }
@@ -1788,31 +1620,17 @@ internal sealed class ReleaseService(
         return ranked.First().Release;
     }
 
-    private async Task<List<Release>?> LoadStoredReleasesAsync(
+    private async Task<IReadOnlyList<Release>?> LoadStoredReleasesAsync(
         CandidateContentItem candidate,
         Guid? userId,
         Guid? correlationId,
         bool writeAudit,
         CancellationToken cancellationToken)
     {
-        var releases = new List<Release>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await releaseRepository.QueryAsync(
-                new ReleaseQuery { ContentHierarchyItemId = candidate.ContentHierarchyItemId },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            releases.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var releases = await releaseRepository.QueryAllAsync(
+            new ReleaseQuery { ContentHierarchyItemId = candidate.ContentHierarchyItemId },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         if (releases.Count != 0)
         {
@@ -1864,8 +1682,8 @@ internal sealed class ReleaseService(
                 if (inFlightMatch.MatchResult is not (ReleaseMatchResult.Identity or ReleaseMatchResult.Confident))
                 {
                     logger.LogInformation(
-                        "The auto-grab of content {ContentItemId} ignored release {InFlightReleaseId} on download " +
-                        "{DownloadId}. This release does not match",
+                        "The auto-grab of content {ContentItemId} ignored release {InFlightReleaseId} on " +
+                        "download {DownloadId} because it does not match",
                         candidate.ContentItemId,
                         inFlight.ReleaseId,
                         inFlight.Id);
@@ -1874,8 +1692,8 @@ internal sealed class ReleaseService(
             }
 
             logger.LogInformation(
-                "The auto-grab skipped content {ContentItemId}. Release {InFlightReleaseId} is already in " +
-                "flight on download {DownloadId}",
+                "The auto-grab skipped content {ContentItemId} because release {InFlightReleaseId} is " +
+                "already in flight on download {DownloadId}",
                 candidate.ContentItemId,
                 inFlight.ReleaseId,
                 inFlight.Id);
@@ -1895,64 +1713,6 @@ internal sealed class ReleaseService(
         }
 
         return true;
-    }
-
-    private async Task<HashSet<Guid>> ResolveBlockedReleaseIdsAsync(
-        IReadOnlyList<Release> releases,
-        Guid leafContentHierarchyItemId,
-        CancellationToken cancellationToken)
-    {
-        var blockedReleaseIds = new HashSet<Guid>();
-        foreach (var release in releases)
-        {
-            var taints = await downloadRepository
-                .ListFailedByReleaseIdentitiesAsync([.. release.IdentityKeys], null, cancellationToken)
-                .ConfigureAwait(false);
-            if (taints.Count > 0)
-            {
-                blockedReleaseIds.Add(release.Id);
-            }
-        }
-
-        var suppressions = await downloadRepository
-            .ListImportedByContentHierarchyItemAsync(
-                leafContentHierarchyItemId,
-                timeProvider.GetUtcNow().UtcDateTime - LeafImportSuppressionWindow,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (suppressions.Count == 0)
-        {
-            return blockedReleaseIds;
-        }
-
-        var suppressedKeys = suppressions
-            .SelectMany(download => download.ReleaseIdentityKeys)
-            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
-            .Select(key => (Authority: key.Authority.Trim(), Value: key.Value.Trim()))
-            .ToHashSet();
-        if (suppressedKeys.Count == 0)
-        {
-            return blockedReleaseIds;
-        }
-
-        foreach (var release in releases)
-        {
-            if (blockedReleaseIds.Contains(release.Id))
-            {
-                continue;
-            }
-
-            var matched = release.IdentityKeys.Any(key =>
-                !string.IsNullOrWhiteSpace(key.Authority) &&
-                !string.IsNullOrWhiteSpace(key.Value) &&
-                suppressedKeys.Contains((key.Authority.Trim(), key.Value.Trim())));
-            if (matched)
-            {
-                blockedReleaseIds.Add(release.Id);
-            }
-        }
-
-        return blockedReleaseIds;
     }
 
     private async Task<AcceptableReleaseSet?> SelectAcceptableReleasesAsync(
@@ -1978,9 +1738,9 @@ internal sealed class ReleaseService(
             if (failedReleaseIds.Contains(release.Id))
             {
                 skippedFailed++;
-                logger.LogInformation(
-                    "The auto-grab skipped release {ReleaseId} for content {ContentItemId}. A Failed record " +
-                    "is active",
+                logger.LogDebug(
+                    "The auto-grab skipped release {ReleaseId} for content {ContentItemId} because a " +
+                    "Failed record is active",
                     release.Id,
                     candidate.ContentItemId);
                 continue;
@@ -1990,9 +1750,9 @@ internal sealed class ReleaseService(
             if (assessment.MatchResult is not (ReleaseMatchResult.Identity or ReleaseMatchResult.Confident))
             {
                 skippedNotMatched++;
-                logger.LogInformation(
-                    "The auto-grab skipped release {ReleaseId} for content {ContentItemId}. The match result " +
-                    "is {MatchResult}",
+                logger.LogDebug(
+                    "The auto-grab skipped release {ReleaseId} for content {ContentItemId} with match " +
+                    "result {MatchResult}",
                     release.Id,
                     candidate.ContentItemId,
                     assessment.MatchResult);
@@ -2002,8 +1762,8 @@ internal sealed class ReleaseService(
             if (assessment.IsAcceptable is null)
             {
                 logger.LogInformation(
-                    "The release service stopped the auto-grab of content {ContentItemId}. No quality " +
-                    "tier list exists for {ContentHierarchyItemId}",
+                    "The release service stopped the auto-grab of content {ContentItemId} because no " +
+                    "quality tier list exists for {ContentHierarchyItemId}",
                     candidate.ContentItemId,
                     candidate.ContentHierarchyItemId);
                 if (writeAudit)
@@ -2029,7 +1789,7 @@ internal sealed class ReleaseService(
             }
 
             if (candidate.Fulfillment == FulfillmentStatus.Upgradable &&
-                !IsAcceptableUpgradeOverCurrentFile(release, assessment, evaluationContext))
+                !releaseEvaluationService.IsAcceptableUpgradeOverCurrentFile(assessment, release, evaluationContext))
             {
                 skippedNotAnUpgrade++;
                 continue;

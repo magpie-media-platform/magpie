@@ -1,6 +1,5 @@
 using System;
 
-using Magpie.Extensions.Movies.Subjects;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Extensions;
 
@@ -31,7 +30,5 @@ public sealed class MoviesExtension : IExtensionLifecycle
     public void RegisterServices(IServiceCollection services)
     {
         services.AddSingleton<IContentTypeDefinitionProvider, MoviesContentTypeDefinitionProvider>();
-        services.AddSingleton<ISubjectKindDefinitionProvider, PersonSubjectKindDefinitionProvider>();
-        services.AddSingleton<ISubjectKindDefinitionProvider, StudioSubjectKindDefinitionProvider>();
     }
 }

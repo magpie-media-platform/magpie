@@ -9,9 +9,7 @@ import { useAuth, Role, RoleName } from '@/auth';
 import './ForbiddenPage.css';
 
 interface ForbiddenLocationState {
-    from?: { pathname: string };
     requiredRole?: string;
-    requiredPermission?: string;
 }
 
 const roleAccessDescription: Record<Role, string> = {
@@ -28,13 +26,11 @@ export function ForbiddenPage() {
     const { user } = useAuth();
 
     const state = (location.state as ForbiddenLocationState) || {};
-    const { requiredRole, requiredPermission } = state;
+    const { requiredRole } = state;
 
     let description = 'You do not have permission to access this page.';
     if (requiredRole) {
         description = `This page requires ${requiredRole} role or higher.`;
-    } else if (requiredPermission) {
-        description = `This page requires the "${requiredPermission}" permission.`;
     }
 
     const handleGoBack = () => {

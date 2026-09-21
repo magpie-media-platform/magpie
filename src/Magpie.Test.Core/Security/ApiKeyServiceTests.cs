@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -11,6 +12,8 @@ using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Extensions.Time.Testing;
+
 using Moq;
 
 using NUnit.Framework;
@@ -18,7 +21,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Security;
 
 [TestFixture]
-public class ApiKeyServiceTests
+public sealed class ApiKeyServiceTests
 {
     private static readonly Guid OwnerUserId = new("55555555-5555-5555-5555-555555555555");
     private static readonly Guid OtherUserId = new("22222222-2222-2222-2222-222222222222");
@@ -27,6 +30,7 @@ public class ApiKeyServiceTests
     private static readonly Guid SystemUserId = new("11111111-1111-1111-1111-111111111111");
     private static readonly Guid EnabledUserId = new("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     private static readonly Guid DisabledUserId = new("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    private static readonly DateTime Now = new(2026, 8, 19, 12, 0, 0, DateTimeKind.Utc);
 
     private Mock<IApiKeyRepository> _apiKeys = null!;
     private Mock<IPasswordHasher> _passwordHasher = null!;
@@ -100,7 +104,11 @@ public class ApiKeyServiceTests
                 Role = Role.Viewer
             });
 
-        _subject = new ApiKeyService(_apiKeys.Object, _passwordHasher.Object, _users.Object, TimeProvider.System);
+        _subject = new ApiKeyService(
+            _apiKeys.Object,
+            _passwordHasher.Object,
+            _users.Object,
+            new FakeTimeProvider(new DateTimeOffset(Now, TimeSpan.Zero)));
     }
 
     [Test]
@@ -613,5 +621,196 @@ public class ApiKeyServiceTests
 
         // Assert
         Assert.That(result.ApiKey.UserId, Is.EqualTo(EnabledUserId));
+    }
+
+    [TestCase("")]
+    [TestCase(" ")]
+    [TestCase("\t")]
+    public void CreateAsync_ThrowsArgumentExceptionWithoutWriting_WhenNameIsBlank(string name)
+    {
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(() => _subject.CreateAsync(
+            new ApiKeyCreate { Name = name, ExpiresAt = null },
+            EnabledUserId));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.ParamName, Is.EqualTo("create.Name"));
+            _apiKeys.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<ApiKey>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [TestCase("")]
+    [TestCase(" ")]
+    [TestCase("\t")]
+    public void CreateForUserAsync_ThrowsArgumentExceptionWithoutWriting_WhenNameIsBlank(string name)
+    {
+        // Arrange
+        _users
+            .Setup(repository => repository.QueryAsync(
+                It.Is<UserQuery>(query => query.Username == "alice"),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 1),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<User>
+            {
+                Items = [new User
+            {
+                Id = EnabledUserId,
+                Username = "alice",
+                ProviderType = "local",
+                Enabled = true,
+                Role = Role.Viewer
+            }],
+                TotalItems = 1
+            });
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(() => _subject.CreateForUserAsync(
+            new ApiKeyCreate { Name = name, ExpiresAt = null },
+            EnabledUserId,
+            "alice"));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.ParamName, Is.EqualTo("create.Name"));
+            _apiKeys.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<ApiKey>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task TryValidateAsync_WritesTheLastUsedTime_WhenTheKeyIsValid()
+    {
+        // Arrange
+        _apiKeys
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ApiKeyQuery>(query => query.KeyHash == "hashed-key"),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ApiKey>
+            {
+                Items = [new ApiKey
+            {
+                Id = ApiKeyId,
+                UserId = OwnerUserId,
+                Name = "OwnedKey",
+                KeyPrefix = "mgp_own",
+                KeyHash = "hashed-key",
+                Enabled = true,
+                LastUsedAt = null
+            }],
+                TotalItems = 1
+            });
+
+        // Act
+        var result = await _subject.TryValidateAsync("mgp_valid").ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.LastUsedAt, Is.EqualTo(new DateTime(2026, 8, 19, 12, 0, 0, DateTimeKind.Utc)));
+            _apiKeys.Verify(
+                repository => repository.UpdateLastUsedAsync(
+                    ApiKeyId,
+                    new DateTime(2026, 8, 19, 12, 0, 0, DateTimeKind.Utc),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task TryValidateAsync_KeepsTheLastUsedTime_WhenTheKeyWasUsedInsideTheWriteInterval()
+    {
+        // Arrange
+        _apiKeys
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ApiKeyQuery>(query => query.KeyHash == "hashed-key"),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ApiKey>
+            {
+                Items = [new ApiKey
+            {
+                Id = ApiKeyId,
+                UserId = OwnerUserId,
+                Name = "OwnedKey",
+                KeyPrefix = "mgp_own",
+                KeyHash = "hashed-key",
+                Enabled = true,
+                LastUsedAt = new DateTime(2026, 8, 19, 11, 59, 30, DateTimeKind.Utc)
+            }],
+                TotalItems = 1
+            });
+
+        // Act
+        var result = await _subject.TryValidateAsync("mgp_valid").ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.LastUsedAt, Is.EqualTo(new DateTime(2026, 8, 19, 11, 59, 30, DateTimeKind.Utc)));
+            _apiKeys.Verify(
+                repository => repository.UpdateLastUsedAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<DateTime>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [TestCase(false, null)]
+    [TestCase(true, "2026-08-19T11:00:00")]
+    public async Task TryValidateAsync_WritesNothing_WhenTheKeyIsRejected(bool enabled, string? expiresAt)
+    {
+        // Arrange
+        _apiKeys
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ApiKeyQuery>(query => query.KeyHash == "hashed-key"),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ApiKey>
+            {
+                Items = [new ApiKey
+            {
+                Id = ApiKeyId,
+                UserId = OwnerUserId,
+                Name = "OwnedKey",
+                KeyPrefix = "mgp_own",
+                KeyHash = "hashed-key",
+                Enabled = enabled,
+                ExpiresAt = expiresAt is null ? null : DateTime.Parse(expiresAt, CultureInfo.InvariantCulture)
+            }],
+                TotalItems = 1
+            });
+
+        // Act
+        var result = await _subject.TryValidateAsync("mgp_rejected").ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Null);
+            _apiKeys.Verify(
+                repository => repository.UpdateLastUsedAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<DateTime>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 }

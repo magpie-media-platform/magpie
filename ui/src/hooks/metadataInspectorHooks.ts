@@ -4,6 +4,7 @@ import { apiGet, apiPatch, buildUrl } from '@/lib/api';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import type { ApiSubject } from '@/hooks/useSubjects';
 import { extractImageUrl, extractTitle } from '@/lib/metadata';
+import { MAX_PAGE_FETCHES } from '@/lib/paging';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import type {
     MaterializedMetadata,
@@ -14,13 +15,20 @@ import type {
 } from '@/types';
 import type { PagedList } from '@/types/paging';
 
-type SubjectRefResolver = (containerIds: Set<string>, id: string) => Promise<Record<string, SubjectRef>>;
+interface SubjectRefLookup {
+    subjects: Record<string, SubjectRef>;
+    truncated: boolean;
+}
+
+type SubjectRefResolver = (containerIds: Set<string>, id: string) => Promise<SubjectRefLookup>;
 
 interface MetadataInspectorHooksConfig {
     basePath: string;
     inspectorKey: (id: string) => QueryKey;
     detailKey: (id: string) => QueryKey;
     resolveSubjectRefs: SubjectRefResolver;
+    entityEvents: readonly string[];
+    refreshJobType?: string;
 }
 
 const SUBJECT_PAGE_SIZE = 500;
@@ -46,17 +54,17 @@ function relatedContainerIds(materialized: MaterializedMetadata, contributions: 
 async function collectSubjectRefs(
     containerIds: Set<string>,
     pageParams: (pageNumber: number) => Record<string, unknown>,
-): Promise<Record<string, SubjectRef>> {
+): Promise<SubjectRefLookup> {
     const subjects: Record<string, SubjectRef> = {};
     if (containerIds.size === 0) {
-        return subjects;
+        return { subjects, truncated: false };
     }
 
     const unresolved = new Set(containerIds);
-    let pageNumber = 1;
     let loaded = 0;
+    let exhausted = false;
 
-    while (unresolved.size > 0) {
+    for (let pageNumber = 1; pageNumber <= MAX_PAGE_FETCHES && unresolved.size > 0; pageNumber += 1) {
         const page = await apiGet<PagedList<ApiSubject>>(buildUrl('/subjects', pageParams(pageNumber)));
         for (const subject of page.items) {
             if (!unresolved.has(subject.metadataContainerId)) {
@@ -72,12 +80,12 @@ async function collectSubjectRefs(
 
         loaded += page.items.length;
         if (page.items.length === 0 || loaded >= page.totalItems) {
+            exhausted = true;
             break;
         }
-        pageNumber += 1;
     }
 
-    return subjects;
+    return { subjects, truncated: unresolved.size > 0 && !exhausted };
 }
 
 export const scanSubjectRefs: SubjectRefResolver = (containerIds) =>
@@ -99,13 +107,13 @@ async function fetchMetadataInspector(
         apiGet<MaterializedMetadata>(`${basePath}/${id}/metadata`),
         apiGet<MetadataContribution[]>(`${basePath}/${id}/metadata/contributions`),
     ]);
-    const subjects = await resolveSubjectRefs(relatedContainerIds(materialized, contributions), id);
+    const { subjects, truncated } = await resolveSubjectRefs(relatedContainerIds(materialized, contributions), id);
 
-    return { materialized, contributions, subjects };
+    return { materialized, contributions, subjects, subjectsTruncated: truncated };
 }
 
 export function createMetadataInspectorHooks(config: MetadataInspectorHooksConfig) {
-    const { basePath, inspectorKey, detailKey, resolveSubjectRefs } = config;
+    const { basePath, inspectorKey, detailKey, resolveSubjectRefs, entityEvents, refreshJobType } = config;
 
     const patchInspector = (id: string, patch: MetadataContainerPatch): Promise<void> =>
         apiPatch(`${basePath}/${id}/metadata`, patch);
@@ -116,27 +124,24 @@ export function createMetadataInspectorHooks(config: MetadataInspectorHooksConfi
         } satisfies MetadataContainerPatch);
 
     function useMetadataInspector(id: string | undefined, options?: { enabled?: boolean }) {
-        const queryKey = [...inspectorKey(id ?? ''), basePath, resolveSubjectRefs] as const;
-        const entityEvents =
-            basePath === '/subjects'
-                ? ['subject.updated', 'subject.deleted']
-                : ['content.hierarchyItem.updated', 'content.hierarchyItem.deleted', 'metadata.refreshed'];
+        const queryKey = [...inspectorKey(id ?? ''), basePath] as const;
         useInvalidateQueriesOnEvents((options?.enabled ?? true) && id ? entityEvents : [], [queryKey], {
             entityIds: id ? [id] : [],
             exact: true,
             owner: 'metadata-inspector',
         });
         useInvalidateQueriesOnEvents(
-            (options?.enabled ?? true) && id && basePath === '/subjects' ? ['job.execution.completed'] : [],
+            (options?.enabled ?? true) && id && refreshJobType ? ['job.execution.completed'] : [],
             [queryKey],
             {
                 entityIds: id ? [id] : [],
                 exact: true,
                 owner: 'metadata-inspector',
-                predicate: (event) => event.context['execution.jobType'] === 'SubjectMetadataRefreshItem',
+                predicate: (event) => event.context['execution.jobType'] === refreshJobType,
             },
         );
 
+        // eslint-disable-next-line @tanstack/query/exhaustive-deps -- resolveSubjectRefs is fixed per basePath, which the key already carries.
         return useQuery({
             queryKey,
             queryFn: () => fetchMetadataInspector(basePath, resolveSubjectRefs, id!),

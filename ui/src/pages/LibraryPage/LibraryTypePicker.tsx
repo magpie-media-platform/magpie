@@ -1,7 +1,6 @@
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { LibraryCountCard } from '@/components/ui/LibraryCountCard/LibraryCountCard';
-import { formatLibraryItemCount } from '@/components/ui/LibraryCountCard/formatLibraryItemCount';
+import { LibraryCountCard, formatLibraryItemCount } from '@/components/ui/LibraryCountCard';
 import {
     useContentLevelCounts,
     type LibraryLevelDefinition,
@@ -27,16 +26,6 @@ function LevelCard({ contentTypeSlug, level, count }: LevelCardProps) {
             linkDataAttributes={{ 'data-level-slug': level.slug }}
             iconTestId="library-type-picker__icon"
             skeletonTestId="library-type-picker__count-skeleton"
-            classNames={{
-                link: 'library-type-picker__link',
-                card: 'library-type-picker__card',
-                content: 'library-type-picker__content',
-                icon: 'library-type-picker__icon',
-                info: 'library-type-picker__info',
-                name: 'library-type-picker__name',
-                count: 'library-type-picker__count',
-                skeleton: 'library-type-picker__count-skeleton',
-            }}
         />
     );
 }

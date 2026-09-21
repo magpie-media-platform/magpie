@@ -30,6 +30,13 @@ rules that require judgment.
 - Use `public` only for API contracts, plugin contracts, abstraction interfaces, models, and public DTOs.
 - Use mutable records for entities and domain models.
 - Use init-only records for output and result DTOs.
+- `Magpie.Models`, `Magpie.Sdk` and `Magpie.Abstractions` target `netstandard2.1`, where `init` puts a
+  `modreq(IsExternalInit)` in the setter signature and binds a compiled extension to the polyfill. Give `set` to
+  every property that an extension assembly constructs or assigns. Keep `init` only on a type that `Magpie.Core`,
+  `Magpie.Api` or `Magpie.Auth` alone constructs. `Magpie.Sdk` and `Magpie.Abstractions` are extension-facing
+  throughout, so they use no `init`.
+- Do not cache a static default instance of a type with `set` properties. Make the default an expression-bodied
+  property so that each caller gets a new instance.
 - Add `required` to non-nullable string properties.
 - Do not change an existing mutable DTO only for style.
 

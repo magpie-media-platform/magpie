@@ -30,11 +30,11 @@ public interface IReleaseSearchService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Runs an interactive indexer search for a content hierarchy item, or returns <see langword="null"/> when
-    /// it is absent.
+    /// Runs an interactive indexer search for a content hierarchy item.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item to search for</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The candidates, or <see langword="null"/> when the item is absent</returns>
     Task<IReadOnlyList<InteractiveSearchCandidate>?> SearchInteractiveAsync(
         Guid contentHierarchyItemId,
         CancellationToken cancellationToken = default);
@@ -47,7 +47,7 @@ public interface IReleaseSearchService
     /// <param name="correlationId">The id that groups related calls, or <see langword="null"/> when standalone</param>
     /// <param name="currentExecutionId">The job execution that runs the search, or <see langword="null"/></param>
     /// <param name="progress">The reporter for progress updates, or <see langword="null"/> when there is none</param>
-    /// <param name="immediateOverride">Whether the search runs at once, past the coalescing window</param>
+    /// <param name="immediateOverride">Whether the search also runs for an item that needs no acquisition</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task SearchAsync(
         Guid contentHierarchyItemId,

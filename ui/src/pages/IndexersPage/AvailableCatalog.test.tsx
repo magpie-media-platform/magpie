@@ -79,7 +79,7 @@ function dataRows() {
     const table = screen.getByRole('grid');
     return within(table)
         .getAllByRole('row')
-        .filter((r) => within(r).queryAllByRole('cell').length > 0);
+        .filter((r) => within(r).queryAllByRole('gridcell').length > 0);
 }
 
 async function toggleFilter(user: ReturnType<typeof userEvent.setup>, columnLabel: RegExp, optionName: string) {

@@ -9,6 +9,7 @@ using Magpie.Extensions.Cardigann.Engine;
 using Magpie.Extensions.Cardigann.Engine.Session;
 using Magpie.Models.Data;
 using Magpie.Models.Jobs;
+using Magpie.Sdk.Configuration;
 using Magpie.Sdk.Diagnostics;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Integrations;
@@ -29,7 +30,7 @@ public sealed class CardigannExtension : IExtensionLifecycle
         "Community Cardigann tracker definitions synced from the default Jackett remote.";
 
     /// <inheritdoc />
-    public Guid Id { get; } = new("8B0F2A4C-1F3E-4A55-9E8E-2A6B9F1F0002");
+    public Guid Id => Constants.ExtensionId;
 
     /// <inheritdoc />
     public Version Version => new(1, 0, 0);
@@ -45,14 +46,14 @@ public sealed class CardigannExtension : IExtensionLifecycle
         return new IndexerFeed
         {
             Id = Guid.NewGuid(),
-            ProviderType = CardigannFeedProvider.ProviderTypeName,
-            Name = CardigannFeedProvider.DefaultFeedName,
+            ProviderType = Constants.ProviderTypeName,
+            Name = Constants.DefaultFeedName,
             Description = DefaultFeedDescription,
             Settings = new Dictionary<string, string>
             {
-                [CardigannFeedProvider.GitUrlSettingKey] = CardigannFeedProvider.DefaultGitUrl,
-                [CardigannFeedProvider.BranchSettingKey] = CardigannFeedProvider.DefaultBranch,
-                [CardigannFeedProvider.DefinitionsPathSettingKey] = CardigannFeedProvider.DefaultDefinitionsPath,
+                [Constants.GitUrlSettingKey] = Constants.DefaultGitUrl,
+                [Constants.BranchSettingKey] = Constants.DefaultBranch,
+                [Constants.DefinitionsPathSettingKey] = Constants.DefaultDefinitionsPath,
             },
             Enabled = true,
         };
@@ -73,13 +74,23 @@ public sealed class CardigannExtension : IExtensionLifecycle
                 AllowAutoRedirect = false
             });
         services.AddHttpClient(Git.GitCoreDefinitionSource.HttpClientName);
+        services
+            .AddHttpClient(
+                FlareSolverrClient.HttpClientName,
+                client => client.Timeout = FlareSolverrClient.RequestTimeout)
+            .ConfigureAdditionalHttpMessageHandlers((handlers, _) => handlers.Clear());
 
         services.AddSingleton<ICardigannLoader, CardigannLoader>();
         services.AddSingleton<IResultParser, ResultParser>();
-        services.AddSingleton<ICardigannSessionManager, CardigannSessionManager>();
+        services.AddSingleton<SolverQueue>();
+        services.AddScoped<ICloudflareSolver, FlareSolverrClient>();
+
+        services.AddSingleton<CardigannSessionState>();
+        services.AddScoped<ICardigannSessionManager, CardigannSessionManager>();
+        services.AddSingleton<IExtensionSettingsSchemaProvider, CardigannSettingsSchemaProvider>();
         services.AddSingleton<Git.IGitDefinitionSource, Git.GitCoreDefinitionSource>();
         services.AddSingleton<IIndexerFeedProvider, CardigannFeedProvider>();
-        services.AddSingleton<IRuntimeIndexerIntegrationFactory, CardigannRuntimeIntegrationFactory>();
+        services.AddScoped<IRuntimeIndexerIntegrationFactory, CardigannRuntimeIntegrationFactory>();
 
         services.AddScoped<IDiagnosticCheck, CardigannDuplicateFeedDiagnostic>();
         services.AddScoped<IDiagnosticRepair, CardigannDuplicateFeedRepair>();
@@ -96,7 +107,7 @@ public sealed class CardigannExtension : IExtensionLifecycle
         var jobManager = context.ServiceProvider.GetRequiredService<IJobManager>();
 
         var feeds = await indexerService.ListFeedsAsync(cancellationToken).ConfigureAwait(false);
-        if (feeds.Any(feed => feed.ProviderType == CardigannFeedProvider.ProviderTypeName))
+        if (feeds.Any(feed => feed.ProviderType == Constants.ProviderTypeName))
         {
             return;
         }
@@ -108,7 +119,7 @@ public sealed class CardigannExtension : IExtensionLifecycle
         var logger = context.LoggerFactory.CreateLogger<CardigannExtension>();
         logger.LogInformation(
             "Cardigann extension registered the default indexer feed for provider type {ProviderType}",
-            CardigannFeedProvider.ProviderTypeName);
+            Constants.ProviderTypeName);
 
         await jobManager
             .ExecuteAsync(new JobEnqueueRequest { JobType = "IndexerFeedSyncScan" }, cancellationToken)

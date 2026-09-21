@@ -69,6 +69,33 @@ function getLabels(result: ReturnType<typeof getCompletions>): string[] {
 }
 
 describe('Filter Query Autocomplete', () => {
+    it.each([
+        'genre has "Ac|tion"',
+        'genres has (name = "Ac|tion")',
+        'title = "Ac|tion"',
+        'genre has "Ac|',
+        'genre has Ac|',
+        'genres has (name = Ac|)',
+    ])('does not offer completions inside a quoted value: %s', (query) => {
+        expect(getCompletions(query)).toBeNull();
+        const context = createContext(query, contentFieldRegistry, false);
+        expect(filterQueryAutocomplete(contentFieldRegistry)(context)).toBeNull();
+    });
+    it('still offers collection fields inside a predicate', () => {
+        expect(getLabels(getCompletions('awards has (|)'))).toEqual([
+            'body',
+            'name',
+            'category',
+            'status',
+            'year',
+            'language',
+            'country',
+            'and',
+            'or',
+            'not',
+        ]);
+    });
+
     describe('Field Registry Functions', () => {
         describe('getScalarField', () => {
             it('finds scalar field by name (case-insensitive)', () => {
@@ -125,7 +152,7 @@ describe('Filter Query Autocomplete', () => {
                 const names = getAllFieldNames(contentFieldRegistry);
                 expect(names).toContain('name');
                 expect(names).toContain('monitoring');
-                expect(names).toContain('fileSize');
+                expect(names).not.toContain('fileSize');
             });
 
             it('returns all collection field names and aliases', () => {
@@ -234,7 +261,7 @@ describe('Filter Query Autocomplete', () => {
 
             expect(labels).toContain('name');
             expect(labels).toContain('monitoring');
-            expect(labels).toContain('fileSize');
+            expect(labels).not.toContain('fileSize');
 
             expect(labels).toContain('genre');
             expect(labels).toContain('genres');
@@ -254,16 +281,40 @@ describe('Filter Query Autocomplete', () => {
             expect(result).not.toBeNull();
             const labels = getLabels(result);
 
-            for (const field of contentFieldRegistry.scalarFields) {
-                expect(labels).toContain(field.name);
-            }
-
-            for (const field of contentFieldRegistry.collectionFields) {
-                expect(labels).toContain(field.name);
-                for (const alias of field.aliases) {
-                    expect(labels).toContain(alias);
-                }
-            }
+            expect(labels).toEqual([
+                'name',
+                'slug',
+                'path',
+                'contentType',
+                'level',
+                'monitoring',
+                'rootFolderId',
+                'parentId',
+                'title',
+                'originalTitle',
+                'overview',
+                'language',
+                'publishDate',
+                'duration',
+                'productionStatus',
+                'genre',
+                'genres',
+                'tag',
+                'tags',
+                'award',
+                'awards',
+                'externalId',
+                'externalIds',
+                'contentRating',
+                'contentRatings',
+                'image',
+                'images',
+                'relationship',
+                'relationships',
+                'and',
+                'or',
+                'not',
+            ]);
         });
 
         it('includes the curated subject fields from registry', () => {
@@ -288,8 +339,7 @@ describe('Filter Query Autocomplete', () => {
             expect(monitoringCompletion!.detail).toBe('boolean');
 
             const fileSizeCompletion = result!.options.find((o) => o.label === 'fileSize');
-            expect(fileSizeCompletion).toBeDefined();
-            expect(fileSizeCompletion!.detail).toBe('long');
+            expect(fileSizeCompletion).toBeUndefined();
         });
 
         it('suggests true and false for a boolean field value', () => {
@@ -551,7 +601,7 @@ describe('Filter Query Autocomplete', () => {
             expect(fieldNames).toContain('overview');
             expect(fieldNames).toContain('publishDate');
             expect(fieldNames).toContain('duration');
-            expect(fieldNames).toContain('fileSize');
+            expect(fieldNames).not.toContain('fileSize');
         });
 
         it('has expected collection fields', () => {

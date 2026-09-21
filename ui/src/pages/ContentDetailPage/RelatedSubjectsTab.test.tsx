@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
@@ -72,6 +72,49 @@ describe('RelatedSubjectsTab', () => {
         expect(img).toBeInTheDocument();
         expect(img.src).toBe('https://img.example/dehaan.jpg');
         expect(screen.queryByTestId('related-subject-avatar-placeholder')).not.toBeInTheDocument();
+        fireEvent.error(img);
+        expect(screen.queryByAltText('Dane DeHaan')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('related-subject-avatar-placeholder')).toBeInTheDocument();
+    });
+
+    it('replaces a broken image with the placeholder', () => {
+        // Arrange
+        useContentRelationships.mockReturnValue({
+            data: [
+                {
+                    id: 'broken',
+                    kind: 'related',
+                    name: 'Sample',
+                    ordinal: 0,
+                    imageUrl: 'https://img.example/broken.png',
+                },
+            ],
+            isLoading: false,
+        });
+        render(
+            <MemoryRouter>
+                <RelatedSubjectsTab contentId="c1" />
+            </MemoryRouter>,
+        );
+        // Act
+        fireEvent.error(screen.getByAltText('Sample'));
+        // Assert
+        expect(screen.queryByAltText('Sample')).not.toBeInTheDocument();
+        expect(screen.getByTestId('related-subject-avatar-placeholder')).toBeInTheDocument();
+    });
+
+    it('shows a skeleton while relationships load', () => {
+        // Arrange
+        useContentRelationships.mockReturnValue({ data: undefined, isLoading: true });
+        // Act
+        const { container } = render(
+            <MemoryRouter>
+                <RelatedSubjectsTab contentId="c1" />
+            </MemoryRouter>,
+        );
+        // Assert
+        expect(container.querySelector('[data-component="skeleton"]')).toBeInTheDocument();
+        expect(screen.queryByText('No related information')).not.toBeInTheDocument();
     });
 
     it('does not call a non-person subject image a headshot', () => {
@@ -90,7 +133,7 @@ describe('RelatedSubjectsTab', () => {
             isLoading: false,
         });
         renderTab();
-        expect(screen.getByTestId('related-subject-avatar-placeholder')).toBeInTheDocument();
+        expect(screen.queryByTestId('related-subject-avatar-placeholder')).toBeInTheDocument();
         expect(screen.queryByAltText('No Photo')).not.toBeInTheDocument();
     });
 
@@ -117,8 +160,8 @@ describe('RelatedSubjectsTab', () => {
     it('renders a single empty state, and no sections, when there are no relationships', () => {
         useContentRelationships.mockReturnValue({ data: [], isLoading: false });
         renderTab();
-        expect(screen.getByText('No related information.')).toBeInTheDocument();
-        expect(screen.queryByRole('heading')).not.toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'No related information' })).toBeInTheDocument();
+        expect(screen.getByText('This item has no related subjects.')).toBeInTheDocument();
         expect(screen.queryByText(/No cast information/)).not.toBeInTheDocument();
         expect(screen.queryByText(/No crew information/)).not.toBeInTheDocument();
     });

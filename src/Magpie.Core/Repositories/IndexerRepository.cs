@@ -26,9 +26,45 @@ internal sealed class IndexerRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<IndexerRepository> logger,
-    TimeProvider? timeProvider = null) : IIndexerRepository
+    TimeProvider timeProvider) : IIndexerRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
+
+    private static IReadOnlyCollection<string> ChangedFields(IndexerPatch patch)
+    {
+        var fields = new List<string>();
+        if (patch.ProviderType is not null)
+        {
+            fields.Add("providerType");
+        }
+
+        if (patch.Name is not null)
+        {
+            fields.Add("name");
+        }
+
+        if (patch.Description is not null)
+        {
+            fields.Add("description");
+        }
+
+        if (patch.Availability is not null)
+        {
+            fields.Add("availability");
+        }
+
+        if (patch.Categories is not null)
+        {
+            fields.Add("categories");
+        }
+
+        if (patch.Languages is not null)
+        {
+            fields.Add("languages");
+        }
+
+        return fields;
+    }
 
     private static IReadOnlyCollection<string> ChangedFields(Indexer current, Indexer model)
     {
@@ -245,6 +281,97 @@ internal sealed class IndexerRepository(
         }
     }
 
+    public async Task<bool> PatchAsync(
+        IndexerPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var model = await context.Indexers
+                        .FirstOrDefaultAsync(i => i.Id == patch.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (model is null)
+                    {
+                        return false;
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    if (patch.ProviderType is not null)
+                    {
+                        model.ProviderType = patch.ProviderType.Value;
+                    }
+
+                    if (patch.Name is not null)
+                    {
+                        model.Name = patch.Name.Value;
+                    }
+
+                    if (patch.Description is not null)
+                    {
+                        model.Description = patch.Description.Value;
+                    }
+
+                    if (patch.Availability is not null)
+                    {
+                        model.Availability = patch.Availability.Value;
+                    }
+
+                    if (patch.Categories is not null)
+                    {
+                        model.Categories = patch.Categories.Value;
+                    }
+
+                    if (patch.Languages is not null)
+                    {
+                        model.Languages = patch.Languages.Value;
+                    }
+
+                    model.ModifiedAt = now;
+                    model.ModifiedByUserId = modifiedByUserId;
+
+                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (updated > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Patch",
+                                EntityId = patch.Id.ToString(),
+                                EntityType = nameof(Indexer),
+                                Detail = $"Updated indexer {model.Name}",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patched)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        IndexerEventBuilder.BuildIndexerUpdatedEvent(patch.Id, ChangedFields(patch)),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return patched;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The indexer repository failed to patch indexer {IndexerId}.", patch.Id);
+            throw;
+        }
+    }
+
     public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
     {
         try
@@ -329,14 +456,20 @@ internal sealed class IndexerRepository(
 
             var totalCount = await indexers.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(Indexer).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(Indexer.Id), nameof(Indexer.FeedId), nameof(Indexer.ExtensionId),
+                nameof(Indexer.ProviderType), nameof(Indexer.Name), nameof(Indexer.Description),
+                nameof(Indexer.Availability), nameof(Indexer.DefinitionType), nameof(Indexer.CreatedAt),
+                nameof(Indexer.CreatedByUserId), nameof(Indexer.ModifiedAt), nameof(Indexer.ModifiedByUserId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 indexers = sort.Direction == SortDirection.Ascending
-                    ? indexers.OrderBy(i => EF.Property<Indexer>(i, sortProperty)).ThenBy(i => i.Id)
-                    : indexers.OrderByDescending(i => EF.Property<Indexer>(i, sortProperty)).ThenBy(i => i.Id);
+                    ? indexers.OrderBy(i => EF.Property<object>(i, sortProperty)).ThenBy(i => i.Id)
+                    : indexers.OrderByDescending(i => EF.Property<object>(i, sortProperty)).ThenBy(i => i.Id);
             }
             else
             {

@@ -1,112 +1,159 @@
 @layer components {
-    .execution-row__detail-tabs-list {
-        padding: 0 var(--space-md);
-        background-color: var(--bg-secondary);
-        border-bottom: 1px solid var(--border-default);
-    }
-
-    .execution-row__detail-tab {
-        text-transform: uppercase;
-        letter-spacing: var(--tracking-wide);
-        font-size: var(--text-xs);
-    }
-
-    .execution-row__logs-list {
-        max-height: 300px;
+    .execution-detail {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        max-height: 380px;
         overflow-y: auto;
-        padding: var(--space-xs);
-    }
-
-    .execution-row__log-entry {
-        display: flex;
-        align-items: flex-start;
-        gap: var(--space-sm);
-        padding: var(--space-xs) var(--space-sm);
-        font-family: var(--font-mono);
-        font-size: var(--text-xs);
-        line-height: var(--leading-relaxed);
-        border-radius: var(--radius-sm);
-
-        &:hover {
-            background-color: var(--bg-tertiary);
-        }
-    }
-
-    .execution-row__log-time {
-        flex-shrink: 0;
-        min-width: 70px;
-        color: var(--text-muted);
-    }
-
-    .execution-row__log-level {
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 18px;
-
-        & svg {
-            font-size: var(--text-sm);
-        }
-    }
-
-    .execution-row__log-entry--debug .execution-row__log-level {
-        color: var(--text-muted);
-    }
-
-    .execution-row__log-entry--info .execution-row__log-level {
-        color: var(--accent-secondary);
-    }
-
-    .execution-row__log-entry--warn .execution-row__log-level {
-        color: var(--status-degraded);
-    }
-
-    .execution-row__log-entry--error .execution-row__log-level {
-        color: var(--status-unhealthy);
-    }
-
-    .execution-row__log-message {
-        flex: 1;
-        color: var(--text-primary);
-        overflow-wrap: break-word;
-    }
-
-    .execution-row__log-entry--debug .execution-row__log-message {
-        color: var(--text-muted);
-    }
-
-    .execution-row__log-entry--warn .execution-row__log-message {
-        color: var(--status-degraded);
-    }
-
-    .execution-row__log-entry--error .execution-row__log-message {
-        color: var(--status-unhealthy);
+        padding: var(--space-md);
     }
 
     @media (max-width: 480px) {
-        .execution-row__logs-list {
-            max-height: 200px;
+        .execution-detail {
+            max-height: 260px;
+            padding: var(--space-sm);
         }
+    }
 
-        .execution-row__log-entry {
-            flex-wrap: wrap;
-            gap: var(--space-xs);
-        }
+    .execution-details {
+        display: grid;
+        grid-template-columns: fit-content(9rem) minmax(0, 1fr);
+        gap: var(--space-2xs) var(--space-md);
+        margin: 0 0 var(--space-sm);
+        padding: 0 0 var(--space-sm);
+        border-bottom: 1px solid var(--border-subtle);
+        font-size: var(--text-xs);
+    }
 
-        .execution-row__log-time {
-            min-width: auto;
-            order: 1;
-        }
+    .execution-details__row {
+        display: contents;
+    }
 
-        .execution-row__log-level {
-            order: 0;
-        }
+    .execution-details__key {
+        overflow: hidden;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 
-        .execution-row__log-message {
-            order: 2;
-            width: 100%;
-            padding-left: calc(18px + var(--space-sm));
+    .execution-details__value {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-sm);
+        min-width: 0;
+        margin: 0;
+        color: var(--text-secondary);
+    }
+
+    .execution-details__value--text {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .execution-details__accent {
+        color: var(--text-primary);
+    }
+
+    .execution-details__action {
+        min-height: 0;
+        padding: var(--space-2xs) var(--space-xs);
+        font-size: var(--text-2xs);
+        font-weight: var(--weight-normal);
+        line-height: 1.4;
+    }
+
+    .execution-ledger {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .execution-ledger__list {
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        line-height: var(--leading-relaxed);
+    }
+
+    .execution-ledger__row {
+        display: grid;
+        grid-template-columns: auto auto 1fr;
+        align-items: baseline;
+        gap: var(--space-sm);
+    }
+
+    .execution-ledger__time {
+        color: var(--accent-secondary);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    .execution-ledger__time--live {
+        color: var(--text-muted);
+    }
+
+    .execution-ledger__icon {
+        align-self: center;
+        width: var(--icon-inline-xs);
+        height: var(--icon-inline-xs);
+        color: var(--text-muted);
+    }
+
+    .execution-ledger__row[data-tone='done'] .execution-ledger__icon {
+        color: var(--status-success, var(--accent-secondary));
+    }
+
+    .execution-ledger__row[data-tone='error'] .execution-ledger__icon,
+    .execution-ledger__row[data-tone='error'] .execution-ledger__text {
+        color: var(--status-error, var(--text-primary));
+    }
+
+    .execution-ledger__row[data-tone='job'] .execution-ledger__icon {
+        color: var(--accent-primary);
+    }
+
+    .execution-ledger__icon--spin {
+        animation: spin 1s linear infinite;
+        color: var(--accent-secondary);
+    }
+
+    .execution-ledger__text {
+        color: var(--text-primary);
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .execution-ledger__link {
+        color: var(--text-primary);
+        text-decoration: none;
+
+        &:hover {
+            color: var(--accent-primary);
+            text-decoration: underline;
         }
+    }
+
+    .execution-ledger__more {
+        align-self: flex-start;
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+
+        &:hover {
+            color: var(--accent-primary);
+        }
+    }
+
+    .execution-ledger__load-more {
+        align-self: flex-start;
+        font-size: var(--text-xs);
     }
 }

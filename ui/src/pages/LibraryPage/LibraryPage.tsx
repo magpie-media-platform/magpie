@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { ArrowLeftIcon, GridFourIcon, ListIcon } from '@phosphor-icons/react';
 
+import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { ContentListSlot } from '@/components/ui/Slot/ContentSlots';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
@@ -11,7 +12,7 @@ import { usePersistentState } from '@/hooks/usePersistentState';
 
 import { LibraryTypePicker } from './LibraryTypePicker';
 import { LibraryFilters } from './LibraryFilters';
-import { LibraryBulkActionsToolbar } from './LibraryBulkActionsToolbar';
+import { LibraryBulkActionButtons } from './LibraryBulkActionButtons';
 import { LibraryMobileSelectionBar } from './LibraryMobileSelectionBar';
 import { LibraryContentSection } from './LibraryContentSection';
 import { LibraryDialogs } from './LibraryDialogs';
@@ -97,24 +98,24 @@ export function LibraryPage() {
                     />
 
                     {library.hasBulkActions && (
-                        <LibraryBulkActionsToolbar
+                        <BulkActionsToolbar
                             selection={library.selection}
-                            selectedPageCount={library.selectedPageCount}
-                            totalItems={library.totalItems}
-                            selectedCount={library.selectedCount}
-                            displaySelectedCount={library.displaySelectedCount}
-                            hasSelection={library.hasSelection}
-                            onClearSelection={library.handleClearSelection}
-                            canEditContent={library.canEditContent}
-                            canManageContent={library.canManageContent}
-                            canDeleteContent={library.canDeleteContent}
-                            onOpenBulkTags={library.handleOpenBulkTags}
-                            onBulkSetMonitoring={library.handleBulkSetMonitoring}
-                            isSettingMonitoring={library.isSettingMonitoring}
-                            onOpenBulkRootFolder={library.openBulkRootFolder}
-                            onOpenBulkQualityTierList={library.openBulkQualityTierList}
-                            onOpenBulkDelete={library.openBulkDeleteConfirm}
-                        />
+                            label="Library selection actions"
+                            itemNounPlural="items"
+                            onClear={library.handleClearSelection}
+                        >
+                            <LibraryBulkActionButtons
+                                canEditContent={library.canEditContent}
+                                canManageContent={library.canManageContent}
+                                canDeleteContent={library.canDeleteContent}
+                                onOpenBulkTags={library.handleOpenBulkTags}
+                                onBulkSetMonitoring={library.handleBulkSetMonitoring}
+                                isSettingMonitoring={library.isSettingMonitoring}
+                                onOpenBulkRootFolder={library.openBulkRootFolder}
+                                onOpenBulkQualityTierList={library.openBulkQualityTierList}
+                                onOpenBulkDelete={library.openBulkDeleteConfirm}
+                            />
+                        </BulkActionsToolbar>
                     )}
 
                     <LibraryContentSection
@@ -134,7 +135,6 @@ export function LibraryPage() {
                         headerFilterHandlers={library.headerFilterHandlers}
                         hasBulkActions={library.hasBulkActions}
                         selection={library.selection}
-                        onRowSelectionChange={library.handleRowSelectionChange}
                         selectionMode={library.selectionMode}
                         onEnterSelectionMode={library.enterSelectionMode}
                         onExitSelectionMode={library.exitSelectionMode}
@@ -154,9 +154,6 @@ export function LibraryPage() {
             {library.hasBulkActions && library.selectionMode && (
                 <LibraryMobileSelectionBar
                     selection={library.selection}
-                    selectedPageCount={library.selectedPageCount}
-                    totalItems={library.totalItems}
-                    displaySelectedCount={library.displaySelectedCount}
                     onClearSelection={library.handleClearSelection}
                     canEditContent={library.canEditContent}
                     canManageContent={library.canManageContent}
@@ -202,6 +199,8 @@ export function LibraryPage() {
                 bulkDeleteConfirmOpen={library.bulkDeleteConfirmOpen}
                 onConfirmBulkDelete={library.handleConfirmBulkDelete}
                 onCancelBulkDelete={library.closeBulkDeleteConfirm}
+                bulkDeleteFiles={library.bulkDeleteFiles}
+                onBulkDeleteFilesChange={library.setBulkDeleteFiles}
                 isDeleting={library.isDeleting}
             />
         </div>

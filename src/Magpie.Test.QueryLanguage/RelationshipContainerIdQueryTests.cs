@@ -16,6 +16,8 @@ public class RelationshipContainerIdQueryTests
     [Test]
     public void ParseContentFilter_BindsTheContainerId_WhenTheRelationshipNamesIt()
     {
+        // Arrange
+
         // Act
         var result = Query.ParseContentFilter();
 
@@ -39,13 +41,13 @@ public class RelationshipContainerIdQueryTests
     }
 
     [Test]
-    public void FormatFilterQuery_KeepsTheContainerId_WhenTheCriteriaRoundTrip()
+    public void FormatContentFilter_KeepsTheContainerId_WhenTheCriteriaRoundTrip()
     {
         // Arrange
         var criteria = Query.ParseContentFilter().Value!;
 
         // Act
-        var result = criteria.FormatFilterQuery();
+        var result = criteria.FormatContentFilter();
 
         // Assert
         Assert.That(result, Is.EqualTo(Query));

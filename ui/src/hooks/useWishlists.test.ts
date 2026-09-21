@@ -285,13 +285,9 @@ describe('useWishlists', () => {
             });
 
             await act(async () => {
-                await result.current.updateWishlist(
-                    'wl-1',
-                    {
-                        name: { value: 'Updated Movies' },
-                    },
-                    true,
-                );
+                await result.current.updateWishlist('wl-1', {
+                    name: { value: 'Updated Movies' },
+                });
             });
 
             expect(mockApiPatch).toHaveBeenCalledWith('/wishlists/wl-1', {
@@ -312,13 +308,9 @@ describe('useWishlists', () => {
             });
 
             await act(async () => {
-                await result.current.updateWishlist(
-                    'wl-3',
-                    {
-                        name: { value: 'Updated Family' },
-                    },
-                    false,
-                );
+                await result.current.updateWishlist('wl-3', {
+                    name: { value: 'Updated Family' },
+                });
             });
 
             expect(mockApiPatch).toHaveBeenCalledWith('/wishlists/wl-3', {
@@ -344,13 +336,9 @@ describe('useWishlists', () => {
             });
 
             act(() => {
-                void result.current.updateWishlist(
-                    'wl-1',
-                    {
-                        name: { value: 'Updated' },
-                    },
-                    true,
-                );
+                void result.current.updateWishlist('wl-1', {
+                    name: { value: 'Updated' },
+                });
             });
 
             await waitFor(() => {
@@ -455,7 +443,7 @@ describe('useWishlists', () => {
             });
 
             await act(async () => {
-                await result.current.deleteWishlist('wl-1', true, false);
+                await result.current.deleteWishlist('wl-1', false);
             });
 
             expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-1');
@@ -474,7 +462,7 @@ describe('useWishlists', () => {
             });
 
             await act(async () => {
-                await result.current.deleteWishlist('wl-1', true, true);
+                await result.current.deleteWishlist('wl-1', true);
             });
 
             expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-1?deleteFilter=true');
@@ -493,7 +481,7 @@ describe('useWishlists', () => {
             });
 
             await act(async () => {
-                await result.current.deleteWishlist('wl-3', false, false, 'user-2');
+                await result.current.deleteWishlist('wl-3', false);
             });
 
             expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-3');
@@ -517,7 +505,7 @@ describe('useWishlists', () => {
             });
 
             act(() => {
-                void result.current.deleteWishlist('wl-1', true, false);
+                void result.current.deleteWishlist('wl-1', false);
             });
 
             await waitFor(() => {

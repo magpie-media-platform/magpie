@@ -11,11 +11,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Swashbuckle.AspNetCore" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\Magpie.Sdk\Magpie.Sdk.csproj" />
+    <ProjectReference Include="..\Magpie.CommandLine.Generators\Magpie.CommandLine.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

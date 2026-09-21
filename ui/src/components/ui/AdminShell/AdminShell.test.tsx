@@ -1,19 +1,15 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
-vi.mock('@/auth', async () => {
-    const actual = await vi.importActual('@/auth');
-    return {
-        ...actual,
-        useAuth: () => ({
-            user: { id: 'u1', username: 'admin', role: 3 },
-            isAuthenticated: true,
-            hasPermission: () => true,
-            hasRole: () => true,
-        }),
-    };
-});
+vi.mock('@/auth/useAuth', () => ({
+    useAuth: () => ({
+        user: { id: 'u1', username: 'admin', role: 3 },
+        isAuthenticated: true,
+        hasPermission: () => true,
+        hasRole: () => true,
+    }),
+}));
 
 vi.mock('../UserMenu', () => ({
     UserMenu: () => <div data-testid="user-menu">UserMenu</div>,
@@ -67,6 +63,7 @@ describe('AdminShell', () => {
             <AdminShell>
                 <AdminShellSidebar>Nav</AdminShellSidebar>
             </AdminShell>,
+            { wrapper: MemoryRouter },
         );
 
         expect(screen.getByRole('navigation', { name: 'Admin navigation' })).toBeInTheDocument();
@@ -112,16 +109,21 @@ describe('AdminSidebar', () => {
         expect(screen.getByRole('link', { name: 'System Status' })).toBeInTheDocument();
     });
 
-    it('renders exit admin link', () => {
+    it('leaves the way out of admin to the header, not the sidebar', () => {
         renderWithRouter(
             <AdminShell>
+                <AdminShellHeader>
+                    <AdminHeader />
+                </AdminShellHeader>
                 <AdminShellSidebar>
                     <AdminSidebar />
                 </AdminShellSidebar>
             </AdminShell>,
         );
 
-        expect(screen.getByText('Exit admin')).toBeInTheDocument();
+        const sidebar = screen.getByRole('navigation', { name: 'Admin navigation' });
+        expect(within(sidebar).queryByRole('link', { name: 'Home' })).not.toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/');
     });
 
     it('places Advanced as the last item of the System group, not its own section', () => {

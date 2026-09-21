@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -235,7 +236,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
 
         using var document = _htmlParser.ParseDocument(html);
         var rowSelector = (definition.Search.Rows.Selector ?? string.Empty)
-            .RenderCardigannTemplate(variables ?? EmptyVars)
+            .RenderCardigannTemplate(variables ?? EmptyVars, EscapeSelectorValue)
             .Trim();
         if (string.IsNullOrEmpty(rowSelector))
         {
@@ -266,7 +267,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         var rowIndex = 0;
         foreach (var row in rows)
         {
-            var release = ExtractRow(row, rowIndex, definition, baseUri, categoryMappings);
+            var release = ExtractRow(row, rowIndex, definition.Search.Fields, baseUri, categoryMappings);
             if (release is not null)
             {
                 releases.Add(release);
@@ -296,7 +297,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         }
         catch (JsonException ex)
         {
-            logger.LogDebug(ex, "The Cardigann parser cannot parse the JSON response for {Tracker}", definition.Id);
+            logger.LogWarning(ex, "The Cardigann parser cannot parse the JSON response for {Tracker}", definition.Id);
             return [];
         }
 
@@ -343,7 +344,10 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         }
     }
 
-    public string? ExtractDownloadTarget(string html, DownloadBlock download)
+    public string? ExtractDownloadTarget(
+        string html,
+        DownloadBlock download,
+        IReadOnlyDictionary<string, object?>? variables = null)
     {
         if (string.IsNullOrEmpty(html))
         {
@@ -351,17 +355,22 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         }
 
         using var document = _htmlParser.ParseDocument(html);
+        var vars = variables ?? EmptyVars;
 
         if (download.InfoHash is not null)
         {
             var hash = download.InfoHash.Hash is null
                 ? null
-                : ExtractField(document.DocumentElement, download.InfoHash.Hash, "download.infohash.hash");
+                : RenderSelector(download.InfoHash.Hash, vars) is { } renderedHash
+                    ? ExtractField(document.DocumentElement, renderedHash, "download.infohash.hash")
+                    : null;
             if (!string.IsNullOrWhiteSpace(hash))
             {
                 var title = download.InfoHash.Title is null
                     ? null
-                    : ExtractField(document.DocumentElement, download.InfoHash.Title, "download.infohash.title");
+                    : RenderSelector(download.InfoHash.Title, vars) is { } renderedTitle
+                        ? ExtractField(document.DocumentElement, renderedTitle, "download.infohash.title")
+                        : null;
                 return BuildMagnet(hash!, title);
             }
         }
@@ -381,7 +390,15 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
 
         foreach (var candidate in candidates)
         {
-            var value = ExtractField(document.DocumentElement, candidate, "download.selector");
+            if (RenderSelector(candidate, vars) is not { } renderedCandidate)
+            {
+                continue;
+            }
+
+            var value = ExtractField(
+                document.DocumentElement,
+                renderedCandidate,
+                "download.selector");
             if (!string.IsNullOrWhiteSpace(value))
             {
                 return value;
@@ -391,17 +408,70 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         return null;
     }
 
+    private static string EscapeSelectorValue(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            if (char.IsAsciiLetterOrDigit(character) || character is '-' or '_' || !char.IsAscii(character))
+            {
+                builder.Append(character);
+            }
+            else if (char.IsControl(character))
+            {
+                builder.Append(CultureInfo.InvariantCulture, $"\\{(int)character:x} ");
+            }
+            else
+            {
+                builder.Append('\\').Append(character);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static FieldDefinition? RenderSelector(
+        FieldDefinition field,
+        IReadOnlyDictionary<string, object?> variables)
+    {
+        if (field.Selector is not { Length: > 0 } selector ||
+            !selector.Contains("{{", StringComparison.Ordinal))
+        {
+            return field;
+        }
+
+        var rendered = selector.RenderCardigannTemplate(variables, EscapeSelectorValue);
+        if (string.IsNullOrWhiteSpace(rendered))
+        {
+            return null;
+        }
+
+        return new FieldDefinition
+        {
+            Selector = rendered,
+            Attribute = field.Attribute,
+            Text = field.Text,
+            Case = field.Case,
+            Optional = field.Optional,
+            Default = field.Default,
+            Filters = field.Filters,
+        };
+    }
+
     private Release? ExtractRow(
         IElement row,
         int rowIndex,
-        CardigannDefinition definition,
+        IReadOnlyDictionary<string, FieldDefinition> fields,
         Uri baseUri,
         IReadOnlyList<CategoryMapping> categoryMappings)
     {
         var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (fieldName, field) in definition.Search.Fields)
+        foreach (var (fieldName, field) in fields)
         {
-            values[fieldName] = ExtractField(row, field, $"row[{rowIndex}].{fieldName}");
+            if (ExtractField(row, field, $"row[{rowIndex}].{fieldName}") is { } value)
+            {
+                values[fieldName] = value;
+            }
         }
 
         var title = Get(values, "title");
@@ -498,7 +568,20 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
 
     public string? ExtractField(IElement? root, FieldDefinition field, string context)
     {
-        var raw = ResolveRawValue(root, field);
+        string? raw;
+        try
+        {
+            raw = ResolveRawValue(root, field);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "The parser cannot evaluate the Cardigann selector {Selector} of {Context}",
+                field.Selector,
+                context);
+            return null;
+        }
 
         if (raw is null)
         {
@@ -537,15 +620,15 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             {
                 logger.LogWarning(
                     ex,
-                    "Cardigann filter {Filter} hit a regex timeout at {Context} and skipped the field (possible ReDoS)",
+                    "Cardigann filter {Filter} timed out at {Context} and skipped the field (possible ReDoS).",
                     step.Name,
                     context);
             }
             catch (Exception ex)
             {
-                logger.LogDebug(
+                logger.LogWarning(
                     ex,
-                    "Cardigann filter {Filter} failed at {Context} and the value stayed unchanged",
+                    "Cardigann filter {Filter} failed at {Context}; the value stayed unchanged.",
                     step.Name,
                     context);
             }

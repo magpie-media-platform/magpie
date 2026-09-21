@@ -540,14 +540,11 @@ internal static class MappingExtensions
     private static IReadOnlyList<ProviderMetadataSearchSubjectReference> SearchSubjectReferences(this WorkHit hit)
     {
         var references = AuthorReferences(hit.Authors).ToList();
-        foreach (var publisher in hit.Publishers)
+        foreach (var publisher in hit.Publishers
+            .Where(publisher => !string.IsNullOrEmpty(publisher.NormalizeSubjectKey()))
+            .Take(Constants.PublisherCap))
         {
             var identity = publisher.NormalizeSubjectKey();
-            if (string.IsNullOrEmpty(identity))
-            {
-                continue;
-            }
-
             references.Add(new ProviderMetadataSearchSubjectReference
             {
                 SubjectKind = Constants.PublisherSubjectKind,
@@ -566,22 +563,23 @@ internal static class MappingExtensions
         return references;
     }
 
+    internal static string FacetIdentity(this SubjectFacetPair facet)
+    {
+        return !string.IsNullOrWhiteSpace(facet.Key) ? facet.Key.Trim() : facet.Name.NormalizeSubjectKey();
+    }
+
     private static void AddFacetReferences(
         this List<ProviderMetadataSearchSubjectReference> references,
         IReadOnlyList<SubjectFacetPair> facets,
         string kind,
         string externalIdSource)
     {
-        foreach (var facet in facets)
+        var identified = facets
+            .Select(facet => (Facet: facet, Identity: facet.FacetIdentity()))
+            .Where(pair => !string.IsNullOrEmpty(pair.Identity))
+            .Take(Constants.SubjectFacetCap);
+        foreach (var (facet, identity) in identified)
         {
-            var identity = !string.IsNullOrWhiteSpace(facet.Key)
-                ? facet.Key.Trim()
-                : facet.Name.NormalizeSubjectKey();
-            if (string.IsNullOrEmpty(identity))
-            {
-                continue;
-            }
-
             references.Add(new ProviderMetadataSearchSubjectReference
             {
                 SubjectKind = kind,

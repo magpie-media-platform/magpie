@@ -14,7 +14,7 @@ internal static class SettingsExtensions
         this MediaServer server,
         ILogger logger)
     {
-        if (!server.Settings.TryGetValue("libraryMappings", out var raw) ||
+        if (!server.Settings.TryGetValue(Constants.LibraryMappingsSettingKey, out var raw) ||
             string.IsNullOrWhiteSpace(raw))
         {
             return [];
@@ -58,8 +58,7 @@ internal static class SettingsExtensions
         {
             logger.LogWarning(
                 ex,
-                "The Jellyfin extension failed to parse the library mappings JSON for server {ServerId}. " +
-                "The extension discarded all library mappings for this server.",
+                "The Jellyfin extension discarded the unparsable library mappings JSON for server {ServerId}.",
                 server.Id);
             return [];
         }
@@ -71,7 +70,7 @@ internal static class SettingsExtensions
             string.IsNullOrWhiteSpace(rawHost))
         {
             throw new ArgumentException(
-                $"Jellyfin setting {JellyfinSettings.HostKey} is required (e.g. 'http://localhost:8096').",
+                $"Jellyfin setting {JellyfinSettings.HostKey} is required.",
                 nameof(settings));
         }
 
@@ -92,8 +91,7 @@ internal static class SettingsExtensions
             string.IsNullOrEmpty(apiKey))
         {
             throw new ArgumentException(
-                $"Jellyfin setting {JellyfinSettings.ApiKeyKey} is required (created in Jellyfin admin " +
-                "-> Dashboard -> API Keys).",
+                $"Jellyfin setting {JellyfinSettings.ApiKeyKey} is required.",
                 nameof(settings));
         }
 

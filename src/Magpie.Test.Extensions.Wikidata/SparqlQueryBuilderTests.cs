@@ -16,7 +16,7 @@ namespace Magpie.Test.Extensions.Wikidata;
 internal sealed class SparqlQueryBuilderTests
 {
     [Test]
-    public void BuildSearch_MovieTitle_ContainsBothBoundsAndDirectTypeGate()
+    public void BuildSearch_ContainsBothBoundsAndDirectTypeGate_WhenMovieTitle()
     {
         // Arrange
         var plan = new QueryPlan
@@ -81,7 +81,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_TitleIn_UsesSeparateCirrusServiceBranches()
+    public void BuildSearch_UsesSeparateCirrusServiceBranches_WhenTitleIn()
     {
         // Arrange
         var plan = new QueryPlan
@@ -141,7 +141,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_TitleEqualsWithExtraValues_UsesAllAlternatives()
+    public void BuildSearch_UsesAllAlternatives_WhenTitleEqualsWithExtraValues()
     {
         // Arrange
         var plan = new QueryPlan
@@ -181,7 +181,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_TitleWindowOffset_ContinuesEachCirrusSource()
+    public void BuildSearch_ContinuesEachCirrusSource_WhenTitleWindowOffset()
     {
         // Arrange
         var plan = new QueryPlan
@@ -208,7 +208,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_TitleStartsWith_UsesTypeGatedCirrusSeeds()
+    public void BuildSearch_UsesTypeGatedCirrusSeeds_WhenTitleStartsWith()
     {
         // Arrange
         var plan = new QueryPlan
@@ -261,7 +261,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_ShowStructured_UsesShowTypesAndStartDate()
+    public void BuildSearch_UsesShowTypesAndStartDate_WhenShowStructured()
     {
         // Arrange
         var plan = new QueryPlan
@@ -318,7 +318,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_StructuredResidual_UsesBoundedLocalCandidateWindow()
+    public void BuildSearch_UsesBoundedLocalCandidateWindow_WhenStructuredResidual()
     {
         // Arrange
         var plan = new QueryPlan
@@ -360,8 +360,10 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildExternalIdentity_Value_SelectsDistinctAndEscapesLiteral()
+    public void BuildExternalIdentity_SelectsDistinctAndEscapesLiteral_WhenValue()
     {
+        // Arrange
+
         // Act
         var result = SparqlQueryBuilder.BuildExternalIdentity(
             EntityKind.Movie,
@@ -378,7 +380,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildRelationshipSeed_PositiveSubjectQids_UsesLightweightBoundedQuery()
+    public void BuildRelationshipSeed_UsesLightweightBoundedQuery_WhenPositiveSubjectQids()
     {
         // Arrange
         var filter = new QueryFilter
@@ -416,6 +418,8 @@ internal sealed class SparqlQueryBuilderTests
     [Test]
     public void BuildExternalIdentity_Throws_WhenPropertyIdDigitsAreNotAscii()
     {
+        // Arrange
+
         // Act
         var action = () => SparqlQueryBuilder.BuildExternalIdentity(
             EntityKind.Movie,
@@ -427,8 +431,10 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildHierarchy_Episode_UsesBestRankAndAggregatesBeforeSentinel()
+    public void BuildHierarchy_UsesBestRankAndAggregatesBeforeSentinel_WhenEpisode()
     {
+        // Arrange
+
         // Act
         var result = SparqlQueryBuilder.BuildHierarchy(
             EntityKind.Episode,
@@ -451,8 +457,10 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildCoordinateIdentity_Episode_ConstrainsSeasonStatementAndShowSeries()
+    public void BuildCoordinateIdentity_ConstrainsSeasonStatementAndShowSeries_WhenEpisode()
     {
+        // Arrange
+
         // Act
         var result = SparqlQueryBuilder.BuildCoordinateIdentity(EntityKind.Episode, "Q100", 2, "Q200").QueryText;
 
@@ -470,6 +478,8 @@ internal sealed class SparqlQueryBuilderTests
     [TestCase("Q\u0661\u0668\u0666\u0660")]
     public void BuildCoordinateIdentity_Throws_WhenQidIsInvalid(string qid)
     {
+        // Arrange
+
         // Act
         var action = () => SparqlQueryBuilder.BuildCoordinateIdentity(EntityKind.Season, qid, 1, null);
 
@@ -478,7 +488,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_RelationshipExternalIdGroups_RenderAsAnd()
+    public void BuildSearch_RenderAsAnd_WhenRelationshipExternalIdGroups()
     {
         // Arrange
         var plan = new QueryPlan
@@ -522,16 +532,16 @@ internal sealed class SparqlQueryBuilderTests
 
         // Act
         var result = SparqlQueryBuilder.BuildSearch(plan, "en").QueryText;
-        var imdb = result.IndexOf("?subject0_0 wdt:P345 \"nm0000206\".", StringComparison.Ordinal);
-        var tmdb = result.IndexOf("?subject0_0 wdt:P4985 \"6384\".", StringComparison.Ordinal);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Does.Contain("VALUES ?relationshipProperty0_0 { wdt:P161 wdt:P725 }"));
-            Assert.That(imdb, Is.GreaterThan(0));
-            Assert.That(tmdb, Is.GreaterThan(imdb));
-            Assert.That(result.Substring(imdb, tmdb - imdb), Does.Not.Contain("} UNION {"));
+            Assert.That(result, Does.Contain("            ?subject0_0 wdt:P345 \"nm0000206\"."));
+            Assert.That(result, Does.Contain("            ?subject0_0 wdt:P4985 \"6384\"."));
+            Assert.That(
+                result,
+                Does.Not.Contain("?subject0_0 wdt:P345 \"nm0000206\".\n          } UNION {"));
         }
     }
 
@@ -578,7 +588,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_ContentRating_UsesSharedPropertyCatalogAndNamedItemSelectors()
+    public void BuildSearch_UsesSharedPropertyCatalogAndNamedItemSelectors_WhenContentRating()
     {
         // Arrange
         var plan = new QueryPlan
@@ -624,7 +634,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_AwardAndNegatedImage_UseDirectPropertyAlternatives()
+    public void BuildSearch_UseDirectPropertyAlternatives_WhenAwardAndNegatedImage()
     {
         // Arrange
         var plan = new QueryPlan
@@ -679,7 +689,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_GenreNameAndQid_UseMwapiAndDirectValueSelector()
+    public void BuildSearch_UseMwapiAndDirectValueSelector_WhenGenreNameAndQid()
     {
         // Arrange
         var plan = new QueryPlan
@@ -720,7 +730,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_Reference_UsesCaseInsensitiveSchemeSelector()
+    public void BuildSearch_UsesCaseInsensitiveSchemeSelector_WhenReference()
     {
         // Arrange
         var plan = new QueryPlan
@@ -767,7 +777,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_ReferenceExactUrls_FiltersValuesBeforeRemotePaging()
+    public void BuildSearch_FiltersValuesBeforeRemotePaging_WhenReferenceExactUrls()
     {
         // Arrange
         var plan = new QueryPlan
@@ -846,7 +856,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_DayEquality_UsesPeriodOverlapAcrossWikibasePrecisions()
+    public void BuildSearch_UsesPeriodOverlapAcrossWikibasePrecisions_WhenDayEquality()
     {
         // Arrange
         var plan = new QueryPlan
@@ -892,7 +902,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_TwoPositiveDateCriteria_BindsSortVariableOnce()
+    public void BuildSearch_BindsSortVariableOnce_WhenTwoPositiveDateCriteria()
     {
         // Arrange
         var plan = new QueryPlan
@@ -951,7 +961,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_NegatedDayEquality_InvertsTheSamePeriodOverlap()
+    public void BuildSearch_InvertsTheSameDayPeriodOverlap_WhenDayEqualityIsNegated()
     {
         // Arrange
         var filter = new QueryFilter
@@ -1009,7 +1019,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_PositiveStructuredFilters_JoinWithoutFilterExists()
+    public void BuildSearch_JoinWithoutFilterExists_WhenPositiveStructuredFilters()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1085,7 +1095,7 @@ internal sealed class SparqlQueryBuilderTests
     [TestCase(EntityKind.Movie, CriteriaValueOperator.IsNotNull, "FILTER EXISTS")]
     [TestCase(EntityKind.Show, CriteriaValueOperator.IsNull, "FILTER NOT EXISTS")]
     [TestCase(EntityKind.Show, CriteriaValueOperator.IsNotNull, "FILTER EXISTS")]
-    public void BuildSearch_LanguagePresence_UsesProjectableLanguageCode(
+    public void BuildSearch_UsesProjectableLanguageCode_WhenLanguagePresence(
         EntityKind entityKind,
         CriteriaValueOperator valueOperator,
         string expectedFilter)
@@ -1153,7 +1163,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_NegatedCompositeFilters_KeepFilterNotExists()
+    public void BuildSearch_KeepFilterNotExists_WhenNegatedCompositeFilters()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1210,7 +1220,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_NegatedTitle_DoesNotRequireOuterLabel()
+    public void BuildSearch_DoesNotRequireOuterLabel_WhenNegatedTitle()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1250,7 +1260,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_OriginalTitleEquals_ConstrainsMonolingualTitle()
+    public void BuildSearch_ConstrainsMonolingualTitle_WhenOriginalTitleEquals()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1282,7 +1292,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_OverviewContains_ConstrainsTaggedDescription()
+    public void BuildSearch_ConstrainsTaggedDescription_WhenOverviewContains()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1315,7 +1325,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_OverviewStartsWith_UsesStrStarts()
+    public void BuildSearch_UsesStrStarts_WhenOverviewStartsWith()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1339,14 +1349,11 @@ internal sealed class SparqlQueryBuilderTests
         var result = SparqlQueryBuilder.BuildSearch(plan, "en").QueryText;
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Does.Contain("FILTER(STRSTARTS(LCASE(STR(?overview0)), \"a heist\"))"));
-        }
+        Assert.That(result, Does.Contain("FILTER(STRSTARTS(LCASE(STR(?overview0)), \"a heist\"))"));
     }
 
     [Test]
-    public void BuildSearch_DurationBound_ComparesAmountInStatementUnits()
+    public void BuildSearch_ComparesAmountInStatementUnits_WhenDurationBound()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1385,7 +1392,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_NegatedDurationEquality_WrapsPatternInNotExists()
+    public void BuildSearch_WrapsPatternInNotExists_WhenNegatedDurationEquality()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1666,7 +1673,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_TitleWithEmbeddedQuotes_StripsOnlyCirrusQuotes()
+    public void BuildSearch_StripsOnlyCirrusQuotes_WhenTitleWithEmbeddedQuotes()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1733,7 +1740,7 @@ internal sealed class SparqlQueryBuilderTests
     }
 
     [Test]
-    public void BuildSearch_RelationshipExternalIdGroup_RendersQidAndPropertyAsOr()
+    public void BuildSearch_RendersQidAndPropertyAsOr_WhenRelationshipExternalIdGroup()
     {
         // Arrange
         var plan = new QueryPlan

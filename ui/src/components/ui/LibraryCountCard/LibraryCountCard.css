@@ -1,0 +1,73 @@
+@layer components {
+    .library-count-card {
+        text-decoration: none;
+        color: inherit;
+        display: block;
+    }
+
+    .library-count-card__card {
+        padding: var(--space-md) var(--space-lg);
+        transition:
+            transform var(--duration-fast) var(--easing-default),
+            box-shadow var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-xl);
+        }
+    }
+
+    .library-count-card__content {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: var(--space-md);
+    }
+
+    .library-count-card__icon {
+        font-size: var(--text-3xl);
+        color: var(--accent-primary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .library-count-card__info {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        min-width: 0;
+    }
+
+    .library-count-card__name {
+        font-size: var(--text-base);
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+    }
+
+    .library-count-card__count {
+        font-size: var(--text-sm);
+        color: var(--text-muted);
+    }
+
+    .library-count-card__skeleton {
+        width: 48px;
+        height: 14px;
+        border-radius: var(--radius-sm);
+    }
+
+    @media (max-width: 480px) {
+        .library-count-card__card {
+            padding: var(--space-sm) var(--space-md);
+        }
+
+        .library-count-card__icon {
+            font-size: var(--text-2xl);
+        }
+
+        .library-count-card__name {
+            font-size: var(--text-sm);
+        }
+    }
+}

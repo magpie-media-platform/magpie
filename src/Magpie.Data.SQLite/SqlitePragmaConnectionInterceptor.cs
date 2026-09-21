@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace Magpie.Data.SQLite;
@@ -14,6 +15,7 @@ internal sealed class SqlitePragmaConnectionInterceptor(TimeSpan busyTimeout) : 
 
     public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
     {
+        RegisterUnicodeLower(connection);
         ApplyPragmas(connection);
     }
 
@@ -22,7 +24,16 @@ internal sealed class SqlitePragmaConnectionInterceptor(TimeSpan busyTimeout) : 
         ConnectionEndEventData eventData,
         CancellationToken cancellationToken = default)
     {
+        RegisterUnicodeLower(connection);
         await ApplyPragmasAsync(connection, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void RegisterUnicodeLower(DbConnection connection)
+    {
+        if (connection is SqliteConnection sqlite)
+        {
+            SqliteUnicodeLower.Register(sqlite);
+        }
     }
 
     private void ApplyPragmas(DbConnection connection)

@@ -18,12 +18,12 @@ public sealed record DiagnosticRepairResult
     /// <summary>
     /// Creates a successful result with the given message.
     /// </summary>
-    /// <param name="message">The description of what the repair did.</param>
+    /// <param name="message">The description of what the repair did</param>
     public static DiagnosticRepairResult Succeeded(string message) => new() { Success = true, Message = message };
 
     /// <summary>
     /// Creates a failed result with the given message.
     /// </summary>
-    /// <param name="message">The reason why the repair did not run or did not complete.</param>
+    /// <param name="message">The reason why the repair did not run or did not complete</param>
     public static DiagnosticRepairResult Failed(string message) => new() { Success = false, Message = message };
 }

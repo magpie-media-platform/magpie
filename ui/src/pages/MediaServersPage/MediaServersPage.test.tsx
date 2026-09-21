@@ -140,7 +140,7 @@ function dataRows() {
     const table = screen.getByRole('grid');
     return within(table)
         .getAllByRole('row')
-        .filter((r) => within(r).queryAllByRole('cell').length > 0);
+        .filter((r) => within(r).queryAllByRole('gridcell').length > 0);
 }
 
 describe('MediaServersPage', () => {
@@ -406,5 +406,50 @@ describe('MediaServersPage URL state', () => {
         render(<MediaServersPage />, { wrapper: createWrapper(['/media-servers?status=healthy']) });
 
         expect(dataRows().length).toBe(3);
+    });
+});
+
+describe('MediaServersPage (mobile card collapse)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
+    });
+
+    it('marks the name cell as header role and the select column as hidden (no layout-participating checkbox)', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        expect(document.querySelector('td[data-column="name"]')).toHaveAttribute('data-mobile-role', 'header');
+        expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
+    });
+
+    it('bulk-deletes every selected server', async () => {
+        const hookReturn = createMockHookReturn();
+        vi.mocked(useMediaServers).mockReturnValue(hookReturn);
+        const user = userEvent.setup();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        await user.click(screen.getByLabelText('Select Plex Media Server'));
+        await user.click(screen.getByLabelText('Select MediaServer A'));
+        await user.click(screen.getByRole('button', { name: 'Delete selected media servers' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(hookReturn.deleteServer).toHaveBeenCalledWith('server-1');
+            expect(hookReturn.deleteServer).toHaveBeenCalledWith('server-2');
+        });
+    });
+
+    it('bulk-enables every selected server', async () => {
+        const hookReturn = createMockHookReturn();
+        vi.mocked(useMediaServers).mockReturnValue(hookReturn);
+        const user = userEvent.setup();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        await user.click(screen.getByLabelText('Select Plex Media Server'));
+        await user.click(screen.getByRole('button', { name: 'Enable selected media servers' }));
+
+        await waitFor(() => {
+            expect(hookReturn.toggleServerEnabled).toHaveBeenCalledWith('server-1', true);
+        });
     });
 });

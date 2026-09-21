@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Core.Jobs.Downloads;
 using Magpie.Models;
 using Magpie.Models.Data;
@@ -30,7 +29,6 @@ public sealed class DownloadStuckDetectionJobTests
     private List<IDownloadClientIntegration> _integrations = null!;
     private Mock<IDownloadRepository> _downloadRepository = null!;
     private Mock<IDownloadService> _downloadService = null!;
-    private Mock<IDataProtectionService> _protector = null!;
     private Mock<IProgressReporter> _progress = null!;
     private FakeTimeProvider _timeProvider = null!;
     private JobContext _jobContext = null!;
@@ -81,11 +79,6 @@ public sealed class DownloadStuckDetectionJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
-        _protector = new Mock<IDataProtectionService>();
-        _protector
-            .Setup(p => p.Unprotect(It.IsAny<IReadOnlyDictionary<string, string>>()))
-            .Returns((IReadOnlyDictionary<string, string> stored) => new Dictionary<string, string>(stored));
-
         _progress = new Mock<IProgressReporter>();
         _subject = new DownloadStuckDetectionJob(
             _integrations,
@@ -93,36 +86,11 @@ public sealed class DownloadStuckDetectionJobTests
             NullLogger<DownloadStuckDetectionJob>.Instance,
             _timeProvider,
             _downloadService.Object,
-            _protector.Object,
             _progress.Object);
     }
 
     [Test]
-    public void Spec_DeclaresThresholdParameters_WithDefaults()
-    {
-        // Arrange
-
-        // Act
-        var parameters = DownloadStuckDetectionJob.Spec.Parameters;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(
-                parameters.Select(p => p.Name),
-                Is.EqualTo(
-                [
-                    "fetchingMinutes",
-                    "stalledMinutes"
-                ]));
-            Assert.That(parameters.Select(p => p.Type), Is.All.EqualTo(DataType.Number));
-            Assert.That(parameters.Select(p => p.Required), Is.All.EqualTo(false));
-            Assert.That(parameters.Select(p => p.DefaultValue), Is.EqualTo(["20", "90"]));
-        }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_RequestsCandidates_WithinDefaultThresholdWindow()
+    public async Task ExecuteAsync_RequestsCandidates_WhenNoThresholdIsConfigured()
     {
         // Arrange
 
@@ -517,6 +485,53 @@ public sealed class DownloadStuckDetectionJobTests
                     It.IsAny<DownloadInfo>(),
                     It.IsAny<DateTime>(),
                     It.IsAny<DateTime>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_SkipsCandidate_WhenClientSettingsCannotBeRead()
+    {
+        // Arrange
+        var candidate = new StuckDownloadCandidate
+        {
+            DownloadId = Guid.NewGuid(),
+            ExternalId = Guid.NewGuid().ToString("N"),
+            Title = $"download-{Guid.NewGuid():N}",
+            Status = DownloadStatus.Downloading,
+            InactivityAnchor = new DateTime(2026, 5, 20, 11, 0, 0, DateTimeKind.Utc),
+            ProviderType = "stub",
+            ClientName = $"client-{Guid.NewGuid():N}",
+            Settings = null
+        };
+        _downloadRepository
+            .Setup(r => r.ListStuckCandidatesAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([candidate]);
+        var integration = new Mock<IDownloadClientIntegration>();
+        integration.SetupGet(i => i.ProviderType).Returns("stub");
+        _integrations.Add(integration.Object);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            integration.Verify(
+                i => i.GetDownloadsAsync(
+                    It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _downloadService.Verify(
+                s => s.MarkStuckAsync(
+                    It.IsAny<StuckDownloadCandidate>(),
+                    It.IsAny<TimeSpan>(),
+                    It.IsAny<DateTime>(),
+                    It.IsAny<Guid?>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Never);

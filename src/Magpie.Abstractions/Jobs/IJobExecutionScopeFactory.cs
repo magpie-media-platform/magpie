@@ -13,7 +13,12 @@ public interface IJobExecutionScopeFactory
     Guid? CurrentExecutionId { get; }
 
     /// <summary>
-    /// Creates a scope for one job execution.
+    /// The correlation of the job execution that owns the current scope.
+    /// </summary>
+    Guid? CurrentCorrelationId { get; }
+
+    /// <summary>
+    /// Creates a scope for one job execution, which keeps the correlation of the current scope.
     /// </summary>
     /// <param name="executionId">The id of the job execution that the scope serves</param>
     IJobExecutionScope CreateScope(Guid executionId);

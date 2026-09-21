@@ -12,8 +12,6 @@ import {
     DialogTitle,
     DialogDescription,
     DialogClose,
-    DialogOverlay,
-    DialogPortal,
 } from './Dialog';
 
 describe('Dialog', () => {
@@ -575,14 +573,6 @@ describe('Dialog', () => {
             expect(body).toHaveClass('dialog-body');
             expect(body).toHaveClass('custom-body');
         });
-    });
-
-    it('exports DialogOverlay for compound usage', () => {
-        expect(DialogOverlay).toBeDefined();
-    });
-
-    it('exports DialogPortal for compound usage', () => {
-        expect(DialogPortal).toBeDefined();
     });
 });
 

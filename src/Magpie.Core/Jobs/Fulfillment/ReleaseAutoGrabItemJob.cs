@@ -1,10 +1,10 @@
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Data;
@@ -23,12 +23,13 @@ internal sealed class ReleaseAutoGrabItemJob(
     IContentHierarchyItemRepository contentHierarchyItemRepository,
     IJobManager jobManager,
     IAuditRecordRepository auditRecordRepository,
+    ITransactionManager transactionManager,
     TimeProvider timeProvider,
     ILogger<ReleaseAutoGrabItemJob> logger) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "ReleaseAutoGrabItem",
+        JobType = MagpieJobs.Types.ReleaseAutoGrabItem,
         DisplayName = "Release auto-grab item",
         Description =
             "Chooses the best acceptable release for one content item and queues it for download. " +
@@ -106,11 +107,7 @@ internal sealed class ReleaseAutoGrabItemJob(
             .ConfigureAwait(false);
 
         var item = page.Items.FirstOrDefault();
-        var record = item?.ContentItem is { } contentItem
-            ? contentItem with { ContentHierarchyItemId = item.Id }
-            : null;
-
-        if (record is null)
+        if (item?.ContentItem is not { } contentItem)
         {
             logger.LogInformation(
                 "Content item {ContentItemId} does not exist, so auto-grab skipped the retry",
@@ -118,7 +115,7 @@ internal sealed class ReleaseAutoGrabItemJob(
             return null;
         }
 
-        var candidate = record;
+        var candidate = contentItem with { ContentHierarchyItemId = item.Id };
 
         if (candidate.Fulfillment is not (FulfillmentStatus.Missing or FulfillmentStatus.Upgradable))
         {
@@ -129,15 +126,11 @@ internal sealed class ReleaseAutoGrabItemJob(
             return null;
         }
 
-        var hierarchyItem = await contentHierarchyItemRepository
-            .GetByIdAsync(candidate.ContentHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
-        if (hierarchyItem?.EffectiveMonitoring != true)
+        if (!item.EffectiveMonitoring)
         {
             logger.LogInformation(
-                "Content item {ContentItemId} is not monitored ({Monitoring}), so auto-grab skipped the retry",
-                contentItemId,
-                hierarchyItem?.EffectiveMonitoring);
+                "Content item {ContentItemId} is not monitored, so auto-grab skipped the retry",
+                contentItemId);
             return null;
         }
 
@@ -157,14 +150,33 @@ internal sealed class ReleaseAutoGrabItemJob(
             [MagpieJobs.Parameters.ContentHierarchyItemId] = candidate.ContentHierarchyItemId.ToString()
         };
 
-        await jobManager.ExecuteAsync(
-            new JobEnqueueRequest
+        await transactionManager.ExecuteWithTransactionAsync(
+            async transactionToken =>
             {
-                JobType = MagpieJobs.Types.ReleaseDownloadItem,
-                Parameters = parameters,
-                Mode = JobExecutionMode.Queue,
-                UserId = userId,
-                CorrelationId = correlationId,
+                await jobManager.ExecuteAsync(
+                    new JobEnqueueRequest
+                    {
+                        JobType = MagpieJobs.Types.ReleaseDownloadItem,
+                        Parameters = parameters,
+                        Mode = JobExecutionMode.Queue,
+                        UserId = userId,
+                        CorrelationId = correlationId,
+                    },
+                    transactionToken).ConfigureAwait(false);
+
+                await auditRecordRepository.CreateAsync(
+                    new AuditRecord
+                    {
+                        Category = AuditCategories.Jobs,
+                        Operation = "GrabAttempted",
+                        EntityType = nameof(ContentItem),
+                        EntityId = candidate.Id.ToString(),
+                        Detail = $"Queued ReleaseDownloadItem for release {chosen.Id}.",
+                        Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                        UserId = userId,
+                        CorrelationId = correlationId
+                    },
+                    transactionToken).ConfigureAwait(false);
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -172,54 +184,5 @@ internal sealed class ReleaseAutoGrabItemJob(
             "Auto-grab selected release {ReleaseId} for content {ContentItemId}",
             chosen.Id,
             candidate.Id);
-
-        await TryWriteAuditAsync(
-            operation: "GrabAttempted",
-            entityType: nameof(ContentItem),
-            entityId: candidate.Id.ToString(),
-            detail: $"Queued ReleaseDownloadItem for release {chosen.Id}.",
-            userId,
-            correlationId,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task TryWriteAuditAsync(
-        string operation,
-        string entityType,
-        string entityId,
-        string detail,
-        Guid? userId,
-        Guid? correlationId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await auditRecordRepository.CreateAsync(
-                new AuditRecord
-                {
-                    Category = AuditCategories.Jobs,
-                    Operation = operation,
-                    EntityType = entityType,
-                    EntityId = entityId,
-                    Detail = detail,
-                    Timestamp = timeProvider.GetUtcNow().UtcDateTime,
-                    UserId = userId,
-                    CorrelationId = correlationId
-                },
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "Auto-grab failed to write the {AuditOperation} audit row for {EntityType}/{EntityId}",
-                operation,
-                entityType,
-                entityId);
-        }
     }
 }

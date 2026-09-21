@@ -52,9 +52,9 @@ internal sealed class RemotePathMappingService(
         return repository.CreateAsync(
             new RemotePathMapping
             {
-                Host = create.Host,
-                RemotePath = create.RemotePath,
-                LocalPath = create.LocalPath
+                Host = RequireHost(create.Host),
+                RemotePath = Require(create.RemotePath, "Remote path"),
+                LocalPath = Require(create.LocalPath, "Local path")
             },
             actingUserId,
             cancellationToken);
@@ -68,28 +68,19 @@ internal sealed class RemotePathMappingService(
     {
         ArgumentNullException.ThrowIfNull(patch);
 
-        var existing = await repository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null)
+        var normalized = patch with
         {
-            return false;
-        }
+            Id = id,
+            Host = patch.Host is null ? null : new() { Value = RequireHost(patch.Host.Value) },
+            RemotePath = patch.RemotePath is null
+                ? null
+                : new() { Value = Require(patch.RemotePath.Value, "Remote path") },
+            LocalPath = patch.LocalPath is null
+                ? null
+                : new() { Value = Require(patch.LocalPath.Value, "Local path") }
+        };
 
-        if (patch.Host is not null)
-        {
-            existing.Host = patch.Host;
-        }
-
-        if (patch.RemotePath is not null)
-        {
-            existing.RemotePath = patch.RemotePath;
-        }
-
-        if (patch.LocalPath is not null)
-        {
-            existing.LocalPath = patch.LocalPath;
-        }
-
-        return await repository.UpdateAsync(existing, actingUserId, cancellationToken).ConfigureAwait(false);
+        return await repository.PatchAsync(normalized, actingUserId, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<bool> DeleteAsync(Guid id, Guid? actingUserId, CancellationToken cancellationToken = default)
@@ -141,6 +132,22 @@ internal sealed class RemotePathMappingService(
         }
 
         return fileSystem.ReplacePathPrefix(remotePath, best.RemotePath, best.LocalPath);
+    }
+
+    private static string Require(string? value, string name)
+    {
+        var trimmed = value?.Trim();
+
+        return string.IsNullOrEmpty(trimmed) ? throw new ArgumentException($"{name} is required.") : trimmed;
+    }
+
+    private static string RequireHost(string? value)
+    {
+        var trimmed = Require(value, "Host");
+
+        return NormalizeHost(trimmed) is null
+            ? throw new ArgumentException("Host must include a hostname.")
+            : trimmed;
     }
 
     private static string? NormalizeHost(string raw)

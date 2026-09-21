@@ -109,17 +109,6 @@
         }
     }
 
-    .content-list__select-all,
-    .content-list__select-cell {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .content-list__select-cell {
-        cursor: default;
-    }
-
     .content-list__date-added,
     .content-list__published {
         font-size: var(--text-sm);

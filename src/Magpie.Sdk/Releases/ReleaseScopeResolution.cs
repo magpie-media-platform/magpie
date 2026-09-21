@@ -10,4 +10,15 @@ namespace Magpie.Sdk.Releases;
 /// <param name="ActionableNodeIds">The ids of the lowest actionable nodes in the scope</param>
 public sealed record ReleaseScopeResolution(
     IReadOnlyList<Guid> ScopeNodeIds,
-    IReadOnlyList<Guid> ActionableNodeIds);
+    IReadOnlyList<Guid> ActionableNodeIds)
+{
+    /// <summary>
+    /// The ids of the hierarchy nodes in the release scope.
+    /// </summary>
+    public IReadOnlyList<Guid> ScopeNodeIds { get; set; } = ScopeNodeIds;
+
+    /// <summary>
+    /// The ids of the lowest actionable nodes in the scope.
+    /// </summary>
+    public IReadOnlyList<Guid> ActionableNodeIds { get; set; } = ActionableNodeIds;
+}

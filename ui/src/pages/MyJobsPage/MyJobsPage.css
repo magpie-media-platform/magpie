@@ -68,11 +68,20 @@
 
     .my-jobs-page__executions-toolbar {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: var(--space-md);
-        margin-bottom: var(--space-md);
         flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-sm);
+        margin-bottom: var(--space-md);
+    }
+
+    .my-jobs-page__executions-toolbar .list-toolbar__filters {
+        margin-bottom: 0;
+    }
+
+    .my-jobs-page__executions-toolbar > [data-action='run-job'],
+    .my-jobs-page__executions-toolbar > :has([data-action='run-job']) {
+        flex: 0 0 auto;
+        margin-left: auto;
     }
 
     .my-jobs-page__roots-toggle {
@@ -83,12 +92,40 @@
         color: var(--text-secondary);
         cursor: pointer;
         user-select: none;
+        white-space: nowrap;
+    }
+
+    .my-jobs-page__chain-filter {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
+    .my-jobs-page__chain-filter-label {
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+        background-color: var(--bg-tertiary);
+        padding: var(--space-2xs) var(--space-sm);
+        border-radius: var(--radius-full);
+        overflow-wrap: anywhere;
     }
 
     .my-jobs-page__list {
         display: flex;
         flex-direction: column;
         gap: var(--space-sm);
+    }
+
+    .my-jobs-page__loading {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .my-jobs-page__skeleton {
+        height: 64px;
+        width: 100%;
+        border-radius: var(--radius-md);
     }
 
     .my-jobs-page__pager {
@@ -124,5 +161,12 @@
         .my-jobs-page__pull-to-refresh .pull-to-refresh__content {
             padding: var(--space-xl);
         }
+    }
+}
+
+@layer components {
+    .my-jobs-page__single-bar {
+        display: flex;
+        margin-bottom: var(--space-sm);
     }
 }

@@ -1,4 +1,4 @@
-export { formatSubjectKindLabel, resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from './subjects';
+export { resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from './subjects';
 
 export type { DownloadClientOption, StateFilterOption, DownloadFilterState } from './downloads';
 
@@ -22,15 +22,7 @@ export type {
 
 export type { FiltersPageCreateState, LibraryAddPreloadState, WishlistsPageCreateState } from './navigation';
 
-export type {
-    UserItem,
-    UserCreate,
-    UserUpdate,
-    UserExternalCreate,
-    ApiKeyItem,
-    ApiKeyCreatedItem,
-    ApiKeyCreate,
-} from './users';
+export type { UserItem, UserCreate, UserUpdate, ApiKeyItem, ApiKeyCreatedItem, ApiKeyCreate } from './users';
 
 export { roleVariants } from './users';
 
@@ -60,7 +52,6 @@ export {
 } from './content';
 
 export type {
-    AcquisitionBlockReason,
     RootFolderResolutionSource,
     EffectiveRootFolder,
     SetContentRootFolderVariables,
@@ -71,8 +62,6 @@ export type {
     SearchContentReleasesParams,
     ContentListResult,
     ContentRelationship,
-    PendingRefreshState,
-    PendingRefreshResponse,
     UpdateContentRequest,
     MetadataInspectorField,
     MetadataGenre,
@@ -89,7 +78,6 @@ export type {
     MaterializedMetadata,
     SubjectRef,
     MetadataInspectorResponse,
-    ScalarPatch,
     MetadataCollectionPatch,
     MetadataSetPatch,
     MetadataAlternateTextAdd,
@@ -132,14 +120,12 @@ export type { CalendarEvent, CalendarView, CalendarQueryParams } from './calenda
 
 export type { PagedList } from './paging';
 
-export type {
-    ContentFilterOption,
-    QualityTierListOption,
-    RootFolderOption,
-    TagOption,
-    WishlistFormValues,
-} from './wishlist';
+export type { ContentFilterOption, QualityTierListOption, RootFolderOption, TagOption } from './wishlist';
 
 export type { BadgeVariant, BadgeSize, BadgeStyle } from './badge';
 
+export type { DetailRow } from './details';
+
 export type { DiskSpaceInfo, DownloadState, DownloadStateCounts, ActiveDownloadItem } from './system';
+
+export type { ScalarPatch, DictionaryPatch } from './patch';

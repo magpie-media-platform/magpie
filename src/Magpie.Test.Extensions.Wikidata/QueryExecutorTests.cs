@@ -750,7 +750,7 @@ internal sealed class QueryExecutorTests
     [TestCase(2, 5, 5, false, TestName = "Structured partial page reports no more")]
     [TestCase(3, 0, 0, false, TestName = "Structured empty later page returns nothing")]
     [TestCase(2, 21, 20, true, TestName = "Structured overflow caps page and flags more")]
-    public async Task SearchAsync_StructuredPaging_CapsPageAndReportsHasMore(
+    public async Task SearchAsync_CapsPageAndReportsHasMore_WhenStructuredPaging(
         int page,
         int rowCount,
         int expectedHits,
@@ -803,8 +803,74 @@ internal sealed class QueryExecutorTests
         }
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SearchAsync_ReturnsFailureWarning_WhenPagingBudgetIsExhausted(bool relationshipSeed)
+    {
+        // Arrange
+        var rows = Enumerable.Range(1, 51).Select(index => new Dictionary<string, SparqlBindingDto>
+        {
+            ["item"] = new() { Value = "Q" + index }
+        }).ToArray();
+        var cache = new Mock<IQueryCoordinator>();
+        cache.Setup(value => value.GetSearchAsync(
+            It.IsAny<string>(),
+            It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()))
+            .ReturnsAsync(new SearchCacheResult(rows, SearchCacheProvenance.Remote));
+        var subject = new QueryExecutor(
+            Mock.Of<IWikidataClient>(), cache.Object, NullLogger<QueryExecutor>.Instance);
+        var plan = new QueryPlan
+        {
+            EntityKind = EntityKind.Movie,
+            Strategy = QueryStrategy.Structured,
+            Page = 1,
+            Warnings = [],
+            UsesLocalPaging = true,
+            Filters = relationshipSeed
+                ? [new QueryFilter
+                {
+                    Kind = QueryFilterKind.Relationship,
+                    Alternatives = [new SubjectFilter { PropertyIds = ["P161"], Qids = ["Q42"] }]
+                }]
+                : [],
+            ResidualFilters = relationshipSeed
+                ? [new ResidualFilter
+                {
+                    Kind = ResidualFilterKind.Relationship,
+                    Source = "Relationships.Some[0]",
+                    Hydration = ResidualHydration.None
+                }]
+                : []
+        };
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+
+        // Act
+        var result = await subject.SearchAsync(plan, context, default)
+            .WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits, Is.Empty);
+            Assert.That(result.Warnings, Is.EqualTo(["Wikidata search failed; no Wikidata results were returned."]));
+        }
+
+        cache.Verify(value => value.GetSearchAsync(
+            It.IsAny<string>(),
+            It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()), Times.Exactly(20));
+    }
+
     [Test]
-    public async Task SearchAsync_StructuredWindow_MapsRowsToHits()
+    public async Task SearchAsync_MapsRowsToHits_WhenStructuredWindow()
     {
         // Arrange
         var context = new RequestContext
@@ -857,7 +923,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_MaximumResults_UsesCallerBoundaryAndLookahead()
+    public async Task SearchAsync_UsesCallerBoundaryAndLookahead_WhenMaximumResults()
     {
         // Arrange
         var context = new RequestContext
@@ -926,7 +992,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_LocalSecondPage_ReturnsTheOffsetPage()
+    public async Task SearchAsync_ReturnsTheOffsetPage_WhenLocalSecondPage()
     {
         // Arrange
         var context = new RequestContext
@@ -982,7 +1048,7 @@ internal sealed class QueryExecutorTests
     [TestCase(1, 50, true, 0, 20, true, TestName = "Title first page uses lookahead")]
     [TestCase(3, 50, false, 0, 10, false, TestName = "Title last page at window")]
     [TestCase(3, 50, true, 1, 11, false, TestName = "Title later page continues window")]
-    public async Task SearchAsync_TitlePaging_ContinuesUntilLogicalBoundary(
+    public async Task SearchAsync_ContinuesUntilLogicalBoundary_WhenTitlePaging(
         int page,
         int rowCount,
         bool exceedsWindow,
@@ -1064,7 +1130,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_TitleWindowExceeded_ReturnsCandidateFromNextWindow()
+    public async Task SearchAsync_ReturnsCandidateFromNextWindow_WhenTitleWindowExceeded()
     {
         // Arrange
         var context = new RequestContext
@@ -1133,7 +1199,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_OrdinaryTitlePages_ReuseCandidateWindow()
+    public async Task SearchAsync_ReuseCandidateWindow_WhenOrdinaryTitlePages()
     {
         // Arrange
         var context = new RequestContext
@@ -1191,7 +1257,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_UnresolvedNameSelector_ReturnsEmptyWithoutSearchingWdqs()
+    public async Task SearchAsync_ReturnsEmptyWithoutSearchingWdqs_WhenUnresolvedNameSelector()
     {
         // Arrange
         var context = new RequestContext
@@ -1249,7 +1315,85 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_UnresolvedNameSelector_PreservesPlanWarningsAndDispositions()
+    public async Task SearchAsync_ResolvesEveryNameWithoutFailing_WhenManyNameSelectors()
+    {
+        // Arrange
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+        IReadOnlyList<Dictionary<string, SparqlBindingDto>> rows =
+        [
+            new()
+            {
+                ["item"] = new SparqlBindingDto { Value = "Q1" },
+                ["itemLabel"] = new SparqlBindingDto { Value = "Movie 1" },
+                ["type"] = new SparqlBindingDto { Value = "Q11424" }
+            }
+        ];
+        var cache = new Mock<IQueryCoordinator>();
+        cache.Setup(value => value.GetEntitySearchAsync(
+            It.IsAny<string>(),
+            It.IsAny<Func<CancellationToken, Task<IReadOnlyList<string>>>>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()))
+            .ReturnsAsync(["Q900"]);
+        cache.Setup(value => value.GetSearchAsync(
+            It.IsAny<string>(),
+            It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()))
+            .ReturnsAsync(new SearchCacheResult(rows, SearchCacheProvenance.Remote));
+        IQueryExecutor subject = new QueryExecutor(
+            new Mock<IWikidataClient>(MockBehavior.Strict).Object,
+            cache.Object,
+            NullLogger<QueryExecutor>.Instance);
+        var plan = new QueryPlan
+        {
+            EntityKind = EntityKind.Movie,
+            Strategy = QueryStrategy.Structured,
+            Filters =
+            [
+                new QueryFilter
+                {
+                    Kind = QueryFilterKind.Relationship,
+                    Alternatives =
+                    [
+                        new SubjectFilter
+                        {
+                            PropertyIds = [Constants.CastMemberPropertyId],
+                            Names = [.. Enumerable.Range(1, 25).Select(index => "Actor " + index)]
+                        }
+                    ]
+                }
+            ],
+            Warnings = [],
+            Page = 1
+        };
+
+        // Act
+        var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits, Has.Count.EqualTo(1));
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        cache.Verify(
+            value => value.GetEntitySearchAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<CancellationToken, Task<IReadOnlyList<string>>>>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<Action<SearchCacheProvenance>?>()),
+            Times.Exactly(25));
+    }
+
+    [Test]
+    public async Task SearchAsync_PreservesPlanWarnings_WhenNameSelectorIsUnresolved()
     {
         // Arrange
         var context = new RequestContext
@@ -1317,7 +1461,6 @@ internal sealed class QueryExecutorTests
             Assert.That(
                 result.Warnings.Select(warning => warning),
                 Is.EqualTo(["planner warning"]));
-            Assert.That(result.CriterionDispositions.Single().Source, Is.EqualTo("CustomMetadata.And[0]"));
         }
     }
 
@@ -1398,7 +1541,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_TitleStartsWith_BindsResolvedCandidatesIntoQuery()
+    public async Task SearchAsync_BindsResolvedCandidatesIntoQuery_WhenTitleStartsWith()
     {
         // Arrange
         var context = new RequestContext
@@ -1481,7 +1624,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_TitleStartsWithAlternatives_BindsEveryResolvedCandidateIntoQuery()
+    public async Task SearchAsync_BindsEveryResolvedCandidateIntoQuery_WhenTitleStartsWithAlternatives()
     {
         // Arrange
         var context = new RequestContext
@@ -1567,8 +1710,9 @@ internal sealed class QueryExecutorTests
         }
     }
 
-    [Test]
-    public async Task SearchAsync_ResolvedNameSelector_BindsResolvedQidsIntoQuery()
+    [TestCase("Keanu Reeves")]
+    [TestCase("Keanu Reeves", "", " ")]
+    public async Task SearchAsync_BindsResolvedQids_WhenNameSelectorContainsBlankValues(params string[] names)
     {
         // Arrange
         var context = new RequestContext
@@ -1634,7 +1778,7 @@ internal sealed class QueryExecutorTests
                         new SubjectFilter
                         {
                             PropertyIds = [Constants.CastMemberPropertyId],
-                            Names = ["Keanu Reeves"]
+                            Names = names
                         }
                     ]
                 }
@@ -1732,7 +1876,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_TerminalFailure_ReturnsRateLimitWarningWithoutHits()
+    public async Task SearchAsync_ReturnsRateLimitWarningWithoutHits_WhenTerminalFailure()
     {
         // Arrange
         var context = new RequestContext
@@ -1926,10 +2070,7 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Hits, Is.Empty);
-        }
+        Assert.That(result.Hits, Is.Empty);
     }
 
     [Test]
@@ -2119,7 +2260,112 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RelationshipSeed_ReturnsRateLimitWarningWithoutHits()
+    public async Task SearchAsync_ReturnsCandidatesFromLaterCandidateWindow_WhenSeedCandidateWindowIsFull()
+    {
+        // Arrange
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+        IReadOnlyList<Dictionary<string, SparqlBindingDto>> seedRows =
+        [
+            new() { ["item"] = new SparqlBindingDto { Value = "Q1" } },
+            new() { ["item"] = new SparqlBindingDto { Value = "Q2" } }
+        ];
+        IReadOnlyList<Dictionary<string, SparqlBindingDto>> firstCandidateRows =
+        [
+            new()
+            {
+                ["item"] = new SparqlBindingDto { Value = "Q1" },
+                ["itemLabel"] = new SparqlBindingDto { Value = "Movie 1" },
+                ["type"] = new SparqlBindingDto { Value = "Q11424" }
+            },
+            new()
+            {
+                ["item"] = new SparqlBindingDto { Value = "Q9999" },
+                ["itemLabel"] = new SparqlBindingDto { Value = "Sentinel" },
+                ["titleWindowExceeded"] = new SparqlBindingDto { Value = "1" }
+            }
+        ];
+        IReadOnlyList<Dictionary<string, SparqlBindingDto>> secondCandidateRows =
+        [
+            new()
+            {
+                ["item"] = new SparqlBindingDto { Value = "Q2" },
+                ["itemLabel"] = new SparqlBindingDto { Value = "Movie 2" },
+                ["type"] = new SparqlBindingDto { Value = "Q11424" }
+            }
+        ];
+        var cache = new Mock<IQueryCoordinator>();
+        cache.SetupSequence(value => value.GetSearchAsync(
+            It.IsAny<string>(),
+            It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()))
+            .ReturnsAsync(new SearchCacheResult(seedRows, SearchCacheProvenance.Remote))
+            .ReturnsAsync(new SearchCacheResult(firstCandidateRows, SearchCacheProvenance.Remote))
+            .ReturnsAsync(new SearchCacheResult(secondCandidateRows, SearchCacheProvenance.Remote));
+        IQueryExecutor subject = new QueryExecutor(
+            new Mock<IWikidataClient>(MockBehavior.Strict).Object,
+            cache.Object,
+            NullLogger<QueryExecutor>.Instance);
+        var plan = new QueryPlan
+        {
+            EntityKind = EntityKind.Movie,
+            Strategy = QueryStrategy.TitleSearch,
+            Filters =
+            [
+                new QueryFilter
+                {
+                    Kind = QueryFilterKind.Relationship,
+                    Alternatives =
+                    [
+                        new SubjectFilter
+                        {
+                            PropertyIds = [Constants.CastMemberPropertyId],
+                            Qids = ["Q100"]
+                        }
+                    ]
+                }
+            ],
+            ResidualFilters =
+            [
+                new ResidualFilter
+                {
+                    Kind = ResidualFilterKind.Relationship,
+                    Source = "Relationships.Some[0]",
+                    Hydration = ResidualHydration.None
+                }
+            ],
+            Warnings = [],
+            Page = 1,
+            UsesLocalPaging = true,
+            OrdinaryTerm = "movie"
+        };
+
+        // Act
+        var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Qid), Is.EqualTo(["Q1", "Q2"]));
+            Assert.That(result.PageInfo.HasMore, Is.False);
+        }
+
+        cache.Verify(
+            value => value.GetSearchAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<Action<SearchCacheProvenance>?>()),
+            Times.Exactly(3));
+    }
+
+    [Test]
+    public async Task SearchAsync_ReturnsRateLimitWarningWithoutHits_WhenRelationshipSeed()
     {
         // Arrange
         var context = new RequestContext
@@ -2407,7 +2653,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_HydrationRequests_PassCacheProvenanceObservers()
+    public async Task SearchAsync_PassCacheProvenanceObservers_WhenHydrationRequests()
     {
         // Arrange
         Action<SearchCacheProvenance>? candidateObserver = null;
@@ -2534,7 +2780,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task GetHierarchyAsync_CommonsFilePathIri_NormalizesHierarchyImageFilename()
+    public async Task GetHierarchyAsync_NormalizesHierarchyImageFilename_WhenCommonsFilePathIri()
     {
         // Arrange
         var context = new RequestContext
@@ -2596,7 +2842,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RateLimitedWindow_ReturnsWarningWithoutHits()
+    public async Task SearchAsync_ReturnsWarningWithoutHits_WhenRateLimitedWindow()
     {
         // Arrange
         var context = new RequestContext
@@ -2674,7 +2920,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ProviderCancellation_ReturnsTimeoutWarning()
+    public async Task SearchAsync_ReturnsTimeoutWarning_WhenProviderCancellation()
     {
         // Arrange
         var context = new RequestContext
@@ -2729,7 +2975,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_HttpFailure_ReturnsFailureWarning()
+    public async Task SearchAsync_ReturnsFailureWarning_WhenHttpFailure()
     {
         // Arrange
         var context = new RequestContext
@@ -2770,7 +3016,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_CachedFill_SkipsTheClientCall()
+    public async Task SearchAsync_SkipsTheClientCall_WhenCachedFill()
     {
         // Arrange
         var context = new RequestContext
@@ -2821,7 +3067,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RemoteFill_CallsTheClientOnce()
+    public async Task SearchAsync_CallsTheClientOnce_WhenRemoteFill()
     {
         // Arrange
         var context = new RequestContext
@@ -2879,7 +3125,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_InFlightCacheEntry_SkipsTheClientCall()
+    public async Task SearchAsync_SkipsTheClientCall_WhenInFlightCacheEntry()
     {
         // Arrange
         var context = new RequestContext
@@ -2931,7 +3177,7 @@ internal sealed class QueryExecutorTests
 
     [TestCase(QueryStrategy.Empty, true)]
     [TestCase(QueryStrategy.Unsupported, false)]
-    public async Task SearchAsync_NonExecutablePlan_ReportsSupportWithoutTouchingClientOrCache(
+    public async Task SearchAsync_ReportsSupportWithoutTouchingClientOrCache_WhenNonExecutablePlan(
         QueryStrategy strategy,
         bool supported)
     {
@@ -2959,14 +3205,11 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Supported, Is.EqualTo(supported));
-        }
+        Assert.That(result.Supported, Is.EqualTo(supported));
     }
 
     [Test]
-    public async Task SearchAsync_UnsupportedStrategy_ReturnsUnsupportedPageInfo()
+    public async Task SearchAsync_ReturnsUnsupportedPageInfo_WhenUnsupportedStrategy()
     {
         // Arrange
         var context = new RequestContext
@@ -3001,7 +3244,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RedactedPlanSerializer_OmitsQueryAndResultValues()
+    public async Task SearchAsync_OmitsQueryAndResultValues_WhenRedactedPlanSerializer()
     {
         // Arrange
         var context = new RequestContext
@@ -3040,8 +3283,7 @@ internal sealed class QueryExecutorTests
                 {
                     Source = "Title[0]",
                     Disposition = CriterionDispositionKind.Refused,
-                    Reason = "secret-reason",
-                    Warning = "secret-warning"
+                    Reason = "secret-reason"
                 }
             ],
             Warnings =
@@ -3116,7 +3358,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_DuplicateQidAndUnacceptedType_ReturnsFirstAcceptedHit()
+    public async Task SearchAsync_ReturnsFirstAcceptedHit_WhenDuplicateQidAndUnacceptedType()
     {
         // Arrange
         var context = new RequestContext
@@ -3180,7 +3422,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_QidFallbackLabel_RejectsHit()
+    public async Task SearchAsync_RejectsHit_WhenQidFallbackLabel()
     {
         // Arrange
         var context = new RequestContext
@@ -3239,7 +3481,7 @@ internal sealed class QueryExecutorTests
     [TestCase(new[] { "matrix" }, 1, TestName = "Title filter keeps the matching hit")]
     [TestCase(new[] { "gladiator" }, 0, TestName = "Title filter rejects the unmatched hit")]
     [TestCase(new string[0], 0, TestName = "Title filter without values drops the unverifiable hit")]
-    public async Task SearchAsync_TitleFilter_KeepsHitOnlyWhenTitleMatches(string[] values, int expectedHits)
+    public async Task SearchAsync_KeepsHitOnlyWhenTitleMatches_WhenTitleFilter(string[] values, int expectedHits)
     {
         // Arrange
         var context = new RequestContext
@@ -3294,7 +3536,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_NonTitleFilter_KeepsHit()
+    public async Task SearchAsync_KeepsHit_WhenNonTitleFilter()
     {
         // Arrange
         var context = new RequestContext
@@ -3347,7 +3589,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RequestedAliasLanguageOutsideFallback_ReturnsMatchingAlias()
+    public async Task SearchAsync_ReturnsMatchingAlias_WhenRequestedAliasLanguageOutsideFallback()
     {
         // Arrange
         var entity = new EntityDto
@@ -3493,7 +3735,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_AliasTextWithoutLanguageConstraint_ReturnsMatchFromAllLanguages()
+    public async Task SearchAsync_ReturnsMatchFromAllLanguages_WhenAliasTextWithoutLanguageConstraint()
     {
         // Arrange
         var entity = new EntityDto
@@ -3631,7 +3873,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_SupportBeyondCandidateWindow_RequestsEveryDistinctQid()
+    public async Task SearchAsync_RequestsEveryDistinctQid_WhenSupportBeyondCandidateWindow()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -3775,7 +4017,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_TitleRegex_ReturnsMatchesWithoutHydration()
+    public async Task SearchAsync_ReturnsMatchesWithoutHydration_WhenTitleRegex()
     {
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
@@ -3868,7 +4110,7 @@ internal sealed class QueryExecutorTests
 
     [TestCase(Constants.EndedProductionStatus, "Q1")]
     [TestCase("Continuing", "Q2")]
-    public async Task SearchAsync_ProductionStatus_ReturnsMatchingState(string value, string expectedQid)
+    public async Task SearchAsync_ReturnsMatchingState_WhenProductionStatus(string value, string expectedQid)
     {
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
@@ -3963,7 +4205,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_OriginalTitleRegex_HydratesMainEntitiesOnly()
+    public async Task SearchAsync_HydratesMainEntitiesOnly_WhenOriginalTitleRegex()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -4140,7 +4382,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_OriginalTitleRegex_UsesHydratedOriginalLanguage()
+    public async Task SearchAsync_UsesHydratedOriginalLanguage_WhenOriginalTitleRegex()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -4326,7 +4568,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_LanguageResidual_MatchesQidCodeAndNameWithConditionalSupportHydration()
+    public async Task SearchAsync_MatchesQidCodeAndNameWithConditionalSupportHydration_WhenLanguageResidual()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -4626,7 +4868,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_MissingLanguageClaim_RetainsUnverifiableCandidate()
+    public async Task SearchAsync_RetainsUnverifiableCandidate_WhenMissingLanguageClaim()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -4758,7 +5000,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_NegatedFuzzyRelationshipSubject_ReturnsNonmatchingSubjects()
+    public async Task SearchAsync_ReturnsNonmatchingSubjects_WhenNegatedFuzzyRelationshipSubject()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -5003,7 +5245,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_OuterNegatedRelationship_ReturnsCandidatesWithoutMatchingRelationship()
+    public async Task SearchAsync_ReturnsCandidatesWithoutMatchingRelationship_WhenOuterNegatedRelationship()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -5293,7 +5535,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_OuterNegatedStudioAlias_RejectsAliasMatch()
+    public async Task SearchAsync_RejectsAliasMatch_WhenOuterNegatedStudioAlias()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -5505,7 +5747,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_OuterNegatedRelationship_UsesFirstAvailableSubjectLabel()
+    public async Task SearchAsync_UsesFirstAvailableSubjectLabel_WhenOuterNegatedRelationship()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -5658,7 +5900,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RelationshipFacets_RequireOneRelationshipToMatchSubjectAndQualifier()
+    public async Task SearchAsync_RequireOneRelationshipToMatchSubjectAndQualifier_WhenRelationshipFacets()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -5997,7 +6239,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_CharacterQualifier_UsesRequestLanguageWithoutSubjectLabel()
+    public async Task SearchAsync_UsesRequestLanguageWithoutSubjectLabel_WhenCharacterQualifier()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -6180,7 +6422,7 @@ internal sealed class QueryExecutorTests
 
     [TestCase(CriteriaValueOperator.IsNull, false)]
     [TestCase(CriteriaValueOperator.IsNotNull, true)]
-    public async Task SearchAsync_CharacterQualifierPresence_SettlesWithoutSupportHydration(
+    public async Task SearchAsync_SettlesWithoutSupportHydration_WhenCharacterQualifierPresence(
         CriteriaValueOperator valueOperator,
         bool expectedMatch)
     {
@@ -6343,7 +6585,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RelationshipSubjectAndCriteria_MatchOneSubject()
+    public async Task SearchAsync_MatchOneSubject_WhenRelationshipSubjectAndCriteria()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -6662,7 +6904,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RelationshipExternalIdGroup_MatchesExactSubjectClaim()
+    public async Task SearchAsync_MatchesExactSubjectClaim_WhenRelationshipExternalIdGroup()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -7087,7 +7329,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RelationshipBeyondDisplayCap_RemainsEvaluable()
+    public async Task SearchAsync_RemainsEvaluable_WhenRelationshipBeyondDisplayCap()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -7264,7 +7506,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_SecondQualifierValue_MatchesSameStatement()
+    public async Task SearchAsync_MatchesSameStatement_WhenSecondQualifierValue()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -7425,7 +7667,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ContentRatingPredicates_DoNotMatchAcrossItems()
+    public async Task SearchAsync_DoNotMatchAcrossItems_WhenContentRatingPredicates()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -7605,7 +7847,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ContentRatingAlternatives_MatchOrAndApplyOuterNegationLast()
+    public async Task SearchAsync_MatchOrAndApplyOuterNegationLast_WhenContentRatingAlternatives()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -7828,7 +8070,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_AwardPredicates_MatchHydratedAwardAndQualifierBody()
+    public async Task SearchAsync_MatchHydratedAwardAndQualifierBody_WhenAwardPredicates()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -8032,7 +8274,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_AwardBodyNeedsThirdBatch_RetainsCandidateWithWarning()
+    public async Task SearchAsync_RetainsCandidateWithWarning_WhenAwardBodyNeedsThirdBatch()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -8214,7 +8456,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_MissingRatingSupport_RetainsCandidateWithWarning()
+    public async Task SearchAsync_RetainsCandidateWithWarning_WhenMissingRatingSupport()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -8378,7 +8620,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_MissingAwardSupport_UsesKnownYearAndQidFacets()
+    public async Task SearchAsync_UsesKnownYearAndQidFacets_WhenMissingAwardSupport()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -8663,7 +8905,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_MissingRatingSupport_UsesKnownBodyAndQidFacets()
+    public async Task SearchAsync_UsesKnownBodyAndQidFacets_WhenMissingRatingSupport()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -8885,7 +9127,7 @@ internal sealed class QueryExecutorTests
     }
 
     [TestCaseSource(nameof(CollectionKnownMatchDominatesMissingSupportCases))]
-    public async Task SearchAsync_CollectionKnownMatch_DominatesMissingSupportForSomeAndNone(
+    public async Task SearchAsync_DominatesMissingSupportForSomeAndNone_WhenCollectionKnownMatch(
         Dictionary<string, EntityDto> entities,
         ResidualCollectionKind kind,
         ResidualCollectionAlternative alternative)
@@ -8997,7 +9239,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ContentRatingQid_IsUnverifiableWithMissingPredecessor()
+    public async Task SearchAsync_IsUnverifiableWithMissingPredecessor_WhenContentRatingQid()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -9223,7 +9465,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ContentRatingBody_DoesNotRequestIrrelevantSystems()
+    public async Task SearchAsync_DoesNotRequestIrrelevantSystems_WhenContentRatingBody()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -9395,7 +9637,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_AwardName_DoesNotRequestIrrelevantConferrer()
+    public async Task SearchAsync_DoesNotRequestIrrelevantConferrer_WhenAwardName()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -9560,7 +9802,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_AwardSameYearMissingPredecessor_OnlyWeakensQidAndBody()
+    public async Task SearchAsync_WeakensOnlyQidAndBodyAwardSeeds_WhenTheSameYearPredecessorIsMissing()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -9973,7 +10215,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_AwardName_IgnoresStatementsAfterMappingCap()
+    public async Task SearchAsync_IgnoresStatementsAfterMappingCap_WhenAwardName()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -10130,7 +10372,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ExcludedGenreName_UsesHitLabelsWithoutHydration()
+    public async Task SearchAsync_UsesHitLabelsWithoutHydration_WhenExcludedGenreName()
     {
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
@@ -10244,7 +10486,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ImageReferenceAndAliasPredicates_MatchMappedCollections()
+    public async Task SearchAsync_MatchMappedCollections_WhenImageReferenceAndAliasPredicates()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -10492,7 +10734,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ShowPosterBackdropAndLogo_MatchFinalArtworkView()
+    public async Task SearchAsync_MatchFinalArtworkView_WhenShowPosterBackdropAndLogo()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -10744,7 +10986,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_MovieLogo_MatchesFinalArtworkView()
+    public async Task SearchAsync_MatchesFinalArtworkView_WhenMovieLogo()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -10891,7 +11133,7 @@ internal sealed class QueryExecutorTests
 
     [TestCase(true, "backdrop", "poster")]
     [TestCase(false, "poster", "backdrop")]
-    public async Task SearchAsync_MovieP18Type_DependsOnP3383Presence(
+    public async Task SearchAsync_DependsOnP3383Presence_WhenMovieP18Type(
         bool hasPoster,
         string expectedType,
         string prohibitedType)
@@ -11086,7 +11328,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_InvalidArtworkFilenames_DoNotCreateResidualItems()
+    public async Task SearchAsync_DoNotCreateResidualItems_WhenInvalidArtworkFilenames()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -11248,7 +11490,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ReferenceOrdinal_MatchesSecondItemAndNoneExcludesIt()
+    public async Task SearchAsync_MatchesSecondItemAndNoneExcludesIt_WhenReferenceOrdinal()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -11461,7 +11703,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_SecondRatingQidInSystem_DoesNotMatchMappedCollection()
+    public async Task SearchAsync_DoesNotMatchMappedCollection_WhenSecondRatingQidInSystem()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -11630,7 +11872,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ContentRatingMixedQidAndName_MatchesEitherFacet()
+    public async Task SearchAsync_MatchesEitherFacet_WhenContentRatingMixedQidAndName()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -11806,7 +12048,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ContentRatingMixedQidAndName_AppliesNegationAfterOr()
+    public async Task SearchAsync_AppliesNegationAfterOr_WhenContentRatingMixedQidAndName()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -11952,7 +12194,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_AwardMixedQidAndName_UsesRequestedLanguage()
+    public async Task SearchAsync_UsesRequestedLanguage_WhenAwardMixedQidAndName()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -12102,7 +12344,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_SupportHydrationFailure_RetainsSupersetWithOneWarning()
+    public async Task SearchAsync_RetainsSupersetWithOneWarning_WhenSupportHydrationFailure()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -12244,7 +12486,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_MainHydrationFailure_RetainsSupersetAndSkipsSupport()
+    public async Task SearchAsync_RetainsSupersetAndSkipsSupport_WhenMainHydrationFailure()
     {
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
@@ -12341,7 +12583,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public void SearchAsync_CallerCancellation_Propagates()
+    public void SearchAsync_Propagates_WhenCallerCancellation()
     {
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
@@ -12438,7 +12680,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_HitStageRejectsAll_SkipsMainAndSupportHydration()
+    public async Task SearchAsync_SkipsMainAndSupportHydration_WhenHitStageRejectsAll()
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
@@ -12582,7 +12824,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_LaterRejection_RemovesUnverifiableWarning()
+    public async Task SearchAsync_RemovesUnverifiableWarning_WhenLaterRejection()
     {
         // Arrange
         IReadOnlyList<Dictionary<string, SparqlBindingDto>> rows =

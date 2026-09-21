@@ -31,26 +31,12 @@ const STATUS_MESSAGES: Record<number, string> = {
     [HTTP_STATUS.GATEWAY_TIMEOUT]: 'The server took too long to respond. Try again later.',
 };
 
-export function isNetworkError(error: unknown): boolean {
-    if (isApiError(error)) {
-        return error.status === NETWORK_ERROR_STATUS;
-    }
-    if (error instanceof Error) {
-        return (
-            error.message.includes('NetworkError') ||
-            error.message.includes('network') ||
-            error.message.includes('Failed to fetch')
-        );
-    }
-    return false;
-}
-
-export function isAuthError(error: unknown): boolean {
-    return isApiError(error) && error.status === HTTP_STATUS.UNAUTHORIZED;
-}
-
 export function isNotFoundError(error: unknown): boolean {
     return isApiError(error) && error.status === HTTP_STATUS.NOT_FOUND;
+}
+
+export function isConflictError(error: unknown): boolean {
+    return isApiError(error) && error.status === HTTP_STATUS.CONFLICT;
 }
 
 export function isValidationError(error: unknown): boolean {
@@ -58,20 +44,6 @@ export function isValidationError(error: unknown): boolean {
         return false;
     }
     return error.status === HTTP_STATUS.BAD_REQUEST || error.status === HTTP_STATUS.UNPROCESSABLE_ENTITY;
-}
-
-export function isServerError(error: unknown): boolean {
-    return isApiError(error) && error.status >= 500 && error.status < 600;
-}
-
-export function isRetryableError(error: unknown): boolean {
-    if (isNetworkError(error)) {
-        return true;
-    }
-    if (isApiError(error)) {
-        return error.status >= 500 || error.status === HTTP_STATUS.TOO_MANY_REQUESTS;
-    }
-    return false;
 }
 
 export function getErrorMessage(error: unknown, fallback = 'The request failed.'): string {
@@ -95,10 +67,6 @@ export function getErrorMessage(error: unknown, fallback = 'The request failed.'
     }
 
     return fallback;
-}
-
-export function isNoDownloadClientError(error: unknown): boolean {
-    return getErrorMessage(error, '').toLowerCase().includes('download client');
 }
 
 export function getValidationErrors(error: unknown): Record<string, string[]> | null {
@@ -150,22 +118,19 @@ export function getFieldError(error: unknown, fieldName: string): string | null 
     return null;
 }
 
-interface ErrorDisplayInfo {
-    message: string;
-    retryable: boolean;
-    status: number;
-    validationErrors: Record<string, string[]> | null;
-}
-
-export function getErrorDisplayInfo(error: unknown): ErrorDisplayInfo {
-    return {
-        message: getErrorMessage(error),
-        retryable: isRetryableError(error),
-        status: isApiError(error) ? error.status : 0,
-        validationErrors: getValidationErrors(error),
-    };
-}
-
 export function createApiError(status: number, message: string, details?: unknown): ApiError {
     return new ApiError(status, message, details);
+}
+
+export function candidateSearchErrorMessage(error: unknown): string {
+    if (isApiError(error) && typeof error.details === 'object' && error.details !== null) {
+        const details = error.details as { message?: unknown };
+        if (typeof details.message === 'string') {
+            return details.message;
+        }
+    }
+    if (isApiError(error) && error.status === 400) {
+        return getErrorMessage(error, 'Search failed. Please try again.');
+    }
+    return 'Search failed. Please try again.';
 }

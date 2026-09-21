@@ -12,12 +12,12 @@ public record CollectionCriteria<TCriteria>
     /// <summary>
     /// The criteria groups that must all match. One match in a group is sufficient for that group.
     /// </summary>
-    public List<List<TCriteria>> Some { get; init; } = [];
+    public List<List<TCriteria>> Some { get; set; } = [];
 
     /// <summary>
     /// The criteria that must not match.
     /// </summary>
-    public List<TCriteria> None { get; init; } = [];
+    public List<TCriteria> None { get; set; } = [];
 
     /// <summary>
     /// All criteria of <see cref="Some"/> as one sequence.

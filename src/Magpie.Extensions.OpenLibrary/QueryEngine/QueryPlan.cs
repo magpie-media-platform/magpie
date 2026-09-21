@@ -8,8 +8,6 @@ internal sealed record QueryPlan
 
     public required BookHierarchy Hierarchy { get; init; }
 
-    public IReadOnlyList<string> Warnings { get; init; } = [];
-
     public IReadOnlyList<string> CandidateLanguagePreferences { get; init; } = [];
 
     public IReadOnlyList<string> CriterionDispositions { get; init; } = [];

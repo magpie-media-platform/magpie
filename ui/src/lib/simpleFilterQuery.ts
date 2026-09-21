@@ -36,11 +36,12 @@ export function escapeQueryString(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function unescapeQueryString(value: string): string {
+export function unescapeQueryString(value: string): string {
     return value.replace(/\\(.)/g, '$1');
 }
 
-function relationshipClause(kind: string, name: string): string {
+/** The MagpieQL relationship clause for a subject kind and name, in the shape the simple filter bar parses back. */
+export function relationshipClause(kind: string, name: string): string {
     const parts: string[] = [];
     if (name) {
         parts.push(`Name contains "${escapeQueryString(name)}"`);
@@ -194,28 +195,28 @@ export function buildQuery(fields: FieldState, context: 'content' | 'subject'): 
 
     if (context === 'content') {
         if (fields.contentType) {
-            clauses.push(`contentType = "${fields.contentType}"`);
+            clauses.push(`contentType = "${escapeQueryString(fields.contentType)}"`);
         }
         if (fields.level) {
-            clauses.push(`level = "${fields.level}"`);
+            clauses.push(`level = "${escapeQueryString(fields.level)}"`);
         }
         if (fields.monitoring) {
             clauses.push(`monitoring = ${fields.monitoring}`);
         }
     } else {
         if (fields.kind) {
-            clauses.push(`kind = "${fields.kind}"`);
+            clauses.push(`kind = "${escapeQueryString(fields.kind)}"`);
         }
     }
 
     if (fields.title) {
-        clauses.push(`title contains "${fields.title}"`);
+        clauses.push(`title contains "${escapeQueryString(fields.title)}"`);
     }
     if (fields.genre && context === 'content') {
-        clauses.push(`genre has "${fields.genre}"`);
+        clauses.push(`genre has "${escapeQueryString(fields.genre)}"`);
     }
     if (fields.tag) {
-        clauses.push(`tag has "${fields.tag}"`);
+        clauses.push(`tag has "${escapeQueryString(fields.tag)}"`);
     }
     if (context === 'content') {
         const yearClause = releaseYearClause(fields.releaseYear, fields.yearOps);
@@ -283,15 +284,15 @@ export function parseQuery(query: string, context: 'content' | 'subject'): Field
     for (const part of parts) {
         const trimmed = part.trim();
 
-        const contentTypeMatch = trimmed.match(/^contentType\s*=\s*"([^"]*)"$/i);
+        const contentTypeMatch = trimmed.match(/^contentType\s*=\s*"((?:\\.|[^"\\])*)"$/i);
         if (contentTypeMatch) {
-            state.contentType = contentTypeMatch[1];
+            state.contentType = unescapeQueryString(contentTypeMatch[1]);
             continue;
         }
 
-        const levelMatch = trimmed.match(/^level\s*=\s*"([^"]*)"$/i);
+        const levelMatch = trimmed.match(/^level\s*=\s*"((?:\\.|[^"\\])*)"$/i);
         if (levelMatch) {
-            state.level = levelMatch[1];
+            state.level = unescapeQueryString(levelMatch[1]);
             continue;
         }
 
@@ -301,27 +302,27 @@ export function parseQuery(query: string, context: 'content' | 'subject'): Field
             continue;
         }
 
-        const kindMatch = trimmed.match(/^kind\s*=\s*"([^"]*)"$/i);
+        const kindMatch = trimmed.match(/^kind\s*=\s*"((?:\\.|[^"\\])*)"$/i);
         if (kindMatch) {
-            state.kind = kindMatch[1];
+            state.kind = unescapeQueryString(kindMatch[1]);
             continue;
         }
 
-        const titleMatch = trimmed.match(/^title\s+contains\s+"([^"]*)"$/i);
+        const titleMatch = trimmed.match(/^title\s+contains\s+"((?:\\.|[^"\\])*)"$/i);
         if (titleMatch) {
-            state.title = titleMatch[1];
+            state.title = unescapeQueryString(titleMatch[1]);
             continue;
         }
 
-        const genreMatch = trimmed.match(/^genre\s+has\s+"([^"]*)"$/i);
+        const genreMatch = trimmed.match(/^genre\s+has\s+"((?:\\.|[^"\\])*)"$/i);
         if (genreMatch && context === 'content') {
-            state.genre = genreMatch[1];
+            state.genre = unescapeQueryString(genreMatch[1]);
             continue;
         }
 
-        const tagMatch = trimmed.match(/^tag\s+has\s+"([^"]*)"$/i);
+        const tagMatch = trimmed.match(/^tag\s+has\s+"((?:\\.|[^"\\])*)"$/i);
         if (tagMatch) {
-            state.tag = tagMatch[1];
+            state.tag = unescapeQueryString(tagMatch[1]);
             continue;
         }
 

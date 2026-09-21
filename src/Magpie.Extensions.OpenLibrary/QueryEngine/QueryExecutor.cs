@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Net.Http;
@@ -28,6 +29,43 @@ internal sealed class QueryExecutor(
     ISettingsResolver settingsResolver,
     ILogger<QueryExecutor> logger) : IQueryExecutor
 {
+    private sealed class ExecutionState
+    {
+        private int _nodes;
+
+        public List<string> Warnings { get; } = [];
+
+        public Activity? Query { get; init; }
+
+        public bool Failed { get; set; }
+
+        public bool Exhausted { get; set; }
+
+        public bool HasUnverifiableCriteria { get; set; }
+
+        public bool HydrationFailed { get; set; }
+
+        public int RequestCount { get; set; }
+
+        public long RowsFetched { get; set; }
+
+        public int FetchLimit { get; set; } = ScanBatchSize;
+
+        public int FetchOffset { get; set; }
+
+        public bool SingleFetch { get; set; }
+
+        public bool ExactClass { get; set; }
+
+        public bool UpstreamHasMore { get; set; }
+
+        public int NextNodeId()
+        {
+            return _nodes++;
+        }
+    }
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
     private const int ScanBatchSize = 100;
 
     private const string ExecuteSpanName = "openlibrary.query.execute";
@@ -156,15 +194,6 @@ internal sealed class QueryExecutor(
         return node.Children.Select(FindFetch).FirstOrDefault(child => child is not null);
     }
 
-    private async ValueTask<T> GetOrAddAsync<T>(
-        ICache cache,
-        string key,
-        Func<CancellationToken, ValueTask<T>> factory,
-        CancellationToken cancellationToken)
-    {
-        return await cache.GetOrAddAsync(key, factory, cancellationToken).ConfigureAwait(false);
-    }
-
     private IReadOnlyList<FilterGroup> EffectiveFilterGroups(PlanNode node)
     {
         if (node.FilterGroups.Count > 0)
@@ -208,7 +237,7 @@ internal sealed class QueryExecutor(
         {
             Hits = [],
             PageInfo = PageInfo(plan.Advanced ? 1 : plan.Page, hasMore: false),
-            Warnings = plan.Warnings,
+            Warnings = [],
             CandidateLanguagePreferences = plan.CandidateLanguagePreferences
         };
     }
@@ -996,7 +1025,6 @@ internal sealed class QueryExecutor(
         if (requestedOffset > int.MaxValue)
         {
             execution.Exhausted = true;
-            execution.Warnings.Add("Open Library cannot represent the requested page offset. No search was run.");
             activity?.SetStatus(
                 ActivityStatusCode.Error,
                 "The requested page offset exceeds the Open Library API integer range.");
@@ -1005,7 +1033,7 @@ internal sealed class QueryExecutor(
             {
                 Hits = [],
                 PageInfo = PageInfo(plan.Page, hasMore: false),
-                Warnings = [.. plan.Warnings, .. execution.Warnings],
+                Warnings = [.. execution.Warnings],
                 CandidateLanguagePreferences = plan.CandidateLanguagePreferences
             };
         }
@@ -1066,12 +1094,7 @@ internal sealed class QueryExecutor(
             hits.RemoveAt(desired);
         }
 
-        var warnings = plan.Warnings.ToList();
-        if (execution.HasUnverifiableCriteria)
-        {
-            warnings.Add("Open Library retained rows with missing optional fields and degraded certainty.");
-        }
-
+        var warnings = new List<string>();
         if (execution.Failed || execution.HydrationFailed)
         {
             warnings.Add("Open Library could not complete the remote search.");
@@ -1109,11 +1132,7 @@ internal sealed class QueryExecutor(
         {
             execution.Exhausted = true;
             Complete(activity, plan, execution, stopwatch, surviving: 0, hasMore: false, TerminalEmpty);
-            return new WorkResolution
-            {
-                Kind = WorkResolutionKind.NotFound,
-                Warnings = plan.Warnings
-            };
+            return new WorkResolution { Kind = WorkResolutionKind.NotFound };
         }
 
         var fetch = FindFetch(plan.Root)
@@ -1165,8 +1184,7 @@ internal sealed class QueryExecutor(
             var negativeKey = string.Concat("edition|", request.CacheKey);
             var lookup = _negativeCache.TryGet<bool>(negativeKey, out _)
                 ? new EditionLookup { Found = false }
-                : await GetOrAddAsync(
-                    _editionCache,
+                : await _editionCache.GetOrAddAsync(
                     request.CacheKey,
                     async operationToken =>
                     {
@@ -1436,8 +1454,7 @@ internal sealed class QueryExecutor(
             var negativeKey = string.Concat("work|", request.CacheKey);
             var result = _negativeCache.TryGet<bool>(negativeKey, out _)
                 ? new WorkResolution { Kind = WorkResolutionKind.NotFound }
-                : await GetOrAddAsync(
-                    _resolutionCache,
+                : await _resolutionCache.GetOrAddAsync(
                     request.CacheKey,
                     operationToken =>
                     {
@@ -1508,13 +1525,7 @@ internal sealed class QueryExecutor(
         return new WorkResolution
         {
             Kind = ambiguous ? WorkResolutionKind.Ambiguous : WorkResolutionKind.Resolved,
-            Hit = distinct[0],
-            Warnings = ambiguous
-                ?
-                [
-                    "Open Library returned multiple works. Source order selected the first verified work."
-                ]
-                : []
+            Hit = distinct[0]
         };
     }
 
@@ -1538,8 +1549,7 @@ internal sealed class QueryExecutor(
             var negativeKey = string.Concat("author|", request.CacheKey);
             var lookup = _negativeCache.TryGet<bool>(negativeKey, out _)
                 ? new AuthorLookup { Found = false }
-                : await GetOrAddAsync(
-                    _authorCache,
+                : await _authorCache.GetOrAddAsync(
                     request.CacheKey,
                     async operationToken =>
                     {
@@ -1584,8 +1594,7 @@ internal sealed class QueryExecutor(
         var cacheHit = true;
         try
         {
-            var page = await GetOrAddAsync(
-                exactClass ? _pageCache : _advancedPageCache,
+            var page = await (exactClass ? _pageCache : _advancedPageCache).GetOrAddAsync(
                 request.CacheKey,
                 async operationToken =>
                 {
@@ -1739,8 +1748,7 @@ internal sealed class QueryExecutor(
             {
                 { "magpie.query.plan_json", JsonSerializer.Serialize(plan, PlanJsonOptions) },
                 { "magpie.query.anchor_kind", plan.AnchorKind },
-                { "magpie.query.known_empty", plan.Root.State == PlanNodeState.Empty },
-                { "magpie.query.warnings", plan.Warnings.ToArray() }
+                { "magpie.query.known_empty", plan.Root.State == PlanNodeState.Empty }
             }));
     }
 
@@ -1756,6 +1764,7 @@ internal sealed class QueryExecutor(
         activity?.SetTag("magpie.query.rows_fetched", execution.RowsFetched);
         activity?.SetTag("magpie.query.rows_surviving", surviving);
         activity?.SetTag("magpie.query.request_count", execution.RequestCount);
+        activity?.SetTag("magpie.query.has_unverifiable_criteria", execution.HasUnverifiableCriteria);
         activity?.SetTag("magpie.query.has_more", hasMore);
         activity?.SetTag("magpie.query.terminal_reason", terminalReason);
         Telemetry.QueryDuration.Record(stopwatch.Elapsed.TotalMilliseconds, new TagList
@@ -1813,42 +1822,6 @@ internal sealed class QueryExecutor(
         foreach (var child in node.Children)
         {
             AppendNode(child, builder);
-        }
-    }
-
-    private sealed class ExecutionState
-    {
-        private int _nodes;
-
-        public List<string> Warnings { get; } = [];
-
-        public Activity? Query { get; init; }
-
-        public bool Failed { get; set; }
-
-        public bool Exhausted { get; set; }
-
-        public bool HasUnverifiableCriteria { get; set; }
-
-        public bool HydrationFailed { get; set; }
-
-        public int RequestCount { get; set; }
-
-        public long RowsFetched { get; set; }
-
-        public int FetchLimit { get; set; } = ScanBatchSize;
-
-        public int FetchOffset { get; set; }
-
-        public bool SingleFetch { get; set; }
-
-        public bool ExactClass { get; set; }
-
-        public bool UpstreamHasMore { get; set; }
-
-        public int NextNodeId()
-        {
-            return _nodes++;
         }
     }
 }

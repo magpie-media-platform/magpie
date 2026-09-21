@@ -77,8 +77,7 @@ internal sealed class SubjectMetadataProvider(
             return support;
         }
 
-        var bodies = await cache.GetEntitiesAsync(bodyQids, context, cancellationToken)
-            .ConfigureAwait(false);
+        var bodies = await cache.GetEntitiesAsync(bodyQids, context, cancellationToken).ConfigureAwait(false);
         var merged = new Dictionary<string, EntityDto>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in support)
         {

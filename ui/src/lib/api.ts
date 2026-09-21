@@ -1,8 +1,6 @@
-import { clearAuthStorage, refreshAccessToken } from './authApi';
+import { clearAuthStorage, storeAuthTokens, tokenStorage } from './tokenStorage';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
-
-const TOKEN_KEY = 'magpie_auth_token';
 
 const REFRESH_ENDPOINT = '/auth/refresh';
 
@@ -18,12 +16,7 @@ const AUTH_FAILURE_DISPATCHED = Symbol('magpie.api.authFailureDispatched');
 type AuthFailureMarked = { [AUTH_FAILURE_DISPATCHED]?: true };
 
 function markAuthFailureDispatched(error: object): void {
-    Object.defineProperty(error, AUTH_FAILURE_DISPATCHED, {
-        value: true,
-        enumerable: false,
-        configurable: false,
-        writable: false,
-    });
+    Object.defineProperty(error, AUTH_FAILURE_DISPATCHED, { value: true });
 }
 
 function isAuthFailureDispatched(error: unknown): boolean {
@@ -32,14 +25,32 @@ function isAuthFailureDispatched(error: unknown): boolean {
     );
 }
 
-async function ensureRefresh(): Promise<void> {
+export interface AuthTokenResponse {
+    accessToken: string;
+
+    accessTokenExpiresAt: string;
+}
+
+export async function renewAccessToken(baseUrl?: string): Promise<string> {
+    const response = await apiFetch<AuthTokenResponse>('/auth/refresh', {
+        baseUrl,
+        method: 'POST',
+        skipAuth: true,
+    });
+
+    storeAuthTokens(response.accessToken, response.accessTokenExpiresAt);
+
+    return response.accessToken;
+}
+
+async function ensureRefresh(baseUrl?: string): Promise<void> {
     if (refreshInFlight) {
         return refreshInFlight;
     }
 
     refreshInFlight = (async () => {
         try {
-            await refreshAccessToken();
+            await renewAccessToken(baseUrl);
         } finally {
             refreshInFlight = null;
         }
@@ -47,36 +58,6 @@ async function ensureRefresh(): Promise<void> {
 
     return refreshInFlight;
 }
-
-export const tokenStorage = {
-    get(): string | null {
-        try {
-            return localStorage.getItem(TOKEN_KEY);
-        } catch {
-            return null;
-        }
-    },
-
-    set(token: string): void {
-        try {
-            localStorage.setItem(TOKEN_KEY, token);
-        } catch {
-            void 0;
-        }
-    },
-
-    remove(): void {
-        try {
-            localStorage.removeItem(TOKEN_KEY);
-        } catch {
-            void 0;
-        }
-    },
-
-    exists(): boolean {
-        return this.get() !== null;
-    },
-};
 
 export class ApiError extends Error {
     readonly status: number;
@@ -125,7 +106,8 @@ export function isAbortError(error: unknown): boolean {
 
 export const AUTH_FAILURE_EVENT = 'magpie:auth:failure';
 
-function dispatchAuthFailure(): void {
+function dispatchAuthFailure(error: object): void {
+    markAuthFailureDispatched(error);
     window.dispatchEvent(new CustomEvent(AUTH_FAILURE_EVENT));
 }
 
@@ -160,18 +142,26 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
     let message = `Request failed with status ${response.status}`;
     if (details && typeof details === 'object') {
         const pd = details as Record<string, unknown>;
-        if (typeof pd.title === 'string') {
-            message = pd.title;
-        } else if (typeof pd.message === 'string') {
-            message = pd.message;
-        } else if (typeof pd.detail === 'string') {
+        if (typeof pd.detail === 'string' && pd.detail) {
             message = pd.detail;
+        } else if (typeof pd.message === 'string' && pd.message) {
+            message = pd.message;
+        } else if (typeof pd.title === 'string' && pd.title) {
+            message = pd.title;
         }
     } else if (typeof details === 'string' && details) {
         message = details;
     }
 
     return new ApiError(response.status, message, details);
+}
+
+function isSameOrigin(url: string, baseUrl: string): boolean {
+    try {
+        return new URL(url, window.location.href).origin === new URL(baseUrl, window.location.href).origin;
+    } catch {
+        return false;
+    }
 }
 
 function buildRequest(
@@ -192,8 +182,11 @@ function buildRequest(
         headers.set('Content-Type', 'application/json');
     }
 
+    const url = path.startsWith('http') ? path : `${baseUrl}${path}`;
+    const apiOrigin = isSameOrigin(url, baseUrl);
+
     let sentToken: string | null = null;
-    if (!skipAuth && !headers.has('Authorization')) {
+    if (!skipAuth && apiOrigin && !headers.has('Authorization')) {
         const token = tokenStorage.get();
         if (token) {
             headers.set('Authorization', `Bearer ${token}`);
@@ -201,9 +194,8 @@ function buildRequest(
         }
     }
 
-    const url = path.startsWith('http') ? path : `${baseUrl}${path}`;
     const init: RequestInit = {
-        credentials: 'include',
+        credentials: apiOrigin ? 'include' : 'omit',
         ...fetchOptions,
         headers,
     };
@@ -221,6 +213,7 @@ function buildRequest(
 
 export async function apiFetchResponse(path: string, options?: ApiRequestOptions): Promise<Response>;
 export async function apiFetchResponse(path: string, options: ApiRequestOptions = {}): Promise<Response> {
+    const isAuthFailure = (response: Response) => response.status === 401;
     const callerHeaders = new Headers(options.headers);
     const callerProvidedAuth = callerHeaders.has('Authorization');
 
@@ -233,7 +226,7 @@ export async function apiFetchResponse(path: string, options: ApiRequestOptions 
         throw new ApiError(0, error instanceof Error ? error.message : 'Network error', error);
     }
 
-    if (response.status === 401) {
+    if (isAuthFailure(response)) {
         const isRefresh = isRefreshEndpoint(path);
         const managedAuth = !skipAuth && !callerProvidedAuth && !isRefresh;
 
@@ -250,22 +243,23 @@ export async function apiFetchResponse(path: string, options: ApiRequestOptions 
             }
         }
 
-        if (managedAuth && sentToken === null && response.status === 401) {
+        if (managedAuth && sentToken === null && isAuthFailure(response)) {
             throw await errorFromResponse(response);
         }
 
-        const canRetry = managedAuth && response.status === 401;
+        const canRetry = managedAuth && isAuthFailure(response);
 
         if (canRetry) {
             try {
-                await ensureRefresh();
+                await ensureRefresh(options.baseUrl);
             } catch (error) {
                 if (isAuthFailureDispatched(error)) {
                     throw error;
                 }
+                const apiError = await errorFromResponse(response);
                 clearAuthStorage();
-                dispatchAuthFailure();
-                throw await errorFromResponse(response);
+                dispatchAuthFailure(apiError);
+                throw apiError;
             }
 
             ({ url, init, skipAuth } = buildRequest(path, options));
@@ -275,18 +269,16 @@ export async function apiFetchResponse(path: string, options: ApiRequestOptions 
                 throw new ApiError(0, error instanceof Error ? error.message : 'Network error', error);
             }
 
-            if (response.status === 401) {
+            if (isAuthFailure(response)) {
+                const apiError = await errorFromResponse(response);
                 clearAuthStorage();
-                dispatchAuthFailure();
-                throw await errorFromResponse(response);
+                dispatchAuthFailure(apiError);
+                throw apiError;
             }
-        } else if (response.status === 401) {
-            clearAuthStorage();
-            dispatchAuthFailure();
+        } else if (isAuthFailure(response)) {
             const apiError = await errorFromResponse(response);
-            if (isRefresh) {
-                markAuthFailureDispatched(apiError);
-            }
+            clearAuthStorage();
+            dispatchAuthFailure(apiError);
             throw apiError;
         }
     }

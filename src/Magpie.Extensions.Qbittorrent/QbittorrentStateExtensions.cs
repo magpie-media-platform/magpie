@@ -4,6 +4,8 @@ namespace Magpie.Extensions.Qbittorrent;
 
 internal static class QbittorrentStateExtensions
 {
+    private const int GlobalShareLimit = -2;
+
     internal static MappingResult ToMappingResult(this string? state)
     {
         if (string.IsNullOrEmpty(state))
@@ -16,8 +18,9 @@ internal static class QbittorrentStateExtensions
             "error" => new MappingResult(DownloadStatus.Failed, "qBittorrent state: error"),
             "missingFiles" => new MappingResult(
                 DownloadStatus.Failed, "qBittorrent state: missingFiles (data files not found)"),
-            "uploading" or "seeding" or "pausedUP" or "stoppedUP"
-                or "queuedUP" or "stalledUP" or "checkingUP" or "forcedUP"
+            "pausedUP" or "stoppedUP"
+                => new MappingResult(DownloadStatus.Downloaded, StatusReason: null, Paused: true),
+            "uploading" or "seeding" or "queuedUP" or "stalledUP" or "checkingUP" or "forcedUP"
                 => new MappingResult(DownloadStatus.Downloaded, StatusReason: null),
             "downloading" or "forcedDL" or "metaDL" or "forcedMetaDL"
                 => new MappingResult(DownloadStatus.Downloading, StatusReason: null),
@@ -47,6 +50,12 @@ internal static class QbittorrentStateExtensions
 
         var ratioReached = maxRatio >= 0 && ratio >= maxRatio;
         var seedingTimeReached = maxSeedingTime >= 0 && seedingTimeSeconds / 60.0 >= maxSeedingTime;
-        return !ratioReached && !seedingTimeReached;
+        if (ratioReached || seedingTimeReached)
+        {
+            return false;
+        }
+
+        var followsGlobalLimit = maxRatio <= GlobalShareLimit || maxSeedingTime <= GlobalShareLimit;
+        return !followsGlobalLimit || !mapping.Paused;
     }
 }

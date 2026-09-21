@@ -27,9 +27,9 @@ internal sealed class ContentFilterRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<ContentFilterRepository> logger,
-    TimeProvider? timeProvider = null) : IContentFilterRepository
+    TimeProvider timeProvider) : IContentFilterRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     private static IReadOnlyCollection<string> ChangedFields(ContentFilterPatch patch)
     {
@@ -124,14 +124,19 @@ internal sealed class ContentFilterRepository(
 
             var totalCount = await filters.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(ContentFilter).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(ContentFilter.Id), nameof(ContentFilter.OwnerUserId), nameof(ContentFilter.Name),
+                nameof(ContentFilter.OwnerLock), nameof(ContentFilter.CreatedAt), nameof(ContentFilter.CreatedByUserId),
+                nameof(ContentFilter.ModifiedAt), nameof(ContentFilter.ModifiedByUserId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 filters = sort.Direction == SortDirection.Ascending
-                    ? filters.OrderBy(f => EF.Property<ContentFilter>(f, sortProperty)).ThenBy(f => f.Id)
-                    : filters.OrderByDescending(f => EF.Property<ContentFilter>(f, sortProperty)).ThenBy(f => f.Id);
+                    ? filters.OrderBy(f => EF.Property<object>(f, sortProperty)).ThenBy(f => f.Id)
+                    : filters.OrderByDescending(f => EF.Property<object>(f, sortProperty)).ThenBy(f => f.Id);
             }
             else
             {
@@ -407,6 +412,7 @@ internal sealed class ContentFilterRepository(
                     if (patch.Tags is not null)
                     {
                         var currentTags = await context.Tags
+                            .Include(t => t.ContentFilters)
                             .Where(t => t.ContentFilters.Any(f => f.Id == patch.Id))
                             .ToListAsync(cancellationToken)
                             .ConfigureAwait(false);

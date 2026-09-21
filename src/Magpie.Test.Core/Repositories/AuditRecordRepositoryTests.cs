@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -14,7 +15,6 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -29,13 +29,14 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class AuditRecordRepositoryTests
+public sealed class AuditRecordRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private List<MagpieEvent> _publishedEvents = null!;
     private ITransactionManager _transactionManager = null!;
     private IAuditRecordRepository _subject = null!;
     private Guid _userId;
+    private FakeTimeProvider _time = null!;
 
     [SetUp]
     public void SetUp()
@@ -69,12 +70,15 @@ public class AuditRecordRepositoryTests
             .Callback((MagpieEvent magpieEvent, CancellationToken _) => _publishedEvents.Add(magpieEvent))
             .Returns(Task.CompletedTask);
 
+        _time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
         _transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _subject = new AuditRecordRepository(
             _context,
             eventBus.Object,
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            transactionManager: _transactionManager);
+            transactionManager: _transactionManager,
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: _time);
     }
 
     [TearDown]
@@ -85,7 +89,7 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_DefersEvent_UntilWrappedTransactionCommits()
+    public async Task CreateAsync_DefersEvent_WhenTheOuterTransactionIsOpen()
     {
         // Arrange
         var record = new AuditRecord { Category = "Security", Operation = "Login", Timestamp = DateTime.UtcNow };
@@ -103,7 +107,7 @@ public class AuditRecordRepositoryTests
         {
             Assert.That(eventsDuringTransaction, Is.Zero);
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
-            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.AuditRecordCreated));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("audit.record.created"));
         }
     }
 
@@ -114,14 +118,15 @@ public class AuditRecordRepositoryTests
         var record = new AuditRecord { Category = "Security", Operation = "Login", Timestamp = DateTime.UtcNow };
 
         // Act
-        // Assert
-        Assert.That(
-            async () => await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        var act = (AsyncTestDelegate)(async () =>
+            await _transactionManager.ExecuteWithTransactionAsync(async ct =>
             {
                 await _subject.CreateAsync(record, ct).ConfigureAwait(false);
                 throw new InvalidOperationException("boom");
-            }).ConfigureAwait(false),
-            Throws.InstanceOf<InvalidOperationException>());
+            }).ConfigureAwait(false));
+
+        // Assert
+        Assert.ThrowsAsync<InvalidOperationException>(act);
         Assert.That(_publishedEvents, Is.Empty);
     }
 
@@ -131,27 +136,18 @@ public class AuditRecordRepositoryTests
         // Arrange
         var firstRecord = new AuditRecord { Category = "System", Operation = "First", Timestamp = DateTime.UtcNow };
         var secondRecord = new AuditRecord { Category = "System", Operation = "Second", Timestamp = DateTime.UtcNow };
-        var publicationCount = 0;
-        var secondPublicationRecordId = string.Empty;
         var eventBus = new Mock<IEventBus>();
         eventBus
-            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
-            .Returns((MagpieEvent magpieEvent, CancellationToken _) =>
-            {
-                publicationCount++;
-                if (publicationCount == 1)
-                {
-                    throw new InvalidOperationException("The first publication failed.");
-                }
-
-                secondPublicationRecordId = magpieEvent.Context[MagpieEvents.Keys.AuditRecordId];
-                return Task.CompletedTask;
-            });
+            .SetupSequence(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Throws(new InvalidOperationException("The first publication failed."))
+            .Returns(Task.CompletedTask);
         IAuditRecordRepository subject = new AuditRecordRepository(
             _context,
             eventBus.Object,
             NullLogger<AuditRecordRepository>.Instance,
-            _transactionManager);
+            _transactionManager,
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         // Act
         await _transactionManager.ExecuteWithTransactionAsync(async ct =>
@@ -167,9 +163,18 @@ public class AuditRecordRepositoryTests
             Assert.That(records, Has.Count.EqualTo(2));
             Assert.That(records, Has.One.Property(nameof(AuditRecord.Id)).EqualTo(firstRecord.Id));
             Assert.That(records, Has.One.Property(nameof(AuditRecord.Id)).EqualTo(secondRecord.Id));
-            Assert.That(publicationCount, Is.EqualTo(2));
-            Assert.That(secondPublicationRecordId, Is.EqualTo(secondRecord.Id.ToString("D")));
         }
+
+        eventBus.Verify(
+            bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+        eventBus.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(magpieEvent =>
+                    magpieEvent.Context.ContainsKey("audit.recordId") &&
+                    magpieEvent.Context["audit.recordId"] == secondRecord.Id.ToString("D")),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -1000,9 +1005,9 @@ public class AuditRecordRepositoryTests
             Assert.That(entity, Has.Property(nameof(entity.Detail)).EqualTo("User logged in successfully"));
             Assert.That(entity, Has.Property(nameof(entity.UserId)).EqualTo(_userId));
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
-            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.AuditRecordCreated));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("audit.record.created"));
             Assert.That(
-                _publishedEvents[0].Context[MagpieEvents.Keys.AuditRecordId],
+                _publishedEvents[0].Context["audit.recordId"],
                 Is.EqualTo(record.Id.ToString("D")));
         }
     }
@@ -1026,7 +1031,7 @@ public class AuditRecordRepositoryTests
     public async Task CreateAsync_SetsTimestamp_WhenNotProvided()
     {
         // Arrange
-        var beforeCreate = DateTime.UtcNow;
+        _time.SetUtcNow(new DateTimeOffset(2030, 1, 2, 3, 4, 5, TimeSpan.Zero));
         var record = new AuditRecord
         {
             Category = "System",
@@ -1035,14 +1040,9 @@ public class AuditRecordRepositoryTests
 
         // Act
         var result = await _subject.CreateAsync(record).ConfigureAwait(false);
-        var afterCreate = DateTime.UtcNow;
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Has.Property(nameof(result.Timestamp)).GreaterThanOrEqualTo(beforeCreate));
-            Assert.That(result, Has.Property(nameof(result.Timestamp)).LessThanOrEqualTo(afterCreate));
-        }
+        Assert.That(result.Timestamp, Is.EqualTo(new DateTime(2030, 1, 2, 3, 4, 5, DateTimeKind.Utc)));
     }
 
     [Test]
@@ -1062,6 +1062,172 @@ public class AuditRecordRepositoryTests
 
         // Assert
         Assert.That(result, Has.Property(nameof(result.Timestamp)).EqualTo(specificTimestamp));
+    }
+
+    [Test]
+    public async Task CreateAsync_StampsAmbientJobExecutionId_WhenJobScopeIsActive()
+    {
+        // Arrange
+        var scopes = new Mock<IJobExecutionScopeFactory>();
+        scopes.SetupGet(factory => factory.CurrentExecutionId)
+            .Returns(new Guid("5fcb4cc4-a34a-4d9b-ac06-3e5da7039d11"));
+        IAuditRecordRepository subject = new AuditRecordRepository(
+            _context,
+            Mock.Of<IEventBus>(),
+            NullLogger<AuditRecordRepository>.Instance,
+            _transactionManager,
+            scopes.Object,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+        var record = new AuditRecord
+        {
+            Category = "Integrations",
+            Operation = "Patch",
+            EntityType = nameof(ContentHierarchyItem)
+        };
+
+        // Act
+        var result = await subject.CreateAsync(record).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            result,
+            Has.Property(nameof(result.JobExecutionId))
+                .EqualTo(new Guid("5fcb4cc4-a34a-4d9b-ac06-3e5da7039d11")));
+    }
+
+    [Test]
+    public async Task CreateAsync_LeavesJobExecutionIdNull_WhenNoJobScopeIsActive()
+    {
+        // Arrange
+        var scopes = new Mock<IJobExecutionScopeFactory>();
+        scopes.SetupGet(factory => factory.CurrentExecutionId).Returns((Guid?)null);
+        IAuditRecordRepository subject = new AuditRecordRepository(
+            _context,
+            Mock.Of<IEventBus>(),
+            NullLogger<AuditRecordRepository>.Instance,
+            _transactionManager,
+            scopes.Object,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+        var record = new AuditRecord
+        {
+            Category = "Integrations",
+            Operation = "Patch",
+            EntityType = nameof(ContentHierarchyItem)
+        };
+
+        // Act
+        var result = await subject.CreateAsync(record).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Has.Property(nameof(result.JobExecutionId)).Null);
+    }
+
+    [Test]
+    public async Task CreateAsync_LeavesJobExecutionIdNull_WhenSubjectIsJobExecution()
+    {
+        // Arrange
+        var scopes = new Mock<IJobExecutionScopeFactory>();
+        scopes.SetupGet(factory => factory.CurrentExecutionId)
+            .Returns(new Guid("ffd28534-8057-4ea1-9a21-b26620c2395c"));
+        IAuditRecordRepository subject = new AuditRecordRepository(
+            _context,
+            Mock.Of<IEventBus>(),
+            NullLogger<AuditRecordRepository>.Instance,
+            _transactionManager,
+            scopes.Object,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+        var record = new AuditRecord
+        {
+            Category = "Jobs",
+            Operation = "Create",
+            EntityId = "9e8d4fda-01d5-4d8c-80f3-12c3b3d1bcbf",
+            EntityType = nameof(JobExecution)
+        };
+
+        // Act
+        var result = await subject.CreateAsync(record).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Has.Property(nameof(result.JobExecutionId)).Null);
+    }
+
+    [TestCase(nameof(ContentHierarchyItem))]
+    [TestCase(nameof(JobExecution))]
+    public async Task CreateAsync_PreservesJobExecutionId_WhenCallerSetsIt(string entityType)
+    {
+        // Arrange
+        var scopes = new Mock<IJobExecutionScopeFactory>();
+        scopes.SetupGet(factory => factory.CurrentExecutionId)
+            .Returns(new Guid("ffd28534-8057-4ea1-9a21-b26620c2395c"));
+        IAuditRecordRepository subject = new AuditRecordRepository(
+            _context,
+            Mock.Of<IEventBus>(),
+            NullLogger<AuditRecordRepository>.Instance,
+            _transactionManager,
+            scopes.Object,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+        var record = new AuditRecord
+        {
+            Category = "Integrations",
+            Operation = "Patch",
+            EntityType = entityType,
+            JobExecutionId = new Guid("73bd312b-3499-4eff-92f1-80d5b9a815c2")
+        };
+
+        // Act
+        var result = await subject.CreateAsync(record).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            result,
+            Has.Property(nameof(result.JobExecutionId))
+                .EqualTo(new Guid("73bd312b-3499-4eff-92f1-80d5b9a815c2")));
+    }
+
+    [Test]
+    public async Task QueryAsync_FiltersByJobExecutionId_WhenJobExecutionIdFilterIsSet()
+    {
+        // Arrange
+        var match = new AuditRecord
+        {
+            Category = "Integrations",
+            Operation = "Patch",
+            Timestamp = DateTime.UtcNow,
+            JobExecutionId = new Guid("5fcb4cc4-a34a-4d9b-ac06-3e5da7039d11")
+        };
+        var otherExecution = new AuditRecord
+        {
+            Category = "Integrations",
+            Operation = "Patch",
+            Timestamp = DateTime.UtcNow,
+            JobExecutionId = new Guid("ffd28534-8057-4ea1-9a21-b26620c2395c")
+        };
+        var noExecution = new AuditRecord
+        {
+            Category = "Integrations",
+            Operation = "Patch",
+            Timestamp = DateTime.UtcNow
+        };
+        _context.AuditRecords.AddRange(match, otherExecution, noExecution);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(
+            new() { JobExecutionId = new Guid("5fcb4cc4-a34a-4d9b-ac06-3e5da7039d11") },
+            new() { PageNumber = 1, PageSize = 100 },
+            null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(1).Items);
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.JobExecutionId))
+                    .EqualTo(new Guid("5fcb4cc4-a34a-4d9b-ac06-3e5da7039d11")));
+        }
     }
 
     [Test]
@@ -1170,7 +1336,7 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task DeleteWhereAsync_DeletesAgedRecords_KeepsFresh()
+    public async Task DeleteWhereAsync_DeletesAgedRecords_WhenRecordsHaveDifferentAges()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -1180,6 +1346,7 @@ public class AuditRecordRepositoryTests
             Mock.Of<IEventBus>(),
             NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
             _transactionManager,
+            Mock.Of<IJobExecutionScopeFactory>(),
             agedTime);
         var aged = await agedRepository.CreateAsync(
             new AuditRecord { Category = "test", Operation = "noop" },
@@ -1200,5 +1367,50 @@ public class AuditRecordRepositoryTests
             Assert.That(await _context.AuditRecords.AnyAsync(a => a.Id == aged.Id).ConfigureAwait(false), Is.False);
             Assert.That(await _context.AuditRecords.AnyAsync(a => a.Id == fresh.Id).ConfigureAwait(false), Is.True);
         }
+    }
+
+    [Test]
+    public async Task DeleteWhereAsync_PreservesOtherRecords_WhenCategoryIsSpecifiedWithoutCutoff()
+    {
+        // Arrange
+        _context.AuditRecords.AddRange(
+            new AuditRecord { Category = "selected", Operation = "Create" },
+            new AuditRecord { Category = "retained", Operation = "Create" });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var deleted = await _subject.DeleteWhereAsync(new() { Category = "selected" }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.EqualTo(1));
+            Assert.That((await _context.AuditRecords.SingleAsync().ConfigureAwait(false)).Category,
+                Is.EqualTo("retained"));
+        }
+    }
+
+    [TestCase(null, "499555cc-e7b2-4716-9f25-219c23624f85")]
+    [TestCase("ac1a8e66-5577-41e9-ae46-3f586b385967", "ac1a8e66-5577-41e9-ae46-3f586b385967")]
+    public async Task CreateAsync_PreservesCorrelation_WhenAmbientScopeExists(string? supplied, string expected)
+    {
+        // Arrange
+        var scopes = new Mock<IJobExecutionScopeFactory>();
+        scopes.SetupGet(scope => scope.CurrentCorrelationId).Returns(new Guid("499555cc-e7b2-4716-9f25-219c23624f85"));
+        var repository = new AuditRecordRepository(_context, Mock.Of<IEventBus>(),
+            NullLogger<AuditRecordRepository>.Instance, _transactionManager, scopes.Object, new FakeTimeProvider());
+        var record = new AuditRecord
+        {
+            Category = "test",
+            Operation = "Create",
+            CorrelationId = supplied == null ? null : Guid.Parse(supplied)
+        };
+
+        // Act
+        await repository.CreateAsync(record, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That((await _context.AuditRecords.SingleAsync().ConfigureAwait(false)).CorrelationId.ToString(),
+            Is.EqualTo(expected));
     }
 }

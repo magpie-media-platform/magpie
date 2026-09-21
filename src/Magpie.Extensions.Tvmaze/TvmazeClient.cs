@@ -30,6 +30,8 @@ internal sealed class TvmazeClient(
 
     private readonly HttpClient _http = httpClientFactory.CreateClient(HttpClientName);
 
+    private ProviderSettings? _settings;
+
     private bool _disposed;
 
     private Uri BuildUri(string path, IReadOnlyList<(string Key, string Value)>? queryParameters)
@@ -38,7 +40,7 @@ internal sealed class TvmazeClient(
         builder.Append('/').Append(path);
         if (queryParameters is not null && queryParameters.Count > 0)
         {
-            builder.Append('?');
+            var separator = '?';
             for (var i = 0; i < queryParameters.Count; i++)
             {
                 var (key, value) = queryParameters[i];
@@ -47,11 +49,8 @@ internal sealed class TvmazeClient(
                     continue;
                 }
 
-                if (i > 0)
-                {
-                    builder.Append('&');
-                }
-
+                builder.Append(separator);
+                separator = '&';
                 builder.Append(Uri.EscapeDataString(key)).Append('=').Append(Uri.EscapeDataString(value));
             }
         }
@@ -59,8 +58,11 @@ internal sealed class TvmazeClient(
         return new Uri(builder.ToString(), UriKind.Absolute);
     }
 
-    public Task<ProviderSettings> ReadSettingsAsync(CancellationToken cancellationToken)
-        => settingsService.ResolveTvmazeSettingsAsync(cancellationToken);
+    private async Task<ProviderSettings> ReadSettingsAsync(CancellationToken cancellationToken)
+    {
+        return _settings ??= await settingsService.ResolveTvmazeSettingsAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public async Task<IReadOnlyList<SearchHitDto>> SearchShowsAsync(
         string searchTerm,
@@ -84,57 +86,15 @@ internal sealed class TvmazeClient(
 
     public async Task<IReadOnlyList<ShowDto>?> GetShowsPageAsync(int page, CancellationToken cancellationToken)
     {
-        var uri = BuildUri("shows", [("page", page.ToString(CultureInfo.InvariantCulture))]);
-        using var response = await SendAsync(uri, cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-
-        response.EnsureSuccessStatusCode();
-        cancellationToken.ThrowIfCancellationRequested();
-        var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-        try
-        {
-            return JsonSerializer.Deserialize<List<ShowDto>>(body, JsonOptions)
-                ?? throw new JsonException("TVMaze returned an empty show-index payload.");
-        }
-        catch (JsonException exception)
-        {
-            logger.LogWarning(exception, "The TVmaze client cannot parse the JSON response for {Uri}.", uri);
-            throw new HttpRequestException("TVMaze returned an unusable show-index payload.", exception);
-        }
+        return await GetJsonAsync<List<ShowDto>>(
+            BuildUri("shows", [("page", page.ToString(CultureInfo.InvariantCulture))]),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<PersonDto?> GetPersonByIdAsync(long personId, CancellationToken cancellationToken)
     {
         return await GetJsonAsync<PersonDto>(
             BuildUri(string.Format(CultureInfo.InvariantCulture, "people/{0}", personId), null),
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task<ShowDto?> GetShowByIdAsync(int showId, CancellationToken cancellationToken)
-    {
-        return await GetJsonAsync<ShowDto>(
-            BuildUri(string.Format(CultureInfo.InvariantCulture, "shows/{0}", showId), null),
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task<ShowDto?> GetShowAsync(int showId, CancellationToken cancellationToken)
-    {
-        return await GetJsonAsync<ShowDto>(
-            BuildUri(
-                string.Format(CultureInfo.InvariantCulture, "shows/{0}", showId),
-                [("embed[]", "episodes"), ("embed[]", "images"), ("embed[]", "akas"), ("embed[]", "seasons")]),
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task<ShowDto?> GetShowWithCreditsAsync(int showId, CancellationToken cancellationToken)
-    {
-        return await GetJsonAsync<ShowDto>(
-            BuildUri(
-                string.Format(CultureInfo.InvariantCulture, "shows/{0}", showId),
-                [("embed[]", "cast"), ("embed[]", "crew")]),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -188,11 +148,11 @@ internal sealed class TvmazeClient(
         return credits ?? throw new HttpRequestException("TVMaze crew credits were unavailable.");
     }
 
-    public async Task<IReadOnlyList<GuestCastEntryDto>> GetEpisodeGuestCastAsync(
+    public async Task<IReadOnlyList<CastEntryDto>> GetEpisodeGuestCastAsync(
         long episodeId,
         CancellationToken cancellationToken)
     {
-        var cast = await GetJsonAsync<List<GuestCastEntryDto>>(
+        var cast = await GetJsonAsync<List<CastEntryDto>>(
             BuildUri(string.Format(CultureInfo.InvariantCulture, "episodes/{0}/guestcast", episodeId), null),
             cancellationToken).ConfigureAwait(false);
         return cast ?? [];

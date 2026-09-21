@@ -56,16 +56,9 @@ public sealed class SendNotificationJobTests
         _providers = [_webhookProvider.Object];
     }
 
-    [TearDown]
-    public void TearDown()
-    {
-        _loggerFactory.Dispose();
-    }
-
     [Test]
     public void Describe_ReturnsBoundedRetryPolicy_WhenRead()
     {
-        // Arrange
         // Act
         var spec = SendNotificationJob.Spec;
 
@@ -78,7 +71,7 @@ public sealed class SendNotificationJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_CallsProviderSendAsync_WithReconstructedEvent()
+    public async Task ExecuteAsync_CallsProviderSendAsync_WhenParametersContainAnEvent()
     {
         // Arrange
         var rule = new NotificationRule
@@ -120,8 +113,8 @@ public sealed class SendNotificationJobTests
             ExecutionMode: JobExecutionMode.Queue,
             Parameters: new Dictionary<string, string>
             {
-                [MagpieJobs.Parameters.RuleId] = rule.Id.ToString("D"),
-                [MagpieJobs.Parameters.Event] = JsonSerializer.Serialize(
+                ["ruleId"] = rule.Id.ToString("D"),
+                ["event"] = JsonSerializer.Serialize(
                     magpieEvent,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))
             },
@@ -147,7 +140,7 @@ public sealed class SendNotificationJobTests
     }
 
     [Test]
-    public void ExecuteAsync_PropagatesProviderFailure_SoRuntimeCanRetry()
+    public void ExecuteAsync_PropagatesFailure_WhenTheProviderThrows()
     {
         // Arrange
         var rule = new NotificationRule
@@ -186,8 +179,8 @@ public sealed class SendNotificationJobTests
             ExecutionMode: JobExecutionMode.Queue,
             Parameters: new Dictionary<string, string>
             {
-                [MagpieJobs.Parameters.RuleId] = rule.Id.ToString("D"),
-                [MagpieJobs.Parameters.Event] = JsonSerializer.Serialize(
+                ["ruleId"] = rule.Id.ToString("D"),
+                ["event"] = JsonSerializer.Serialize(
                     magpieEvent,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))
             },
@@ -234,8 +227,8 @@ public sealed class SendNotificationJobTests
             ExecutionMode: JobExecutionMode.Queue,
             Parameters: new Dictionary<string, string>
             {
-                [MagpieJobs.Parameters.RuleId] = ruleId.ToString("D"),
-                [MagpieJobs.Parameters.Event] = JsonSerializer.Serialize(
+                ["ruleId"] = ruleId.ToString("D"),
+                ["event"] = JsonSerializer.Serialize(
                     magpieEvent,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))
             },
@@ -287,8 +280,8 @@ public sealed class SendNotificationJobTests
             ExecutionMode: JobExecutionMode.Queue,
             Parameters: new Dictionary<string, string>
             {
-                [MagpieJobs.Parameters.RuleId] = rule.Id.ToString("D"),
-                [MagpieJobs.Parameters.Event] = JsonSerializer.Serialize(
+                ["ruleId"] = rule.Id.ToString("D"),
+                ["event"] = JsonSerializer.Serialize(
                     magpieEvent,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))
             },
@@ -319,7 +312,7 @@ public sealed class SendNotificationJobTests
             ExecutionMode: JobExecutionMode.Queue,
             Parameters: new Dictionary<string, string>
             {
-                [MagpieJobs.Parameters.Event] = JsonSerializer.Serialize(
+                ["event"] = JsonSerializer.Serialize(
                     magpieEvent,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))
             },
@@ -349,7 +342,7 @@ public sealed class SendNotificationJobTests
             ExecutionMode: JobExecutionMode.Queue,
             Parameters: new Dictionary<string, string>
             {
-                [MagpieJobs.Parameters.RuleId] = Guid.NewGuid().ToString("D")
+                ["ruleId"] = Guid.NewGuid().ToString("D")
             },
             Event: null);
 
@@ -362,7 +355,7 @@ public sealed class SendNotificationJobTests
     }
 
     [Test]
-    public void SerializeEvent_RoundTrips_ThroughJobParameters()
+    public void SerializeEvent_PreservesEventFields_WhenStoredInJobParameters()
     {
         // Arrange
         var now = new DateTime(2026, 5, 15, 12, 0, 0, DateTimeKind.Utc);

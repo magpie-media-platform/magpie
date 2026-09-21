@@ -48,7 +48,7 @@ public interface IMetadataContainerRepository : IPatchRepository<Guid, MetadataC
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the primary image URL of each metadata contribution in a set.
+    /// Lists the primary image URL of each metadata contribution in a set.
     /// </summary>
     /// <param name="contributionIds">The ids of the metadata contributions to look up</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -58,7 +58,7 @@ public interface IMetadataContainerRepository : IPatchRepository<Guid, MetadataC
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the relationship keys of one metadata contribution.
+    /// Lists the relationship keys of one metadata contribution.
     /// </summary>
     /// <param name="contributionId">The id of the metadata contribution</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -92,18 +92,7 @@ public interface IMetadataContainerRepository : IPatchRepository<Guid, MetadataC
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the time of the last refresh of a metadata container.
-    /// </summary>
-    /// <param name="id">The id of the metadata container</param>
-    /// <param name="dateLastRefreshed">The UTC time of the refresh</param>
-    /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task UpdateLastRefreshedAsync(
-        Guid id,
-        DateTime dateLastRefreshed,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Gets the ids of the metadata containers that nothing references.
+    /// Lists the ids of the metadata containers that nothing references.
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The ids of the orphaned metadata containers</returns>

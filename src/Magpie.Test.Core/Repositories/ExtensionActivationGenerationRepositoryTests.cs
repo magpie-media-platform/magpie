@@ -1,8 +1,10 @@
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models.Data;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -13,7 +15,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class ExtensionActivationGenerationRepositoryTests
+public sealed class ExtensionActivationGenerationRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IExtensionActivationGenerationRepository _subject = null!;
@@ -27,10 +29,13 @@ public class ExtensionActivationGenerationRepositoryTests
 
         _context.Database.OpenConnection();
         _context.Database.EnsureCreated();
+        _context.ExtensionActivationStates.Add(new ExtensionActivationState { Id = 1, Generation = 0 });
+        _context.SaveChanges();
 
         var loggerFactory = NullLoggerFactory.Instance;
         _subject = new ExtensionActivationGenerationRepository(
             _context,
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             loggerFactory.CreateLogger<ExtensionActivationGenerationRepository>());
     }
 
@@ -42,7 +47,7 @@ public class ExtensionActivationGenerationRepositoryTests
     }
 
     [Test]
-    public async Task GetCurrentAsync_ReturnsZero_ForFreshDatabase()
+    public async Task GetCurrentAsync_ReturnsZero_WhenTheDatabaseIsNew()
     {
         // Act
         var generation = await _subject.GetCurrentAsync().ConfigureAwait(false);
@@ -64,6 +69,23 @@ public class ExtensionActivationGenerationRepositoryTests
             Assert.That(first, Is.EqualTo(1));
             Assert.That(second, Is.EqualTo(2));
             Assert.That(await _subject.GetCurrentAsync().ConfigureAwait(false), Is.EqualTo(2));
+        }
+    }
+
+    [Test]
+    public async Task GetCurrentAsync_DoesNotInsert_WhenDatabaseHasNoSeed()
+    {
+        // Arrange
+        await _context.ExtensionActivationStates.ExecuteDeleteAsync().ConfigureAwait(false);
+
+        // Act
+        var generation = await _subject.GetCurrentAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(generation, Is.Zero);
+            Assert.That(await _context.ExtensionActivationStates.CountAsync().ConfigureAwait(false), Is.Zero);
         }
     }
 }

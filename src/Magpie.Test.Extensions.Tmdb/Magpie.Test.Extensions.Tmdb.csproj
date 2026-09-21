@@ -3,7 +3,6 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     <RunSettingsFilePath>$(MSBuildThisFileDirectory)..\test.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
@@ -22,12 +21,10 @@
     <PackageReference Include="NUnit3TestAdapter" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="RichardSzalay.MockHttp" />
   </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
       <ProjectReference Include="..\Magpie.Extensions.Tmdb\Magpie.Extensions.Tmdb.csproj" />
   </ItemGroup>
 

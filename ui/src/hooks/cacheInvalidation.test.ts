@@ -29,6 +29,8 @@ import { useApiKeys, apiKeyQueryKeys } from './useApiKeys';
 import { useBackups, backupQueryKeys } from './useBackups';
 import { useIndexers, indexerQueryKeys } from './useIndexers';
 import { useUsers, userQueryKeys } from './useUsers';
+import { useQualityTierLists } from './useQualityTierLists';
+import { tagQueryKeys } from './useTags';
 
 const mockApiGet = vi.mocked(apiGet);
 const mockApiPost = vi.mocked(apiPost);
@@ -420,7 +422,7 @@ describe('cache invalidation', () => {
             });
 
             await act(async () => {
-                await result.current.updateIndexer('i1', { name: 'Updated' });
+                await result.current.updateIndexer('i1', { name: { value: 'Updated' } });
             });
 
             expect(spy).toHaveBeenCalledWith({ queryKey: indexerQueryKeys.list() });
@@ -572,7 +574,7 @@ describe('cache invalidation', () => {
             });
 
             await act(async () => {
-                await result.current.updateFeed('f1', { name: 'Updated Feed' });
+                await result.current.updateFeed('f1', { name: { value: 'Updated Feed' } });
             });
 
             expect(spy).toHaveBeenCalledWith({ queryKey: indexerQueryKeys.feeds() });
@@ -735,6 +737,30 @@ describe('cache invalidation', () => {
             });
 
             expect(spy).toHaveBeenCalledWith({ queryKey: userQueryKeys.all });
+        });
+    });
+
+    describe('useQualityTierLists', () => {
+        it('should invalidate tag queries after a tag assignment', async () => {
+            const queryClient = createTestClient();
+            const spy = vi.spyOn(queryClient, 'invalidateQueries');
+            mockApiGet.mockResolvedValue([]);
+            mockApiPatch.mockResolvedValue(undefined);
+
+            const { result } = renderHook(() => useQualityTierLists(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            await act(async () => {
+                await result.current.updateTierList('list-1', { tags: { add: ['Movies'] } });
+            });
+
+            expect(spy).toHaveBeenCalledWith({ queryKey: tagQueryKeys.byEntity('list-1') });
+            expect(spy).toHaveBeenCalledWith({ queryKey: tagQueryKeys.all });
         });
     });
 });

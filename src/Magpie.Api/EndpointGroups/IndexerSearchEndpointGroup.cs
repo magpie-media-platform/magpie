@@ -41,7 +41,9 @@ internal sealed class IndexerSearchEndpointGroup : IApiEndpointGroup
         var result = await indexerService.SearchAsync(request, cancellationToken).ConfigureAwait(false);
 
         return result is null
-            ? Results.Problem("The selected indexers share no query mode that fits the request.", statusCode: 400)
+            ? Results.Problem(
+                "The selected indexers share no query mode that fits the request.",
+                statusCode: StatusCodes.Status400BadRequest)
             : Results.Ok(result);
     }
 

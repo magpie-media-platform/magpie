@@ -72,7 +72,7 @@ internal sealed class RootFoldersEndpointGroup : IApiEndpointGroup
     {
         var created = await rootFolderService.CreateAsync(create, user.Id, cancellationToken).ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Created($"/api/{Name}/{created.Id}", created);
     }
 
     [MagpieCommand("get", "GET", "{id:guid}", "Show a root folder")]

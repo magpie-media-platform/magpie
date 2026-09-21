@@ -7,25 +7,11 @@ import { TooltipProvider } from '@/components/ui/Tooltip';
 
 import { ExclusionsEditor, type ExclusionDraft } from './RulesEditor';
 
-const mockUseQualityFields = vi.fn();
 const mockUseLibraryTypes = vi.fn();
-
-vi.mock('@/hooks/useQualityFields', () => ({
-    useQualityFields: () => mockUseQualityFields(),
-}));
 
 vi.mock('@/hooks/useLibraryTypes', () => ({
     useLibraryTypes: () => mockUseLibraryTypes(),
 }));
-
-const defaultQualityFields = {
-    universalFields: [
-        { name: 'Title', label: 'Title', isNumeric: false },
-        { name: 'Size', label: 'Size', isNumeric: true },
-    ],
-    isLoading: false,
-    error: null,
-};
 
 const defaultLibraryTypes = {
     contentTypes: [] as {
@@ -58,7 +44,6 @@ function createExclusion(overrides: Partial<ExclusionDraft> = {}): ExclusionDraf
 describe('ExclusionsEditor', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockUseQualityFields.mockReturnValue(defaultQualityFields);
         mockUseLibraryTypes.mockReturnValue(defaultLibraryTypes);
     });
 

@@ -5,7 +5,8 @@ import type { ApiEventFilter } from '@/lib/eventContextCriteria';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
 
-import type { IntegrationSettingDefinition } from './useProviderSchema';
+import { useProviderSchemaQuery } from './useProviderSchema';
+import { useProviderCatalog } from './useProviderCatalog';
 
 export interface NotificationRule {
     id: string;
@@ -45,7 +46,7 @@ interface NotificationRuleCreate {
     enabled: boolean;
 }
 
-interface NotificationRuleUpdate extends Omit<NotificationRuleCreate, 'settings'> {
+interface NotificationRuleUpdate extends Omit<NotificationRuleCreate, 'settings' | 'providerType' | 'ownerUserId'> {
     id: string;
 
     settings?: Record<string, string>;
@@ -54,43 +55,13 @@ interface NotificationRuleUpdate extends Omit<NotificationRuleCreate, 'settings'
 const notificationRuleQueryKeys = {
     all: ['notification-rules'] as const,
     list: () => ['notification-rules', 'list'] as const,
-    detail: (id: string) => ['notification-rules', 'detail', id] as const,
     providers: () => ['notification-rules', 'providers'] as const,
     providerSchema: (providerType: string) => ['notification-rules', 'providers', providerType, 'schema'] as const,
+    detail: (id: string) => ['notification-rules', 'detail', id] as const,
 };
-
-const NOTIFICATION_PROVIDER_CHANGE_EVENTS = [
-    'extension.installed',
-    'extension.updated',
-    'extension.enabled',
-    'extension.disabled',
-    'extension.uninstalled',
-    'extension.upgraded',
-] as const;
 
 async function fetchRules(): Promise<NotificationRule[]> {
     return apiGet<NotificationRule[]>('/notification-rules');
-}
-
-async function fetchProviders(): Promise<string[]> {
-    const providers =
-        await apiGet<Array<{ kind: string; providerType: string; schema: IntegrationSettingDefinition[] }>>(
-            '/providers',
-        );
-
-    return providers.filter((provider) => provider.kind === 'notification').map((provider) => provider.providerType);
-}
-
-async function fetchProviderSchema(providerType: string): Promise<IntegrationSettingDefinition[]> {
-    const providers =
-        await apiGet<Array<{ kind: string; providerType: string; schema: IntegrationSettingDefinition[] }>>(
-            '/providers',
-        );
-
-    return (
-        providers.find((provider) => provider.kind === 'notification' && provider.providerType === providerType)
-            ?.schema ?? []
-    );
 }
 
 async function createRule(request: NotificationRuleCreate): Promise<NotificationRule> {
@@ -105,6 +76,10 @@ async function updateRule(request: NotificationRuleUpdate): Promise<void> {
         ...(settings ? { settings: { add: settings } } : {}),
         enabled: { value: enabled },
     });
+}
+
+async function setRuleEnabled(id: string, enabled: boolean): Promise<void> {
+    return apiPatch(`/notification-rules/${id}`, { enabled: { value: enabled } });
 }
 
 async function deleteRule(id: string): Promise<void> {
@@ -142,6 +117,13 @@ export function useNotificationRules() {
         },
     });
 
+    const toggleMutation = useMutation({
+        mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => setRuleEnabled(id, enabled),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: notificationRuleQueryKeys.all });
+        },
+    });
+
     const deleteMutation = useMutation({
         mutationFn: deleteRule,
         onSuccess: () => {
@@ -165,6 +147,9 @@ export function useNotificationRules() {
         updateRule: updateMutation.mutateAsync,
         isUpdating: updateMutation.isPending,
 
+        toggleRuleEnabled: (id: string, enabled: boolean) => toggleMutation.mutateAsync({ id, enabled }),
+        isToggling: toggleMutation.isPending,
+
         deleteRule: deleteMutation.mutateAsync,
         isDeleting: deleteMutation.isPending,
 
@@ -174,15 +159,9 @@ export function useNotificationRules() {
 }
 
 export function useNotificationProviders() {
-    useInvalidateQueriesOnEvents(NOTIFICATION_PROVIDER_CHANGE_EVENTS, [notificationRuleQueryKeys.providers()], {
-        exact: true,
-        owner: 'notification-providers',
-    });
-    const providersQuery = useQuery({
-        queryKey: notificationRuleQueryKeys.providers(),
-        queryFn: fetchProviders,
-        staleTime: 60_000,
-    });
+    const providersQuery = useProviderCatalog((providers) =>
+        providers.filter((provider) => provider.kind === 'notification').map((provider) => provider.providerType),
+    );
 
     return {
         providers: providersQuery.data ?? [],
@@ -193,15 +172,5 @@ export function useNotificationProviders() {
 }
 
 export function useNotificationProviderSchema(providerType: string | null) {
-    useInvalidateQueriesOnEvents(
-        providerType ? NOTIFICATION_PROVIDER_CHANGE_EVENTS : [],
-        [notificationRuleQueryKeys.providerSchema(providerType ?? '')],
-        { exact: true, owner: 'notification-provider-schema' },
-    );
-    return useQuery({
-        queryKey: notificationRuleQueryKeys.providerSchema(providerType ?? ''),
-        queryFn: () => fetchProviderSchema(providerType!),
-        enabled: !!providerType,
-        staleTime: 60_000,
-    });
+    return useProviderSchemaQuery('notification', providerType);
 }

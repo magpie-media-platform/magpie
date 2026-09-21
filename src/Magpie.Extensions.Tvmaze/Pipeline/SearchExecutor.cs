@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Net.Http;
@@ -25,13 +26,6 @@ namespace Magpie.Extensions.Tvmaze.Pipeline;
 
 internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> logger) : ISearchExecutor
 {
-    private static readonly JsonSerializerOptions ExecutionJsonOptions = new()
-    {
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true
-    };
-
     private enum NodeExecutionStatus
     {
         Success,
@@ -40,6 +34,101 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         Unavailable,
         Skipped
     }
+
+    private sealed record NodeExecutionResult(
+        NodeExecutionStatus Status,
+        IReadOnlyList<ShowDto> Candidates,
+        int RowsIn = 0,
+        int Rejections = 0)
+    {
+        internal static NodeExecutionResult Empty { get; } = new(NodeExecutionStatus.Empty, []);
+
+        internal static NodeExecutionResult Failed { get; } = new(NodeExecutionStatus.Failed, []);
+
+        internal static NodeExecutionResult Unavailable { get; } = new(NodeExecutionStatus.Unavailable, []);
+
+        internal static NodeExecutionResult Skipped { get; } = new(NodeExecutionStatus.Skipped, []);
+
+        internal static NodeExecutionResult From(IReadOnlyList<ShowDto> candidates, int? rowsIn = null)
+        {
+            var inputCount = rowsIn ?? candidates.Count;
+            return new NodeExecutionResult(
+                candidates.Count == 0 ? NodeExecutionStatus.Empty : NodeExecutionStatus.Success,
+                candidates,
+                inputCount,
+                Math.Max(0, inputCount - candidates.Count));
+        }
+    }
+
+    private sealed record ResolvedPerson(PersonDto Person, IReadOnlyList<SearchSeed.PersonAlternative> Alternatives);
+
+    private sealed record ResolveExecutionResult(NodeExecutionStatus Status, IReadOnlyList<ResolvedPerson> People)
+    {
+        internal static ResolveExecutionResult Empty { get; } = new(NodeExecutionStatus.Empty, []);
+
+        internal static ResolveExecutionResult Failed { get; } = new(NodeExecutionStatus.Failed, []);
+    }
+
+    private sealed class PlanExecutionContext(
+        int requiredCount,
+        int maximumResults)
+    {
+        private readonly Dictionary<int, int> _branchIndexes = [];
+
+        internal int RequiredCount { get; } = requiredCount;
+
+        internal List<string> Warnings { get; } = [];
+
+        internal QueryExecutionOutcome Outcome { get; } = new() { MaximumResults = maximumResults };
+
+        internal int FilterRowsIn { get; set; }
+
+        internal HashSet<string> Embeds { get; } = new(StringComparer.Ordinal);
+
+        internal int TotalRejections => Outcome.Rejections.Values.Sum();
+
+        internal Dictionary<int, NodeExecutionResult> NodeResults { get; } = [];
+
+        internal Dictionary<int, NodeExecutionResult> VerifiedResults { get; } = [];
+
+        internal Dictionary<int, ResolveExecutionResult> ResolveResults { get; } = [];
+
+        internal Dictionary<(int ShowId, string Embeds), ShowDto?> Details { get; } = [];
+
+        internal void RecordBranch(NodeExecutionOutcome outcome)
+        {
+            if (_branchIndexes.TryGetValue(outcome.Id, out var index))
+            {
+                Outcome.Branches[index] = outcome;
+                return;
+            }
+
+            _branchIndexes.Add(outcome.Id, Outcome.Branches.Count);
+            Outcome.Branches.Add(outcome);
+        }
+
+        internal bool HasBranch(int nodeId) => _branchIndexes.ContainsKey(nodeId);
+
+        internal int RowsOut(int nodeId)
+        {
+            return _branchIndexes.TryGetValue(nodeId, out var index) ? Outcome.Branches[index].RowsOut : 0;
+        }
+
+        internal void Reject(string reason)
+        {
+            Outcome.Rejections[reason] = Outcome.Rejections.GetValueOrDefault(reason) + 1;
+        }
+    }
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
+    private const int MaximumBrowsePages = 4;
+
+    private static readonly JsonSerializerOptions ExecutionJsonOptions = new()
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true
+    };
 
     public Task<MetadataSearchPage> ExecuteAsync(
         QueryPlan plan,
@@ -426,12 +515,8 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             return;
         }
 
-        var matchingAlternatives = alternatives
-            .Where(alternative => alternative.PersonIds.Count == 0 || alternative.PersonIds.Contains(person.Id))
-            .Where(alternative => alternative.SubjectCriteria.All(criterion =>
-                CriterionGrammar.Matches(criterion, person.Name)))
-            .ToArray();
-        if (matchingAlternatives.Length == 0)
+        var matchingAlternatives = MatchingAlternatives(person, alternatives);
+        if (matchingAlternatives.Count == 0)
         {
             personIds.Remove(person.Id);
             return;
@@ -731,7 +816,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         var requiredCount = plan.MaximumResults == int.MaxValue
             ? int.MaxValue
             : plan.MaximumResults + 1;
-        var context = new PlanExecutionContext(requiredCount, plan.MaximumResults, plan.Warnings);
+        var context = new PlanExecutionContext(requiredCount, plan.MaximumResults);
         var execution = plan.Root is FilterPlanNode filter
             ? await ExecuteVerifiedNodeAsync(
                 filter.Child,
@@ -792,6 +877,11 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             logger.LogTrace(
                 "EXEC TVMaze {ExecutionJson}",
                 JsonSerializer.Serialize(context.Outcome, ExecutionJsonOptions));
+        }
+
+        if (execution.Status == NodeExecutionStatus.Failed && result.Matches.Count == 0)
+        {
+            throw new InvalidOperationException("TVMaze search failed with no completed execution node.");
         }
 
         return result;
@@ -1033,7 +1123,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         foreach (var lookup in seed.Lookups)
         {
             var show = lookup.ShowId is { } showId
-                ? await client.GetShowByIdAsync(showId, cancellationToken).ConfigureAwait(false)
+                ? await client.GetShowWithEmbedsAsync(showId, [], cancellationToken).ConfigureAwait(false)
                 : await client.LookupShowAsync(lookup.Source, lookup.Value, cancellationToken)
                     .ConfigureAwait(false);
             if (show is not null)
@@ -1344,7 +1434,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         var pageRequests = 0;
         var rowsIn = 0;
         var rejectionsBefore = context.TotalRejections;
-        for (var page = 0; survivors.Count < requiredCount; page++)
+        for (var page = 0; page < MaximumBrowsePages && survivors.Count < requiredCount; page++)
         {
             IReadOnlyList<ShowDto>? shows;
             try
@@ -1634,91 +1724,5 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             RowsIn = rowsIn,
             Rejections = context.TotalRejections - rejectionsBefore
         };
-    }
-
-    private sealed record NodeExecutionResult(
-        NodeExecutionStatus Status,
-        IReadOnlyList<ShowDto> Candidates,
-        int RowsIn = 0,
-        int Rejections = 0)
-    {
-        internal static NodeExecutionResult Empty { get; } = new(NodeExecutionStatus.Empty, []);
-
-        internal static NodeExecutionResult Failed { get; } = new(NodeExecutionStatus.Failed, []);
-
-        internal static NodeExecutionResult Unavailable { get; } = new(NodeExecutionStatus.Unavailable, []);
-
-        internal static NodeExecutionResult Skipped { get; } = new(NodeExecutionStatus.Skipped, []);
-
-        internal static NodeExecutionResult From(IReadOnlyList<ShowDto> candidates, int? rowsIn = null)
-        {
-            var inputCount = rowsIn ?? candidates.Count;
-            return new NodeExecutionResult(
-                candidates.Count == 0 ? NodeExecutionStatus.Empty : NodeExecutionStatus.Success,
-                candidates,
-                inputCount,
-                Math.Max(0, inputCount - candidates.Count));
-        }
-    }
-
-    private sealed record ResolvedPerson(PersonDto Person, IReadOnlyList<SearchSeed.PersonAlternative> Alternatives);
-
-    private sealed record ResolveExecutionResult(NodeExecutionStatus Status, IReadOnlyList<ResolvedPerson> People)
-    {
-        internal static ResolveExecutionResult Empty { get; } = new(NodeExecutionStatus.Empty, []);
-
-        internal static ResolveExecutionResult Failed { get; } = new(NodeExecutionStatus.Failed, []);
-    }
-
-    private sealed class PlanExecutionContext(
-        int requiredCount,
-        int maximumResults,
-        IReadOnlyList<string> warnings)
-    {
-        private readonly Dictionary<int, int> _branchIndexes = [];
-
-        internal int RequiredCount { get; } = requiredCount;
-
-        internal List<string> Warnings { get; } = [.. warnings];
-
-        internal QueryExecutionOutcome Outcome { get; } = new() { MaximumResults = maximumResults };
-
-        internal int FilterRowsIn { get; set; }
-
-        internal HashSet<string> Embeds { get; } = new(StringComparer.Ordinal);
-
-        internal int TotalRejections => Outcome.Rejections.Values.Sum();
-
-        internal Dictionary<int, NodeExecutionResult> NodeResults { get; } = [];
-
-        internal Dictionary<int, NodeExecutionResult> VerifiedResults { get; } = [];
-
-        internal Dictionary<int, ResolveExecutionResult> ResolveResults { get; } = [];
-
-        internal Dictionary<(int ShowId, string Embeds), ShowDto?> Details { get; } = [];
-
-        internal void RecordBranch(NodeExecutionOutcome outcome)
-        {
-            if (_branchIndexes.TryGetValue(outcome.Id, out var index))
-            {
-                Outcome.Branches[index] = outcome;
-                return;
-            }
-
-            _branchIndexes.Add(outcome.Id, Outcome.Branches.Count);
-            Outcome.Branches.Add(outcome);
-        }
-
-        internal bool HasBranch(int nodeId) => _branchIndexes.ContainsKey(nodeId);
-
-        internal int RowsOut(int nodeId)
-        {
-            return _branchIndexes.TryGetValue(nodeId, out var index) ? Outcome.Branches[index].RowsOut : 0;
-        }
-
-        internal void Reject(string reason)
-        {
-            Outcome.Rejections[reason] = Outcome.Rejections.GetValueOrDefault(reason) + 1;
-        }
     }
 }

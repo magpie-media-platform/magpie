@@ -21,7 +21,7 @@ public interface IDownloadRepository :
     IBulkPatchRepository<Guid, Download, DownloadQuery, DownloadPatch>
 {
     /// <summary>
-    /// Gets one page of download queue entries that match a query.
+    /// Queries one page of download queue entries that match a query.
     /// </summary>
     /// <param name="query">The criteria that an entry must match</param>
     /// <param name="paging">The page number and page size</param>
@@ -63,7 +63,7 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets failed downloads for a set of release identities.
+    /// Lists the failed downloads for a set of release identities.
     /// </summary>
     /// <param name="releaseIdentityKeys">The release identity keys to look up</param>
     /// <param name="downloadClientId">The id of one download client, or null for every client</param>
@@ -74,7 +74,7 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets recent imported downloads for a content hierarchy item.
+    /// Lists the recent imported downloads for a content hierarchy item.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
     /// <param name="completedAfter">The earliest completion time to consider</param>
@@ -195,7 +195,7 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the downloads that passed a stuck-detection time limit.
+    /// Lists the downloads that passed a stuck-detection time limit.
     /// </summary>
     /// <param name="fetchingCutoff">The time limit for a download that still fetches</param>
     /// <param name="stalledCutoff">The time limit for a download that makes no progress</param>
@@ -250,7 +250,7 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the terminal downloads that the client cleanup can consider.
+    /// Lists the terminal downloads that the client cleanup can consider.
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<IReadOnlyList<DownloadCleanupCandidate>> ListCleanupCandidatesAsync(
@@ -278,7 +278,7 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the downloads of a set of content items that a download client still holds.
+    /// Lists the downloads of a set of content items that a download client still holds.
     /// </summary>
     /// <param name="contentItemIds">The ids of the content items to look up</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

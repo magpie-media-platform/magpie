@@ -1,12 +1,16 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Services;
@@ -20,9 +24,19 @@ internal sealed class ExtensionLifecycleManager(
     ExtensionLoadContext loadContext,
     IEventBus eventBus,
     IServiceScopeFactory scopeFactory,
-    TimeProvider timeProvider,
+    IExtensionRepository repository,
+    IFileSystem fileSystem,
+    MagpieHostEnvironment hostEnvironment,
+    ILoggerFactory loggerFactory,
     ILogger<ExtensionLifecycleManager> logger) : IExtensionLifecycleManager
 {
+    private static string ResolveAssemblyPath(Assembly assembly)
+    {
+        return AssemblyLoadContext.GetLoadContext(assembly) is ExtensionLoader.ExtensionAssemblyLoadContext context
+            ? context.MainAssemblyPath
+            : assembly.Location;
+    }
+
     private static bool Matches(IExtension loaded, Extension extension, IFileSystem fileSystem)
     {
         var assembly = loaded.GetType().Assembly;
@@ -32,12 +46,13 @@ internal sealed class ExtensionLifecycleManager(
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(extension.FilePath) || string.IsNullOrWhiteSpace(assembly.Location))
+        var assemblyPath = ResolveAssemblyPath(assembly);
+        if (string.IsNullOrWhiteSpace(extension.FilePath) || string.IsNullOrWhiteSpace(assemblyPath))
         {
             return false;
         }
 
-        return fileSystem.PathsEqual(assembly.Location, extension.FilePath);
+        return fileSystem.PathsEqual(assemblyPath, extension.FilePath);
     }
 
     public async Task DispatchStartupHooksAsync(CancellationToken cancellationToken = default)
@@ -56,8 +71,6 @@ internal sealed class ExtensionLifecycleManager(
 
         using var scope = scopeFactory.CreateScope();
         var context = CreateContext(scope.ServiceProvider);
-        var repository = scope.ServiceProvider.GetRequiredService<IExtensionRepository>();
-        var fileSystem = scope.ServiceProvider.GetRequiredService<IFileSystem>();
         var rows = (await repository.ListAllAsync(cancellationToken).ConfigureAwait(false)).ToArray();
 
         foreach (var extension in loadContext.Loaded)
@@ -69,7 +82,7 @@ internal sealed class ExtensionLifecycleManager(
 
             var assembly = extension.GetType().Assembly;
             var runtimeName = assembly.GetName().Name;
-            var runtimePath = assembly.Location;
+            var runtimePath = ResolveAssemblyPath(assembly);
             var row = extension.Id == Guid.Empty
                 ? null
                 : rows.FirstOrDefault(candidate => candidate.Id == extension.Id);
@@ -110,8 +123,8 @@ internal sealed class ExtensionLifecycleManager(
             if (row is null)
             {
                 logger.LogWarning(
-                    "Extension {ExtensionName} has no desired extension row. " +
-                    "The lifecycle manager skipped the install and upgrade hooks",
+                    "The lifecycle manager skipped the install and upgrade hooks for extension " +
+                    "{ExtensionName} because it has no desired extension row",
                     extension.Name);
             }
             else
@@ -119,13 +132,19 @@ internal sealed class ExtensionLifecycleManager(
                 var currentVersion = extension.Version.ToString();
                 if (string.IsNullOrWhiteSpace(row.LifecycleVersion))
                 {
-                    await DispatchOnExtensionInstallAsync(
-                        lifecycle, extension, row, repository, context, cancellationToken).ConfigureAwait(false);
+                    await DispatchVersionHookAsync(
+                        () => lifecycle.OnExtensionInstallAsync(context, cancellationToken),
+                        nameof(IExtensionLifecycle.OnExtensionInstallAsync),
+                        extension, row, cancellationToken).ConfigureAwait(false);
                 }
                 else if (!string.Equals(row.LifecycleVersion, currentVersion, StringComparison.Ordinal))
                 {
-                    await DispatchOnExtensionUpgradeAsync(
-                        lifecycle, extension, row, repository, context, cancellationToken).ConfigureAwait(false);
+                    await DispatchVersionHookAsync(
+                        Version.TryParse(row.LifecycleVersion, out var previousVersion)
+                            ? () => lifecycle.OnExtensionUpgradeAsync(context, previousVersion, cancellationToken)
+                            : () => Task.CompletedTask,
+                        nameof(IExtensionLifecycle.OnExtensionUpgradeAsync),
+                        extension, row, cancellationToken).ConfigureAwait(false);
                 }
             }
 
@@ -152,12 +171,12 @@ internal sealed class ExtensionLifecycleManager(
             nameof(IExtensionLifecycle.OnExtensionUninstallAsync));
     }
 
-    private static ExtensionLifecycleContext CreateContext(IServiceProvider scopedServices)
+    private ExtensionLifecycleContext CreateContext(IServiceProvider scopedServices)
     {
         return new ExtensionLifecycleContext(
-            scopedServices.GetRequiredService<IMagpieSystem>().NodeId,
+            hostEnvironment.NodeId,
             scopedServices,
-            scopedServices.GetRequiredService<ILoggerFactory>());
+            loggerFactory);
     }
 
     private async Task InvokeHookAsync(
@@ -165,8 +184,6 @@ internal sealed class ExtensionLifecycleManager(
         Func<IExtensionLifecycle, ExtensionLifecycleContext, Task> hook,
         string hookName)
     {
-        using var scope = scopeFactory.CreateScope();
-        var fileSystem = scope.ServiceProvider.GetRequiredService<IFileSystem>();
         var match = loadContext.Loaded.FirstOrDefault(candidate =>
             candidate is IExtensionLifecycle && Matches(candidate, extension, fileSystem));
         await InvokeLoadedHookAsync(match, hook, hookName).ConfigureAwait(false);
@@ -180,23 +197,27 @@ internal sealed class ExtensionLifecycleManager(
         }
 
         const string reason = "The extension assembly failed to load.";
-        using var scope = scopeFactory.CreateScope();
-        var repository = scope.ServiceProvider.GetRequiredService<IExtensionRepository>();
 
         foreach (var extension in loadContext.Failed)
         {
             try
             {
-                var disabled = extension with
+                var disabled = await repository.PatchAsync(
+                    new ExtensionPatch
+                    {
+                        Id = extension.Id,
+                        Enabled = new() { Value = false },
+                        DisabledReason = new() { Value = reason }
+                    },
+                    modifiedByUserId: null,
+                    cancellationToken).ConfigureAwait(false);
+                if (!disabled)
                 {
-                    Enabled = false,
-                    DisabledReason = reason,
-                    ModifiedAt = timeProvider.GetUtcNow().UtcDateTime
-                };
-                await repository.UpdateAsync(disabled, modifiedByUserId: null, cancellationToken)
-                    .ConfigureAwait(false);
+                    continue;
+                }
+
                 await eventBus.PublishAsync(
-                    ExtensionEventBuilder.BuildExtensionDisabledEvent(disabled.Id, reason),
+                    ExtensionEventBuilder.BuildExtensionDisabledEvent(extension.Id, reason),
                     cancellationToken)
                     .ConfigureAwait(false);
                 logger.LogWarning(
@@ -237,24 +258,23 @@ internal sealed class ExtensionLifecycleManager(
         {
             logger.LogError(
                 ex,
-                "Extension {ExtensionName} threw an exception in {HookName}. The lifecycle manager will continue",
+                "Extension {ExtensionName} threw an exception in {HookName}",
                 match.Name,
                 hookName);
         }
     }
 
-    private async Task DispatchOnExtensionInstallAsync(
-        IExtensionLifecycle lifecycle,
+    private async Task DispatchVersionHookAsync(
+        Func<Task> hook,
+        string hookName,
         IExtension loaded,
         Extension row,
-        IExtensionRepository repository,
-        ExtensionLifecycleContext context,
         CancellationToken cancellationToken)
     {
         if (!await TryInvokeAsync(
-            () => lifecycle.OnExtensionInstallAsync(context, cancellationToken),
+            hook,
             loaded.Name,
-            nameof(IExtensionLifecycle.OnExtensionInstallAsync)).ConfigureAwait(false))
+            hookName).ConfigureAwait(false))
         {
             return;
         }
@@ -270,43 +290,7 @@ internal sealed class ExtensionLifecycleManager(
             logger.LogWarning(
                 ex,
                 "The lifecycle manager failed to record version {LifecycleVersion} for extension " +
-                "{ExtensionName}. The hooks will run again at startup",
-                currentVersion,
-                row.Name);
-        }
-    }
-
-    private async Task DispatchOnExtensionUpgradeAsync(
-        IExtensionLifecycle lifecycle,
-        IExtension loaded,
-        Extension row,
-        IExtensionRepository repository,
-        ExtensionLifecycleContext context,
-        CancellationToken cancellationToken)
-    {
-        if (Version.TryParse(row.LifecycleVersion, out var previousVersion))
-        {
-            if (!await TryInvokeAsync(
-                () => lifecycle.OnExtensionUpgradeAsync(context, previousVersion, cancellationToken),
-                loaded.Name,
-                nameof(IExtensionLifecycle.OnExtensionUpgradeAsync)).ConfigureAwait(false))
-            {
-                return;
-            }
-        }
-
-        var currentVersion = loaded.Version.ToString();
-        row.LifecycleVersion = currentVersion;
-        try
-        {
-            await repository.UpdateAsync(row, modifiedByUserId: null, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(
-                ex,
-                "The lifecycle manager failed to record version {LifecycleVersion} for extension " +
-                "{ExtensionName}. The hooks will run again at startup",
+                "{ExtensionName}",
                 currentVersion,
                 row.Name);
         }
@@ -323,7 +307,7 @@ internal sealed class ExtensionLifecycleManager(
         {
             logger.LogError(
                 ex,
-                "Extension {ExtensionName} threw an exception in {HookName}. The lifecycle manager skipped the hook",
+                "Extension {ExtensionName} threw an exception in {HookName}",
                 extensionName,
                 hookName);
             return false;

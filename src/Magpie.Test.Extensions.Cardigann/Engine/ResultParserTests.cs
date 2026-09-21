@@ -70,6 +70,87 @@ public sealed class ResultParserTests
     }
 
     [Test]
+    public void ExtractDownloadTarget_ReturnsAttributeValue_WhenTheSelectorVariableHoldsSelectorGrammar()
+    {
+        // Arrange
+        var html = """<html><body><a title='cool"release' href="/dl/1">grab</a></body></html>""";
+        var download = new DownloadBlock
+        {
+            Selector = """a[title="{{ .Keywords }}"]""",
+            Attribute = "href",
+        };
+        var variables = new Dictionary<string, object?> { [".Keywords"] = "cool\"release" };
+
+        // Act
+        var target = _parser.ExtractDownloadTarget(html, download, variables);
+
+        // Assert
+        Assert.That(target, Is.EqualTo("/dl/1"));
+    }
+
+    [Test]
+    public void ExtractDownloadTarget_ReturnsAttributeValue_WhenSelectorHoldsATemplate()
+    {
+        // Arrange
+        var download = new DownloadBlock
+        {
+            Selectors =
+            [
+                new FieldDefinition
+                {
+                    Selector = """a[href^="{{ .Config.downloadlink }}"]""",
+                    Attribute = "href",
+                },
+            ],
+        };
+        var variables = new Dictionary<string, object?> { [".Config.downloadlink"] = "magnet:" };
+
+        // Act
+        var target = _parser.ExtractDownloadTarget(DetailHtml, download, variables);
+
+        // Assert
+        Assert.That(target, Is.EqualTo("magnet:?xt=urn:btih:" + Btih + "&dn=cool"));
+    }
+
+    [Test]
+    public void ExtractDownloadTarget_ReturnsAttributeValue_WhenTheScalarSelectorHoldsATemplate()
+    {
+        // Arrange
+        var download = new DownloadBlock
+        {
+            Selector = """a[href^="{{ .Config.downloadlink }}"]""",
+            Attribute = "href",
+        };
+        var variables = new Dictionary<string, object?> { [".Config.downloadlink"] = "magnet:" };
+
+        // Act
+        var target = _parser.ExtractDownloadTarget(DetailHtml, download, variables);
+
+        // Assert
+        Assert.That(target, Is.EqualTo("magnet:?xt=urn:btih:" + Btih + "&dn=cool"));
+    }
+
+    [Test]
+    public void ExtractDownloadTarget_ReturnsNull_WhenTheSelectorTemplateRendersEmpty()
+    {
+        // Arrange
+        var download = new DownloadBlock
+        {
+            Selectors =
+            [
+                new FieldDefinition { Selector = "{{ .Config.downloadlink }}" },
+            ],
+        };
+        var variables = new Dictionary<string, object?> { [".Config.downloadlink"] = string.Empty };
+
+        // Act
+        var target = _parser.ExtractDownloadTarget(DetailHtml, download, variables);
+
+        // Assert
+        Assert.That(target, Is.Null);
+    }
+
+    [Test]
     public void ExtractDownloadTarget_ReturnsNull_WhenSelectorMisses()
     {
         // Arrange
@@ -187,6 +268,156 @@ public sealed class ResultParserTests
             Assert.That(releases[0].IdentityKeys, Has.Count.EqualTo(1));
             Assert.That(releases[0].IdentityKeys.Single().Authority, Is.EqualTo("btih"));
             Assert.That(releases[0].IdentityKeys.Single().Value, Is.EqualTo(Btih));
+        }
+    }
+
+    [Test]
+    public void Parse_MatchesRow_WhenTheRowSelectorVariableHoldsSelectorGrammar()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = """tr[data-cat="{{ .Category }}"]""";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title"] = new() { Selector = "td.title" },
+            ["details"] = new() { Selector = "td.details > a", Attribute = "href" },
+        };
+        var variables = new Dictionary<string, object?> { [".Category"] = "cool\"release" };
+
+        // Act
+        var releases = _parser.Parse(
+            """
+            <table><tr data-cat='cool&quot;release'>
+                <td class="title">Cool Movie</td>
+                <td class="details"><a href="/details/42">link</a></td>
+            </tr></table>
+            """,
+            definition,
+            new Uri("https://tracker.test/"),
+            variables);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Cool Movie"));
+        }
+    }
+
+    [Test]
+    public void Parse_MatchesRow_WhenTheRowSelectorComparesAConfiguredValueThatHoldsSelectorGrammar()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector =
+            """{{ if eq .Config.section "tv/anime" }}tr.anime{{ else }}tr.all{{ end }}""";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title"] = new() { Selector = "td.title" },
+            ["details"] = new() { Selector = "td.details > a", Attribute = "href" },
+        };
+        var variables = new Dictionary<string, object?> { [".Config.section"] = "tv/anime" };
+
+        // Act
+        var releases = _parser.Parse(
+            """
+            <table>
+                <tr class="anime">
+                    <td class="title">Anime Movie</td>
+                    <td class="details"><a href="/details/1">link</a></td>
+                </tr>
+                <tr class="all">
+                    <td class="title">Other Movie</td>
+                    <td class="details"><a href="/details/2">link</a></td>
+                </tr>
+            </table>
+            """,
+            definition,
+            new Uri("https://tracker.test/"),
+            variables);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Anime Movie"));
+        }
+    }
+
+    [Test]
+    public void Parse_SkipsTheInvalidField_WhenItsSelectorCannotBeEvaluated()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "tr.release";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title"] = new() { Selector = "td.title" },
+            ["download"] = new() { Selector = "a.download", Attribute = "href" },
+            ["size"] = new() { Selector = "td[" },
+        };
+
+        // Act
+        var releases = _parser.Parse(
+            """
+            <table>
+                <tr class="release"><td class="title">One</td><td><a class="download" href="/one">a</a></td></tr>
+                <tr class="release"><td class="title">Two</td><td><a class="download" href="/two">a</a></td></tr>
+                <tr class="release"><td class="title">Three</td><td><a class="download" href="/three">a</a></td></tr>
+            </table>
+            """,
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?>());
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(3));
+            Assert.That(releases.Select(release => release.Title), Is.EqualTo(["One", "Two", "Three"]));
+            Assert.That(releases[0].Properties, Does.Not.Contain("\"size\""));
+            Assert.That(releases[1].Properties, Does.Not.Contain("\"size\""));
+            Assert.That(releases[2].Properties, Does.Not.Contain("\"size\""));
+        }
+    }
+
+    [Test]
+    public void Parse_RetainsFieldOnLaterRows_WhenFirstRowCaseSelectorFails()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "tr.release";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title"] = new() { Selector = "td.title" },
+            ["download"] = new() { Selector = "a.download", Attribute = "href" },
+            ["size"] = new()
+            {
+                Case = new Dictionary<string, string>
+                {
+                    ["td.known"] = "1024",
+                    ["td["] = "2048",
+                },
+            },
+        };
+
+        // Act
+        var releases = _parser.Parse(
+            """
+            <table>
+                <tr class="release"><td class="title">One</td><td><a class="download" href="/one">a</a></td></tr>
+                <tr class="release"><td class="title known">Two</td><td><a class="download" href="/two">a</a></td></tr>
+            </table>
+            """,
+            definition,
+            new Uri("https://tracker.test/"));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(2));
+            Assert.That(releases[0].Size, Is.Null);
+            Assert.That(releases[1].Size, Is.EqualTo(1024));
         }
     }
 

@@ -42,7 +42,6 @@ interface UseLibraryFiltersArgs {
     contentTypes: LibraryTypeDefinition[];
     routeContentTypeSlug: string | undefined;
     selectedLevel: LibraryLevelDefinition | null;
-    clearSelection: () => void;
     user: User | null;
     canManageContent: boolean;
     hasRole: (minRole: Role) => boolean;
@@ -54,7 +53,6 @@ export function useLibraryFilters({
     contentTypes,
     routeContentTypeSlug,
     selectedLevel,
-    clearSelection,
     user,
     canManageContent,
     hasRole,
@@ -136,7 +134,6 @@ export function useLibraryFilters({
 
     const handleFilterQueryChange = useCallback(
         (query: string) => {
-            clearSelection();
             if (query.length > 0) {
                 setFilterBarExpanded(true);
             }
@@ -158,7 +155,7 @@ export function useLibraryFilters({
             setDivergedFromId(reference ? reference.id : null);
             updateParams({ filter: query, savedFilter: '', page: '1' });
         },
-        [updateParams, clearSelection, referencedSavedFilter],
+        [updateParams, referencedSavedFilter],
     );
 
     const handleSortingChange = useCallback(
@@ -185,9 +182,8 @@ export function useLibraryFilters({
         (value: string) => {
             const next = normalizeFulfillmentApiName(value);
             updateParams({ fulfillment: next ?? '', page: '1' });
-            clearSelection();
         },
-        [updateParams, clearSelection],
+        [updateParams],
     );
 
     const headerFilters: ContentHeaderFilters = useMemo(() => {
@@ -274,8 +270,7 @@ export function useLibraryFilters({
         setDivergedFromId(null);
         updateParams({ filter: '', fulfillment: '', savedFilter: '', page: '1' });
         setFilterBarExpanded(false);
-        clearSelection();
-    }, [updateParams, clearSelection]);
+    }, [updateParams]);
 
     const handleOpenSaveFilter = useCallback(() => {
         setSaveFilterError(null);
@@ -300,7 +295,6 @@ export function useLibraryFilters({
                         contentHierarchyItem?: { and?: unknown[] };
                         mediaFiles?: { and?: unknown[] };
                     },
-                    isShared: false,
                 });
 
                 if (created?.id) {
@@ -333,13 +327,9 @@ export function useLibraryFilters({
             return;
         }
 
-        const fullFilter = savedContentFilters.find((f) => f.id === referencedSavedFilter.id);
-        const isShared = fullFilter?.ownerId === null;
-
         try {
             await updateFilterMutation.mutateAsync({
                 id: referencedSavedFilter.id,
-                isShared,
                 criteria: { value: parseResult.criteria as ContentFilterCriteria },
             });
 
@@ -355,15 +345,7 @@ export function useLibraryFilters({
         } catch {
             setSaveFilterError('Failed to update filter. Please try again.');
         }
-    }, [
-        referencedSavedFilter,
-        filterQuery,
-        savedContentFilters,
-        updateFilterMutation,
-        updateParams,
-        closeSaveFilterDialog,
-        toast,
-    ]);
+    }, [referencedSavedFilter, filterQuery, updateFilterMutation, updateParams, closeSaveFilterDialog, toast]);
 
     return {
         filterQuery,

@@ -63,7 +63,6 @@ function TestConsumer() {
             <span data-testid="user-id">{ctx.context.userId ?? 'null'}</span>
             <span data-testid="username">{ctx.context.username ?? 'null'}</span>
             <span data-testid="role">{ctx.context.role ?? 'null'}</span>
-            <span data-testid="theme">{ctx.context.theme ?? 'null'}</span>
             <span data-testid="error">{ctx.state.error?.message ?? 'null'}</span>
         </div>
     );
@@ -96,7 +95,6 @@ describe('ExtensionProvider', () => {
         expect(screen.getByTestId('user-id')).toHaveTextContent('null');
         expect(screen.getByTestId('username')).toHaveTextContent('null');
         expect(screen.getByTestId('role')).toHaveTextContent('null');
-        expect(screen.getByTestId('theme')).toHaveTextContent('null');
     });
 
     it('provides custom context values', async () => {
@@ -117,19 +115,6 @@ describe('ExtensionProvider', () => {
         await waitFor(() => {
             expect(screen.getByTestId('state')).toHaveTextContent('ready');
         });
-    });
-
-    it('provides theme in context', () => {
-        const manifest: UIManifest = { assets: [], extensions: [] };
-        mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
-
-        render(
-            <ExtensionProvider theme="dark">
-                <TestConsumer />
-            </ExtensionProvider>,
-        );
-
-        expect(screen.getByTestId('theme')).toHaveTextContent('dark');
     });
 
     it('transitions through loading states', async () => {

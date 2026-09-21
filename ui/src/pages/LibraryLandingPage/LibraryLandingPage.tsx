@@ -6,8 +6,7 @@ import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { LibraryCountCard } from '@/components/ui/LibraryCountCard/LibraryCountCard';
-import { formatLibraryItemCount } from '@/components/ui/LibraryCountCard/formatLibraryItemCount';
+import { LibraryCountCard, formatLibraryItemCount } from '@/components/ui/LibraryCountCard';
 import {
     useLibraryTypes,
     useLibraryCounts,
@@ -40,26 +39,13 @@ function TypeCard({ type, basePath, isSubject = false, counts }: TypeCardProps) 
             linkDataAttributes={{ 'data-type-id': type.id }}
             iconTestId="library-landing__type-icon"
             skeletonTestId="library-landing__count-skeleton"
-            classNames={{
-                link: 'library-landing__type-link',
-                card: 'library-landing__type-card',
-                content: 'library-landing__type-content',
-                icon: 'library-landing__type-icon',
-                info: 'library-landing__type-info',
-                name: 'library-landing__type-name',
-                count: 'library-landing__type-count',
-                skeleton: 'library-landing__count-skeleton',
-            }}
         />
     );
 }
 
 function TypeCardSkeleton() {
     return (
-        <div
-            className="library-landing__type-card library-landing__type-card--skeleton"
-            data-testid="library-landing__type-card--skeleton"
-        >
+        <div className="library-landing__type-card--skeleton" data-testid="library-landing__type-card--skeleton">
             <Skeleton className="library-landing__skeleton-icon" />
             <div className="library-landing__skeleton-lines">
                 <Skeleton className="library-landing__skeleton-text" />

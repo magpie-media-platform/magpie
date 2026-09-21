@@ -1,82 +1,76 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CubeIcon, IconContext } from '@phosphor-icons/react';
+import { CdnPhosphorIcon } from './CdnPhosphorIcon';
 
-import { CdnPhosphorIcon, buildPhosphorIconUrl, normalizePhosphorIconName } from './CdnPhosphorIcon';
+const image = document.createElement('img');
 
-type ImageResult = 'load' | 'error';
-
-let imageResult: ImageResult;
-
-class MockImage {
-    onload: (() => void) | null = null;
-
-    onerror: (() => void) | null = null;
-
-    set src(_value: string) {
-        queueMicrotask(() => {
-            if (imageResult === 'load') {
-                this.onload?.();
-            } else {
-                this.onerror?.();
-            }
-        });
-    }
-}
-
-describe('CdnPhosphorIcon', () => {
-    beforeEach(() => {
-        imageResult = 'load';
-        vi.stubGlobal('Image', MockImage);
+beforeEach(() => {
+    vi.spyOn(window, 'Image').mockImplementation(function () {
+        return image;
     });
+});
 
-    afterEach(() => {
-        vi.unstubAllGlobals();
-    });
+afterEach(() => vi.restoreAllMocks());
 
-    it('builds pinned CDN URLs for regular and weighted icon assets', () => {
-        expect(buildPhosphorIconUrl('user-square', 'regular')).toBe(
-            'https://cdn.jsdelivr.net/npm/@phosphor-icons/core@2.1.1/assets/regular/user-square.svg',
+it.each(['UserSquareIcon', 'user-square', 'user_square', 'user square'])('loads a CDN mask for %s', (name) => {
+    render(<CdnPhosphorIcon name={name} weight="duotone" data-testid="icon" />);
+    expect(image.src).toBe(
+        'https://cdn.jsdelivr.net/npm/@phosphor-icons/core@2.1.1/assets/duotone/user-square-duotone.svg',
+    );
+    fireEvent.load(image);
+    expect(screen.getByTestId('icon')).toHaveAttribute('data-icon-source', 'phosphor-cdn');
+    expect(screen.getByTestId('icon').style.maskImage).toBe(
+        'url("https://cdn.jsdelivr.net/npm/@phosphor-icons/core@2.1.1/assets/duotone/user-square-duotone.svg")',
+    );
+});
+
+describe('fallback and context', () => {
+    it.each([undefined, null, '../../user-square'])('uses the cube for an invalid name %s', (name) => {
+        render(
+            <>
+                <CdnPhosphorIcon name={name} data-testid="unknown" />
+                <CubeIcon data-testid="cube" />
+            </>,
         );
-        expect(buildPhosphorIconUrl('user-square', 'duotone')).toBe(
-            'https://cdn.jsdelivr.net/npm/@phosphor-icons/core@2.1.1/assets/duotone/user-square-duotone.svg',
+        expect(screen.getByTestId('unknown').innerHTML).toBe(screen.getByTestId('cube').innerHTML);
+        expect(window.Image).not.toHaveBeenCalled();
+    });
+
+    it('preserves inherited icon options', () => {
+        render(
+            <IconContext.Provider value={{ size: 32, color: 'red', weight: 'bold', mirrored: true }}>
+                <CdnPhosphorIcon name="books" alt="Books" data-testid="icon" />
+            </IconContext.Provider>,
         );
+        fireEvent.load(image);
+        expect(screen.getByTestId('icon')).toHaveAttribute('width', '32');
+        expect(screen.getByTestId('icon').style.backgroundColor).toBe('red');
+        expect(screen.getByTestId('icon')).toHaveStyle({ transform: 'scaleX(-1)' });
+        expect(image.src).toBe('https://cdn.jsdelivr.net/npm/@phosphor-icons/core@2.1.1/assets/bold/books-bold.svg');
+        expect(screen.getByTestId('icon').querySelector('title')).toHaveTextContent('Books');
     });
 
-    it('normalizes supported Phosphor name formats and rejects unsafe names', () => {
-        expect(normalizePhosphorIconName('UserSquareIcon')).toBe('user-square');
-        expect(normalizePhosphorIconName(' user square ')).toBe('user-square');
-        expect(normalizePhosphorIconName('user_square')).toBe('user-square');
-        expect(normalizePhosphorIconName('../../user-square')).toBeNull();
-        expect(normalizePhosphorIconName(undefined)).toBeNull();
+    it.each(['not-an-icon', 'airplane'])('keeps the cube when the CDN asset %s cannot load', (name) => {
+        render(
+            <>
+                <CdnPhosphorIcon name={name} data-testid="unavailable" />
+                <CubeIcon data-testid="fallback" />
+            </>,
+        );
+        fireEvent.error(image);
+        expect(screen.getByTestId('unavailable').innerHTML).toBe(screen.getByTestId('fallback').innerHTML);
     });
 
-    it('renders the CDN icon after its asset loads', async () => {
-        render(<CdnPhosphorIcon name="books" weight="duotone" data-testid="icon" />);
-
-        await act(async () => {
-            await Promise.resolve();
-        });
-
-        const icon = screen.getByTestId('icon');
-        expect(icon).toHaveAttribute('data-icon-source', 'phosphor-cdn');
-        expect(icon).toHaveStyle({
-            maskImage:
-                'url("https://cdn.jsdelivr.net/npm/@phosphor-icons/core@2.1.1/assets/duotone/books-duotone.svg")',
-        });
-    });
-
-    it('renders the cube fallback when the name is absent or the CDN asset fails', async () => {
-        const { rerender } = render(<CdnPhosphorIcon name={undefined} data-testid="icon" />);
+    it('ignores a previous load after the requested name changes', async () => {
+        const { rerender } = render(<CdnPhosphorIcon name="books" data-testid="icon" />);
+        const previousLoad = image.onload;
+        rerender(<CdnPhosphorIcon name="user-square" data-testid="icon" />);
+        await act(() => previousLoad?.call(image, new Event('load')));
         expect(screen.getByTestId('icon')).not.toHaveAttribute('data-icon-source');
-
-        imageResult = 'error';
-        rerender(<CdnPhosphorIcon name="not-an-icon" data-testid="icon" />);
-
-        await act(async () => {
-            await Promise.resolve();
-        });
-
-        expect(screen.getByTestId('icon')).not.toHaveAttribute('data-icon-source');
-        expect(screen.getByTestId('icon').querySelector('path')).toBeInTheDocument();
+        fireEvent.load(image);
+        expect(screen.getByTestId('icon').style.maskImage).toBe(
+            'url("https://cdn.jsdelivr.net/npm/@phosphor-icons/core@2.1.1/assets/regular/user-square.svg")',
+        );
     });
 });

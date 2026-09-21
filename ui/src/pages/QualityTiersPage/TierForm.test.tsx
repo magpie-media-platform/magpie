@@ -8,25 +8,11 @@ import { TooltipProvider } from '@/components/ui/Tooltip';
 
 import { TierForm } from './TierForm';
 
-const mockUseQualityFields = vi.fn();
 const mockUseLibraryTypes = vi.fn();
-
-vi.mock('@/hooks/useQualityFields', () => ({
-    useQualityFields: () => mockUseQualityFields(),
-}));
 
 vi.mock('@/hooks/useLibraryTypes', () => ({
     useLibraryTypes: () => mockUseLibraryTypes(),
 }));
-
-const defaultQualityFields = {
-    universalFields: [
-        { name: 'Title', label: 'Title', isNumeric: false },
-        { name: 'Size', label: 'Size', isNumeric: true },
-    ],
-    isLoading: false,
-    error: null,
-};
 
 const defaultLibraryTypes = {
     contentTypes: [] as {
@@ -46,7 +32,6 @@ const defaultLibraryTypes = {
 beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
-    mockUseQualityFields.mockReturnValue(defaultQualityFields);
     mockUseLibraryTypes.mockReturnValue(defaultLibraryTypes);
 });
 
@@ -661,6 +646,43 @@ describe('TierForm dirty detection', () => {
         );
 
         expect(screen.getByLabelText(/criterion 1 field/i)).toHaveValue('Size');
+    });
+
+    it('refuses to save a criterion with no field name', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={vi.fn()} onSubmit={onSubmit} />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), 'Bluray-1080p');
+        await user.click(document.querySelector('[data-action="add-criterion"]') as HTMLElement);
+        await user.type(screen.getByLabelText(/criterion 1 value/i), 'Bluray');
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(onSubmit).not.toHaveBeenCalled();
+        expect(screen.getByText('Every criterion needs a field name')).toBeInTheDocument();
+    });
+
+    it('refuses to save an exclusion criterion with no field name', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={vi.fn()} onSubmit={onSubmit} />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), 'Bluray-1080p');
+        await user.click(document.querySelector('[data-action="add-exclusion"]') as HTMLElement);
+        await user.click(document.querySelectorAll('[data-action="add-criterion"]')[1] as HTMLElement);
+        await user.type(screen.getByLabelText(/criterion 1 value/i), 'CAM');
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(onSubmit).not.toHaveBeenCalled();
+        expect(screen.getByText('Every exclusion criterion needs a field name')).toBeInTheDocument();
     });
 
     it('does not warn on cancel after inserting a blank criterion row', async () => {

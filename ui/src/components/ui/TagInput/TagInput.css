@@ -11,6 +11,7 @@
         align-items: center;
         gap: var(--space-xs);
         width: 100%;
+        min-height: 32px;
         padding: var(--space-2xs) var(--space-xs);
         background-color: var(--bg-primary);
         border: 1px solid var(--border-default);
@@ -22,6 +23,10 @@
             outline: var(--focus-ring-width) solid var(--focus-ring-color);
             outline-offset: var(--focus-ring-offset);
             border-color: var(--border-accent);
+        }
+
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
         }
     }
 

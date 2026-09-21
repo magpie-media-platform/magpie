@@ -92,8 +92,7 @@ export function DashboardPage() {
     const retryContent = useCallback(() => {
         void contentCountsQuery.refetch();
         void recentContentQuery.refetch();
-        void upcomingContentQuery.refetch();
-    }, [contentCountsQuery, recentContentQuery, upcomingContentQuery]);
+    }, [contentCountsQuery, recentContentQuery]);
     const retryUpcoming = useCallback(() => {
         void upcomingContentQuery.refetch();
     }, [upcomingContentQuery]);
@@ -144,12 +143,8 @@ export function DashboardPage() {
     const healthLoading = clientHealthQuery.isLoading || serverHealthQuery.isLoading;
     const healthError = queryErrorOrNull(clientHealthQuery) ?? queryErrorOrNull(serverHealthQuery);
 
-    const contentLoading =
-        contentCountsQuery.isLoading || recentContentQuery.isLoading || upcomingContentQuery.isLoading;
-    const contentError =
-        queryErrorOrNull(contentCountsQuery) ??
-        queryErrorOrNull(recentContentQuery) ??
-        queryErrorOrNull(upcomingContentQuery);
+    const contentLoading = contentCountsQuery.isLoading || recentContentQuery.isLoading;
+    const contentError = queryErrorOrNull(contentCountsQuery) ?? queryErrorOrNull(recentContentQuery);
 
     return (
         <div className="dashboard-page" data-page="dashboard">

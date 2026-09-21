@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 
 using Magpie.Models.Data;
 using Magpie.Models.Patch;
@@ -39,4 +40,28 @@ public sealed record ContentHierarchyItemPatch : TagsPatch
     /// The patch for <see cref="ContentHierarchyItem.PendingMetadataRefresh"/>.
     /// </summary>
     public ScalarPatch<bool>? PendingMetadataRefresh { get; init; }
+
+    /// <summary>
+    /// The patch for <see cref="ContentHierarchyItem.Name"/>.
+    /// </summary>
+    [JsonIgnore]
+    public ScalarPatch<string>? Name { get; init; }
+
+    /// <summary>
+    /// The patch for <see cref="ContentHierarchyItem.Slug"/>.
+    /// </summary>
+    [JsonIgnore]
+    public ScalarPatch<string>? Slug { get; init; }
+
+    /// <summary>
+    /// The patch for <see cref="ContentHierarchyItem.Settings"/>.
+    /// </summary>
+    [JsonIgnore]
+    public DictionaryPatch<string, string, string>? Settings { get; init; }
+
+    /// <summary>
+    /// The patch for <see cref="ContentHierarchyItem.DateLastRefreshed"/>.
+    /// </summary>
+    [JsonIgnore]
+    public ScalarPatch<DateTime?>? DateLastRefreshed { get; init; }
 }

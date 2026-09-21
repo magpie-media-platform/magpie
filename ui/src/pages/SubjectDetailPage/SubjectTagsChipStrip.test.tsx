@@ -71,11 +71,12 @@ describe('SubjectTagsChipStrip', () => {
         });
     });
 
-    it('hides an empty read-only row', () => {
+    it('shows an empty tags row for a read-only viewer', () => {
         mockUseTagsByEntity.mockReturnValue({ tags: [], isLoading: false });
 
-        const { container } = renderStrip(false);
+        renderStrip(false);
 
-        expect(container).toBeEmptyDOMElement();
+        expect(screen.getByText('No tags')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Add tag' })).not.toBeInTheDocument();
     });
 });

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -7,7 +8,9 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,7 +34,7 @@ using Microsoft.Extensions.Logging;
 namespace Magpie.Core.Extensions;
 
 internal sealed class ExtensionService(
-    HttpClient httpClient,
+    IHttpClientFactory httpClientFactory,
     IExtensionRepository extensionRepository,
     IExtensionPackageSourceRepository packageSourceRepository,
     IExtensionActivationGenerationRepository activationGenerationRepository,
@@ -44,10 +47,27 @@ internal sealed class ExtensionService(
     TimeProvider timeProvider,
     ILogger<ExtensionService> logger) : IExtensionService
 {
+    public const string HttpClientName = "ExtensionService";
+
     private static readonly TimeSpan UpdateInfoCacheTtl = TimeSpan.FromMinutes(15);
 
     private static readonly string[] PreferredTargetFrameworks =
-    ["net10.0", "net9.0", "net8.0", "netstandard2.1", "netstandard2.0"];
+    [
+        "net10.0",
+        "net9.0",
+        "net8.0",
+        "netstandard2.1",
+        "netstandard2.0"
+    ];
+
+    private static readonly string[] SupportedRegistrationTypes =
+    [
+        "RegistrationsBaseUrl/3.6.0",
+        "RegistrationsBaseUrl/3.4.0",
+        "RegistrationsBaseUrl/3.0.0-rc",
+        "RegistrationsBaseUrl/3.0.0-beta",
+        "RegistrationsBaseUrl"
+    ];
 
     private const string UpdateInfoCacheKey = "magpie.extensions.update-availability";
     private const string ManualDisableReason = "Disabled by request.";
@@ -375,6 +395,11 @@ internal sealed class ExtensionService(
             return $"extension-{Guid.NewGuid():N}";
         }
 
+        if (suggested.Trim().TrimEnd('.') is "" || suggested.Contains('/') || suggested.Contains('\\'))
+        {
+            throw new ArgumentException("The extension directory name is invalid.", nameof(suggested));
+        }
+
         var invalid = Path.GetInvalidFileNameChars();
         var sanitized = new string([.. suggested.Trim().Select(c => invalid.Contains(c) ? '-' : c)]);
         return string.IsNullOrWhiteSpace(sanitized)
@@ -392,11 +417,23 @@ internal sealed class ExtensionService(
         if (Version.TryParse(StripPrerelease(candidate), out var parsedCandidate) &&
             Version.TryParse(StripPrerelease(current), out var parsedCurrent))
         {
-            return parsedCandidate > parsedCurrent;
+            return parsedCandidate > parsedCurrent ||
+                (parsedCandidate == parsedCurrent && !IsPrerelease(candidate) && IsPrerelease(current));
         }
 
         return string.CompareOrdinal(candidate, current) > 0;
     }
+
+    private static bool HasChanges(ExtensionPatch patch) =>
+        patch.NuGetId is not null ||
+        patch.PackageRepository is not null ||
+        patch.AutoUpgrade is not null ||
+        patch.LoadOrder is not null ||
+        patch.Enabled is not null ||
+        patch.DisabledReason is not null;
+
+    private static bool IsPrerelease(string version) =>
+        version.Split('+', 2)[0].Contains('-', StringComparison.Ordinal);
 
     private static string StripPrerelease(string version)
     {
@@ -468,6 +505,23 @@ internal sealed class ExtensionService(
 
     private static bool LooksLikeFlatContainerEndpoint(string sourceUrl) =>
         sourceUrl.Contains("v3-flatcontainer", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryReadSourceUri(string? value, [NotNullWhen(true)] out Uri? sourceUri)
+    {
+        sourceUri = Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
+            string.IsNullOrEmpty(uri.UserInfo)
+            ? uri
+            : null;
+        return sourceUri is not null;
+    }
+
+    private static void ValidateSourceUri(string? value, string parameterName)
+    {
+        if (!TryReadSourceUri(value, out _))
+        {
+            throw new ArgumentException("The package source must be an absolute HTTPS URL.", parameterName);
+        }
+    }
 
     public async Task<IReadOnlyList<ExtensionListItem>> ListAsync(CancellationToken cancellationToken = default)
     {
@@ -591,16 +645,15 @@ internal sealed class ExtensionService(
             return null;
         }
 
-        var extension = existing with
-        {
-            Enabled = true,
-            DisabledReason = null,
-            ModifiedAt = timeProvider.GetUtcNow().UtcDateTime,
-            ModifiedByUserId = actingUserId
-        };
-
-        var updated = await extensionRepository.UpdateAsync(extension, actingUserId, cancellationToken)
-            .ConfigureAwait(false);
+        var updated = await extensionRepository.PatchAsync(
+            new ExtensionPatch
+            {
+                Id = extensionId,
+                Enabled = new() { Value = true },
+                DisabledReason = new() { Value = null }
+            },
+            actingUserId,
+            cancellationToken).ConfigureAwait(false);
         if (!updated)
         {
             return null;
@@ -610,7 +663,13 @@ internal sealed class ExtensionService(
         await eventBus.PublishAsync(
             ExtensionEventBuilder.BuildExtensionEnabledEvent(extensionId),
             cancellationToken).ConfigureAwait(false);
-        return extension;
+        return existing with
+        {
+            Enabled = true,
+            DisabledReason = null,
+            ModifiedAt = timeProvider.GetUtcNow().UtcDateTime,
+            ModifiedByUserId = actingUserId
+        };
     }
 
     public async Task<Extension?> DisableAsync(
@@ -626,15 +685,10 @@ internal sealed class ExtensionService(
 
         await lifecycleManager.InvokeDisableAsync(existing, cancellationToken).ConfigureAwait(false);
 
-        var extension = existing with
-        {
-            Enabled = false,
-            ModifiedAt = timeProvider.GetUtcNow().UtcDateTime,
-            ModifiedByUserId = actingUserId
-        };
-
-        var updated = await extensionRepository.UpdateAsync(extension, actingUserId, cancellationToken)
-            .ConfigureAwait(false);
+        var updated = await extensionRepository.PatchAsync(
+            new ExtensionPatch { Id = extensionId, Enabled = new() { Value = false } },
+            actingUserId,
+            cancellationToken).ConfigureAwait(false);
         if (!updated)
         {
             return null;
@@ -645,7 +699,12 @@ internal sealed class ExtensionService(
             ExtensionEventBuilder.BuildExtensionDisabledEvent(extensionId, ManualDisableReason),
             cancellationToken)
             .ConfigureAwait(false);
-        return extension;
+        return existing with
+        {
+            Enabled = false,
+            ModifiedAt = timeProvider.GetUtcNow().UtcDateTime,
+            ModifiedByUserId = actingUserId
+        };
     }
 
     public async Task<bool> PatchAsync(
@@ -655,6 +714,29 @@ internal sealed class ExtensionService(
         CancellationToken cancellationToken = default)
     {
         var effective = patch with { Id = extensionId };
+        if (effective.Enabled is { Value: true })
+        {
+            effective = effective with { DisabledReason = patch.DisabledReason ?? new() { Value = null } };
+        }
+
+        if (!HasChanges(effective))
+        {
+            return await extensionRepository.GetByIdAsync(extensionId, cancellationToken)
+                .ConfigureAwait(false) is not null;
+        }
+
+        if (effective.Enabled is { Value: false })
+        {
+            var existing = await extensionRepository.GetByIdAsync(extensionId, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+            {
+                return false;
+            }
+
+            await lifecycleManager.InvokeDisableAsync(existing, cancellationToken).ConfigureAwait(false);
+        }
+
         var patched = await extensionRepository.PatchAsync(effective, actingUserId, cancellationToken)
             .ConfigureAwait(false);
         if (!patched)
@@ -662,9 +744,18 @@ internal sealed class ExtensionService(
             return false;
         }
 
-        if (effective.LoadOrder is not null)
+        if (effective.Enabled is not null || effective.LoadOrder is not null)
         {
             await PublishActivationChangedAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (effective.Enabled is { } enabled)
+        {
+            await eventBus.PublishAsync(
+                enabled.Value
+                    ? ExtensionEventBuilder.BuildExtensionEnabledEvent(extensionId)
+                    : ExtensionEventBuilder.BuildExtensionDisabledEvent(extensionId, ManualDisableReason),
+                cancellationToken).ConfigureAwait(false);
         }
 
         return true;
@@ -717,6 +808,7 @@ internal sealed class ExtensionService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
+        ValidateSourceUri(create.SourceUrl, nameof(create));
         return await packageSourceRepository.CreateAsync(
             new ExtensionPackageSource
             {
@@ -740,6 +832,11 @@ internal sealed class ExtensionService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
+        if (patch.SourceUrl is { } sourceUrl)
+        {
+            ValidateSourceUri(sourceUrl.Value, nameof(patch));
+        }
+
         return await packageSourceRepository
             .PatchAsync(patch with { Id = packageSourceId }, actingUserId, cancellationToken)
             .ConfigureAwait(false);
@@ -842,8 +939,8 @@ internal sealed class ExtensionService(
                 }
 
                 logger.LogInformation(
-                    "The extension service updated extension {ExtensionName} to v{ExtensionVersion} " +
-                    "in {TargetDirectory}. A restart is necessary",
+                    "The extension service updated extension {ExtensionName} to v{ExtensionVersion} in " +
+                    "{TargetDirectory} and needs a restart",
                     updated.Name,
                     updated.Version,
                     targetDir);
@@ -899,7 +996,7 @@ internal sealed class ExtensionService(
 
                 var versions = await GetVersionsAsync(extension.PackageId, cancellationToken)
                     .ConfigureAwait(false);
-                var latest = versions.LastOrDefault();
+                var latest = versions.LastOrDefault(candidate => !IsPrerelease(candidate));
                 var hasUpdate = !string.IsNullOrWhiteSpace(latest) && IsNewer(latest!, extension.Version);
 
                 updates.Add(new ExtensionUpdateInfo(
@@ -940,8 +1037,8 @@ internal sealed class ExtensionService(
         if (!managed && hostOptions.Cluster.Mode == ExtensionClusterMode.MultiNodeLocalExtensions)
         {
             throw new MagpieException(
-                "Local extension uploads are unavailable while multi-node extension mode is enabled. Install the " +
-                "extension from a configured NuGet source instead.");
+                "Local extension uploads are unavailable in multi-node extension mode; install from a " +
+                "configured NuGet source instead.");
         }
 
         var buffer = new MemoryStream();
@@ -975,7 +1072,15 @@ internal sealed class ExtensionService(
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(hostEnvironment.ExtensionsRoot);
-        var targetDir = Path.Combine(hostEnvironment.ExtensionsRoot, directoryName);
+        var targetDir = fileSystem.GetFullPath(Path.Combine(hostEnvironment.ExtensionsRoot, directoryName));
+        if (!fileSystem.IsPathWithin(hostEnvironment.ExtensionsRoot, targetDir) ||
+            fileSystem.PathsEqual(hostEnvironment.ExtensionsRoot, targetDir) ||
+            !fileSystem.PathsEqual(Path.GetDirectoryName(targetDir)!, hostEnvironment.ExtensionsRoot))
+        {
+            throw new ArgumentException(
+                "The extension directory is outside the extensions root.", nameof(directoryName));
+        }
+
         var tempDir = Path.Combine(hostEnvironment.ExtensionsRoot, $".install-{Guid.NewGuid():N}");
         var backupDir = Path.Combine(hostEnvironment.ExtensionsRoot, $".backup-{Guid.NewGuid():N}");
         var movedExisting = false;
@@ -1029,8 +1134,8 @@ internal sealed class ExtensionService(
             }
 
             logger.LogInformation(
-                "The extension service installed extension {ExtensionName} v{ExtensionVersion} " +
-                "in {TargetDirectory}. A restart is necessary",
+                "The extension service installed extension {ExtensionName} v{ExtensionVersion} in " +
+                "{TargetDirectory} and needs a restart",
                 registered.Name,
                 registered.Version,
                 targetDir);
@@ -1083,7 +1188,7 @@ internal sealed class ExtensionService(
         if (!fileSystem.IsPathWithin(fullRoot, fullFilePath) || fileSystem.PathsEqual(fullRoot, fullFilePath))
         {
             logger.LogWarning(
-                "Extension path {FilePath} is outside root {Root}. The extension service rejected the path",
+                "The extension service rejected path {FilePath} outside root {Root}",
                 fullFilePath,
                 fullRoot);
             return false;
@@ -1100,8 +1205,8 @@ internal sealed class ExtensionService(
             fileSystem.PathsEqual(fullRoot, fullFileDirectory))
         {
             logger.LogWarning(
-                "Extension directory {Directory} is outside a staging subdirectory of {Root}. " +
-                "The extension service rejected the directory",
+                "The extension service rejected directory {Directory} outside a staging subdirectory of " +
+                "{Root}",
                 fullFileDirectory,
                 fullRoot);
             return false;
@@ -1140,8 +1245,8 @@ internal sealed class ExtensionService(
             else if (movedExisting && Directory.Exists(backupDir))
             {
                 logger.LogWarning(
-                    "The extension service did not restore backup {BackupDirectory}. " +
-                    "Target {TargetDirectory} already exists",
+                    "The extension service did not restore backup {BackupDirectory} because target " +
+                    "{TargetDirectory} already exists",
                     backupDir,
                     targetDir);
             }
@@ -1189,15 +1294,32 @@ internal sealed class ExtensionService(
         if (string.IsNullOrWhiteSpace(resolvedVersion))
         {
             var versions = await GetVersionsAsync(packageId, cancellationToken).ConfigureAwait(false);
-            resolvedVersion = versions.LastOrDefault();
+            resolvedVersion = versions.LastOrDefault(candidate => !IsPrerelease(candidate));
             if (string.IsNullOrWhiteSpace(resolvedVersion))
             {
+                if (versions.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"NuGet package {packageId} publishes prerelease versions only; name a version to " +
+                        "install it.");
+                }
+
                 return null;
             }
         }
 
-        var lowerId = packageId.ToLowerInvariant();
-        var lowerVersion = resolvedVersion!.ToLowerInvariant();
+        if (packageId is "." or "..")
+        {
+            throw new ArgumentException("The package ID is invalid.", nameof(packageId));
+        }
+
+        var lowerId = Uri.EscapeDataString(packageId.ToLowerInvariant());
+        if (resolvedVersion is "." or "..")
+        {
+            throw new ArgumentException("The package version is invalid.", nameof(version));
+        }
+
+        var lowerVersion = Uri.EscapeDataString(resolvedVersion!.ToLowerInvariant());
 
         try
         {
@@ -1218,7 +1340,7 @@ internal sealed class ExtensionService(
                     using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
                     ApplyCredentials(request, source);
 
-                    using var response = await httpClient
+                    using var response = await httpClientFactory.CreateClient(HttpClientName)
                         .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                         .ConfigureAwait(false);
 
@@ -1230,11 +1352,27 @@ internal sealed class ExtensionService(
                     response.EnsureSuccessStatusCode();
 
                     var buffer = new MemoryStream();
-                    await response.Content.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-                    buffer.Position = 0;
-                    return buffer;
+                    try
+                    {
+                        await response.Content.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+                        buffer.Position = 0;
+                        await VerifyPackageIntegrityAsync(
+                            buffer, endpoints.RegistrationUrl, packageId, resolvedVersion, source, cancellationToken)
+                            .ConfigureAwait(false);
+                        buffer.Position = 0;
+                        return buffer;
+                    }
+                    catch
+                    {
+                        await buffer.DisposeAsync().ConfigureAwait(false);
+                        throw;
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (CryptographicException)
                 {
                     throw;
                 }
@@ -1243,11 +1381,10 @@ internal sealed class ExtensionService(
                     logger.LogError(
                         ex,
                         "The extension service failed to download NuGet package {PackageId} {Version} " +
-                        "from {PackageSourceName} ({ExErrorCode})",
+                        "from {PackageSourceName}",
                         packageId,
                         resolvedVersion,
-                        source.Name,
-                        "nuget-source-download");
+                        source.Name);
                 }
             }
 
@@ -1257,16 +1394,87 @@ internal sealed class ExtensionService(
         {
             throw;
         }
+        catch (CryptographicException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             logger.LogError(
                 ex,
-                "The extension service failed to download NuGet package {PackageId} {Version} ({ExErrorCode})",
+                "The extension service failed to download NuGet package {PackageId} {Version}",
                 packageId,
-                resolvedVersion,
-                "nuget-download");
+                resolvedVersion);
             return null;
         }
+    }
+
+    private async Task VerifyPackageIntegrityAsync(
+        Stream package,
+        string? registrationUrl,
+        string packageId,
+        string version,
+        ExtensionPackageSource source,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(registrationUrl))
+        {
+            if (!LooksLikeSearchEndpoint(source.SourceUrl) && !LooksLikeFlatContainerEndpoint(source.SourceUrl))
+            {
+                throw new InvalidDataException("The package source has no integrity metadata.");
+            }
+
+            logger.LogWarning(
+                "NuGet source {PackageSourceName} installed package {PackageId} {Version} without integrity " +
+                "verification because it publishes no package hashes",
+                source.Name,
+                packageId,
+                version);
+            return;
+        }
+
+        var indexUrl =
+            $"{registrationUrl.TrimEnd('/')}/{Uri.EscapeDataString(packageId.ToLowerInvariant())}/index.json";
+        var index = await GetFromJsonAsync<JsonElement>(indexUrl, source, cancellationToken).ConfigureAwait(false);
+        foreach (var page in index.GetProperty("items").EnumerateArray())
+        {
+            var entries = page.TryGetProperty("items", out var inlineEntries)
+                ? inlineEntries
+                : (await GetFromJsonAsync<JsonElement>(
+                    page.GetProperty("@id").GetString()!, source, cancellationToken).ConfigureAwait(false))
+                    .GetProperty("items");
+            foreach (var entry in entries.EnumerateArray())
+            {
+                var catalog = entry.GetProperty("catalogEntry");
+                if (!string.Equals(
+                    catalog.GetProperty("version").GetString(), version, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var metadata = await GetFromJsonAsync<JsonElement>(
+                    catalog.GetProperty("@id").GetString()!, source, cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(
+                    metadata.GetProperty("id").GetString(), packageId, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(
+                        metadata.GetProperty("version").GetString(), version, StringComparison.OrdinalIgnoreCase) ||
+                    metadata.GetProperty("packageHashAlgorithm").GetString() != "SHA512")
+                {
+                    throw new InvalidDataException("The package integrity metadata is invalid.");
+                }
+
+                var expected = Convert.FromBase64String(metadata.GetProperty("packageHash").GetString()!);
+                var actual = await SHA512.HashDataAsync(package, cancellationToken).ConfigureAwait(false);
+                if (!CryptographicOperations.FixedTimeEquals(expected, actual))
+                {
+                    throw new CryptographicException("The package hash does not match the source metadata.");
+                }
+
+                return;
+            }
+        }
+
+        throw new InvalidDataException("The package source has no integrity metadata for this version.");
     }
 
     private async Task<IReadOnlyList<string>> GetVersionsAsync(string packageId, CancellationToken cancellationToken)
@@ -1276,7 +1484,12 @@ internal sealed class ExtensionService(
             return [];
         }
 
-        var lowerId = packageId.ToLowerInvariant();
+        if (packageId is "." or "..")
+        {
+            throw new ArgumentException("The package ID is invalid.", nameof(packageId));
+        }
+
+        var lowerId = Uri.EscapeDataString(packageId.ToLowerInvariant());
 
         try
         {
@@ -1309,10 +1522,9 @@ internal sealed class ExtensionService(
                     logger.LogError(
                         ex,
                         "The extension service failed to list the NuGet versions of {PackageId} " +
-                        "from {PackageSourceName} ({ExErrorCode})",
+                        "from {PackageSourceName}",
                         packageId,
-                        source.Name,
-                        "nuget-source-versions");
+                        source.Name);
                 }
             }
 
@@ -1326,9 +1538,8 @@ internal sealed class ExtensionService(
         {
             logger.LogError(
                 ex,
-                "The extension service failed to list the NuGet versions of {PackageId} ({ExErrorCode})",
-                packageId,
-                "nuget-versions");
+                "The extension service failed to list the NuGet versions of {PackageId}",
+                packageId);
             return [];
         }
     }
@@ -1394,34 +1605,17 @@ internal sealed class ExtensionService(
         {
             logger.LogError(
                 ex,
-                "The extension service failed to search NuGet source {PackageSourceName} ({ExErrorCode})",
-                source.Name,
-                "nuget-source-search");
+                "The extension service failed to search NuGet source {PackageSourceName}",
+                source.Name);
         }
     }
 
     private async Task<IReadOnlyList<ExtensionPackageSource>> GetEnabledSourcesAsync(
         CancellationToken cancellationToken)
     {
-        const int pageSize = 500;
-        var sources = new List<ExtensionPackageSource>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await packageSourceRepository.QueryAsync(
-                new ExtensionPackageSourceQuery { Enabled = true },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            sources.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var sources = await packageSourceRepository.QueryAllAsync(
+            new ExtensionPackageSourceQuery { Enabled = true },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return sources;
     }
@@ -1453,7 +1647,11 @@ internal sealed class ExtensionService(
                     r.Type?.StartsWith("PackageBaseAddress", StringComparison.OrdinalIgnoreCase) == true)
                 ?.Id;
 
-            return new(SearchUrl: searchUrl, FlatContainerUrl: flatContainerUrl);
+            var registrationUrl = SupportedRegistrationTypes
+                .Select(type => index?.Resources?.FirstOrDefault(resource =>
+                    string.Equals(resource.Type, type, StringComparison.OrdinalIgnoreCase))?.Id)
+                .FirstOrDefault(url => !string.IsNullOrWhiteSpace(url));
+            return new(SearchUrl: searchUrl, FlatContainerUrl: flatContainerUrl, RegistrationUrl: registrationUrl);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1463,9 +1661,8 @@ internal sealed class ExtensionService(
         {
             logger.LogError(
                 ex,
-                "The extension service failed to resolve NuGet source {PackageSourceName} ({ExErrorCode})",
-                source.Name,
-                "nuget-source-index");
+                "The extension service failed to resolve NuGet source {PackageSourceName}",
+                source.Name);
             return new(SearchUrl: null, FlatContainerUrl: null);
         }
     }
@@ -1478,7 +1675,9 @@ internal sealed class ExtensionService(
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
         ApplyCredentials(request, source);
 
-        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await httpClientFactory.CreateClient(HttpClientName)
+            .SendAsync(request, cancellationToken)
+            .ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return default;
@@ -1490,6 +1689,27 @@ internal sealed class ExtensionService(
 
     private void ApplyCredentials(HttpRequestMessage request, ExtensionPackageSource source)
     {
+        if (source.CredentialKind == ExtensionPackageSourceCredentialKind.None)
+        {
+            return;
+        }
+
+        if (!TryReadSourceUri(source.SourceUrl, out var sourceUri))
+        {
+            logger.LogWarning(
+                "NuGet source {PackageSourceName} has no absolute HTTPS URL; the extension service calls " +
+                "it without credentials",
+                source.Name);
+            return;
+        }
+
+        if (!TryReadSourceUri(request.RequestUri?.AbsoluteUri, out var requestUri) ||
+            !string.Equals(sourceUri.IdnHost, requestUri.IdnHost, StringComparison.OrdinalIgnoreCase) ||
+            sourceUri.Port != requestUri.Port)
+        {
+            return;
+        }
+
         string? secret;
         if (source.CredentialKind == ExtensionPackageSourceCredentialKind.Basic)
         {
@@ -1506,9 +1726,8 @@ internal sealed class ExtensionService(
             if (string.IsNullOrWhiteSpace(secretReference))
             {
                 logger.LogWarning(
-                    "NuGet source {PackageSourceName} uses secret credentials without a reference ({ExErrorCode})",
-                    source.Name,
-                    "nuget-source-secret-reference");
+                    "NuGet source {PackageSourceName} uses secret credentials without a reference",
+                    source.Name);
                 return;
             }
 
@@ -1516,11 +1735,10 @@ internal sealed class ExtensionService(
             if (string.IsNullOrWhiteSpace(secret))
             {
                 logger.LogWarning(
-                    "NuGet source {PackageSourceName} reference {SecretReference} has no value, so the " +
-                    "extension service will call this source without credentials ({ExErrorCode})",
+                    "NuGet source {PackageSourceName} reference {SecretReference} has no value; the " +
+                    "extension service calls it without credentials",
                     source.Name,
-                    secretReference,
-                    "nuget-source-secret-reference");
+                    secretReference);
                 return;
             }
         }
@@ -1541,7 +1759,8 @@ internal sealed class ExtensionService(
             .ConfigureAwait(false);
     }
 
-    private sealed record NuGetSourceEndpoints(string? SearchUrl, string? FlatContainerUrl);
+    private sealed record NuGetSourceEndpoints(
+        string? SearchUrl, string? FlatContainerUrl, string? RegistrationUrl = null);
 
     private sealed record NuGetServiceIndex
     {

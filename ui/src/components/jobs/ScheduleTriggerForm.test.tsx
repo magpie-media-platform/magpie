@@ -480,6 +480,7 @@ describe('ScheduleTriggerForm cron presets', () => {
         expect(screen.getByRole('option', { name: 'Every hour' })).toBeInTheDocument();
         expect(screen.getByRole('option', { name: 'Every 4 hours' })).toBeInTheDocument();
         expect(screen.getByRole('option', { name: 'Daily at midnight' })).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: 'Daily at 2 AM' })).toBeInTheDocument();
     });
 
     it('writes the Every 4 hours cron expression when selected', async () => {

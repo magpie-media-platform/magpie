@@ -67,7 +67,7 @@ public class QbittorrentDownloadClientIntegrationTests
         _torrentHttp = new HttpClient(_torrentHandler, disposeHandler: false);
         _httpClientFactory
             .Setup(factory => factory.CreateClient(QbittorrentDownloadClientIntegration.TorrentFileHttpClientName))
-            .Returns(_torrentHttp);
+            .Returns(() => new HttpClient(_torrentHandler, disposeHandler: false));
         _integration = new QbittorrentDownloadClientIntegration(
             NullLogger<QbittorrentDownloadClientIntegration>.Instance,
             _client.Object,
@@ -77,7 +77,6 @@ public class QbittorrentDownloadClientIntegrationTests
     [TearDown]
     public void TearDown()
     {
-        ((IDisposable)_integration).Dispose();
         _torrentHttp.Dispose();
         _torrentHandler.Dispose();
     }
@@ -520,7 +519,7 @@ public class QbittorrentDownloadClientIntegrationTests
     }
 
     [Test]
-    public async Task DownloadReleaseAsync_ReusesTorrentHttpClient_WhenMultipleTorrentsAreDownloaded()
+    public async Task DownloadReleaseAsync_CreatesTorrentHttpClientPerRequest_WhenMultipleTorrentsAreDownloaded()
     {
         // Arrange
         var downloadRequest = _torrentHandler
@@ -545,20 +544,18 @@ public class QbittorrentDownloadClientIntegrationTests
         await _integration.DownloadReleaseAsync(release, AnonymousSettings, default).ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(_torrentHandler.GetMatchCount(downloadRequest), Is.EqualTo(2));
-            _httpClientFactory.Verify(
-                factory => factory.CreateClient(
-                    QbittorrentDownloadClientIntegration.TorrentFileHttpClientName),
-                Times.Once);
-            _client.Verify(client => client.AddTorrentFileAsync(
-                It.IsAny<QbittorrentSettings>(),
-                It.IsAny<byte[]>(),
-                "reused.torrent",
-                null,
-                It.IsAny<CancellationToken>()), Times.Exactly(2));
-        }
+        Assert.That(_torrentHandler.GetMatchCount(downloadRequest), Is.EqualTo(2));
+
+        _httpClientFactory.Verify(
+            factory => factory.CreateClient(
+                QbittorrentDownloadClientIntegration.TorrentFileHttpClientName),
+            Times.Exactly(2));
+        _client.Verify(client => client.AddTorrentFileAsync(
+            It.IsAny<QbittorrentSettings>(),
+            It.IsAny<byte[]>(),
+            "reused.torrent",
+            null,
+            It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [Test]
@@ -748,11 +745,16 @@ public class QbittorrentDownloadClientIntegrationTests
         }
     }
 
-    [TestCase(0.0, 2.0, 0L, 120L, true)]
-    [TestCase(2.0, 2.0, 0L, 120L, false)]
-    [TestCase(0.0, 2.0, 7200L, 120L, false)]
-    [TestCase(0.0, -1.0, 0L, -1L, true)]
+    [TestCase("seeding", 0.0, 2.0, 0L, 120L, true)]
+    [TestCase("seeding", 2.0, 2.0, 0L, 120L, false)]
+    [TestCase("seeding", 0.0, 2.0, 7200L, 120L, false)]
+    [TestCase("seeding", 0.0, -1.0, 0L, -1L, true)]
+    [TestCase("seeding", 0.0, -2.0, 0L, -2L, true)]
+    [TestCase("pausedUP", 0.0, -2.0, 0L, -2L, false)]
+    [TestCase("stoppedUP", 0.0, -2.0, 0L, -2L, false)]
+    [TestCase("pausedUP", 0.0, -1.0, 0L, -1L, true)]
     public async Task GetDownloadAsync_HeldByPolicy_WhenSeedingLimitsAreEvaluated(
+        string state,
         double ratio,
         double maxRatio,
         long seedingTime,
@@ -769,7 +771,7 @@ public class QbittorrentDownloadClientIntegrationTests
                 new TorrentInfo
                 {
                     Hash = Hash,
-                    State = "seeding",
+                    State = state,
                     Ratio = ratio,
                     MaxRatio = maxRatio,
                     SeedingTime = seedingTime,
@@ -1025,5 +1027,27 @@ public class QbittorrentDownloadClientIntegrationTests
 
         // Assert
         Assert.That(result.Issues, Has.Some.Property("Key").EqualTo("password"));
+    }
+
+    [Test]
+    public async Task GetDownloadsAsync_PreservesRequestedId_WhenClientHashUsesDifferentCase()
+    {
+        // Arrange
+        _client.Setup(client => client.GetTorrentInfoAsync(It.IsAny<QbittorrentSettings>(),
+                It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new TorrentInfo { Hash = "abcdef", State = "downloading", Progress = 0.5 }]);
+
+        // Act
+        var result = await _integration.GetDownloadsAsync(["ABCDEF"], AnonymousSettings, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Statuses, Has.Count.EqualTo(1));
+            Assert.That(result.Statuses.Keys, Is.EqualTo(["ABCDEF"]));
+            Assert.That(result.Statuses["ABCDEF"].ExternalId, Is.EqualTo("ABCDEF"));
+            Assert.That(result.Statuses["ABCDEF"].Status, Is.EqualTo(DownloadStatus.Downloading));
+            Assert.That(result.Failures, Is.Empty);
+        }
     }
 }

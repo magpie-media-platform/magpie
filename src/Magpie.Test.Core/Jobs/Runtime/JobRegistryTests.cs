@@ -14,7 +14,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Jobs.Runtime;
 
 [TestFixture]
-public class JobRegistryTests
+public sealed class JobRegistryTests
 {
     private static readonly Type TestJobType = typeof(ContentMetadataRefreshItemJob);
     private static readonly Type OverrideJobType = typeof(ReleaseSearchItemJob);

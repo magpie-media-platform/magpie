@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,6 +15,7 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Jobs;
@@ -30,8 +32,12 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Jobs.Runtime;
 
 [TestFixture]
-public class JobManagerTests
+public sealed class JobManagerTests
 {
+    private const string TraceSourceName = "Magpie.Test.Core.Jobs.Runtime.JobManagerTests";
+
+    private const string PublisherTraceParent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
     private Mock<IJobRuntime> _runtime = null!;
     private Mock<IJobExecutionRepository> _executionRepository = null!;
     private Mock<IScheduleTriggerRepository> _scheduleTriggerRepository = null!;
@@ -73,7 +79,7 @@ public class JobManagerTests
     }
 
     [Test]
-    public async Task ExecuteAsync_CreatesExecution_AndReturnsId()
+    public async Task ExecuteAsync_CreatesExecutionAndReturnsId_WhenTheRequestIsValid()
     {
         // Arrange
         var executionId = Guid.NewGuid();
@@ -86,7 +92,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         // Act
@@ -102,7 +108,6 @@ public class JobManagerTests
                     e.ExecutionMode == JobExecutionMode.Queue &&
                     e.Status == JobExecutionStatus.Queued),
                 null,
-                false,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -120,7 +125,7 @@ public class JobManagerTests
         };
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
         _jobExecutionScopes.SetupGet(value => value.CurrentExecutionId).Returns(parentId);
 
@@ -138,13 +143,163 @@ public class JobManagerTests
             r => r.CreateAsync(
                 It.Is<JobExecution>(e => e.ParentExecutionId == parentId),
                 null,
-                false,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Test]
-    public async Task ExecuteAsync_LeavesParentNull_ForTopLevelTrigger()
+    public async Task ExecuteAsync_LeavesParentNullAndStartsANewCorrelation_WhenTheRequestIsASuccessor()
+    {
+        // Arrange
+        var parentId = Guid.NewGuid();
+        var parentCorrelationId = Guid.NewGuid();
+        JobExecution? captured = null;
+        _executionRepository
+            .Setup(m => m.CreateAsync(
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback<JobExecution, Guid?, CancellationToken>((value, _, _) => captured = value)
+            .ReturnsAsync(new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "PollingJob",
+                Status = JobExecutionStatus.Queued
+            });
+        _jobExecutionScopes.SetupGet(value => value.CurrentExecutionId).Returns(parentId);
+        _jobExecutionScopes.SetupGet(value => value.CurrentCorrelationId).Returns(parentCorrelationId);
+
+        // Act
+        await _subject.ExecuteAsync(
+            new JobEnqueueRequest
+            {
+                JobType = "PollingJob",
+                Mode = JobExecutionMode.Queue,
+                IsSuccessor = true,
+            },
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(captured?.ParentExecutionId, Is.Null);
+            Assert.That(captured?.CorrelationId, Is.Not.Null);
+            Assert.That(captured?.CorrelationId, Is.Not.EqualTo(parentCorrelationId));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsTheParentAndTheCorrelation_WhenTheRequestIsNotASuccessor()
+    {
+        // Arrange
+        var parentId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        JobExecution? captured = null;
+        _executionRepository
+            .Setup(m => m.CreateAsync(
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback<JobExecution, Guid?, CancellationToken>((value, _, _) => captured = value)
+            .ReturnsAsync(new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ChildJob",
+                Status = JobExecutionStatus.Queued
+            });
+        _jobExecutionScopes.SetupGet(value => value.CurrentExecutionId).Returns(parentId);
+
+        // Act
+        await _subject.ExecuteAsync(
+            new JobEnqueueRequest
+            {
+                JobType = "ChildJob",
+                Mode = JobExecutionMode.Queue,
+                CorrelationId = correlationId,
+            },
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(captured?.ParentExecutionId, Is.EqualTo(parentId));
+            Assert.That(captured?.CorrelationId, Is.EqualTo(correlationId));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsThePublisherTrace_WhenTheTriggerContextAlreadyCarriesOne()
+    {
+        // Arrange
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = candidate => candidate.Name == TraceSourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var source = new ActivitySource(TraceSourceName);
+        JobExecution? captured = null;
+        _executionRepository
+            .Setup(m => m.CreateAsync(
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback<JobExecution, Guid?, CancellationToken>((value, _, _) => captured = value)
+            .ReturnsAsync(new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ChildJob",
+                Status = JobExecutionStatus.Queued
+            });
+        using var activity = source.StartActivity("dispatcher");
+
+        // Act
+        await _subject.ExecuteAsync(
+            new JobEnqueueRequest
+            {
+                JobType = "ChildJob",
+                Mode = JobExecutionMode.Queue,
+                TriggerContext = new Dictionary<string, string>
+                {
+                    ["traceparent"] = PublisherTraceParent
+                }
+            },
+            default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(captured?.TriggerContext["traceparent"], Is.EqualTo(PublisherTraceParent));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_InjectsTheCurrentTrace_WhenTheTriggerContextCarriesNone()
+    {
+        // Arrange
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = candidate => candidate.Name == TraceSourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var source = new ActivitySource(TraceSourceName);
+        JobExecution? captured = null;
+        _executionRepository
+            .Setup(m => m.CreateAsync(
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback<JobExecution, Guid?, CancellationToken>((value, _, _) => captured = value)
+            .ReturnsAsync(new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ChildJob",
+                Status = JobExecutionStatus.Queued
+            });
+        using var activity = source.StartActivity("dispatcher");
+        var traceId = activity!.TraceId.ToHexString();
+
+        // Act
+        await _subject.ExecuteAsync(
+            new JobEnqueueRequest { JobType = "ChildJob", Mode = JobExecutionMode.Queue },
+            default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(captured?.TriggerContext["traceparent"], Does.Contain(traceId));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_LeavesParentNull_WhenTheTriggerHasNoParent()
     {
         // Arrange
         var execution = new JobExecution
@@ -155,7 +310,7 @@ public class JobManagerTests
         };
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         // Act
@@ -167,7 +322,6 @@ public class JobManagerTests
             r => r.CreateAsync(
                 It.Is<JobExecution>(e => e.ParentExecutionId == null),
                 null,
-                false,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -186,7 +340,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         // Act
@@ -199,7 +353,6 @@ public class JobManagerTests
             r => r.CreateAsync(
                 It.Is<JobExecution>(e => e.ExecutionMode == JobExecutionMode.Immediate),
                 null,
-                false,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -218,7 +371,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         var options = new JobRuntimeOptions();
@@ -249,7 +402,7 @@ public class JobManagerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(scheduler.Total, Is.EqualTo(options.MaxConcurrentJobs));
+            Assert.That(scheduler.Total, Is.EqualTo(options.PoolSize));
             _runtime.Verify(m => m.ExecuteAsync(executionId, It.IsAny<CancellationToken>()), Times.Once);
         }
     }
@@ -267,7 +420,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         // Act
@@ -292,7 +445,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         // Act
@@ -317,7 +470,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         // Act
@@ -338,7 +491,6 @@ public class JobManagerTests
                     e.Parameters.ContainsKey("key2") &&
                     e.Parameters["key2"] == "value2"),
                 null,
-                false,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -356,7 +508,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         var subject = new JobManager(
@@ -393,7 +545,6 @@ public class JobManagerTests
             r => r.CreateAsync(
                 It.Is<JobExecution>(e => e.Scope == JobScope.Content),
                 null,
-                false,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -411,7 +562,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         // Act
@@ -423,7 +574,6 @@ public class JobManagerTests
             r => r.CreateAsync(
                 It.Is<JobExecution>(e => e.Scope == JobScope.System),
                 null,
-                false,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -443,7 +593,7 @@ public class JobManagerTests
 
         _executionRepository
             .Setup(m => m.CreateAsync(
-                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
         // Act
@@ -460,7 +610,6 @@ public class JobManagerTests
             r => r.CreateAsync(
                 It.Is<JobExecution>(e => e.ExtensionId == extensionId),
                 null,
-                false,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -546,14 +695,71 @@ public class JobManagerTests
             NotBeforeAt = _timeProvider.GetUtcNow().UtcDateTime.AddSeconds(secondsFromNow)
         };
         _executionRepository
-            .Setup(repository => repository.GetLineageAsync(executionId, 500, It.IsAny<CancellationToken>()))
+            .Setup(repository => repository.GetLineageAsync(executionId, 500, 500, It.IsAny<CancellationToken>()))
             .ReturnsAsync([execution]);
 
         // Act
-        var result = await _subject.GetExecutionTreeAsync(executionId, includeSiblings: false).ConfigureAwait(false);
+        var result = await _subject
+            .GetExecutionTreeAsync(executionId, includeSiblings: false, maxNodes: 500)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(result!.Root!.Status, Is.EqualTo(expectedStatus));
+    }
+
+    [Test]
+    public async Task GetExecutionTreeAsync_ReportsTruncation_WhenTheLineageFillsTheNodeLimit()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        _executionRepository
+            .Setup(repository => repository.GetLineageAsync(rootId, 500, 2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new JobExecution { Id = rootId, JobType = "TestJob", Status = JobExecutionStatus.Running },
+                new JobExecution
+                {
+                    Id = childId,
+                    ParentExecutionId = rootId,
+                    JobType = "TestJob",
+                    Status = JobExecutionStatus.Running
+                }
+            ]);
+
+        // Act
+        var result = await _subject
+            .GetExecutionTreeAsync(rootId, includeSiblings: false, maxNodes: 2)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.Truncated, Is.True);
+            Assert.That(result.TotalCount, Is.EqualTo(2));
+        }
+    }
+
+    [Test]
+    public async Task GetExecutionTreeAsync_ClampsTheNodeLimit_WhenTheRequestExceedsTheCeiling()
+    {
+        // Arrange
+        var executionId = Guid.NewGuid();
+        _executionRepository
+            .Setup(repository => repository.GetLineageAsync(executionId, 500, 5000, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new JobExecution { Id = executionId, JobType = "TestJob" }]);
+
+        // Act
+        var result = await _subject
+            .GetExecutionTreeAsync(executionId, includeSiblings: false, maxNodes: 1000000)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.TotalCount, Is.EqualTo(1));
+            Assert.That(result.Truncated, Is.False);
+        }
     }
 
     [Test]
@@ -592,7 +798,7 @@ public class JobManagerTests
     }
 
     [Test]
-    public async Task CreateScheduleTriggerAsync_DelegatesToRepository_AndComputesNextRun()
+    public async Task CreateScheduleTriggerAsync_ComputesNextRun_WhenTheScheduleIsCreated()
     {
         // Arrange
         var create = new ScheduleTriggerCreate
@@ -799,9 +1005,6 @@ public class JobManagerTests
         _scheduleTriggerRepository
             .Setup(m => m.PatchAsync(It.IsAny<ScheduleTriggerPatch>(), userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        _scheduleTriggerRepository
-            .Setup(m => m.UpdateAsync(It.IsAny<ScheduleTrigger>(), userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
 
         // Act
         var result = await _subject.PatchScheduleTriggerAsync(triggerId, patch, userId, callerIsAdmin: true)
@@ -810,11 +1013,58 @@ public class JobManagerTests
         // Assert
         Assert.That(result, Is.True);
         _scheduleTriggerRepository.Verify(
-            r => r.UpdateAsync(
-                It.Is<ScheduleTrigger>(t => t.Id == triggerId && t.NextRunAt.HasValue),
+            r => r.PatchAsync(
+                It.Is<ScheduleTriggerPatch>(applied =>
+                    applied.Id == triggerId && applied.NextRunAt!.Value.HasValue),
                 userId,
                 It.IsAny<CancellationToken>()),
             Times.Once);
+        _scheduleTriggerRepository.Verify(
+            r => r.UpdateAsync(
+                It.IsAny<ScheduleTrigger>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public async Task PatchScheduleTriggerAsync_ReturnsFalse_WhenTheRepositoryPatchFails()
+    {
+        // Arrange
+        var triggerId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var trigger = new ScheduleTrigger
+        {
+            Id = triggerId,
+            JobType = "TestJob",
+            Scope = JobScope.User,
+            Name = "TestTrigger",
+            Schedule = "*/5 * * * *",
+            ExecutionMode = JobExecutionMode.Queue,
+            Enabled = true
+        };
+        var patch = new ScheduleTriggerPatch
+        {
+            Id = triggerId,
+            Schedule = new() { Value = "*/10 * * * *" }
+        };
+
+        _scheduleTriggerRepository
+            .Setup(m => m.GetByIdAsync(triggerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(trigger);
+        _scheduleTriggerRepository
+            .Setup(m => m.PatchAsync(It.IsAny<ScheduleTriggerPatch>(), userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        // Act
+        var result = await _subject.PatchScheduleTriggerAsync(triggerId, patch, userId, callerIsAdmin: true)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.False);
+        _scheduleTriggerRepository.Verify(
+            m => m.UpdateAsync(It.IsAny<ScheduleTrigger>(), userId, It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Test]
@@ -895,9 +1145,6 @@ public class JobManagerTests
         _scheduleTriggerRepository
             .Setup(m => m.PatchAsync(It.IsAny<ScheduleTriggerPatch>(), userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        _scheduleTriggerRepository
-            .Setup(m => m.UpdateAsync(It.IsAny<ScheduleTrigger>(), userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
 
         // Act
         var result = await _subject.PatchScheduleTriggerAsync(triggerId, patch, userId, callerIsAdmin: true)
@@ -906,8 +1153,9 @@ public class JobManagerTests
         // Assert
         Assert.That(result, Is.True);
         _scheduleTriggerRepository.Verify(
-            r => r.UpdateAsync(
-                It.Is<ScheduleTrigger>(t => t.Id == triggerId && !t.NextRunAt.HasValue),
+            r => r.PatchAsync(
+                It.Is<ScheduleTriggerPatch>(applied =>
+                    applied.Id == triggerId && !applied.NextRunAt!.Value.HasValue),
                 userId,
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -1117,7 +1365,6 @@ public class JobManagerTests
             repository => repository.CreateAsync(
                 It.IsAny<JobExecution>(),
                 It.IsAny<Guid?>(),
-                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -1175,6 +1422,192 @@ public class JobManagerTests
 
         // Assert
         Assert.That(exception!.Message, Is.EqualTo("Parameter itemId must be a valid number."));
+        _eventTriggerRepository.Verify(
+            repository => repository.PatchAsync(
+                It.IsAny<EventTriggerPatch>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public void CreateEventTriggerAsync_Throws_WhenEventFilterRegexIsMalformed()
+    {
+        // Arrange
+        var create = new EventTriggerCreate
+        {
+            JobType = "TestJob",
+            Scope = JobScope.Administrative,
+            Name = "TestEventTrigger",
+            EventFilter = new EventFilter
+            {
+                EventName = new()
+                {
+                    Operator = CriteriaValueOperator.Regex,
+                    Value = "[",
+                },
+            },
+        };
+        var subject = new JobManager(
+            _runtime.Object,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[]
+            {
+                new JobSpec
+                {
+                    JobType = "TestJob",
+                    DisplayName = "TestJob",
+                    Category = "Test",
+                    Scope = JobScope.Administrative,
+                    SupportedTriggerModes = new[] { JobTriggerMode.Event },
+                }
+            }),
+            _executionRepository.Object,
+            _scheduleTriggerRepository.Object,
+            _eventTriggerRepository.Object,
+            Mock.Of<IJobConcurrencyScheduler>(),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            TimeProvider.System,
+            NullLoggerFactory.Instance.CreateLogger<JobManager>());
+
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await subject.CreateEventTriggerAsync(create, Guid.NewGuid(), Role.Admin, default).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("Event filter regular expression is malformed."));
+        _eventTriggerRepository.Verify(
+            repository => repository.CreateAsync(
+                It.IsAny<EventTrigger>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public async Task CreateEventTriggerAsync_DelegatesToRepository_WhenEventFilterRegexIsValid()
+    {
+        // Arrange
+        var userId = Guid.NewGuid();
+        var eventFilter = new EventFilter
+        {
+            EventName = new()
+            {
+                Operator = CriteriaValueOperator.Regex,
+                Value = "^content\\.[a-z]+$",
+            },
+        };
+        var create = new EventTriggerCreate
+        {
+            JobType = "TestJob",
+            Scope = JobScope.Administrative,
+            Name = "TestEventTrigger",
+            EventFilter = eventFilter,
+        };
+        _eventTriggerRepository
+            .Setup(repository => repository.CreateAsync(
+                It.IsAny<EventTrigger>(),
+                userId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EventTrigger
+            {
+                Id = Guid.NewGuid(),
+                JobType = "TestJob",
+                Scope = JobScope.Administrative,
+                Name = "TestEventTrigger",
+                EventFilter = eventFilter,
+            });
+        var subject = new JobManager(
+            _runtime.Object,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[]
+            {
+                new JobSpec
+                {
+                    JobType = "TestJob",
+                    DisplayName = "TestJob",
+                    Category = "Test",
+                    Scope = JobScope.Administrative,
+                    SupportedTriggerModes = new[] { JobTriggerMode.Event },
+                }
+            }),
+            _executionRepository.Object,
+            _scheduleTriggerRepository.Object,
+            _eventTriggerRepository.Object,
+            Mock.Of<IJobConcurrencyScheduler>(),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            TimeProvider.System,
+            NullLoggerFactory.Instance.CreateLogger<JobManager>());
+
+        // Act
+        var result = await subject.CreateEventTriggerAsync(create, userId, Role.Admin, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Has.Property(nameof(result.Name)).EqualTo("TestEventTrigger"));
+    }
+
+    [Test]
+    public void PatchEventTriggerAsync_Throws_WhenEventFilterRegexIsMalformed()
+    {
+        // Arrange
+        var triggerId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        _eventTriggerRepository
+            .Setup(repository => repository.GetByIdAsync(triggerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EventTrigger
+            {
+                Id = triggerId,
+                JobType = "TestJob",
+                Scope = JobScope.Administrative,
+                Name = "Test event trigger",
+                EventFilter = new EventFilter(),
+            });
+        var patch = new EventTriggerPatch
+        {
+            EventFilter = new()
+            {
+                Value = new EventFilter
+                {
+                    EventContext = new()
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            ["itemId"] = new()
+                            {
+                                Operator = CriteriaValueOperator.Regex,
+                                Value = "(",
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        var subject = new JobManager(
+            _runtime.Object,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[]
+            {
+                new JobSpec
+                {
+                    JobType = "TestJob",
+                    DisplayName = "Test job",
+                    Category = "Test",
+                    Scope = JobScope.Administrative,
+                    SupportedTriggerModes = new[] { JobTriggerMode.Event },
+                }
+            }),
+            _executionRepository.Object,
+            _scheduleTriggerRepository.Object,
+            _eventTriggerRepository.Object,
+            Mock.Of<IJobConcurrencyScheduler>(),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            TimeProvider.System,
+            NullLoggerFactory.Instance.CreateLogger<JobManager>());
+
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await subject.PatchEventTriggerAsync(triggerId, patch, userId, callerIsAdmin: true, default)
+                .ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("Event filter regular expression is malformed."));
         _eventTriggerRepository.Verify(
             repository => repository.PatchAsync(
                 It.IsAny<EventTriggerPatch>(),
@@ -1313,7 +1746,7 @@ public class JobManagerTests
     [TestCase(ConcurrencyScope.Global, "global")]
     [TestCase(ConcurrencyScope.PerTypeAndTarget, "type:magpie.job|contentItemId=abc-123")]
     [TestCase(ConcurrencyScope.PerTarget, "contentItemId=abc-123")]
-    public void ResolveLockPartition_Result_WhenScope(ConcurrencyScope scope, string? expected)
+    public void ResolveLockPartition_ReturnsTheScopePartition_WhenScopeVaries(ConcurrencyScope scope, string? expected)
     {
         // Arrange
         var spec = new JobSpec

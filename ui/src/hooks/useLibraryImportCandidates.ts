@@ -1,11 +1,12 @@
-import { useQuery } from '@tanstack/react-query';
-
-import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
-import { apiGet, buildUrl } from '@/lib/api';
-import { queryErrorOrNull } from '@/lib/utils';
 import type { PagedList } from '@/types/paging';
 
-type LibraryImportCandidateStatus = 'Pending' | 'Failed' | 'Invalidated' | 'Queued' | 'Importing';
+export type LibraryImportCandidateStatus =
+    | 'Pending'
+    | 'Failed'
+    | 'Invalidated'
+    | 'Queued'
+    | 'Importing'
+    | 'MatchingPending';
 
 interface LibraryImportMatch {
     confidence: number;
@@ -62,26 +63,8 @@ export interface LibraryImportCandidate {
 
 export type PagedLibraryImportCandidates = PagedList<LibraryImportCandidate>;
 
-export interface LibraryImportCandidateQueryParams {
-    rootFolderId?: string;
-
-    status?: LibraryImportCandidateStatus | LibraryImportCandidateStatus[];
-
-    hasMatches?: boolean;
-
-    pageNumber?: number;
-
-    pageSize?: number;
-
-    sortBy?: string;
-
-    sortDirection?: 0 | 1 | 2;
-}
-
 export const libraryImportCandidateQueryKeys = {
     all: ['import/candidates'] as const,
-    list: (params?: LibraryImportCandidateQueryParams) => ['import/candidates', 'list', params ?? {}] as const,
-    detail: (id: string) => ['import/candidates', 'detail', id] as const,
 };
 
 export function getParsedSignalValue(signals: ParsedSignalBag | null | undefined, key: string): string {
@@ -100,43 +83,4 @@ export function getParsedSignalNumber(signals: ParsedSignalBag | null | undefine
     }
 
     return Number(value);
-}
-
-async function fetchLibraryImportCandidates(
-    params?: LibraryImportCandidateQueryParams,
-): Promise<PagedLibraryImportCandidates> {
-    const url = buildUrl('/import/candidates', params);
-    return apiGet<PagedLibraryImportCandidates>(url);
-}
-
-export function useLibraryImportCandidates(params?: LibraryImportCandidateQueryParams) {
-    useInvalidateQueriesOnEvents(
-        ['library.scan.completed', 'library.importCandidate.updated'],
-        [libraryImportCandidateQueryKeys.list(params)],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'library-import-candidates' },
-    );
-
-    const query = useQuery({
-        queryKey: libraryImportCandidateQueryKeys.list(params),
-        queryFn: () => fetchLibraryImportCandidates(params),
-    });
-
-    const items: LibraryImportCandidate[] = query.data?.items ?? [];
-    const pagination = query.data
-        ? {
-              pageNumber: query.data.pageNumber,
-              pageSize: query.data.pageSize,
-              totalItems: query.data.totalItems,
-          }
-        : null;
-
-    return {
-        items,
-        pagination,
-        isLoading: query.isLoading,
-        isFetching: query.isFetching,
-        isError: query.isError,
-        error: queryErrorOrNull(query),
-        refetch: query.refetch,
-    };
 }

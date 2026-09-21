@@ -281,7 +281,8 @@ public class TvmazeContentMetadataProviderTests
         };
         var client = new Mock<IClient>();
         client
-            .Setup(value => value.GetShowAsync(82, It.IsAny<CancellationToken>()))
+            .Setup(value => value.GetShowWithEmbedsAsync(
+                82, new[] { "episodes", "images", "akas", "seasons" }, It.IsAny<CancellationToken>()))
             .ReturnsAsync(show);
         var subject = new ContentMetadataProvider(
             client.Object,
@@ -330,7 +331,8 @@ public class TvmazeContentMetadataProviderTests
         }
 
         client.Verify(
-            value => value.GetShowAsync(82, It.IsAny<CancellationToken>()),
+            value => value.GetShowWithEmbedsAsync(
+                82, new[] { "episodes", "images", "akas", "seasons" }, It.IsAny<CancellationToken>()),
             Times.Once);
         client.Verify(
             value => value.GetSeasonsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()),

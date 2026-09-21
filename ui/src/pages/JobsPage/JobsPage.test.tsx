@@ -43,6 +43,7 @@ const mockJobs: ApiJobExecution[] = [
         startedAt: '2024-01-15T10:30:00Z',
         completedAt: null,
         statusMessage: 'Checking feed: NZBgeek',
+        correlationId: 'corr-alpha',
     },
     {
         id: 'exec-2',
@@ -54,6 +55,7 @@ const mockJobs: ApiJobExecution[] = [
         startedAt: '2024-01-15T10:28:00Z',
         completedAt: null,
         statusMessage: 'Processing: Breaking Bad S05E16',
+        correlationId: 'corr-alpha',
     },
     {
         id: 'exec-3',
@@ -316,6 +318,7 @@ function pageJobs(url: string, source: ApiJobExecution[]) {
 
     const jobType = query.get('jobType');
     const wireStatuses = query.getAll('status');
+    const correlationId = query.get('correlationId');
     const pageNumber = Number.parseInt(query.get('pageNumber') ?? '1', 10) || 1;
     const pageSize = Number.parseInt(query.get('pageSize') ?? String(EXECUTIONS_PAGE_SIZE), 10) || EXECUTIONS_PAGE_SIZE;
 
@@ -326,6 +329,9 @@ function pageJobs(url: string, source: ApiJobExecution[]) {
     if (wireStatuses.length > 0) {
         const allowed = new Set(wireStatuses);
         filtered = filtered.filter((job) => allowed.has(job.status));
+    }
+    if (correlationId) {
+        filtered = filtered.filter((job) => job.correlationId === correlationId);
     }
     filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
@@ -491,14 +497,14 @@ describe('JobsPage tabs', () => {
 });
 
 describe('JobsPage Executions tab', () => {
-    it('renders execution list', () => {
+    it('renders execution list', async () => {
         render(
             <TestWrapper>
                 <JobsPage />
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('list', { name: /job history/i })).toBeInTheDocument();
+        expect(await screen.findByRole('list', { name: /job history/i })).toBeInTheDocument();
     });
 
     it('renders execution items', async () => {
@@ -900,8 +906,14 @@ describe('JobsPage Executions tab - execution details', () => {
         expect(logs).toHaveAttribute('data-state', 'open');
     });
 
-    it('expands and scrolls the execution linked by the job query parameter', async () => {
+    it('shows only the execution linked by the job query parameter, with a way back', async () => {
         const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/exec-2') {
+                return Promise.resolve(mockJobs[1]);
+            }
+            return defaultApiGetResponse(url);
+        });
 
         render(
             <TestWrapper initialRoute="/?job=exec-2">
@@ -918,6 +930,8 @@ describe('JobsPage Executions tab - execution details', () => {
         expect(within(linkedRow).getByTestId('execution-row__trigger')).toHaveAttribute('aria-expanded', 'true');
         expect(within(linkedRow).getByTestId('execution-row__logs')).toHaveAttribute('data-state', 'open');
         expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+        expect(document.querySelectorAll('[data-execution-id]')).toHaveLength(1);
+        expect(screen.getByRole('button', { name: 'Back to jobs' })).toBeInTheDocument();
     });
 
     it('fetches and expands a linked child execution omitted by the roots-only list', async () => {
@@ -1330,6 +1344,69 @@ describe('JobsPage roots-only toggle', () => {
 
         const toggle = await screen.findByRole('switch', { name: /show top level only/i });
         expect(toggle).toHaveAttribute('data-state', 'unchecked');
+    });
+});
+
+describe('JobsPage chain filter', () => {
+    it('applies the correlationId filter from the URL to the requested and rendered list', async () => {
+        render(
+            <TestWrapper initialRoute="/?correlationId=corr-alpha">
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const list = screen.getByRole('list', { name: /job history/i });
+            expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+        });
+
+        const jobsCalls = mockApiGet.mock.calls.map((c) => c[0] as string).filter((u) => u.startsWith('/jobs?'));
+        expect(jobsCalls.some((u) => u.includes('correlationId=corr-alpha'))).toBe(true);
+    });
+
+    it('shows the active chain filter labeled as a chain, not as parent and child', async () => {
+        render(
+            <TestWrapper initialRoute="/?correlationId=corr-alpha">
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        const chainFilter = await screen.findByText(/corr-alpha/);
+        expect(chainFilter).toHaveTextContent('Chain: corr-alpha');
+        expect(screen.getByRole('button', { name: /clear chain filter/i })).toBeInTheDocument();
+    });
+
+    it('does not show the chain filter when no correlationId is in the URL', () => {
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        expect(document.querySelector('[data-control="chain-filter"]')).not.toBeInTheDocument();
+    });
+
+    it('clears the chain filter and restores the full list', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper initialRoute="/?correlationId=corr-alpha">
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const list = screen.getByRole('list', { name: /job history/i });
+            expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+        });
+
+        await user.click(screen.getByRole('button', { name: /clear chain filter/i }));
+
+        expect(document.querySelector('[data-control="chain-filter"]')).not.toBeInTheDocument();
+        await waitFor(() => {
+            const list = screen.getByRole('list', { name: /job history/i });
+            expect(within(list).getAllByRole('listitem')).toHaveLength(8);
+        });
     });
 });
 
@@ -1771,14 +1848,14 @@ describe('JobsPage Events tab - Event Trigger Actions', () => {
 });
 
 describe('JobsPage accessibility', () => {
-    it('executions list has accessible label', () => {
+    it('executions list has accessible label', async () => {
         render(
             <TestWrapper>
                 <JobsPage />
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('list', { name: /job history/i })).toBeInTheDocument();
+        expect(await screen.findByRole('list', { name: /job history/i })).toBeInTheDocument();
     });
 
     it('roots-only toggle has an accessible label', async () => {
@@ -2040,4 +2117,32 @@ describe('JobsPage URL persistence', () => {
             expect(items.length).toBe(1);
         });
     });
+});
+
+it.each([
+    ['Scheduled Jobs', '/schedule-triggers', 'No schedule triggers'],
+    ['Event Triggers', '/event-triggers', 'No event triggers'],
+])('Triggers_ShowLoadingOutsideList_WhenLoading %s', async (tab, endpoint, emptyTitle) => {
+    // Arrange
+    let resolveResponse!: (value: never[]) => void;
+    const response = new Promise<never[]>((resolve) => {
+        resolveResponse = resolve;
+    });
+    mockApiGet.mockImplementation((url) => (url.startsWith(endpoint) ? response : defaultApiGetResponse(url)));
+    const user = userEvent.setup();
+    render(<JobsPage />, { wrapper: TestWrapper });
+
+    // Act
+    await user.click(screen.getByRole('tab', { name: tab }));
+
+    // Assert
+    expect(screen.getByTestId('jobs-page__loading').closest('[role="list"]')).toBeNull();
+    expect(screen.queryByText(emptyTitle)).not.toBeInTheDocument();
+
+    // Act
+    resolveResponse([]);
+
+    // Assert
+    expect((await screen.findByText(emptyTitle)).closest('[role="list"]')).toBeNull();
+    expect(screen.queryByTestId('jobs-page__loading')).not.toBeInTheDocument();
 });

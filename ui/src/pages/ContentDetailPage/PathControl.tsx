@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 
 import { useAuth } from '@/auth';
 import { FileBrowser } from '@/components/configuration/FileBrowser';
@@ -31,7 +31,6 @@ function PathEditor({
     const { hasPermission } = useAuth();
     const { toast } = useToast();
     const applyMutation = useApplyContentPath();
-    const pickedRef = useRef(false);
     const [browserOpen, setBrowserOpen] = useState(false);
 
     const apply = async (path: string | null) => {
@@ -63,7 +62,6 @@ function PathEditor({
                 defaultOpen
                 value={rawPath ? CURRENT_VALUE : INHERIT_VALUE}
                 onValueChange={(value) => {
-                    pickedRef.current = true;
                     if (value === INHERIT_VALUE) {
                         void apply(null);
                     } else if (value === SELECT_VALUE) {
@@ -72,16 +70,8 @@ function PathEditor({
                         onClose();
                     }
                 }}
-                onOpenChange={(open) => {
-                    if (!open) {
-                        queueMicrotask(() => {
-                            if (pickedRef.current) {
-                                pickedRef.current = false;
-                            } else if (!browserOpen) {
-                                onClose();
-                            }
-                        });
-                    }
+                onDismiss={() => {
+                    if (!browserOpen) onClose();
                 }}
                 disabled={applyMutation.isPending}
             >
@@ -90,7 +80,11 @@ function PathEditor({
                 </SelectTrigger>
                 <SelectContent>
                     <SelectItem value={INHERIT_VALUE}>Inherit</SelectItem>
-                    {rawPath && <SelectItem value={CURRENT_VALUE}>{rawPath}</SelectItem>}
+                    {rawPath && (
+                        <SelectItem value={CURRENT_VALUE} title={rawPath}>
+                            {rawPath}
+                        </SelectItem>
+                    )}
                     <SelectItem value={SELECT_VALUE} disabled={!hasPermission('files.browse')}>
                         Select folder
                     </SelectItem>
@@ -123,7 +117,11 @@ export function PathControl({ contentHierarchyItemId, rawPath, canEdit = true }:
             canEdit={canEdit}
             editAriaLabel="Edit content path"
             triggerTestId="path-control__trigger"
-            readValue={<span data-testid="path-control__value">{value}</span>}
+            readValue={
+                <span data-testid="path-control__value" title={value}>
+                    {value}
+                </span>
+            }
         >
             {({ close }) => (
                 <PathEditor

@@ -11,60 +11,65 @@ public sealed record MetadataSearchCandidate
     /// <summary>
     /// Provider type.
     /// </summary>
-    public required string ProviderType { get; init; }
+    public required string ProviderType { get; set; }
 
     /// <summary>
     /// External ID source.
     /// </summary>
-    public required string ExternalIdSource { get; init; }
+    public required string ExternalIdSource { get; set; }
 
     /// <summary>
     /// External ID.
     /// </summary>
-    public required string ExternalId { get; init; }
+    public required string ExternalId { get; set; }
 
     /// <summary>
     /// Content type slug.
     /// </summary>
-    public required string ContentType { get; init; }
+    public required string ContentType { get; set; }
 
     /// <summary>
     /// Content hierarchy level slug.
     /// </summary>
-    public string? Level { get; init; }
+    public string? Level { get; set; }
 
     /// <summary>
     /// Display title.
     /// </summary>
-    public string? Title { get; init; }
+    public string? Title { get; set; }
 
     /// <summary>
     /// Release year.
     /// </summary>
-    public int? Year { get; init; }
+    public int? Year { get; set; }
 
     /// <summary>
     /// Release date.
     /// </summary>
-    public DateTime? ReleaseDate { get; init; }
+    public DateTime? ReleaseDate { get; set; }
 
     /// <summary>
     /// Overview text.
     /// </summary>
-    public string? Overview { get; init; }
+    public string? Overview { get; set; }
 
     /// <summary>
     /// Language code.
     /// </summary>
-    public string? Language { get; init; }
+    public string? Language { get; set; }
 
     /// <summary>
     /// Thumbnail URL.
     /// </summary>
-    public Uri? ThumbnailUrl { get; init; }
+    public Uri? ThumbnailUrl { get; set; }
 
     /// <summary>
     /// Related subjects.
     /// </summary>
-    public IReadOnlyList<ProviderMetadataSearchSubjectReference> SubjectReferences { get; init; } = [];
+    public IReadOnlyList<ProviderMetadataSearchSubjectReference> SubjectReferences { get; set; } = [];
+
+    /// <summary>
+    /// Other external ids the provider reports for the same real-world item.
+    /// </summary>
+    public IReadOnlyList<MetadataSearchCandidateExternalId> AdditionalExternalIds { get; set; } = [];
 }

@@ -1,5 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import { EditorView } from '@codemirror/view';
+import { undo } from '@codemirror/commands';
 import { lintGutter, setDiagnostics } from '@codemirror/lint';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
@@ -62,7 +63,9 @@ describe('FilterQueryEditor', () => {
         it('has role="textbox" and aria-label by default', () => {
             render(<FilterQueryEditor value="" onChange={vi.fn()} data-testid="filter-editor" />);
 
-            const editor = screen.getByTestId('filter-editor');
+            const editor = screen.getByRole('textbox', { name: 'Filter query' });
+            expect(editor).toHaveAttribute('contenteditable', 'true');
+            expect(screen.getAllByRole('textbox')).toHaveLength(1);
             expect(editor).toHaveAttribute('role', 'textbox');
             expect(editor).toHaveAttribute('aria-label', 'Filter query');
         });
@@ -77,19 +80,58 @@ describe('FilterQueryEditor', () => {
                 />,
             );
 
-            expect(screen.getByTestId('filter-editor')).toHaveAttribute('aria-label', 'Filter query input');
+            expect(screen.getByRole('textbox')).toHaveAttribute('aria-label', 'Filter query input');
         });
 
         it('sets aria-readonly when readOnly is true', () => {
             render(<FilterQueryEditor value="" onChange={vi.fn()} readOnly data-testid="filter-editor" />);
 
-            expect(screen.getByTestId('filter-editor')).toHaveAttribute('aria-readonly', 'true');
+            expect(screen.getByRole('textbox')).toHaveAttribute('aria-readonly', 'true');
+        });
+
+        it('preserves focus, selection and undo history when aria attributes change', () => {
+            // Arrange
+            const onChange = vi.fn();
+            const { rerender } = render(<FilterQueryEditor value="a" onChange={onChange} />);
+            const editor = screen.getByRole('textbox');
+            const view = EditorView.findFromDOM(editor)!;
+            act(() => {
+                view.focus();
+                view.dispatch({ changes: { from: 1, insert: 'b' }, selection: { anchor: 2 } });
+            });
+
+            // Act
+            rerender(
+                <FilterQueryEditor
+                    value="ab"
+                    onChange={onChange}
+                    aria-label="Query"
+                    aria-labelledby="label"
+                    aria-describedby="help"
+                />,
+            );
+
+            // Assert
+            expect(screen.getByRole('textbox')).toBe(editor);
+            expect(editor).toHaveFocus();
+            expect(editor).toHaveAttribute('aria-label', 'Query');
+            expect(editor).toHaveAttribute('aria-labelledby', 'label');
+            expect(editor).toHaveAttribute('aria-describedby', 'help');
+            expect(view.state.selection.main.head).toBe(2);
+            rerender(<FilterQueryEditor value="ab" onChange={onChange} />);
+            expect(editor).toHaveAttribute('aria-label', 'Filter query');
+            expect(editor).not.toHaveAttribute('aria-labelledby');
+            expect(editor).not.toHaveAttribute('aria-describedby');
+            act(() => {
+                expect(undo(view)).toBe(true);
+            });
+            expect(view.state.doc.toString()).toBe('a');
         });
 
         it('does not set aria-readonly when readOnly is false', () => {
             render(<FilterQueryEditor value="" onChange={vi.fn()} readOnly={false} data-testid="filter-editor" />);
 
-            expect(screen.getByTestId('filter-editor')).not.toHaveAttribute('aria-readonly');
+            expect(screen.getByRole('textbox')).not.toHaveAttribute('aria-readonly');
         });
     });
 
@@ -307,7 +349,7 @@ describe('FilterQueryEditor', () => {
 
             const editor = screen.getByTestId('filter-editor');
             expect(editor).toHaveClass('filter-query-editor--invalid');
-            expect(editor).toHaveAttribute('aria-invalid', 'true');
+            expect(screen.getByRole('textbox')).toHaveAttribute('aria-invalid', 'true');
         });
 
         it('clears the error text when the diagnostics resolve', () => {

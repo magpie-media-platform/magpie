@@ -24,4 +24,14 @@ public sealed record MagpieEvent(
     /// The id of the job execution that published the event, when any.
     /// </summary>
     public Guid? JobExecutionId { get; init; }
+
+    /// <summary>
+    /// The id that groups the job executions related to the publisher, when any.
+    /// </summary>
+    public Guid? CorrelationId { get; init; }
+
+    /// <summary>
+    /// The distributed trace context of the publisher, keyed by propagation field name, when any.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? TraceContext { get; init; }
 }

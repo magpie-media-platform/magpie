@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Data;
 
@@ -13,6 +14,7 @@ namespace Magpie.Core.Repositories;
 
 internal sealed class ExtensionActivationGenerationRepository(
     MagpieDbContext context,
+    ITransactionManager transactionManager,
     ILogger<ExtensionActivationGenerationRepository> logger) : IExtensionActivationGenerationRepository
 {
     private const int SingletonId = 1;
@@ -28,14 +30,7 @@ internal sealed class ExtensionActivationGenerationRepository(
                 .SingleOrDefaultAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            if (generation is not null)
-            {
-                return generation.Value;
-            }
-
-            context.ExtensionActivationStates.Add(new() { Id = SingletonId, Generation = 0 });
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            return 0;
+            return generation ?? 0;
         }
         catch (Exception ex)
         {
@@ -48,19 +43,22 @@ internal sealed class ExtensionActivationGenerationRepository(
     {
         try
         {
-            var updated = await context.ExtensionActivationStates
-                .Where(s => s.Id == SingletonId)
-                .ExecuteUpdateAsync(s => s.SetProperty(e => e.Generation, e => e.Generation + 1), cancellationToken)
-                .ConfigureAwait(false);
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var updated = await context.ExtensionActivationStates
+                        .Where(s => s.Id == SingletonId)
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(e => e.Generation, e => e.Generation + 1), cancellationToken)
+                        .ConfigureAwait(false);
+                    if (updated == 0)
+                    {
+                        throw new InvalidOperationException("The activation generation is not seeded.");
+                    }
 
-            if (updated == 0)
-            {
-                context.ExtensionActivationStates.Add(new() { Id = SingletonId, Generation = 1 });
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                return 1;
-            }
-
-            return await GetCurrentAsync(cancellationToken).ConfigureAwait(false);
+                    return await GetCurrentAsync(cancellationToken).ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

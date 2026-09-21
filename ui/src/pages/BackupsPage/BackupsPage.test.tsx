@@ -138,6 +138,16 @@ beforeEach(() => {
 });
 
 describe('BackupsPage', () => {
+    it('shows scheduled optimization status without a disabled action', async () => {
+        // Arrange
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+        // Assert
+        expect(await screen.findByText('Scheduled Optimization')).toBeInTheDocument();
+        expect(screen.getByTestId('backups-page__last-optimized')).toHaveTextContent('Never');
+        expect(screen.queryByRole('button', { name: 'Scheduled maintenance' })).not.toBeInTheDocument();
+    });
+
     it('renders with correct data-page attribute', async () => {
         render(<BackupsPage />, { wrapper: createWrapper() });
 

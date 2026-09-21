@@ -6,8 +6,8 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Jobs;
 using Magpie.Core.Observability;
-using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
 using Magpie.Models.Data;
@@ -16,7 +16,6 @@ using Magpie.Models.Integrations;
 using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
 using Magpie.Models.Patch;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
@@ -28,7 +27,6 @@ internal sealed class DownloadService(
     IEnumerable<IDownloadClientIntegration> downloadClientIntegrations,
     IDownloadClientRepository downloadClientRepository,
     IDownloadRepository downloadRepository,
-    IJobExecutionRepository jobExecutionRepository,
     IJobManager jobManager,
     ITransactionManager transactionManager,
     TimeProvider timeProvider,
@@ -51,13 +49,6 @@ internal sealed class DownloadService(
         DownloadStatus.Stalled
     ];
 
-    private static readonly string DownloadIdTriggerContextKey = MagpieEvents.Keys.DownloadId.ToEventContextKey();
-
-    private const string DownloadImportItemJobType = "DownloadImportItem";
-    private const string ReleaseAutoGrabItemJobType = "ReleaseAutoGrabItem";
-    private const string AutoGrabItemContentItemIdParameter = "contentItemId";
-    private const string DownloadIdParameter = "downloadId";
-
     private const string PauseReason = "Operator pause";
     private const string ResumeReason = "Operator resume";
     private const string ForceStartReason = "Operator force-start";
@@ -73,7 +64,7 @@ internal sealed class DownloadService(
                 or DownloadStatus.Queued
                 or DownloadStatus.Paused ||
             ShouldApplyStalledStatusBeforeShortCutoff(candidate, info, stalledCutoff) ||
-            HasProgressAnchorUpdate(candidate, info);
+            HasProgressAnchorUpdate(candidate.Progress, candidate.LastProgressAt, info);
     }
 
     private static bool ShouldApplyStalledStatusBeforeShortCutoff(
@@ -91,30 +82,26 @@ internal sealed class DownloadService(
         return status is DownloadStatus.Downloaded or DownloadStatus.Imported;
     }
 
-    private static bool IsCompletionTransition(StuckDownloadCandidate candidate, DownloadInfo info)
-    {
-        return IsCompleteStatus(info.Status) && !IsCompleteStatus(candidate.Status);
-    }
-
-    private static bool HasProgressAnchorUpdate(StuckDownloadCandidate candidate, DownloadInfo info)
+    private static bool HasProgressAnchorUpdate(decimal? progress, DateTime? lastProgressAt, DownloadInfo info)
     {
         return info.ProgressPercent is { } reportedProgress &&
-            (candidate.Progress != reportedProgress || candidate.LastProgressAt is null);
+            (progress != reportedProgress || lastProgressAt is null);
     }
 
     private static RefreshedDownloadState BuildRefreshedState(
-        StuckDownloadCandidate candidate,
+        RefreshedDownloadState current,
+        DownloadStatus currentStatus,
         DownloadInfo info,
         DateTime now)
     {
-        var newDateCompleted = IsCompleteStatus(info.Status) && candidate.DateCompleted is null
+        var newDateCompleted = IsCompleteStatus(info.Status) && current.DateCompleted is null
             ? now
-            : candidate.DateCompleted;
+            : current.DateCompleted;
 
-        var newProgress = candidate.Progress;
-        var newLastProgressAt = candidate.LastProgressAt;
-        var completionTransition = IsCompletionTransition(candidate, info);
-        if (HasProgressAnchorUpdate(candidate, info) || completionTransition)
+        var newProgress = current.Progress;
+        var newLastProgressAt = current.LastProgressAt;
+        var completionTransition = IsCompleteStatus(info.Status) && !IsCompleteStatus(currentStatus);
+        if (HasProgressAnchorUpdate(current.Progress, current.LastProgressAt, info) || completionTransition)
         {
             if (info.ProgressPercent is { } reportedProgress)
             {
@@ -124,14 +111,14 @@ internal sealed class DownloadService(
             newLastProgressAt = now;
         }
 
-        var failedTransition = info.Status is DownloadStatus.Failed && candidate.Status is not DownloadStatus.Failed;
+        var failedTransition = info.Status is DownloadStatus.Failed && currentStatus is not DownloadStatus.Failed;
 
         return new RefreshedDownloadState(
             newDateCompleted,
             newProgress,
             newLastProgressAt,
-            failedTransition ? DownloadFailureReason.DownloadErrored : candidate.FailureReason,
-            failedTransition ? now : candidate.FailedAt);
+            failedTransition ? DownloadFailureReason.DownloadErrored : current.FailureReason,
+            failedTransition ? now : current.FailedAt);
     }
 
     public async Task<GrabResult> GrabAsync(
@@ -165,7 +152,7 @@ internal sealed class DownloadService(
                 ReleaseTelemetry.Grabs.Add(1, modeTag, new("outcome", "tainted"));
                 logger.LogInformation(
                     "The download service refused the grab of release {ReleaseId} on client " +
-                    "{DownloadClientId}. {TaintCount} prior Failed rows exist",
+                    "{DownloadClientId} because {TaintCount} prior Failed rows exist",
                     release.Id,
                     source.Id,
                     taints.Count);
@@ -193,79 +180,6 @@ internal sealed class DownloadService(
 
         ReleaseTelemetry.Grabs.Add(1, modeTag, new("outcome", "accepted"));
         return GrabResult.FromSuccess(downloadInfo);
-    }
-
-    private async Task<bool> IsImportAlreadyDispatchedAsync(
-        Guid downloadId,
-        CancellationToken cancellationToken = default)
-    {
-        var downloadIdString = downloadId.ToString("D");
-
-        const int pageSize = 500;
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await jobExecutionRepository.QueryAsync(
-                new JobExecutionQuery
-                {
-                    JobType = DownloadImportItemJobType,
-                    Statuses =
-                    [
-                        JobExecutionStatus.Queued,
-                        JobExecutionStatus.Running,
-                        JobExecutionStatus.Completed
-                    ]
-                },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            if (pageItems.Any(e =>
-                (e.Parameters.TryGetValue(DownloadIdParameter, out var paramId) &&
-                    string.Equals(paramId, downloadIdString, StringComparison.OrdinalIgnoreCase)) ||
-                (e.TriggerContext.TryGetValue(DownloadIdTriggerContextKey, out var ctxId) &&
-                    string.Equals(ctxId, downloadIdString, StringComparison.OrdinalIgnoreCase))))
-            {
-                return true;
-            }
-
-            if (pageItems.Count < pageSize)
-            {
-                return false;
-            }
-
-            pageNumber++;
-        }
-    }
-
-    private async Task<bool> TryEnqueueImportAsync(
-        Guid downloadId,
-        Guid? userId,
-        CancellationToken cancellationToken = default)
-    {
-        if (await IsImportAlreadyDispatchedAsync(downloadId, cancellationToken).ConfigureAwait(false))
-        {
-            logger.LogDebug(
-                "An import for download {DownloadId} already exists, so the download service did not " +
-                "enqueue DownloadImportItem",
-                downloadId);
-            return false;
-        }
-
-        await jobManager.ExecuteAsync(
-            new JobEnqueueRequest
-            {
-                JobType = DownloadImportItemJobType,
-                Parameters = new Dictionary<string, string>()
-                {
-                    [DownloadIdParameter] = downloadId.ToString("D")
-                },
-                UserId = userId,
-                Mode = JobExecutionMode.Queue,
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        return true;
     }
 
     public async Task<PagedList<DownloadQueueEntry>> QueryAsync(
@@ -428,23 +342,23 @@ internal sealed class DownloadService(
             }
         }
 
-        return new BulkResult { Count = removed };
+        var failed = targets.Count - removed;
+        return new BulkResult
+        {
+            Count = removed,
+            Error = failed == 0 ? null : $"Failed to remove {failed} {(failed == 1 ? "download" : "downloads")}."
+        };
     }
 
     public async Task<BulkResult> BulkPauseAsync(
         BulkAction<DownloadQuery> action,
         CancellationToken cancellationToken = default)
     {
-        await DispatchBulkClientTransitionAsync<IPausableDownloadClient>(
+        var ids = await DispatchBulkClientTransitionAsync<IPausableDownloadClient>(
             action,
             PausableStatuses,
             (capability, externalId, settings, ct) => capability.PauseDownloadAsync(externalId, settings, ct),
             cancellationToken).ConfigureAwait(false);
-
-        var ids = (await ListBulkTargetsAsync(action, cancellationToken).ConfigureAwait(false))
-            .Where(download => PausableStatuses.Contains(download.Status))
-            .Select(download => download.Id)
-            .ToList();
 
         return await downloadRepository.BulkPatchAsync(
             new()
@@ -464,16 +378,11 @@ internal sealed class DownloadService(
         BulkAction<DownloadQuery> action,
         CancellationToken cancellationToken = default)
     {
-        await DispatchBulkClientTransitionAsync<IResumableDownloadClient>(
+        var ids = await DispatchBulkClientTransitionAsync<IResumableDownloadClient>(
             action,
             ResumableStatuses,
             (capability, externalId, settings, ct) => capability.ResumeDownloadAsync(externalId, settings, ct),
             cancellationToken).ConfigureAwait(false);
-
-        var ids = (await ListBulkTargetsAsync(action, cancellationToken).ConfigureAwait(false))
-            .Where(download => ResumableStatuses.Contains(download.Status))
-            .Select(download => download.Id)
-            .ToList();
 
         return await downloadRepository.BulkPatchAsync(
             new()
@@ -552,32 +461,24 @@ internal sealed class DownloadService(
         Guid? userId,
         CancellationToken cancellationToken)
     {
-        var newDateCompleted = info.Status is DownloadStatus.Downloaded or DownloadStatus.Imported &&
-            download.DateCompleted is null
-                ? timeProvider.GetUtcNow().UtcDateTime
-                : download.DateCompleted;
-
-        var newProgress = download.Progress;
-        var newLastProgressAt = download.LastProgressAt;
-        if (info.ProgressPercent is { } reportedProgress)
-        {
-            if (download.Progress != reportedProgress)
-            {
-                newProgress = reportedProgress;
-                newLastProgressAt = timeProvider.GetUtcNow().UtcDateTime;
-            }
-            else if (download.LastProgressAt is null)
-            {
-                newLastProgressAt = timeProvider.GetUtcNow().UtcDateTime;
-            }
-        }
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var refreshed = BuildRefreshedState(
+            new RefreshedDownloadState(
+                download.DateCompleted,
+                download.Progress,
+                download.LastProgressAt,
+                download.FailureReason,
+                download.FailedAt),
+            download.Status,
+            info,
+            now);
 
         var hasChanges = download.Status != info.Status ||
             download.StatusReason != info.StatusReason ||
             download.OutputPath != info.OutputPath ||
-            download.DateCompleted != newDateCompleted ||
-            download.Progress != newProgress ||
-            download.LastProgressAt != newLastProgressAt ||
+            download.DateCompleted != refreshed.DateCompleted ||
+            download.Progress != refreshed.Progress ||
+            download.LastProgressAt != refreshed.LastProgressAt ||
             download.HeldByPolicy != info.HeldByPolicy;
 
         if (!hasChanges)
@@ -585,33 +486,20 @@ internal sealed class DownloadService(
             return;
         }
 
-        var completedTransition = info.Status is DownloadStatus.Downloaded &&
-            download.Status is not DownloadStatus.Downloaded;
-
-        var failedTransition = info.Status is DownloadStatus.Failed && download.Status is not DownloadStatus.Failed;
-
-        var now = timeProvider.GetUtcNow().UtcDateTime;
-
-        var newFailureReason = failedTransition
-            ? DownloadFailureReason.DownloadErrored
-            : download.FailureReason;
-        var newFailedAt = failedTransition ? now : download.FailedAt;
-
-        var applied = false;
         await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
-                applied = await downloadRepository.UpdateRefreshedStatusAsync(
+                var applied = await downloadRepository.UpdateRefreshedStatusAsync(
                     download.Id,
                     info.Status,
                     info.StatusReason,
                     info.OutputPath,
-                    newDateCompleted,
-                    newProgress,
-                    newLastProgressAt,
+                    refreshed.DateCompleted,
+                    refreshed.Progress,
+                    refreshed.LastProgressAt,
                     info.HeldByPolicy,
-                    newFailureReason,
-                    newFailedAt,
+                    refreshed.FailureReason,
+                    refreshed.FailedAt,
                     now,
                     userId,
                     ct)
@@ -620,16 +508,8 @@ internal sealed class DownloadService(
                 if (!applied)
                 {
                     logger.LogDebug(
-                        "Download {DownloadId} reached a terminal status concurrently. " +
-                        "The refreshed status did not apply",
-                        download.Id);
-                    return;
-                }
-
-                if (completedTransition && await TryEnqueueImportAsync(download.Id, userId, ct).ConfigureAwait(false))
-                {
-                    logger.LogInformation(
-                        "Download {DownloadId} completed. The download service enqueued DownloadImportItem directly",
+                        "Download {DownloadId} reached a terminal status concurrently, so the refreshed " +
+                        "status did not apply",
                         download.Id);
                 }
             },
@@ -666,9 +546,16 @@ internal sealed class DownloadService(
             return false;
         }
 
-        var refreshed = BuildRefreshedState(candidate, info, now);
-        var completedTransition = info.Status is DownloadStatus.Downloaded &&
-            candidate.Status is not DownloadStatus.Downloaded;
+        var refreshed = BuildRefreshedState(
+            new RefreshedDownloadState(
+                candidate.DateCompleted,
+                candidate.Progress,
+                candidate.LastProgressAt,
+                candidate.FailureReason,
+                candidate.FailedAt),
+            candidate.Status,
+            info,
+            now);
         var updated = await downloadRepository.UpdateActiveRefreshedStatusAsync(
             candidate.DownloadId,
             info.Status,
@@ -690,20 +577,9 @@ internal sealed class DownloadService(
             return true;
         }
 
-        if (completedTransition)
-        {
-            if (await TryEnqueueImportAsync(candidate.DownloadId, userId, cancellationToken).ConfigureAwait(false))
-            {
-                logger.LogInformation(
-                    "Download {DownloadId} completed during the stuck download verification. " +
-                    "The download service enqueued DownloadImportItem directly",
-                    candidate.DownloadId);
-            }
-        }
-
         logger.LogInformation(
-            "Download {DownloadId} on {DownloadClientName} refreshed to {DownloadStatus}. " +
-            "The download service did not apply the Failed or DownloadStuck status",
+            "Download {DownloadId} on {DownloadClientName} refreshed to {DownloadStatus} without applying " +
+            "Failed or DownloadStuck",
             candidate.DownloadId,
             candidate.ClientName,
             info.Status);
@@ -782,13 +658,14 @@ internal sealed class DownloadService(
         return await downloadRepository.PatchAsync(patch, null, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task DispatchBulkClientTransitionAsync<TCapability>(
+    private async Task<List<Guid>> DispatchBulkClientTransitionAsync<TCapability>(
         BulkAction<DownloadQuery> action,
         DownloadStatus[] applicableStatuses,
         Func<TCapability, string, IReadOnlyDictionary<string, string>, CancellationToken, Task<bool>> dispatch,
         CancellationToken cancellationToken)
         where TCapability : class
     {
+        var accepted = new List<Guid>();
         var downloads = await ListBulkTargetsAsync(action, cancellationToken).ConfigureAwait(false);
         var applicable = downloads.Where(d => Array.IndexOf(applicableStatuses, d.Status) >= 0);
 
@@ -814,8 +691,11 @@ internal sealed class DownloadService(
 
                 try
                 {
-                    await dispatch(capability, download.ExternalId, client.Settings, cancellationToken)
-                        .ConfigureAwait(false);
+                    if (await dispatch(capability, download.ExternalId, client.Settings, cancellationToken)
+                        .ConfigureAwait(false))
+                    {
+                        accepted.Add(download.Id);
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -831,6 +711,8 @@ internal sealed class DownloadService(
                 }
             }
         }
+
+        return accepted;
     }
 
     private async Task<IReadOnlyList<Download>> ListBulkTargetsAsync(
@@ -852,27 +734,11 @@ internal sealed class DownloadService(
 
         if (action.Filter is not null)
         {
-            const int pageSize = 500;
-            var pageNumber = 1;
-            while (true)
+            var matches = await downloadRepository.QueryAllAsync(action.Filter, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var download in matches)
             {
-                var page = await downloadRepository.QueryAsync(
-                    action.Filter,
-                    new() { PageNumber = pageNumber, PageSize = pageSize },
-                    null,
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                foreach (var download in pageItems)
-                {
-                    targets[download.Id] = download;
-                }
-
-                if (pageItems.Count < pageSize)
-                {
-                    break;
-                }
-
-                pageNumber++;
+                targets[download.Id] = download;
             }
         }
 
@@ -892,10 +758,10 @@ internal sealed class DownloadService(
         await jobManager.ExecuteAsync(
             new JobEnqueueRequest
             {
-                JobType = ReleaseAutoGrabItemJobType,
+                JobType = MagpieJobs.Types.ReleaseAutoGrabItem,
                 Parameters = new Dictionary<string, string>()
                 {
-                    [AutoGrabItemContentItemIdParameter] = contentItemId.ToString("D")
+                    [MagpieJobs.Parameters.ContentItemId] = contentItemId.ToString("D")
                 },
                 Mode = JobExecutionMode.Queue,
             },
@@ -906,11 +772,11 @@ internal sealed class DownloadService(
             contentItemId);
     }
 
-    private async Task TryRemoveFromClientAsync(Download download, CancellationToken cancellationToken)
+    private async Task<bool> TryRemoveFromClientAsync(Download download, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(download.ExternalId))
         {
-            return;
+            return true;
         }
 
         var client = await downloadClientRepository.GetByIdAsync(download.DownloadClientId, cancellationToken)
@@ -921,12 +787,16 @@ internal sealed class DownloadService(
                 candidate => string.Equals(candidate.ProviderType, client.ProviderType, StringComparison.Ordinal));
         if (client is null || integration is null)
         {
-            return;
+            return false;
         }
 
         try
         {
-            await integration.RemoveDownloadAsync(download.ExternalId, true, client.Settings, cancellationToken)
+            return await integration.RemoveDownloadAsync(
+                download.ExternalId,
+                true,
+                client.Settings,
+                cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -942,14 +812,19 @@ internal sealed class DownloadService(
                 download.Id,
                 download.ExternalId,
                 download.DownloadClientId);
+            return false;
         }
     }
 
     private async Task<bool> DeleteWithFilesAsync(Download download, CancellationToken cancellationToken)
     {
-        await TryRemoveFromClientAsync(download, cancellationToken).ConfigureAwait(false);
+        if (!await TryRemoveFromClientAsync(download, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
 
-        return await downloadRepository.DeleteAsync(download.Id, null, cancellationToken).ConfigureAwait(false);
+        await downloadRepository.DeleteAsync(download.Id, null, cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     private List<DownloadQueueEntry> WithDownloadClientCapabilities(IEnumerable<DownloadQueueEntry> entries)

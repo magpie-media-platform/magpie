@@ -23,11 +23,9 @@ internal sealed class DownloadClientService(
     IEventBus eventBus,
     TimeProvider timeProvider) : IDownloadClientService
 {
-    private const int UnhealthyFailureThreshold = 3;
-
-    private static Dictionary<string, string> MergeSettings(
-        IReadOnlyDictionary<string, string>? stored,
-        IReadOnlyDictionary<string, string> incoming)
+    private static Dictionary<string, string> MergedOver(
+        IReadOnlyDictionary<string, string> incoming,
+        IReadOnlyDictionary<string, string>? stored)
     {
         var merged = stored is null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -40,6 +38,78 @@ internal sealed class DownloadClientService(
         return merged;
     }
 
+    private static int NextConsecutiveFailures(ConfigurationTestResult result, int currentFailures) =>
+        result.Success ? 0 : Math.Max(0, currentFailures) + 1;
+
+    private static IntegrationHealthStatus ToHealthStatus(ConfigurationFailureKind failureKind, int failures)
+    {
+        const int unhealthyFailureThreshold = 3;
+        var unhealthy = failures >= unhealthyFailureThreshold ||
+            failureKind is ConfigurationFailureKind.Auth
+                or ConfigurationFailureKind.Fatal
+                or ConfigurationFailureKind.NotFound;
+        return unhealthy ? IntegrationHealthStatus.Unhealthy : IntegrationHealthStatus.Degraded;
+    }
+
+    private static ConfigurationTestResult ToFailureResult(IntegrationSettingsValidationResult validation) =>
+        new()
+        {
+            Success = false,
+            Message = string.Join("; ", validation.Issues.Select(issue => issue.Message)),
+            FailureKind = ConfigurationFailureKind.Fatal
+        };
+
+    private static async Task<ConfigurationTestResult> WithConnectionTimeoutAsync(
+        Func<CancellationToken, Task<ConfigurationTestResult>> test,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutSource = timeout is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource?.CancelAfter(timeout.GetValueOrDefault());
+
+        try
+        {
+            var pending = test(timeoutSource?.Token ?? cancellationToken);
+            return timeout is { } limit
+                ? await pending.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
+                : await pending.ConfigureAwait(false);
+        }
+        catch (TimeoutException) when (timeout is not null)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "Connection test timed out.",
+                FailureKind = ConfigurationFailureKind.Transient
+            };
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
+            timeoutSource is { IsCancellationRequested: true })
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "Connection test timed out.",
+                FailureKind = ConfigurationFailureKind.Transient
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = ex.Message,
+                FailureKind = ConfigurationFailureKind.Fatal
+            };
+        }
+    }
+
     private static ConfigurationTestResult Unresolved(string? providerType)
     {
         return new()
@@ -48,25 +118,6 @@ internal sealed class DownloadClientService(
             Message = $"No download client integration is available for provider type {providerType ?? "(unknown)"}.",
             FailureKind = ConfigurationFailureKind.Fatal
         };
-    }
-
-    private static ConfigurationTestResult ValidationFailure(IntegrationSettingsValidationResult validation)
-    {
-        return new()
-        {
-            Success = false,
-            Message = string.Join("; ", validation.Issues.Select(issue => issue.Message)),
-            FailureKind = ConfigurationFailureKind.Fatal
-        };
-    }
-
-    private static IntegrationHealthStatus ResolveFailureStatus(ConfigurationFailureKind failureKind, int failures)
-    {
-        var unhealthy = failures >= UnhealthyFailureThreshold ||
-            failureKind is ConfigurationFailureKind.Auth
-                or ConfigurationFailureKind.Fatal
-                or ConfigurationFailureKind.NotFound;
-        return unhealthy ? IntegrationHealthStatus.Unhealthy : IntegrationHealthStatus.Degraded;
     }
 
     public async Task<IReadOnlyList<DownloadClient>> ListAsync(CancellationToken cancellationToken = default)
@@ -157,14 +208,14 @@ internal sealed class DownloadClientService(
             return Unresolved(resolvedType);
         }
 
-        var merged = MergeSettings(existing?.Settings, settings);
+        var merged = MergedOver(settings, existing?.Settings);
 
         var validation = await settingsService
             .ValidateAsync(integration.SettingsSchema, merged, integration, cancellationToken)
             .ConfigureAwait(false);
         if (!validation.IsValid)
         {
-            return ValidationFailure(validation);
+            return ToFailureResult(validation);
         }
 
         var transient = existing is not null
@@ -229,10 +280,10 @@ internal sealed class DownloadClientService(
         var result = await TestDownloadClientCoreAsync(downloadClient, timeout, cancellationToken)
             .ConfigureAwait(false);
 
-        var failures = result.Success ? 0 : Math.Max(0, downloadClient.ConsecutiveFailures) + 1;
+        var failures = NextConsecutiveFailures(result, downloadClient.ConsecutiveFailures);
         var status = result.Success
             ? IntegrationHealthStatus.Healthy
-            : ResolveFailureStatus(result.FailureKind, failures);
+            : ToHealthStatus(result.FailureKind, failures);
 
         await downloadClientRepository.PatchAsync(
             new DownloadClientPatch
@@ -261,50 +312,7 @@ internal sealed class DownloadClientService(
             return Unresolved(downloadClient.ProviderType);
         }
 
-        using var timeoutSource = timeout is null
-            ? null
-            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource?.CancelAfter(timeout.GetValueOrDefault());
-        var testCancellationToken = timeoutSource?.Token ?? cancellationToken;
-
-        try
-        {
-            var test = integration.TestConnectionAsync(downloadClient.Settings, testCancellationToken);
-            return timeout is { } limit
-                ? await test.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
-                : await test.ConfigureAwait(false);
-        }
-        catch (TimeoutException) when (timeout is not null)
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
-            timeoutSource is { IsCancellationRequested: true })
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = ex.Message,
-                FailureKind = ConfigurationFailureKind.Fatal
-            };
-        }
+        var test = (CancellationToken ct) => integration.TestConnectionAsync(downloadClient.Settings, ct);
+        return await WithConnectionTimeoutAsync(test, timeout, cancellationToken).ConfigureAwait(false);
     }
 }

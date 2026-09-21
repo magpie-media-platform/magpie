@@ -63,11 +63,10 @@ internal sealed class InteractiveSearchEndpointGroup : IApiEndpointGroup
         return result.Status switch
         {
             InteractiveReleaseGrabResult.Accepted =>
-                Results.Accepted($"api/{Name}/{contentHierarchyItemId}/grab", result.ExecutionId),
+                Results.Accepted($"/api/{Name}/{contentHierarchyItemId}/grab", result.ExecutionId),
             InteractiveReleaseGrabResult.ContentNotFound => Results.NotFound(),
-            InteractiveReleaseGrabResult.NoDownloadClient => Results.Problem(
-                detail: result.Detail,
-                statusCode: StatusCodes.Status409Conflict),
+            InteractiveReleaseGrabResult.NoDownloadClient or InteractiveReleaseGrabResult.AlreadyInProgress =>
+                Results.Problem(detail: result.Detail, statusCode: StatusCodes.Status409Conflict),
             _ => Results.Problem(
                 detail: result.Detail,
                 statusCode: StatusCodes.Status400BadRequest),

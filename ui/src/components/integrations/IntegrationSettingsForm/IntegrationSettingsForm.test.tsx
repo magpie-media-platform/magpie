@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
@@ -32,12 +32,12 @@ function withQueryClient(
 ): ReactNode {
     const extensionContext: ExtensionContextValue = {
         state: extensionState,
+        retriesExhausted: false,
         context: {
             apiBaseUrl: '/api',
             userId: 'user-1',
             username: 'admin',
             role: 'Admin',
-            theme: null,
         },
         getExtensionsForSlot: () => [],
         retry: () => Promise.resolve(),
@@ -217,7 +217,7 @@ describe('IntegrationSettingsForm', () => {
             expect(input).toHaveAttribute('type', 'password');
             expect(input).not.toHaveAttribute('readonly');
             expect(input).not.toHaveAttribute('placeholder', '********');
-            expect(screen.queryByRole('button', { name: 'Clear API Key' })).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Replace API Key' })).not.toBeInTheDocument();
         });
 
         it('masks and locks a configured secret behind a clear button', () => {
@@ -229,7 +229,7 @@ describe('IntegrationSettingsForm', () => {
             expect(input.value).toBe('');
             expect(input).toHaveAttribute('readonly');
             expect(input).toHaveAttribute('placeholder', '********');
-            expect(screen.getByRole('button', { name: 'Clear API Key' })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Replace API Key' })).toBeInTheDocument();
         });
 
         it('unlocks a configured secret for editing when the clear button is clicked', async () => {
@@ -240,7 +240,7 @@ describe('IntegrationSettingsForm', () => {
                 secretsConfigured: { apiKey: true },
             });
 
-            await user.click(screen.getByRole('button', { name: 'Clear API Key' }));
+            await user.click(screen.getByRole('button', { name: 'Replace API Key' }));
 
             const input = screen.getByLabelText('API Key') as HTMLInputElement;
             expect(input).not.toHaveAttribute('readonly');
@@ -248,7 +248,7 @@ describe('IntegrationSettingsForm', () => {
 
             await user.type(input, 'x');
             expect(onChange).toHaveBeenCalledWith('apiKey', 'x');
-            expect(screen.queryByRole('button', { name: 'Clear API Key' })).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Replace API Key' })).not.toBeInTheDocument();
         });
     });
 
@@ -528,7 +528,7 @@ describe('IntegrationSettingsForm', () => {
                 expect(cell).toHaveAttribute('type', 'password');
                 expect(cell).toHaveAttribute('readonly');
                 expect(cell).toHaveAttribute('placeholder', '********');
-                expect(screen.getByRole('button', { name: 'Clear Token' })).toBeInTheDocument();
+                expect(screen.getByRole('button', { name: 'Replace Token' })).toBeInTheDocument();
             });
 
             it('unlocks a stored secret cell and flows the replacement through onChange', async () => {
@@ -539,7 +539,7 @@ describe('IntegrationSettingsForm', () => {
                     values: { credentials: JSON.stringify([{ account: 'acct-1', token: '' }]) },
                 });
 
-                await user.click(screen.getByRole('button', { name: 'Clear Token' }));
+                await user.click(screen.getByRole('button', { name: 'Replace Token' }));
                 const cell = document.querySelector(
                     '[data-row-index="0"] input[data-field="token"]',
                 ) as HTMLInputElement;
@@ -555,7 +555,7 @@ describe('IntegrationSettingsForm', () => {
                 const user = userEvent.setup();
                 render(<ControlledMappings initialValue={JSON.stringify([{ account: 'acct-1', token: '' }])} />);
 
-                expect(screen.getByRole('button', { name: 'Clear Token' })).toBeInTheDocument();
+                expect(screen.getByRole('button', { name: 'Replace Token' })).toBeInTheDocument();
 
                 await user.click(screen.getByRole('button', { name: 'Add row' }));
 
@@ -565,7 +565,7 @@ describe('IntegrationSettingsForm', () => {
                 expect(newCell).toBeInTheDocument();
                 expect(newCell).not.toHaveAttribute('readonly');
                 expect(newCell).not.toHaveAttribute('placeholder', '********');
-                expect(screen.getAllByRole('button', { name: 'Clear Token' })).toHaveLength(1);
+                expect(screen.getAllByRole('button', { name: 'Replace Token' })).toHaveLength(1);
             });
         });
 
@@ -574,7 +574,7 @@ describe('IntegrationSettingsForm', () => {
 
             beforeEach(() => {
                 mockApiGet.mockReset();
-                delete (window as unknown as Record<string, unknown>).magpieJellyfin;
+                delete (window as unknown as Record<string, unknown>).sampleProvider;
             });
 
             const optionsSchema: IntegrationSettingDefinition[] = [
@@ -600,11 +600,11 @@ describe('IntegrationSettingsForm', () => {
                         {
                             key: 'serverLibraryId',
                             type: SchemaDataType.String,
-                            displayName: 'Jellyfin library',
+                            displayName: 'Provider library',
                             required: true,
                             optionsSource: {
                                 kind: 'JSFunction',
-                                functionName: 'magpieJellyfin.listLibraries',
+                                functionName: 'sampleProvider.listLibraries',
                             },
                         },
                     ],
@@ -621,7 +621,7 @@ describe('IntegrationSettingsForm', () => {
                     }
                     return Promise.reject(new Error(`Unexpected path: ${path}`));
                 });
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries: () => [] };
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries: () => [] };
 
                 render(
                     withQueryClient(
@@ -717,9 +717,9 @@ describe('IntegrationSettingsForm', () => {
                     { value: 'lib-1', label: 'Movies' },
                     { value: 'lib-2', label: 'Shows' },
                 ]);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries };
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
                 const values = {
-                    host: 'http://jellyfin.local:8096',
+                    host: 'http://provider.local:8096',
                     apiKey: 'k',
                     libraryMappings: JSON.stringify([
                         { rootFolderPath: '/data/movies', contentType: 'movies', serverLibraryId: '' },
@@ -732,7 +732,7 @@ describe('IntegrationSettingsForm', () => {
                             schema={optionsSchema}
                             values={values}
                             onChange={vi.fn()}
-                            extensionId="jellyfin-extension"
+                            extensionId="provider-extension"
                             entityId="server-1"
                         />,
                     ),
@@ -740,30 +740,34 @@ describe('IntegrationSettingsForm', () => {
 
                 await waitFor(() => {
                     expect(listLibraries).toHaveBeenCalledWith({
-                        extensionId: 'jellyfin-extension',
+                        extensionId: 'provider-extension',
                         entityId: 'server-1',
                         state: values,
                     });
                 });
 
-                const cell = await screen.findByLabelText('Jellyfin library');
+                const cell = await screen.findByLabelText('Provider library');
                 expect(cell.tagName).toBe('BUTTON');
             });
 
-            it('keeps the picker visible with a retryable network error when the resolver fails', async () => {
+            it.each([
+                new Error('upstream unreachable'),
+                'upstream unreachable',
+                Object.assign(new Error('upstream unreachable'), { userMessage: ' ' }),
+            ])('keeps the picker visible with a retryable generic error for %o', async (error) => {
                 mockApiGet.mockResolvedValue([]);
                 const listLibraries = vi
                     .fn()
-                    .mockRejectedValueOnce(new Error('upstream unreachable'))
+                    .mockRejectedValueOnce(error)
                     .mockResolvedValueOnce([{ value: 'lib-1', label: 'Movies' }]);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries };
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
 
                 render(
                     withQueryClient(
                         <IntegrationSettingsForm
                             schema={optionsSchema}
                             values={{
-                                host: 'http://jellyfin.local:8096',
+                                host: 'http://provider.local:8096',
                                 apiKey: 'secret',
                                 libraryMappings: JSON.stringify([
                                     { rootFolderPath: '', contentType: '', serverLibraryId: '' },
@@ -775,23 +779,32 @@ describe('IntegrationSettingsForm', () => {
                     ),
                 );
 
-                expect(await screen.findByText(/Failed to connect to Jellyfin/)).toBeInTheDocument();
-                expect(screen.getByLabelText('Jellyfin library').tagName).toBe('BUTTON');
-                expect(screen.queryByRole('textbox', { name: 'Jellyfin library' })).not.toBeInTheDocument();
+                const failure = await screen.findByText('Failed to load options. Check the source connection.');
+                expect(failure).toHaveAttribute('role', 'alert');
+                expect(failure).toHaveClass('integration-settings-form__error');
+                expect(screen.getByLabelText('Provider library').tagName).toBe('BUTTON');
+                expect(screen.queryByRole('textbox', { name: 'Provider library' })).not.toBeInTheDocument();
 
-                await userEvent.click(screen.getByRole('button', { name: 'Retry libraries' }));
+                await userEvent.click(
+                    within(
+                        screen
+                            .getByLabelText('Provider library')
+                            .closest('.integration-settings-form__cell-fallback') as HTMLElement,
+                    ).getByRole('button', { name: 'Retry options' }),
+                );
 
                 await waitFor(() => expect(listLibraries).toHaveBeenCalledTimes(2));
-                await waitFor(() => expect(screen.getByLabelText('Jellyfin library')).toBeEnabled());
-                await userEvent.click(screen.getByLabelText('Jellyfin library'));
+                await waitFor(() => expect(screen.getByLabelText('Provider library')).toBeEnabled());
+                await userEvent.click(screen.getByLabelText('Provider library'));
                 expect(await screen.findByRole('option', { name: 'Movies' })).toBeInTheDocument();
             });
 
-            it('renders an authentication-specific retry state without exposing the resolver error', async () => {
+            it('renders a provider-supplied message without exposing the resolver error', async () => {
                 mockApiGet.mockResolvedValue([]);
-                const error = new Error('sensitive upstream response');
-                error.name = 'JellyfinAuthenticationError';
-                (window as unknown as Record<string, unknown>).magpieJellyfin = {
+                const error = Object.assign(new Error('sensitive upstream response'), {
+                    userMessage: 'The provider rejected the API key.',
+                });
+                (window as unknown as Record<string, unknown>).sampleProvider = {
                     listLibraries: () => Promise.reject(error),
                 };
 
@@ -800,7 +813,7 @@ describe('IntegrationSettingsForm', () => {
                         <IntegrationSettingsForm
                             schema={optionsSchema}
                             values={{
-                                host: 'http://jellyfin.local:8096',
+                                host: 'http://provider.local:8096',
                                 apiKey: 'secret',
                                 libraryMappings: JSON.stringify([
                                     { rootFolderPath: '', contentType: '', serverLibraryId: '' },
@@ -813,15 +826,15 @@ describe('IntegrationSettingsForm', () => {
 
                 expect(await screen.findByText(/rejected the API key/)).toBeInTheDocument();
                 expect(screen.queryByText(/sensitive upstream response/)).not.toBeInTheDocument();
-                expect(screen.getByLabelText('Jellyfin library').tagName).toBe('BUTTON');
+                expect(screen.getByLabelText('Provider library').tagName).toBe('BUTTON');
             });
 
             it('calls the JSFunction with unsaved credentials without requiring an existing entity', async () => {
                 mockApiGet.mockResolvedValue([]);
                 const listLibraries = vi.fn((_context: unknown) => [{ value: 'lib-1', label: 'Movies' }]);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries };
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
                 const values = {
-                    host: 'http://jellyfin.local:8096',
+                    host: 'http://provider.local:8096',
                     apiKey: 'new-key',
                     libraryMappings: JSON.stringify([{ rootFolderPath: '', contentType: '', serverLibraryId: '' }]),
                 };
@@ -839,15 +852,15 @@ describe('IntegrationSettingsForm', () => {
                         state: values,
                     });
                 });
-                expect((await screen.findByLabelText('Jellyfin library')).tagName).toBe('BUTTON');
+                expect((await screen.findByLabelText('Provider library')).tagName).toBe('BUTTON');
             });
 
             it('uses stored edit settings when the secret is omitted from the form', async () => {
                 mockApiGet.mockResolvedValue([]);
                 const listLibraries = vi.fn(() => [{ value: 'lib-1', label: 'Movies' }]);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries };
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
                 const values = {
-                    host: 'http://jellyfin.local:8096',
+                    host: 'http://provider.local:8096',
                     libraryMappings: JSON.stringify([
                         { rootFolderPath: '/data/movies', contentType: 'movies', serverLibraryId: 'lib-1' },
                     ]),
@@ -871,13 +884,18 @@ describe('IntegrationSettingsForm', () => {
                         state: values,
                     });
                 });
-                await waitFor(() => expect(screen.getByLabelText('Jellyfin library')).toHaveTextContent('Movies'));
+                await waitFor(() => expect(screen.getByLabelText('Provider library')).toHaveTextContent('Movies'));
             });
 
-            it('shows a picker credential prompt without resolving on an incomplete create form', () => {
+            it('shows a credential prompt supplied by the resolver on an incomplete create form', async () => {
                 mockApiGet.mockResolvedValue([]);
-                const listLibraries = vi.fn(() => []);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries };
+                const listLibraries = vi.fn(() => {
+                    throw Object.assign(new Error('Missing credentials.'), {
+                        userMessage: 'Enter the connection credentials.',
+                        notConfigured: true,
+                    });
+                });
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
                 render(
                     withQueryClient(
                         <IntegrationSettingsForm
@@ -893,23 +911,32 @@ describe('IntegrationSettingsForm', () => {
                     ),
                 );
 
-                expect(screen.getByLabelText('Jellyfin library').tagName).toBe('BUTTON');
-                expect(screen.getByText(/Enter the Jellyfin host URL and API key/)).toBeInTheDocument();
-                expect(screen.queryByRole('textbox', { name: 'Jellyfin library' })).not.toBeInTheDocument();
-                expect(listLibraries).not.toHaveBeenCalled();
+                expect(screen.getByLabelText('Provider library').tagName).toBe('BUTTON');
+                const prompt = await screen.findByText('Enter the connection credentials.');
+                expect(prompt).toHaveAttribute('role', 'status');
+                expect(prompt).toHaveClass('integration-settings-form__help');
+                expect(
+                    within(
+                        screen
+                            .getByLabelText('Provider library')
+                            .closest('.integration-settings-form__cell-fallback') as HTMLElement,
+                    ).queryByRole('button', { name: 'Retry options' }),
+                ).not.toBeInTheDocument();
+                expect(screen.queryByRole('textbox', { name: 'Provider library' })).not.toBeInTheDocument();
+                expect(listLibraries).toHaveBeenCalledTimes(1);
                 expect(document.querySelector('[data-testid="mappings-needs-saved-server"]')).not.toBeInTheDocument();
             });
 
             it('keeps the picker visible when the server has no libraries', async () => {
                 mockApiGet.mockResolvedValue([]);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries: () => [] };
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries: () => [] };
 
                 render(
                     withQueryClient(
                         <IntegrationSettingsForm
                             schema={optionsSchema}
                             values={{
-                                host: 'http://jellyfin.local:8096',
+                                host: 'http://provider.local:8096',
                                 apiKey: 'secret',
                                 libraryMappings: JSON.stringify([
                                     { rootFolderPath: '', contentType: '', serverLibraryId: '' },
@@ -920,14 +947,14 @@ describe('IntegrationSettingsForm', () => {
                     ),
                 );
 
-                expect(await screen.findByText(/No Jellyfin libraries were found/)).toBeInTheDocument();
-                expect(screen.getByLabelText('Jellyfin library').tagName).toBe('BUTTON');
-                expect(screen.queryByRole('textbox', { name: 'Jellyfin library' })).not.toBeInTheDocument();
+                expect(await screen.findByText(/No options are available./)).toBeInTheDocument();
+                expect(screen.getByLabelText('Provider library').tagName).toBe('BUTTON');
+                expect(screen.queryByRole('textbox', { name: 'Provider library' })).not.toBeInTheDocument();
             });
 
-            it('shows a loading state while Jellyfin discovery is pending', async () => {
+            it('shows a loading state while Provider discovery is pending', async () => {
                 mockApiGet.mockResolvedValue([]);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = {
+                (window as unknown as Record<string, unknown>).sampleProvider = {
                     listLibraries: () => new Promise(() => undefined),
                 };
 
@@ -936,7 +963,7 @@ describe('IntegrationSettingsForm', () => {
                         <IntegrationSettingsForm
                             schema={optionsSchema}
                             values={{
-                                host: 'http://jellyfin.local:8096',
+                                host: 'http://provider.local:8096',
                                 apiKey: 'secret',
                                 libraryMappings: JSON.stringify([
                                     { rootFolderPath: '', contentType: '', serverLibraryId: '' },
@@ -947,21 +974,21 @@ describe('IntegrationSettingsForm', () => {
                     ),
                 );
 
-                expect(await screen.findByText('Loading Jellyfin libraries...')).toBeInTheDocument();
-                expect(screen.getByLabelText('Jellyfin library').tagName).toBe('BUTTON');
+                expect(await screen.findByText('Loading options...')).toBeInTheDocument();
+                expect(screen.getByLabelText('Provider library').tagName).toBe('BUTTON');
             });
 
             it('shows a loading state while extension assets are unsettled with credentials present', () => {
                 mockApiGet.mockResolvedValue([]);
                 const listLibraries = vi.fn(() => []);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries };
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
 
                 render(
                     withQueryClient(
                         <IntegrationSettingsForm
                             schema={optionsSchema}
                             values={{
-                                host: 'http://jellyfin.local:8096',
+                                host: 'http://provider.local:8096',
                                 apiKey: 'secret',
                                 libraryMappings: JSON.stringify([
                                     { rootFolderPath: '', contentType: '', serverLibraryId: '' },
@@ -974,16 +1001,22 @@ describe('IntegrationSettingsForm', () => {
                     ),
                 );
 
-                expect(screen.getByText('Loading Jellyfin libraries...')).toBeInTheDocument();
-                expect(screen.queryByText(/No Jellyfin libraries were found/)).not.toBeInTheDocument();
-                expect(screen.queryByRole('textbox', { name: 'Jellyfin library' })).not.toBeInTheDocument();
+                expect(
+                    within(
+                        screen
+                            .getByLabelText('Provider library')
+                            .closest('.integration-settings-form__cell-fallback') as HTMLElement,
+                    ).getByText('Loading options...'),
+                ).toBeInTheDocument();
+                expect(screen.queryByText(/No options are available./)).not.toBeInTheDocument();
+                expect(screen.queryByRole('textbox', { name: 'Provider library' })).not.toBeInTheDocument();
                 expect(listLibraries).not.toHaveBeenCalled();
             });
 
             it('reloads libraries after either connection setting changes without putting secrets in query keys', async () => {
                 mockApiGet.mockResolvedValue([]);
                 const listLibraries = vi.fn((_context: unknown) => [{ value: 'lib-1', label: 'Movies' }]);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = { listLibraries };
+                (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
                 const client = createQueryClient();
                 const mappings = JSON.stringify([{ rootFolderPath: '', contentType: '', serverLibraryId: 'lib-1' }]);
                 const { rerender } = render(
@@ -1030,7 +1063,7 @@ describe('IntegrationSettingsForm', () => {
 
             it('persists a picked library and renders it selected on rerender', async () => {
                 mockApiGet.mockResolvedValue([]);
-                (window as unknown as Record<string, unknown>).magpieJellyfin = {
+                (window as unknown as Record<string, unknown>).sampleProvider = {
                     listLibraries: () => [
                         { value: 'lib-1', label: 'Movies' },
                         { value: 'lib-2', label: 'Shows' },
@@ -1038,7 +1071,7 @@ describe('IntegrationSettingsForm', () => {
                 };
                 const onChange = vi.fn();
                 const baseValues = {
-                    host: 'http://jellyfin.local:8096',
+                    host: 'http://provider.local:8096',
                     apiKey: 'secret',
                     libraryMappings: JSON.stringify([
                         { rootFolderPath: '', contentType: '', serverLibraryId: 'lib-1' },
@@ -1050,8 +1083,8 @@ describe('IntegrationSettingsForm', () => {
                     ),
                 );
 
-                await waitFor(() => expect(screen.getByLabelText('Jellyfin library')).toHaveTextContent('Movies'));
-                const picker = screen.getByLabelText('Jellyfin library');
+                await waitFor(() => expect(screen.getByLabelText('Provider library')).toHaveTextContent('Movies'));
+                const picker = screen.getByLabelText('Provider library');
 
                 await userEvent.click(picker);
                 await userEvent.click(screen.getByRole('option', { name: 'Shows' }));
@@ -1068,7 +1101,7 @@ describe('IntegrationSettingsForm', () => {
                         />,
                     ),
                 );
-                await waitFor(() => expect(screen.getByLabelText('Jellyfin library')).toHaveTextContent('Shows'));
+                await waitFor(() => expect(screen.getByLabelText('Provider library')).toHaveTextContent('Shows'));
             });
         });
 

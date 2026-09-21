@@ -32,12 +32,7 @@ public sealed class TvmazeExtension : IExtension
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)
     {
-        services.AddHttpClient(
-            TvmazeClient.HttpClientName,
-            client =>
-            {
-                client.BaseAddress = new Uri(TvmazeClient.DefaultBaseUrl, UriKind.Absolute);
-            })
+        services.AddHttpClient(TvmazeClient.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
@@ -51,8 +46,10 @@ public sealed class TvmazeExtension : IExtension
         services.AddScoped<IContentHierarchyMetadataProvider, ContentMetadataProvider>();
         services.AddScoped<IContentHierarchyMetadataSearcher, ContentMetadataSearcher>();
 
-        services.AddSingleton<IUIExtensionProvider, AdminUiProvider>();
-        services.AddSingleton<IAssetProvider, AdminUiProvider>();
-        services.AddSingleton<IExtensionSettingsSchemaProvider, AdminUiProvider>();
+        services.AddSingleton<AdminUiProvider>();
+        services.AddSingleton<IUIExtensionProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IAssetProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IExtensionSettingsSchemaProvider>(
+            provider => provider.GetRequiredService<AdminUiProvider>());
     }
 }

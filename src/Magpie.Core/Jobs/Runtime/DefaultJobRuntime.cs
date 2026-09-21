@@ -24,6 +24,12 @@ namespace Magpie.Core.Jobs.Runtime;
 
 internal sealed class DefaultJobRuntime : IJobRuntime
 {
+    private sealed class RunningExecution(CancellationTokenSource cts)
+    {
+        public CancellationTokenSource Cts { get; } = cts;
+        public bool OperatorCancelled { get; set; }
+    }
+
     private const string OutcomeCompleted = "completed";
 
     private const string OutcomeFailed = "failed";
@@ -44,7 +50,10 @@ internal sealed class DefaultJobRuntime : IJobRuntime
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _heartbeatInterval;
     private readonly ConcurrentDictionary<Guid, RunningExecution> _running = new();
+    private readonly JobShutdownSignal _shutdownSignal;
     private string _nodeId;
+
+    private volatile bool _disposing;
 
     public DefaultJobRuntime(
         IJobExecutionScopeFactory jobExecutionScopeFactory,
@@ -52,6 +61,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         IJobRegistry registry,
         MagpieHostEnvironment hostEnvironment,
         IEventBus eventBus,
+        JobShutdownSignal shutdownSignal,
         TimeProvider timeProvider,
         ILogger<DefaultJobRuntime> logger)
         : this(
@@ -60,6 +70,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             registry,
             hostEnvironment,
             eventBus,
+            shutdownSignal,
             timeProvider,
             logger,
             DefaultHeartbeatInterval)
@@ -72,6 +83,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         IJobRegistry registry,
         MagpieHostEnvironment hostEnvironment,
         IEventBus eventBus,
+        JobShutdownSignal shutdownSignal,
         TimeProvider timeProvider,
         ILogger<DefaultJobRuntime> logger,
         TimeSpan heartbeatInterval)
@@ -80,6 +92,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         _scopeFactory = scopeFactory;
         _registry = registry;
         _eventBus = eventBus;
+        _shutdownSignal = shutdownSignal;
         _timeProvider = timeProvider;
         _logger = logger;
         _heartbeatInterval = heartbeatInterval;
@@ -126,7 +139,8 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         if (!_registry.TryGetJobSpec(execution.JobType, out var spec))
         {
             _logger.LogError(
-                "No job handler exists for job type {JobType}. The runtime will mark execution {ExecutionId} as failed",
+                "No job handler exists for job type {JobType}, so the runtime will mark execution {ExecutionId}" +
+                " as failed",
                 execution.JobType,
                 executionId);
             JobsTelemetry.FailuresTotal.Add(
@@ -142,7 +156,10 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             if (failedByThisRun)
             {
                 await _eventBus.PublishAsync(
-                    JobEventBuilder.BuildJobExecutionFailedEvent(execution.Id, execution.JobType, noHandlerReason),
+                    JobEventBuilder.BuildJobExecutionFailedEvent(execution.Id, execution.JobType, noHandlerReason) with
+                    {
+                        CorrelationId = execution.CorrelationId
+                    },
                     default).ConfigureAwait(false);
             }
 
@@ -156,7 +173,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             if (!claimed)
             {
                 _logger.LogDebug(
-                    "This node failed to claim job execution {ExecutionId}. Another node took it, or " +
+                    "This node failed to claim job execution {ExecutionId} because another node took it, or " +
                     "another execution holds the same lock partition",
                     executionId);
                 return;
@@ -168,18 +185,19 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             ? specTimeout
             : default(TimeSpan?);
         var effectiveTimeout = declaredTimeout ?? DefaultMaxRunDuration;
+        var deadline = _timeProvider.GetUtcNow() + effectiveTimeout;
 
         await executions
-            .TrySetRunningTimeoutAsync(
-                executionId,
-                _nodeId,
-                _timeProvider.GetUtcNow().UtcDateTime + effectiveTimeout,
-                default)
+            .TrySetRunningTimeoutAsync(executionId, _nodeId, deadline.UtcDateTime, default)
             .ConfigureAwait(false);
 
-        var jobCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var jobCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _shutdownSignal.Cancellation.Token);
         var runningEntry = new RunningExecution(jobCts);
         _running[executionId] = runningEntry;
+        _shutdownSignal.Outstanding[executionId] =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         JobExecution? registeredState;
         try
@@ -189,6 +207,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         catch
         {
             _running.TryRemove(executionId, out _);
+            CompleteShutdownTracking(executionId);
             jobCts.Dispose();
             throw;
         }
@@ -201,6 +220,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         else if (registeredState?.Status is not JobExecutionStatus.Running)
         {
             _running.TryRemove(executionId, out _);
+            CompleteShutdownTracking(executionId);
             jobCts.Dispose();
             return;
         }
@@ -247,13 +267,13 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             var jobExecutionScope = _jobExecutionScopeFactory.CreateScope(executionId);
 
             await using var _ = jobExecutionScope.ConfigureAwait(false);
-            jobExecutionScope.SetParentContext(executionId);
+            jobExecutionScope.SetParentContext(executionId, execution.CorrelationId);
 
             if (!jobExecutionScope.TryGetHandler(spec, out var handler))
             {
                 _logger.LogError(
-                    "No job handler exists for job type {JobType}. " +
-                    "The runtime will mark execution {ExecutionId} as failed",
+                    "No job handler exists for job type {JobType}, so the runtime will mark execution " +
+                    "{ExecutionId} as failed",
                     execution.JobType,
                     executionId);
                 JobsTelemetry.FailuresTotal.Add(
@@ -269,7 +289,13 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 if (failedByThisRun)
                 {
                     await _eventBus.PublishAsync(
-                        JobEventBuilder.BuildJobExecutionFailedEvent(execution.Id, execution.JobType, noHandlerReason),
+                        JobEventBuilder.BuildJobExecutionFailedEvent(
+                            execution.Id,
+                            execution.JobType,
+                            noHandlerReason) with
+                        {
+                            CorrelationId = execution.CorrelationId
+                        },
                         default).ConfigureAwait(false);
                 }
 
@@ -288,7 +314,8 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 Event: execution.EventTriggerId is null
                     ? null
                     : execution.TriggerContext.ToMagpieEvent(),
-                CorrelationId: execution.CorrelationId);
+                CorrelationId: execution.CorrelationId,
+                Deadline: deadline);
 
             await handler.ExecuteAsync(jobContext, jobCts.Token).ConfigureAwait(false);
             var completedByThisRun = await executions
@@ -319,7 +346,9 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         }
         catch (OperationCanceledException) when (jobCts.IsCancellationRequested)
         {
-            var hostShutdown = cancellationToken.IsCancellationRequested;
+            var hostShutdown = cancellationToken.IsCancellationRequested ||
+                _shutdownSignal.Cancellation.Token.IsCancellationRequested ||
+                _disposing;
             if (runningEntry.OperatorCancelled)
             {
                 outcome = OutcomeCancelled;
@@ -391,8 +420,8 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                         new KeyValuePair<string, object?>("job.type", execution.JobType),
                         new KeyValuePair<string, object?>("reason_kind", "host_shutdown"));
                     _logger.LogWarning(
-                        "The host shutdown interrupted execution {ExecutionId} ({JobType}). " +
-                        "The runtime applied the {Policy} policy",
+                        "The host shutdown interrupted execution {ExecutionId} ({JobType}), so the runtime " +
+                        "applied the {Policy} policy",
                         executionId,
                         execution.JobType,
                         failurePolicy);
@@ -424,7 +453,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 new KeyValuePair<string, object?>("job.type", execution.JobType),
                 new KeyValuePair<string, object?>("reason_kind", "exception"));
             _logger.LogError(ex, "Job execution {ExecutionId} ({JobType}) failed", executionId, execution.JobType);
-            await TransitionFailureAsync(
+            var failedByThisRun = await TransitionFailureAsync(
                 executions,
                 auditRecords,
                 transactionManager,
@@ -436,6 +465,21 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 ex.Message,
                 timeoutAudit: false)
                 .ConfigureAwait(false);
+            if (!failedByThisRun)
+            {
+                var cancelledByThisRun = await executions
+                    .TryMarkCancellationRequestedCancelledAsync(executionId, ex.Message, default)
+                    .ConfigureAwait(false);
+                if (cancelledByThisRun)
+                {
+                    outcome = OutcomeCancelled;
+                    activity?.AddEvent(new ActivityEvent("cancelled"));
+                    _logger.LogInformation(
+                        "An operator cancelled job execution {ExecutionId} ({JobType}), which ended with an error",
+                        executionId,
+                        execution.JobType);
+                }
+            }
         }
         finally
         {
@@ -457,6 +501,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             }
 
             _running.TryRemove(executionId, out _);
+            CompleteShutdownTracking(executionId);
             jobCts.Dispose();
 
             JobsTelemetry.ExecutionDuration.Record(
@@ -481,14 +526,14 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         return execution.CreatedByUserId is not null ? "manual" : "system";
     }
 
-    private async Task<bool> TransitionFailureAsync(
+    private static async Task<JobFailureTransitionResult> TransitionRunningToFailureAsync(
         IJobExecutionRepository executions,
         IAuditRecordRepository auditRecords,
         ITransactionManager transactionManager,
         IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution failed,
-        JobSpec spec,
+        JobSpec? spec,
         JobFailurePolicy policy,
         string reason,
         bool timeoutAudit)
@@ -522,8 +567,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 }
 
                 if (policy is JobFailurePolicy.Fail ||
-                    (policy is JobFailurePolicy.Retry &&
-                        failed.ExecutionMode is JobExecutionMode.Immediate))
+                    (policy is JobFailurePolicy.Retry && failed.ExecutionMode is JobExecutionMode.Immediate))
                 {
                     result = new(true, PublishFailure: true, Retry: null);
                     return;
@@ -537,13 +581,46 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 }
 
                 retry.LockPartition = failed.LockPartition
-                    ?? jobManager.ResolveLockPartition(
-                        failed.JobType,
-                        failed.GetLockPartitionFor(spec));
+                    ?? jobManager.ResolveLockPartition(failed.JobType, BuildLockPartitionParameters(failed, spec));
                 await executions.CreateAsync(retry, failed.CreatedByUserId, transactionToken).ConfigureAwait(false);
                 result = new(true, PublishFailure: false, retry);
             },
             default).ConfigureAwait(false);
+
+        return result;
+    }
+
+    private void CompleteShutdownTracking(Guid executionId)
+    {
+        if (_shutdownSignal.Outstanding.TryRemove(executionId, out var completion))
+        {
+            completion.TrySetResult();
+        }
+    }
+
+    private async Task<bool> TransitionFailureAsync(
+        IJobExecutionRepository executions,
+        IAuditRecordRepository auditRecords,
+        ITransactionManager transactionManager,
+        IJobManager jobManager,
+        IJobRetryPolicy retryPolicy,
+        JobExecution failed,
+        JobSpec spec,
+        JobFailurePolicy policy,
+        string reason,
+        bool timeoutAudit)
+    {
+        var result = await TransitionRunningToFailureAsync(
+            executions,
+            auditRecords,
+            transactionManager,
+            jobManager,
+            retryPolicy,
+            failed,
+            spec,
+            policy,
+            reason,
+            timeoutAudit).ConfigureAwait(false);
 
         if (!result.Transitioned)
         {
@@ -566,7 +643,10 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         else if (result.PublishFailure)
         {
             await _eventBus.PublishAsync(
-                JobEventBuilder.BuildJobExecutionFailedEvent(failed.Id, failed.JobType, reason),
+                JobEventBuilder.BuildJobExecutionFailedEvent(failed.Id, failed.JobType, reason) with
+                {
+                    CorrelationId = failed.CorrelationId
+                },
                 default).ConfigureAwait(false);
         }
 
@@ -680,6 +760,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
 
     public void Dispose()
     {
+        _disposing = true;
         foreach (var running in _running.Values)
         {
             try
@@ -694,9 +775,33 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         _running.Clear();
     }
 
-    private sealed class RunningExecution(CancellationTokenSource cts)
+    private static Dictionary<string, string?> BuildLockPartitionParameters(JobExecution execution, JobSpec? spec)
     {
-        public CancellationTokenSource Cts { get; } = cts;
-        public bool OperatorCancelled { get; set; }
+        var parameters = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var parameter in execution.Parameters)
+        {
+            parameters[parameter.Key] = parameter.Value;
+        }
+
+        if (spec is null || spec.LockPartitionEventContextKeys.Count == 0)
+        {
+            return parameters;
+        }
+
+        foreach (var (field, eventContextKey) in spec.LockPartitionEventContextKeys)
+        {
+            if (parameters.TryGetValue(field, out var existing) && !string.IsNullOrWhiteSpace(existing))
+            {
+                continue;
+            }
+
+            if (execution.TriggerContext.TryGetValue(eventContextKey.ToEventContextKey(), out var value) &&
+                !string.IsNullOrWhiteSpace(value))
+            {
+                parameters[field] = value;
+            }
+        }
+
+        return parameters;
     }
 }

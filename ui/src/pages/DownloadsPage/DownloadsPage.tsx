@@ -9,7 +9,6 @@ import {
     ListBulletsIcon,
     StopCircleIcon,
     LinkBreakIcon,
-    XIcon,
 } from '@phosphor-icons/react';
 import { type CellContext, type SortingState } from '@tanstack/react-table';
 
@@ -23,7 +22,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { Button } from '@/components/ui/Button';
 import { DataTable } from '@/components/ui/DataTable';
 import { Pager } from '@/components/ui/Pager';
-import { SelectAllBanner } from '@/components/ui/SelectAllBanner';
+import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { DownloadDetailsDialog } from '@/components/downloads/DownloadDetailsDialog';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
@@ -34,7 +33,6 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
 import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
-import { Checkbox } from '@/components/ui/Checkbox';
 import { Skeleton } from '@/components/ui/Skeleton';
 import {
     useDownloads,
@@ -50,8 +48,10 @@ import { useBulkSelection, type BulkSelection } from '@/hooks/useBulkSelection';
 import { useDownloadClients } from '@/hooks/useDownloadClients';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { formatDateTime } from '@/lib/dateFormatting';
+import { displayLineageLeafTitle } from '@/lib/downloadTitle';
 import { type DownloadClientOption, type StateFilterOption, type DownloadFilterState } from '@/types';
 import { ACTIVE_DOWNLOAD_STATUSES } from '@/types/downloads';
+import type { SortDirectionName } from '@/types/paging';
 
 import {
     StatusBadge,
@@ -60,7 +60,6 @@ import {
     TitleCell,
     RowActions,
     buildDownloadColumns,
-    displayLineageLeafTitle,
     getEndedAt,
     stoppableStatuses,
     type RowActionHandlers,
@@ -95,6 +94,7 @@ const historyStateOptions: StateFilterOption[] = [
     { value: 'Importing', label: 'Importing' },
     { value: 'Imported', label: 'Imported' },
     { value: 'Failed', label: 'Failed' },
+    { value: 'Cancelled', label: 'Cancelled' },
 ];
 
 const SORT_COLUMN_TO_PROPERTY: Record<string, string> = {
@@ -213,9 +213,10 @@ export function DownloadsPage() {
         const active = sorting[0];
         const column = active?.id ?? fallbackColumn;
         const desc = active?.desc ?? true;
+        const sortDirection: SortDirectionName = desc ? 'Descending' : 'Ascending';
         return {
             sortBy: SORT_COLUMN_TO_PROPERTY[column] ?? SORT_COLUMN_TO_PROPERTY[fallbackColumn],
-            sortDirection: (desc ? 2 : 1) as 1 | 2,
+            sortDirection,
         };
     };
 
@@ -266,14 +267,14 @@ export function DownloadsPage() {
         bulkResumeDownloads,
         bulkStopDownloads,
         refetch: refetchQueue,
-    } = useDownloads(queueParams);
+    } = useDownloads(queueParams, activeTab === 'queue');
 
     const {
         downloads: pagedHistoryDownloads,
         pagination: historyPagination,
         isLoading: historyLoading,
         refetch: refetchHistory,
-    } = useDownloads(historyParams);
+    } = useDownloads(historyParams, activeTab === 'history');
 
     const { clients: apiClients } = useDownloadClients();
 
@@ -462,7 +463,7 @@ export function DownloadsPage() {
             }
             toast({
                 title: count === 1 ? 'Download forgotten' : `${count} downloads forgotten`,
-                description: 'Magpie stopped tracking it. The transfer is left in the download client.',
+                description: `Magpie stopped tracking ${count === 1 ? 'it' : 'them'}. ${count === 1 ? 'The transfer is' : 'The transfers are'} left in the download client.`,
                 variant: 'success',
             });
             forgetTarget.selection?.clear();
@@ -796,13 +797,11 @@ export function DownloadsPage() {
     }, [refetchDownloads]);
 
     const usesCardLayout = useCardLayout();
-    const [queueSelectionMode, setQueueSelectionMode] = useState(false);
-    const [historySelectionMode, setHistorySelectionMode] = useState(false);
 
     const renderMobileCard = (download: ApiDownload, tab: 'queue' | 'history') => {
         const selection = tab === 'queue' ? queueSelection : historySelection;
         const canSelect = tab === 'queue' ? canSelectQueueRows : canSelectHistoryRows;
-        const selectionMode = tab === 'queue' ? queueSelectionMode : historySelectionMode;
+        const isSelecting = selection.selectionMode && canSelect;
 
         return (
             <MobileMediaCard
@@ -814,14 +813,7 @@ export function DownloadsPage() {
                 posterAlt={`${displayLineageLeafTitle(download)} artwork`}
                 title={<TitleCell download={download} />}
                 titleAccessory={
-                    selectionMode && canSelect ? (
-                        <Checkbox
-                            checked={selection.isRowChecked(download.id)}
-                            onCheckedChange={(checked) => selection.toggleRow(download.id, Boolean(checked))}
-                            aria-label={`Select ${displayLineageLeafTitle(download)}`}
-                            data-action="select-row"
-                        />
-                    ) : (
+                    isSelecting ? undefined : (
                         <div className="downloads-page__mobile-actions">
                             <RowActions
                                 download={download}
@@ -832,6 +824,10 @@ export function DownloadsPage() {
                         </div>
                     )
                 }
+                selectable={isSelecting}
+                selected={selection.isRowChecked(download.id)}
+                onToggleSelected={() => selection.toggleRow(download.id, !selection.isRowChecked(download.id))}
+                selectionLabel={`Select ${displayLineageLeafTitle(download)}`}
                 trailing={tab === 'queue' ? <DownloadProgress download={download} /> : undefined}
             >
                 <div className="downloads-page__mobile-status">
@@ -851,20 +847,6 @@ export function DownloadsPage() {
         const [current] = historyTable.sorting;
         const resolved = next.length === 0 && current ? [{ ...current, desc: !current.desc }] : next;
         historyTable.setSorting(resolved);
-    };
-
-    const toggleMobileSelectionMode = (tab: 'queue' | 'history') => {
-        if (tab === 'queue') {
-            if (queueSelectionMode) {
-                queueSelection.clear();
-            }
-            setQueueSelectionMode((active) => !active);
-            return;
-        }
-        if (historySelectionMode) {
-            historySelection.clear();
-        }
-        setHistorySelectionMode((active) => !active);
     };
 
     const renderBulkBar = (
@@ -978,7 +960,6 @@ export function DownloadsPage() {
         if (mobile) {
             return (
                 <MobileSelectionBar
-                    className="downloads-page__mobile-selection-bar"
                     data-component={`downloads-mobile-selection-bar-${tab}`}
                     selection={selection}
                     pageSelectedCount={selectedRecords.length}
@@ -991,34 +972,14 @@ export function DownloadsPage() {
         }
 
         return (
-            <div className="bulk-actions-toolbar" data-component={`downloads-bulk-bar-${tab}`}>
-                {(selection.showAcrossPagesPrompt || allPages) && (
-                    <SelectAllBanner
-                        allPages={allPages}
-                        pageSelectedCount={selectedRecords.length}
-                        totalCount={totalCount}
-                        selectedCount={selectedCount}
-                        onSelectAllAcrossPages={selection.selectAllAcrossPages}
-                        onClear={selection.clear}
-                        itemNounPlural="downloads"
-                    />
-                )}
-                <div className="bulk-actions-toolbar__info">
-                    <span className="bulk-actions-toolbar__count">{selectedCount} selected</span>
-                    <button
-                        type="button"
-                        className="bulk-actions-toolbar__clear"
-                        onClick={selection.clear}
-                        disabled={!hasSelection}
-                        aria-label="Clear selection"
-                        data-action="clear-selection"
-                    >
-                        <XIcon weight="bold" aria-hidden="true" />
-                        Clear
-                    </button>
-                </div>
-                <div className="bulk-actions-toolbar__buttons">{actions}</div>
-            </div>
+            <BulkActionsToolbar
+                selection={selection}
+                label={`${tab === 'queue' ? 'Queue' : 'History'} selection actions`}
+                itemNounPlural="downloads"
+                data-component={`downloads-bulk-bar-${tab}`}
+            >
+                {actions}
+            </BulkActionsToolbar>
         );
     };
 
@@ -1161,8 +1122,8 @@ export function DownloadsPage() {
                                 selection={
                                     canSelectQueueRows
                                         ? {
-                                              active: queueSelectionMode,
-                                              onToggle: () => toggleMobileSelectionMode('queue'),
+                                              active: queueSelection.selectionMode,
+                                              onToggle: queueSelection.toggleSelectionMode,
                                           }
                                         : undefined
                                 }
@@ -1170,7 +1131,11 @@ export function DownloadsPage() {
                         )}
 
                         {usesCardLayout && (
-                            <div className="downloads-page__mobile-list" role="list" aria-label="Download queue">
+                            <div
+                                className="downloads-page__mobile-list"
+                                role={pagedQueueDownloads.length > 0 ? 'list' : undefined}
+                                aria-label={pagedQueueDownloads.length > 0 ? 'Download queue' : undefined}
+                            >
                                 {pagedQueueDownloads.length === 0
                                     ? queuePlaceholder
                                     : pagedQueueDownloads.map((download) => renderMobileCard(download, 'queue'))}
@@ -1179,7 +1144,7 @@ export function DownloadsPage() {
 
                         {usesCardLayout &&
                             canSelectQueueRows &&
-                            queueSelectionMode &&
+                            queueSelection.selectionMode &&
                             renderBulkBar(
                                 'queue',
                                 queueSelection,
@@ -1249,8 +1214,8 @@ export function DownloadsPage() {
                                 selection={
                                     canSelectHistoryRows
                                         ? {
-                                              active: historySelectionMode,
-                                              onToggle: () => toggleMobileSelectionMode('history'),
+                                              active: historySelection.selectionMode,
+                                              onToggle: historySelection.toggleSelectionMode,
                                           }
                                         : undefined
                                 }
@@ -1258,7 +1223,11 @@ export function DownloadsPage() {
                         )}
 
                         {usesCardLayout && (
-                            <div className="downloads-page__mobile-list" role="list" aria-label="Download history">
+                            <div
+                                className="downloads-page__mobile-list"
+                                role={pagedHistoryDownloads.length > 0 ? 'list' : undefined}
+                                aria-label={pagedHistoryDownloads.length > 0 ? 'Download history' : undefined}
+                            >
                                 {pagedHistoryDownloads.length === 0
                                     ? historyPlaceholder
                                     : pagedHistoryDownloads.map((download) => renderMobileCard(download, 'history'))}
@@ -1267,7 +1236,7 @@ export function DownloadsPage() {
 
                         {usesCardLayout &&
                             canSelectHistoryRows &&
-                            historySelectionMode &&
+                            historySelection.selectionMode &&
                             renderBulkBar(
                                 'history',
                                 historySelection,

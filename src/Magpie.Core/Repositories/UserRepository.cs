@@ -14,6 +14,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Models.Repositories;
+using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -27,21 +28,52 @@ internal sealed class UserRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<UserRepository> logger,
-    TimeProvider? timeProvider = null) : IUserRepository
+    TimeProvider timeProvider) : IUserRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private static readonly (string Name, Func<User, User, bool> Changed)[] UpdateFields =
+    [
+        ("username", (current, model) => !Equals(current.Username, model.Username)),
+        ("email", (current, model) => !Equals(current.Email, model.Email)),
+        ("extensionId", (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
+        ("providerType", (current, model) => !Equals(current.ProviderType, model.ProviderType)),
+        ("externalId", (current, model) => !Equals(current.ExternalId, model.ExternalId)),
+        ("settings", (current, model) => !SettingsEqual(current.Settings, model.Settings)),
+        (MagpieEvents.Fields.UserEnabled, (current, model) => !Equals(current.Enabled, model.Enabled)),
+        (MagpieEvents.Fields.UserRole, (current, model) => !Equals(current.Role, model.Role)),
+        ("credentials", (current, model) => !Equals(current.PasswordHash, model.PasswordHash) ||
+            !Equals(current.PasswordSalt, model.PasswordSalt)),
+        ("failedLoginAttempts", (current, model) => !Equals(current.FailedLoginAttempts, model.FailedLoginAttempts)),
+        ("lockedUntil", (current, model) => !Equals(current.LockedUntil, model.LockedUntil)),
+        ("lastLoginAt", (current, model) => !Equals(current.LastLoginAt, model.LastLoginAt)),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
+
+    private static bool SettingsEqual(
+        IReadOnlyDictionary<string, string>? current,
+        IReadOnlyDictionary<string, string>? model)
+    {
+        if (current is null || model is null)
+        {
+            return current is null && model is null;
+        }
+
+        return current.Count == model.Count &&
+            current.All(pair => model.TryGetValue(pair.Key, out var value) &&
+                string.Equals(pair.Value, value, StringComparison.Ordinal));
+    }
 
     private static IReadOnlyCollection<string> ChangedFields(UserPatch patch)
     {
         var fields = new List<string>();
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(MagpieEvents.Fields.UserEnabled);
         }
 
         if (patch.Role is not null)
         {
-            fields.Add("role");
+            fields.Add(MagpieEvents.Fields.UserRole);
         }
 
         return fields;
@@ -133,6 +165,23 @@ internal sealed class UserRepository(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
+                    var current = await context.Users.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    var changedFields = new List<string>();
+                    foreach (var (name, changed) in UpdateFields)
+                    {
+                        if (changed(current, model))
+                        {
+                            changedFields.Add(name);
+                        }
+                    }
+
                     var updated = await context.Users
                         .Where(u => u.Id == model.Id)
                         .ExecuteUpdateAsync(
@@ -167,6 +216,14 @@ internal sealed class UserRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                SecurityEventBuilder.BuildUserUpdatedEvent(model.Id, changedFields), token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -517,14 +574,21 @@ internal sealed class UserRepository(
 
             var totalCount = await users.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(User).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(User.Id), nameof(User.Username), nameof(User.Email),
+                nameof(User.ExtensionId), nameof(User.ProviderType), nameof(User.ExternalId),
+                nameof(User.Enabled), nameof(User.Role), nameof(User.FailedLoginAttempts),
+                nameof(User.LockedUntil), nameof(User.LastLoginAt), nameof(User.CreatedAt),
+                nameof(User.CreatedByUserId), nameof(User.ModifiedAt), nameof(User.ModifiedByUserId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 users = sort.Direction == SortDirection.Ascending
-                    ? users.OrderBy(u => EF.Property<User>(u, sortProperty)).ThenBy(u => u.Id)
-                    : users.OrderByDescending(u => EF.Property<User>(u, sortProperty)).ThenBy(u => u.Id);
+                    ? users.OrderBy(u => EF.Property<object>(u, sortProperty)).ThenBy(u => u.Id)
+                    : users.OrderByDescending(u => EF.Property<object>(u, sortProperty)).ThenBy(u => u.Id);
             }
             else
             {

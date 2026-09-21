@@ -1,27 +1,36 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class UserRepositoryTests
+public sealed class UserRepositoryTests
 {
+    private Mock<IEventBus> _updateEvents = null!;
+
     private MagpieDbContext _context = null!;
     private IUserRepository _subject = null!;
     private Guid _adminUserId;
@@ -54,18 +63,22 @@ public class UserRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
+        _updateEvents = new Mock<IEventBus>();
         _subject = new UserRepository(
             _context,
             auditRecordRepository,
             transactionManager,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
-            loggerFactory.CreateLogger<UserRepository>());
+            _updateEvents.Object,
+            loggerFactory.CreateLogger<UserRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -289,6 +302,36 @@ public class UserRepositoryTests
             Assert.That(updated, Has.Property(nameof(updated.Role)).EqualTo(Role.Manager));
             Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_adminUserId));
         }
+    }
+
+    [Test]
+    public async Task UpdateAsync_PublishesUpdatedEventWithChangedFields_WhenExists()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new User
+        {
+            Username = "OriginalUser",
+            ProviderType = "local",
+            Email = "original@example.com",
+            Enabled = true,
+            Role = Role.Viewer
+        }, _adminUserId).ConfigureAwait(false);
+
+        created.Username = "UpdatedUser";
+        created.Email = "updated@example.com";
+        created.Enabled = false;
+        created.Role = Role.Manager;
+
+        // Act
+        await _subject.UpdateAsync(created, _adminUserId).ConfigureAwait(false);
+
+        // Assert
+        _updateEvents.Verify(bus => bus.PublishAsync(
+            It.Is<MagpieEvent>(e =>
+                e.Name == "user.updated" &&
+                e.Context.ContainsKey("user.changedFields") &&
+                e.Context["user.changedFields"] == "username,email,enabled,role"),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -1035,5 +1078,38 @@ public class UserRepositoryTests
 
         // Assert
         Assert.That(result, Is.False);
+    }
+
+    [TestCase("passwordHash")]
+    [TestCase("passwordSalt")]
+    public async Task QueryAsync_UsesDefaultSort_WhenSecretColumnIsRequested(string propertyName)
+    {
+        // Arrange
+        _context.Users.AddRange(
+            new User
+            {
+                Username = "Alpha",
+                ProviderType = "local",
+                Role = Role.Viewer,
+                PasswordHash = "z",
+                PasswordSalt = "z"
+            },
+            new User
+            {
+                Username = "Zulu",
+                ProviderType = "local",
+                Role = Role.Viewer,
+                PasswordHash = "a",
+                PasswordSalt = "a"
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.QueryAsync(new UserQuery { Role = Role.Viewer },
+            new() { PageNumber = 1, PageSize = 10 },
+            new() { PropertyName = propertyName, Direction = SortDirection.Ascending }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(page.Items.Select(item => item.Username), Is.EqualTo(["Alpha", "Zulu"]));
     }
 }

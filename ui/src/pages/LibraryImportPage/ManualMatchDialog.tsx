@@ -26,6 +26,7 @@ import {
 } from '@/hooks/useProviderMetadataCandidateSearch';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import { useSetLibraryImportMatch } from '@/hooks/useSetLibraryImportMatch';
+import { useSetLibraryImportCandidateGroupMatch } from '@/hooks/useSetLibraryImportCandidateGroupMatch';
 import {
     getParsedSignalNumber,
     getParsedSignalValue,
@@ -34,22 +35,15 @@ import {
     type LibraryImportCandidate,
     type ParsedSignalBag,
 } from '@/hooks/useLibraryImportCandidates';
+import type { LibraryImportCandidateGroup } from '@/hooks/useLibraryImportCandidateGroups';
 import { isApiError } from '@/lib/api';
+import { candidateSearchErrorMessage } from '@/lib/errors';
 import { escapeQueryString } from '@/lib/simpleFilterQuery';
 
+import { fileName } from './importDisplay';
 import './ManualMatchDialog.css';
 
 const ANY_CONTENT_TYPE = '__any__';
-
-function candidateSearchErrorMessage(error: unknown): string {
-    if (isApiError(error) && typeof error.details === 'object' && error.details !== null) {
-        const details = error.details as { message?: unknown; position?: unknown };
-        if (typeof details.message === 'string' && typeof details.position === 'number') {
-            return details.message;
-        }
-    }
-    return 'Search failed. Please try again.';
-}
 
 interface MatchSearchRequest {
     queryText: string;
@@ -61,18 +55,11 @@ interface MatchSearchRequest {
     contentType: string;
 }
 
-function fileName(path: string): string {
-    const segments = path.split(/[/\\]/);
-    return segments[segments.length - 1] || path;
-}
-
 function candidateKey(candidate: ProviderMetadataCandidate): string {
     return `${candidate.providerType}:${candidate.externalIdSource}:${candidate.externalId}`;
 }
 
-function splitSignalTitleYear(parsedSignals: ParsedSignalBag | null | undefined): { title: string; year: string } {
-    const title = getParsedSignalValue(parsedSignals, PARSED_FILE_SIGNAL_TITLE);
-    const year = getParsedSignalNumber(parsedSignals, PARSED_FILE_SIGNAL_YEAR) ?? undefined;
+function splitTitleYear(title: string, year: number | undefined): { title: string; year: string } {
     const trailing = title.match(/^(.+?)\s+(\d{4})$/);
     if (trailing) {
         const embedded = Number(trailing[2]);
@@ -84,6 +71,12 @@ function splitSignalTitleYear(parsedSignals: ParsedSignalBag | null | undefined)
         }
     }
     return { title, year: year === undefined ? '' : String(year) };
+}
+
+function splitSignalTitleYear(parsedSignals: ParsedSignalBag | null | undefined): { title: string; year: string } {
+    const title = getParsedSignalValue(parsedSignals, PARSED_FILE_SIGNAL_TITLE);
+    const year = getParsedSignalNumber(parsedSignals, PARSED_FILE_SIGNAL_YEAR) ?? undefined;
+    return splitTitleYear(title, year);
 }
 
 function buildMatchQuery(title: string, year: string, contentType: string): string {
@@ -102,17 +95,42 @@ function buildMatchQuery(title: string, year: string, contentType: string): stri
     return clauses.join(' and ');
 }
 
+export type ManualMatchTarget =
+    | { kind: 'candidate'; candidate: LibraryImportCandidate }
+    | { kind: 'group'; group: LibraryImportCandidateGroup; rootFolderId?: string };
+
+function targetKey(target: ManualMatchTarget): string {
+    return target.kind === 'candidate' ? `candidate:${target.candidate.id}` : `group:${target.group.groupKey}`;
+}
+
+function targetLabel(target: ManualMatchTarget): string {
+    return target.kind === 'candidate' ? fileName(target.candidate.filePath) : target.group.title;
+}
+
+function targetContentType(target: ManualMatchTarget): string {
+    return (target.kind === 'candidate' ? target.candidate.contentType : target.group.contentType) ?? '';
+}
+
+function targetSeed(target: ManualMatchTarget): { title: string; year: string } {
+    return target.kind === 'candidate'
+        ? splitSignalTitleYear(target.candidate.parsedSignals)
+        : splitTitleYear(target.group.title, undefined);
+}
+
 interface ManualMatchDialogProps {
-    match: LibraryImportCandidate | null;
+    target: ManualMatchTarget | null;
     onClose: () => void;
     onMatched: () => void;
 }
 
-export function ManualMatchDialog({ match, onClose, onMatched }: ManualMatchDialogProps) {
+export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDialogProps) {
     const { toast } = useToast();
     const candidateSearch = useProviderMetadataCandidateSearch();
-    const setMatch = useSetLibraryImportMatch();
+    const setCandidateMatch = useSetLibraryImportMatch();
+    const setGroupMatch = useSetLibraryImportCandidateGroupMatch();
     const { contentTypes, isLoading: registryLoading } = useLibraryTypes();
+
+    const titleInputRef = useRef<HTMLInputElement>(null);
 
     const [title, setTitle] = useState<string>('');
     const [year, setYear] = useState<string>('');
@@ -128,20 +146,20 @@ export function ManualMatchDialog({ match, onClose, onMatched }: ManualMatchDial
     const lastSearchRef = useRef<MatchSearchRequest | null>(null);
     const resetCandidateSearch = candidateSearch.reset;
     useEffect(() => {
-        if (match && seededForRef.current !== match.id) {
-            seededForRef.current = match.id;
-            const seeded = splitSignalTitleYear(match.parsedSignals);
+        if (target && seededForRef.current !== targetKey(target)) {
+            seededForRef.current = targetKey(target);
+            const seeded = targetSeed(target);
             setTitle(seeded.title);
             setYear(seeded.year);
-            setContentType(match.contentType ?? '');
+            setContentType(targetContentType(target));
             setPage(1);
             setCandidateSearchError(null);
             lastSearchRef.current = null;
             resetCandidateSearch();
-        } else if (!match) {
+        } else if (!target) {
             seededForRef.current = null;
         }
-    }, [match, resetCandidateSearch]);
+    }, [target, resetCandidateSearch]);
 
     const handleYearChange = useCallback((raw: string) => {
         setYear(raw.replace(/\D/g, '').slice(0, 4));
@@ -174,10 +192,10 @@ export function ManualMatchDialog({ match, onClose, onMatched }: ManualMatchDial
 
     const goToPage = useCallback(
         (nextPage: number) => {
-            const target = Math.max(1, nextPage);
-            setPage(target);
+            const clampedPage = Math.max(1, nextPage);
+            setPage(clampedPage);
             if (lastSearchRef.current) {
-                void runCandidateSearch(lastSearchRef.current, target);
+                void runCandidateSearch(lastSearchRef.current, clampedPage);
             }
         },
         [runCandidateSearch],
@@ -198,14 +216,13 @@ export function ManualMatchDialog({ match, onClose, onMatched }: ManualMatchDial
 
     const handleMatch = useCallback(
         async (candidate: ProviderMetadataCandidate) => {
-            if (!match) {
+            if (!target) {
                 return;
             }
             const key = candidateKey(candidate);
             setMatchingKey(key);
             try {
-                await setMatch.mutateAsync({
-                    id: match.id,
+                const matchFields = {
                     providerType: candidate.providerType,
                     externalIdKey: candidate.externalIdSource,
                     externalId: candidate.externalId,
@@ -213,25 +230,55 @@ export function ManualMatchDialog({ match, onClose, onMatched }: ManualMatchDial
                     subtitle: candidate.year != null ? String(candidate.year) : undefined,
                     imageUrl: candidate.thumbnailUrl ?? undefined,
                     levelSlug: candidate.level ?? undefined,
-                });
+                };
+                if (target.kind === 'candidate') {
+                    await setCandidateMatch.mutateAsync({ id: target.candidate.id, ...matchFields });
+                } else {
+                    await setGroupMatch.mutateAsync({
+                        groupKey: target.group.groupKey,
+                        rootFolderId: target.rootFolderId,
+                        ...matchFields,
+                    });
+                }
                 toast({
                     title: 'Match set',
-                    description: `"${candidate.title?.trim() || 'Untitled'}" is now matched to this file. Import it when ready.`,
+                    description:
+                        target.kind === 'candidate'
+                            ? `"${candidate.title?.trim() || 'Untitled'}" is now matched to this file.`
+                            : `"${candidate.title?.trim() || 'Untitled'}" is now matched to every candidate in this group. Import it when ready.`,
                     variant: 'success',
                 });
                 onMatched();
                 onClose();
-            } catch {
-                toast({
-                    title: 'Failed to set match',
-                    description: 'The server rejected the request. Please try again.',
-                    variant: 'error',
-                });
+            } catch (error) {
+                if (isApiError(error) && error.status === 404) {
+                    toast({
+                        title: target.kind === 'group' ? 'Group is gone' : 'File is gone',
+                        description:
+                            target.kind === 'group'
+                                ? 'The queue was out of date. Magpie refreshed it and removed this group.'
+                                : 'The queue was out of date. Magpie refreshed it and removed this file.',
+                        variant: 'error',
+                    });
+                    onClose();
+                } else if (isApiError(error) && error.status === 400) {
+                    toast({
+                        title: 'Failed to set match',
+                        description: 'This result is missing the identifiers Magpie needs. Pick a different result.',
+                        variant: 'error',
+                    });
+                } else {
+                    toast({
+                        title: 'Failed to set match',
+                        description: 'Magpie could not set the match. Please try again.',
+                        variant: 'error',
+                    });
+                }
             } finally {
                 setMatchingKey(null);
             }
         },
-        [match, setMatch, toast, onMatched, onClose],
+        [target, setCandidateMatch, setGroupMatch, toast, onMatched, onClose],
     );
 
     const contentTypeLabel = useMemo(() => {
@@ -253,13 +300,26 @@ export function ManualMatchDialog({ match, onClose, onMatched }: ManualMatchDial
 
     return (
         <>
-            <Dialog open={match !== null} onOpenChange={(open) => !open && onClose()}>
-                <DialogContent data-component="manual-match-dialog">
+            <Dialog open={target !== null} onOpenChange={(open) => !open && onClose()}>
+                <DialogContent
+                    data-component="manual-match-dialog"
+                    onOpenAutoFocus={(event) => {
+                        event.preventDefault();
+                        const input = titleInputRef.current;
+                        if (input) {
+                            input.focus({ preventScroll: true });
+                            const end = input.value.length;
+                            input.setSelectionRange(end, end);
+                        }
+                    }}
+                >
                     <DialogHeader>
                         <DialogTitle>Find a match</DialogTitle>
                         <DialogDescription className="manual-match-dialog__description">
-                            {match
-                                ? `Search for a match for "${fileName(match.filePath)}". Matching does not import the file.`
+                            {target
+                                ? target.kind === 'candidate'
+                                    ? `Search for a match for "${targetLabel(target)}". Matching does not import the file.`
+                                    : `Search for a match for "${targetLabel(target)}". Matching applies to every candidate in this group.`
                                 : ''}
                         </DialogDescription>
                     </DialogHeader>
@@ -271,6 +331,7 @@ export function ManualMatchDialog({ match, onClose, onMatched }: ManualMatchDial
                                     <div className="manual-match-dialog__field manual-match-dialog__field--title">
                                         <Label htmlFor="manual-match-title">Title</Label>
                                         <Input
+                                            ref={titleInputRef}
                                             id="manual-match-title"
                                             size="sm"
                                             value={title}

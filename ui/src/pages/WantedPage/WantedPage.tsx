@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ImageBrokenIcon, MagnifyingGlassIcon, TargetIcon, WarningCircleIcon, XIcon } from '@phosphor-icons/react';
+import { MagnifyingGlassIcon, TargetIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { useQuery } from '@tanstack/react-query';
 import { type ColumnDef, type RowSelectionState, type SortingState } from '@tanstack/react-table';
 
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
+import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
 import { Button } from '@/components/ui/Button';
-import { Checkbox } from '@/components/ui/Checkbox';
+import { selectColumn } from '@/components/ui/DataTable/selectColumn';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -18,7 +20,7 @@ import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/Mo
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Pager } from '@/components/ui/Pager';
-import { SelectAllBanner } from '@/components/ui/SelectAllBanner';
+import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/Toast';
 import { useAuth } from '@/auth';
@@ -37,7 +39,6 @@ import type { ContentListItem, FulfillmentStatus } from '@/types';
 
 import { countMissingDescendants, resolveWantedSearchLeaves } from './wantedSearch';
 
-import '@/styles/bulk-actions-toolbar.css';
 import './WantedPage.css';
 
 const PAGE_SIZE = 25;
@@ -53,17 +54,6 @@ const WANTED_SORT_OPTIONS: MobileListSortOption[] = [
     { id: 'publishDate', label: 'Published', initialDirection: 'desc' },
     { id: 'lastSearched', label: 'Last Searched', initialDirection: 'desc' },
 ];
-
-function PosterCell({ posterUrl, title }: { posterUrl?: string; title: string }) {
-    if (!posterUrl) {
-        return (
-            <div className="wanted-page__poster wanted-page__poster--placeholder" aria-hidden="true">
-                <ImageBrokenIcon weight="thin" />
-            </div>
-        );
-    }
-    return <img src={posterUrl} alt={`${title} artwork`} className="wanted-page__poster" loading="lazy" />;
-}
 
 function TitleCell({
     item,
@@ -150,11 +140,22 @@ function MissingDescendantCount({
     item: ContentListItem;
     contentTypes: LibraryTypeDefinition[];
 }) {
+    const contentId = item.id;
+    const containerLevels = contentTypes.flatMap((type) =>
+        type.levels.flatMap((level) => (level.parentSlug ? [{ contentType: type.slug, level: level.parentSlug }] : [])),
+    );
     const container = isContainerItem(item, contentTypes);
     const query = useQuery({
-        queryKey: [...wantedQueryKeys.missingDescendants(item.id), item, contentTypes],
+        queryKey: [...wantedQueryKeys.missingDescendants(contentId), containerLevels],
         queryFn: () =>
-            countMissingDescendants(item, (candidate) => isContainerItem(candidate, contentTypes), fetchWantedChildren),
+            countMissingDescendants(
+                contentId,
+                (candidate) =>
+                    containerLevels.some(
+                        (entry) => entry.contentType === candidate.contentType && entry.level === candidate.level,
+                    ),
+                fetchWantedChildren,
+            ),
         enabled: container,
         staleTime: 30_000,
     });
@@ -226,7 +227,15 @@ export function WantedPage() {
     const [searchParams] = useSearchParams();
     const usesCardLayout = useCardLayout();
     const parentId = searchParams.get('parentId') || undefined;
-    const { items, upgradeItems, isLoading: isWantedLoading, isError, refetch } = useWantedContent(parentId);
+    const {
+        items,
+        upgradeItems,
+        isLoading: isWantedLoading,
+        isError,
+        isTruncated,
+        totalItems,
+        refetch,
+    } = useWantedContent(parentId);
     const { ancestors } = useContentAncestors(parentId);
     const { contentTypes, isLoading: areContentTypesLoading } = useLibraryTypes();
     const isLoading = isWantedLoading || areContentTypesLoading;
@@ -299,10 +308,6 @@ export function WantedPage() {
         [selection, sortedItems],
     );
     const selectedIdSet = useMemo(() => new Set(selectedItems.map((item) => item.id)), [selectedItems]);
-    const pageSelectedCount = useMemo(
-        () => pagedItems.filter((item) => selection.isRowChecked(item.id)).length,
-        [pagedItems, selection],
-    );
 
     useEffect(() => {
         clearSelection();
@@ -418,7 +423,9 @@ export function WantedPage() {
                         description: details.join(' '),
                         variant: failedCount > 0 ? 'warning' : 'success',
                     });
-                    handleClearSelection();
+                    if (failedCount === 0) {
+                        handleClearSelection();
+                    }
                     await refetch();
                 } else {
                     toast({
@@ -441,29 +448,12 @@ export function WantedPage() {
     );
 
     const columns: ColumnDef<ContentListItem>[] = useMemo(() => {
-        const selectionColumn: ColumnDef<ContentListItem> = {
-            id: 'select',
-            header: () => (
-                <div className="wanted-page__select-cell" onClick={(event) => event.stopPropagation()}>
-                    <Checkbox
-                        checked={selection.headerChecked}
-                        onCheckedChange={(checked) => selection.toggleHeader(Boolean(checked))}
-                        aria-label="Select all visible wanted items"
-                    />
-                </div>
-            ),
-            cell: ({ row }) => (
-                <div className="wanted-page__select-cell" onClick={(event) => event.stopPropagation()}>
-                    <Checkbox
-                        checked={selection.isRowChecked(row.original.id)}
-                        onCheckedChange={(checked) => selection.toggleRow(row.original.id, Boolean(checked))}
-                        aria-label={`Select ${row.original.title}`}
-                    />
-                </div>
-            ),
-            enableSorting: false,
-            size: 48,
-        };
+        const selectionColumn: ColumnDef<ContentListItem> = selectColumn<ContentListItem>({
+            selection,
+            getId: (item) => item.id,
+            headerLabel: 'Select all visible wanted items',
+            rowLabel: (item) => item.title,
+        });
 
         return [
             ...(canSearch ? [selectionColumn] : []),
@@ -473,7 +463,14 @@ export function WantedPage() {
                 header: '',
                 enableSorting: false,
                 size: 48,
-                cell: ({ row }) => <PosterCell posterUrl={row.original.posterUrl} title={row.original.title} />,
+                cell: ({ row }) => (
+                    <ContentPoster
+                        posterUrl={row.original.posterUrl}
+                        title={row.original.title}
+                        className="wanted-page__poster"
+                        placeholderClassName="wanted-page__poster--placeholder"
+                    />
+                ),
             },
             {
                 id: 'title',
@@ -650,60 +647,34 @@ export function WantedPage() {
                 icon={<TargetIcon weight="duotone" aria-hidden="true" data-testid="wanted-page__icon" />}
             />
 
+            {isTruncated && (
+                <Alert variant="warning" title="Not every wanted item is listed" data-testid="wanted-page__truncated">
+                    This page loaded the first {totalItems.toLocaleString()} wanted items. Open a parent item to see the
+                    rest.
+                </Alert>
+            )}
+
             {canSearch && !usesCardLayout && (
-                <div
-                    className="bulk-actions-toolbar-presence wanted-page__desktop-bulk-toolbar"
-                    data-component="bulk-actions-toolbar"
-                    data-visible={selection.hasSelection ? 'true' : 'false'}
-                    aria-hidden={!selection.hasSelection}
-                    inert={!selection.hasSelection}
+                <BulkActionsToolbar
+                    className="wanted-page__desktop-bulk-toolbar"
+                    selection={selection}
+                    label="Wanted selection actions"
+                    itemNounPlural="items"
+                    desktopOnly={false}
+                    onClear={handleClearSelection}
                 >
-                    <div className="bulk-actions-toolbar-presence__inner">
-                        {selection.hasSelection && (
-                            <div className="bulk-actions-toolbar" role="region" aria-label="Wanted selection actions">
-                                {(selection.showAcrossPagesPrompt || selection.allPages) && (
-                                    <SelectAllBanner
-                                        allPages={selection.allPages}
-                                        pageSelectedCount={pageSelectedCount}
-                                        totalCount={sortedItems.length}
-                                        selectedCount={selection.selectedCount}
-                                        onSelectAllAcrossPages={selection.selectAllAcrossPages}
-                                        onClear={handleClearSelection}
-                                        itemNounPlural="items"
-                                    />
-                                )}
-                                <div className="bulk-actions-toolbar__info">
-                                    <span className="bulk-actions-toolbar__count">
-                                        {selection.selectedCount} selected
-                                    </span>
-                                    <button
-                                        type="button"
-                                        className="bulk-actions-toolbar__clear"
-                                        onClick={handleClearSelection}
-                                        aria-label="Clear selection"
-                                        data-action="clear-selection"
-                                    >
-                                        <XIcon weight="bold" aria-hidden="true" />
-                                        Clear
-                                    </button>
-                                </div>
-                                <div className="bulk-actions-toolbar__buttons">
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        onClick={() => void handleSearchNow(selectedItems)}
-                                        loading={isSearching}
-                                        disabled={isSearching}
-                                        data-action="bulk-search-now"
-                                    >
-                                        <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
-                                        Search Now
-                                    </Button>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void handleSearchNow(selectedItems)}
+                        loading={isSearching}
+                        disabled={isSearching}
+                        data-action="bulk-search-now"
+                    >
+                        <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                        Search Now
+                    </Button>
+                </BulkActionsToolbar>
             )}
 
             {isLoading ? (
@@ -893,10 +864,9 @@ export function WantedPage() {
 
             {usesCardLayout && canSearch && mobileSelectionMode && (
                 <MobileSelectionBar
-                    className="wanted-page__mobile-selection-bar"
                     data-component="wanted-mobile-selection-bar"
                     selection={selection}
-                    pageSelectedCount={pageSelectedCount}
+                    pageSelectedCount={selection.pageSelectedCount}
                     totalCount={sortedItems.length}
                     onClear={selection.clear}
                     itemNounPlural="items"

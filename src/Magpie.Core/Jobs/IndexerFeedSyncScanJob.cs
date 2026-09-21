@@ -19,11 +19,11 @@ internal sealed class IndexerFeedSyncScanJob(
     IIndexerFeedRepository indexerFeedRepository,
     IJobManager jobManager,
     ILogger<IndexerFeedSyncScanJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "IndexerFeedSyncScan",
+        JobType = MagpieJobs.Types.IndexerFeedSyncScan,
         DisplayName = "Indexer feed sync scan",
         Description = "Queues a sync for every enabled indexer feed.",
         Category = "Integrations",
@@ -39,9 +39,8 @@ internal sealed class IndexerFeedSyncScanJob(
     {
         var userId = jobContext.ManualTriggerUserId;
         var correlationId = jobContext.CorrelationId;
-        var progress = progressReporter;
 
-        progress?.Report(0, "The scan will load the indexer feeds.");
+        progressReporter.Report(0, "The scan will load the indexer feeds.");
 
         var feeds = (await indexerFeedRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
             .Where(f => f.Enabled)
@@ -53,7 +52,9 @@ internal sealed class IndexerFeedSyncScanJob(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var feed = feeds[i];
-            progress?.ReportFraction(i, feeds.Length, $"The scan will queue a sync for indexer feed {feed.Name}.");
+            progressReporter.ReportFraction(
+                i,
+                feeds.Length, $"The scan will queue a sync for indexer feed {feed.Name}.");
 
             try
             {
@@ -69,7 +70,7 @@ internal sealed class IndexerFeedSyncScanJob(
             }
         }
 
-        progress?.Report(1, "The indexer-feed sync scan completed.");
+        progressReporter.Report(1, "The indexer-feed sync scan completed.");
     }
 
     private async Task EnqueueSyncAsync(
@@ -81,7 +82,7 @@ internal sealed class IndexerFeedSyncScanJob(
         await jobManager.ExecuteAsync(
             new JobEnqueueRequest
             {
-                JobType = IndexerFeedSyncItemJob.Spec.JobType,
+                JobType = MagpieJobs.Types.IndexerFeedSyncItem,
                 Parameters = new Dictionary<string, string>
                 {
                     [MagpieJobs.Parameters.FeedId] = feedId.ToString()
@@ -92,6 +93,6 @@ internal sealed class IndexerFeedSyncScanJob(
             },
             cancellationToken).ConfigureAwait(false);
 
-        logger.LogInformation("The job queued the indexer feed sync for feed {FeedId}", feedId);
+        logger.LogDebug("The job queued the indexer feed sync for feed {FeedId}", feedId);
     }
 }

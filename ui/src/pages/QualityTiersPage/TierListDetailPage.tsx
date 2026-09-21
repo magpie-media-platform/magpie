@@ -9,6 +9,7 @@ import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { useToast } from '@/components/ui/Toast';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
+import { useSortableList } from '@/components/ui/SortableList';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import { stripBlankRows, useFormDirty } from '@/hooks/useFormDirty';
@@ -75,15 +76,9 @@ export function TierListDetailPage() {
     const cleanListExclusionsRef = useRef<ExclusionDraft[]>([]);
     const cleanListSourceRulesRef = useRef<ApiQualityTierRule[]>([]);
 
-    const [draggedTierId, setDraggedTierId] = useState<string | null>(null);
-    const [dropTargetId, setDropTargetId] = useState<string | null>(null);
-    const [dropPosition, setDropPosition] = useState<'before' | 'after' | null>(null);
-    const [orderedTiers, setOrderedTiers] = useState<TierWithCriteria[] | null>(null);
-    const dragImageRef = useRef<HTMLDivElement>(null);
-
     const { data: apiTierList, isLoading, error, refetch } = useQualityTierList(tierListId);
-    const { updateTierList } = useQualityTierLists();
-    const { createTier, updateTier } = useQualityTiers();
+    const { tierLists, updateTierList } = useQualityTierLists();
+    const { createTier, updateTier, deleteTier } = useQualityTiers();
 
     const tierList = useMemo(() => {
         if (!apiTierList) {
@@ -272,7 +267,32 @@ export function TierListDetailPage() {
                 },
             };
             await updateTierList(tierListId, patch);
+
+            const listsLoaded = tierLists.some((list) => list.id === tierListId);
+            const rankedElsewhere = tierLists.some(
+                (list) =>
+                    list.id !== tierListId &&
+                    list.qualityTierRanks.some((rank) => rank.qualityTierId === deletingTier.id),
+            );
+            let tierRowKept = false;
+            if (listsLoaded && !rankedElsewhere) {
+                try {
+                    await deleteTier(deletingTier.id);
+                } catch {
+                    tierRowKept = true;
+                }
+            }
+
             await refetch();
+
+            if (tierRowKept) {
+                toast({
+                    title: 'Tier kept',
+                    description: `"${deletingTier.name}" is no longer in this list. It is still available for other lists.`,
+                    variant: 'warning',
+                });
+                return;
+            }
 
             toast({
                 title: 'Deleted',
@@ -289,7 +309,7 @@ export function TierListDetailPage() {
             setIsDeleting(false);
             setDeletingTier(null);
         }
-    }, [deletingTier, tierListId, updateTierList, refetch, toast]);
+    }, [deletingTier, tierListId, tierLists, updateTierList, deleteTier, refetch, toast]);
 
     const handleCancelDelete = useCallback(() => {
         setDeletingTier(null);
@@ -518,124 +538,45 @@ export function TierListDetailPage() {
         void saveListRules();
     }, [saveListRules]);
 
-    const displayTiers = useMemo(() => orderedTiers ?? tierList?.tiers ?? [], [orderedTiers, tierList?.tiers]);
+    const tiers = useMemo(() => tierList?.tiers ?? [], [tierList?.tiers]);
 
-    const handleDragStart = useCallback(
-        (tierId: string, event: React.DragEvent) => {
-            setDraggedTierId(tierId);
-
-            if (dragImageRef.current) {
-                const tier = displayTiers.find((t) => t.id === tierId);
-                if (tier) {
-                    dragImageRef.current.textContent = tier.name;
-                    dragImageRef.current.style.display = 'block';
-                    event.dataTransfer.setDragImage(dragImageRef.current, 0, 0);
-                    requestAnimationFrame(() => {
-                        if (dragImageRef.current) {
-                            dragImageRef.current.style.display = 'none';
-                        }
-                    });
-                }
-            }
-
-            event.dataTransfer.effectAllowed = 'move';
-            event.dataTransfer.setData('text/plain', tierId);
-        },
-        [displayTiers],
-    );
-
-    const handleDragEnd = useCallback(() => {
-        setDraggedTierId(null);
-        setDropTargetId(null);
-        setDropPosition(null);
-    }, []);
-
-    const handleDragOver = useCallback(
-        (tierId: string, event: React.DragEvent) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = 'move';
-
-            if (!draggedTierId || draggedTierId === tierId) {
+    const handleReorder = useCallback(
+        async (orderedIds: string[]) => {
+            if (!tierListId) {
                 return;
             }
 
-            const rect = event.currentTarget.getBoundingClientRect();
-            const midY = rect.top + rect.height / 2;
-            const position: 'before' | 'after' = event.clientY < midY ? 'before' : 'after';
+            const update: QualityTierListRankPatch[] = orderedIds.map((id, index) => ({
+                qualityTierId: { value: id },
+                ordinal: { value: index },
+            }));
 
-            setDropTargetId(tierId);
-            setDropPosition(position);
+            await updateTierList(tierListId, { qualityTierRanks: { update } });
+            await refetch();
         },
-        [draggedTierId],
+        [tierListId, updateTierList, refetch],
     );
 
-    const handleDragLeave = useCallback(() => {
-        setDropTargetId(null);
-        setDropPosition(null);
-    }, []);
-
-    const handleDrop = useCallback(
-        async (targetTierId: string, event: React.DragEvent) => {
-            event.preventDefault();
-
-            const sourceTierId = event.dataTransfer.getData('text/plain');
-            if (!sourceTierId || sourceTierId === targetTierId || !dropPosition || !tierListId) {
-                handleDragEnd();
-                return;
-            }
-
-            const currentTiers = orderedTiers ?? tierList?.tiers ?? [];
-            const sourceIndex = currentTiers.findIndex((t) => t.id === sourceTierId);
-            const targetIndex = currentTiers.findIndex((t) => t.id === targetTierId);
-
-            if (sourceIndex === -1 || targetIndex === -1) {
-                handleDragEnd();
-                return;
-            }
-
-            const newTiers = [...currentTiers];
-            const [removed] = newTiers.splice(sourceIndex, 1);
-
-            let insertIndex = targetIndex;
-            if (dropPosition === 'after') {
-                insertIndex += 1;
-            }
-            if (sourceIndex < targetIndex) {
-                insertIndex -= 1;
-            }
-
-            newTiers.splice(insertIndex, 0, removed);
-            setOrderedTiers(newTiers);
-            handleDragEnd();
-
-            try {
-                const update: QualityTierListRankPatch[] = newTiers.map((tier, index) => ({
-                    qualityTierId: { value: tier.id },
-                    ordinal: { value: index },
-                }));
-
-                const patch: QualityTierListPatch = {
-                    qualityTierRanks: { update },
-                };
-                await updateTierList(tierListId, patch);
-                await refetch();
-
-                toast({
-                    title: 'Reordered',
-                    description: `Moved "${removed.name}" to priority ${insertIndex + 1}`,
-                    variant: 'success',
-                });
-            } catch {
-                setOrderedTiers(null);
-                toast({
-                    title: 'Reorder failed',
-                    description: 'Failed to save the tier order.',
-                    variant: 'error',
-                });
-            }
+    const sortable = useSortableList<TierWithCriteria>({
+        items: tiers,
+        getLabel: (tier) => tier.name,
+        onReorder: handleReorder,
+        onReorderSuccess: ({ item, position }) => {
+            toast({
+                title: 'Reordered',
+                description: `Moved "${item.name}" to priority ${position + 1}`,
+                variant: 'success',
+            });
         },
-        [tierListId, tierList, orderedTiers, dropPosition, handleDragEnd, updateTierList, refetch, toast],
-    );
+        onReorderError: () => {
+            toast({
+                title: 'Reorder failed',
+                description: 'Failed to save the tier order.',
+                variant: 'error',
+            });
+        },
+        disabled: !canManage,
+    });
 
     if (isLoading) {
         return <TierListDetailSkeleton />;
@@ -715,23 +656,14 @@ export function TierListDetailPage() {
 
                 <TierListTiersSection
                     canManage={canManage}
-                    displayTiers={displayTiers}
+                    sortable={sortable}
                     deletingTierId={deletingTier?.id ?? null}
                     isDeleting={isDeleting}
                     cloningTierId={cloningTierId}
-                    draggedTierId={draggedTierId}
-                    dropTargetId={dropTargetId}
-                    dropPosition={dropPosition}
-                    dragImageRef={dragImageRef}
                     onEditTier={handleEditTier}
                     onCloneTier={handleCloneTier}
                     onDeleteTier={handleDeleteTier}
                     onToggleCutoff={handleToggleCutoff}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
                 />
             </PullToRefresh>
 

@@ -137,12 +137,6 @@
         gap: var(--space-xs);
     }
 
-    .wanted-page__select-cell {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
     .wanted-page__table .data-table__table {
         table-layout: fixed;
     }

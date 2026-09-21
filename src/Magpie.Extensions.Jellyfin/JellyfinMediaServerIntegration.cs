@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,11 +29,7 @@ internal sealed class JellyfinMediaServerIntegration(
         IValidatesIntegrationSettings
 {
     private static readonly TimeSpan ResolutionCacheTtl = TimeSpan.FromSeconds(60);
-    public const string ProviderTypeName = "jellyfin";
-    public const string LibraryMappingsSettingKey = "libraryMappings";
-    public const string MappingRootFolderPathKey = "rootFolderPath";
-    public const string MappingContentTypeKey = "contentType";
-    public const string MappingServerLibraryIdKey = "serverLibraryId";
+    public const string ProviderTypeName = Constants.ProviderTypeName;
     public const string LibraryOptionsFunctionName = "magpieJellyfin.listLibraries";
 
     private readonly ILogger<JellyfinMediaServerIntegration> _logger = logger;
@@ -55,7 +52,7 @@ internal sealed class JellyfinMediaServerIntegration(
     [
         new()
         {
-            Key = "host",
+            Key = JellyfinSettings.HostKey,
             Type = DataType.String,
             DisplayName = "Host URL",
             Description = "Base URL of the Jellyfin server (e.g. http://localhost:8096).",
@@ -64,7 +61,7 @@ internal sealed class JellyfinMediaServerIntegration(
         },
         new()
         {
-            Key = "apiKey",
+            Key = JellyfinSettings.ApiKeyKey,
             Type = DataType.String,
             DisplayName = "API Key",
             Secret = true,
@@ -73,7 +70,7 @@ internal sealed class JellyfinMediaServerIntegration(
         },
         new()
         {
-            Key = LibraryMappingsSettingKey,
+            Key = Constants.LibraryMappingsSettingKey,
             Type = DataType.MappingsList,
             DisplayName = "Library mappings",
             Description =
@@ -84,7 +81,7 @@ internal sealed class JellyfinMediaServerIntegration(
             [
                 new()
                 {
-                    Key = MappingRootFolderPathKey,
+                    Key = Constants.MappingRootFolderPathKey,
                     Type = DataType.String,
                     DisplayName = "Root folder",
                     Description = "Root folder this mapping applies to.",
@@ -96,7 +93,7 @@ internal sealed class JellyfinMediaServerIntegration(
                 },
                 new()
                 {
-                    Key = MappingContentTypeKey,
+                    Key = Constants.MappingContentTypeKey,
                     Type = DataType.String,
                     DisplayName = "Content type",
                     Description = "Content type this mapping applies to.",
@@ -108,7 +105,7 @@ internal sealed class JellyfinMediaServerIntegration(
                 },
                 new()
                 {
-                    Key = MappingServerLibraryIdKey,
+                    Key = Constants.MappingServerLibraryIdKey,
                     Type = DataType.String,
                     DisplayName = "Jellyfin library",
                     Description = "Choose a library from the configured Jellyfin server.",
@@ -156,8 +153,8 @@ internal sealed class JellyfinMediaServerIntegration(
         string? match = null;
         foreach (var row in rows)
         {
-            var rowContentType = GetRowValue(row, MappingContentTypeKey);
-            var rowRootFolderPath = GetRowValue(row, MappingRootFolderPathKey);
+            var rowContentType = GetRowValue(row, Constants.MappingContentTypeKey);
+            var rowRootFolderPath = GetRowValue(row, Constants.MappingRootFolderPathKey);
             if (string.IsNullOrWhiteSpace(rowContentType) || string.IsNullOrWhiteSpace(rowRootFolderPath))
             {
                 continue;
@@ -177,7 +174,7 @@ internal sealed class JellyfinMediaServerIntegration(
                 continue;
             }
 
-            var libraryId = GetRowValue(row, MappingServerLibraryIdKey);
+            var libraryId = GetRowValue(row, Constants.MappingServerLibraryIdKey);
             if (string.IsNullOrWhiteSpace(libraryId))
             {
                 continue;
@@ -200,7 +197,7 @@ internal sealed class JellyfinMediaServerIntegration(
         var builder = new StringBuilder();
         builder.Append("host=").Append(parsed.Host.AbsoluteUri).Append('\n');
         builder.Append("apiKey=").Append(parsed.ApiKey).Append('\n');
-        return builder.ToString();
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
     }
 
     public Task<IntegrationSettingsValidationResult> ValidateSettingsAsync(
@@ -209,13 +206,13 @@ internal sealed class JellyfinMediaServerIntegration(
     {
         var issues = new List<IntegrationSettingsValidationIssue>();
 
-        if (settings.TryGetValue("host", out var host) && !string.IsNullOrWhiteSpace(host))
+        if (settings.TryGetValue(JellyfinSettings.HostKey, out var host) && !string.IsNullOrWhiteSpace(host))
         {
             if (!Uri.TryCreate(host, UriKind.Absolute, out var uri) ||
                 !(uri.Scheme is "http" or "https"))
             {
                 issues.Add(new IntegrationSettingsValidationIssue(
-                    "host",
+                    JellyfinSettings.HostKey,
                     "Host must be an absolute http(s) URL."));
             }
         }
@@ -363,8 +360,8 @@ internal sealed class JellyfinMediaServerIntegration(
                 ? "lookup-error"
                 : "not-found-on-server";
             _logger.LogInformation(
-                "The deep link for Jellyfin server {ServerId} is not available ({Reason}). The {Scope} lookup " +
-                "found no item for external ids {ExternalIds}.",
+                "The deep link for Jellyfin server {ServerId} found no item ({Reason}) in the {Scope} lookup " +
+                "for external ids {ExternalIds}.",
                 server.Id,
                 reason,
                 libraryId is null ? "server-wide" : "library " + libraryId,

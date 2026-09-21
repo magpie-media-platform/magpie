@@ -72,6 +72,7 @@ internal sealed class GitCoreDefinitionSource(
         var (baseUrl, owner, repo) = SplitGitUrl(gitUrl);
 
         using var httpClient = CreateHttpClient(token);
+        using var cancellation = cancellationToken.Register(httpClient.CancelPendingRequests);
 
         cancellationToken.ThrowIfCancellationRequested();
         var commitSha = await GitSmartHttp
@@ -83,6 +84,7 @@ internal sealed class GitCoreDefinitionSource(
         var contents = await LoadFromUrl
             .LoadSubdirectoryContentsFromGitUrlAsync(gitUrl, commitSha, subdirectory, httpClient)
             .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         var definitions = new Dictionary<string, string>();
         foreach (var (path, bytes) in contents)
         {

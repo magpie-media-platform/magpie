@@ -11,8 +11,8 @@ using Magpie.Core.Caching;
 using Magpie.Core.Config;
 using Magpie.Core.Extensions;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,6 +26,151 @@ namespace Magpie.Test.Core;
 [TestFixture]
 public sealed class ExtensionServiceEventTests
 {
+    private string _extensionsRoot = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _extensionsRoot = Path.Combine(Path.GetTempPath(), $"magpie-extension-service-{Guid.NewGuid():N}");
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        if (Directory.Exists(_extensionsRoot))
+        {
+            Directory.Delete(_extensionsRoot, recursive: true);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task PatchAsync_ReturnsExistenceWithoutWriting_WhenPatchIsEmpty(bool exists)
+    {
+        // Arrange
+        var extensionId = Guid.NewGuid();
+        var extension = new Extension
+        {
+            Id = extensionId,
+            Name = "Test extension",
+            Version = "1.0.0",
+            FilePath = "test.dll",
+            AssemblyName = "Test.Extension"
+        };
+        var extensions = new Mock<IExtensionRepository>();
+        extensions
+            .Setup(repository => repository.GetByIdAsync(extensionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(exists ? extension : null);
+        var activationGeneration = new Mock<IExtensionActivationGenerationRepository>();
+        var eventBus = new Mock<IEventBus>();
+        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
+        using var cacheFactory = new MemoryCacheFactory(cacheStore);
+        var subject = new ExtensionService(
+            Mock.Of<IHttpClientFactory>(),
+            extensions.Object,
+            Mock.Of<IExtensionPackageSourceRepository>(),
+            activationGeneration.Object,
+            new("node-1", false, false, ".", ".", ".", ".", DateTime.UtcNow),
+            new MagpieHostOptions(),
+            Mock.Of<IExtensionLifecycleManager>(),
+            eventBus.Object,
+            cacheFactory,
+            Mock.Of<IFileSystem>(),
+            TimeProvider.System,
+            NullLogger<ExtensionService>.Instance);
+
+        // Act
+        var result = await subject.PatchAsync(extensionId, new(), null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.EqualTo(exists));
+            extensions.Verify(repository => repository.PatchAsync(
+                It.IsAny<ExtensionPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+            activationGeneration.VerifyNoOtherCalls();
+            eventBus.VerifyNoOtherCalls();
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_WritesOnePatch_WhenThePatchAlsoDisablesTheExtension()
+    {
+        // Arrange
+        var extensionId = Guid.NewGuid();
+        var extension = new Extension
+        {
+            Id = extensionId,
+            Name = "Test extension",
+            Version = "1.0.0",
+            FilePath = "test.dll",
+            AssemblyName = "Test.Extension",
+            Enabled = true
+        };
+        var extensions = new Mock<IExtensionRepository>();
+        extensions
+            .Setup(repository => repository.GetByIdAsync(extensionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(extension);
+        var applied = default(ExtensionPatch);
+        extensions
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<ExtensionPatch>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<ExtensionPatch, Guid?, CancellationToken>((patch, _, _) => applied = patch)
+            .ReturnsAsync(true);
+        var activationGeneration = new Mock<IExtensionActivationGenerationRepository>();
+        activationGeneration
+            .Setup(repository => repository.BumpAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        var eventBus = new Mock<IEventBus>();
+        eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var lifecycle = new Mock<IExtensionLifecycleManager>();
+        lifecycle
+            .Setup(manager => manager.InvokeDisableAsync(It.IsAny<Extension>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
+        using var cacheFactory = new MemoryCacheFactory(cacheStore);
+        var subject = new ExtensionService(
+            Mock.Of<IHttpClientFactory>(),
+            extensions.Object,
+            Mock.Of<IExtensionPackageSourceRepository>(),
+            activationGeneration.Object,
+            new("node-1", false, false, ".", ".", ".", ".", DateTime.UtcNow),
+            new MagpieHostOptions(),
+            lifecycle.Object,
+            eventBus.Object,
+            cacheFactory,
+            Mock.Of<IFileSystem>(),
+            TimeProvider.System,
+            NullLogger<ExtensionService>.Instance);
+
+        // Act
+        var result = await subject.PatchAsync(
+            extensionId,
+            new() { Enabled = new() { Value = false }, LoadOrder = new() { Value = 7 } },
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(applied?.Enabled?.Value, Is.False);
+            Assert.That(applied?.LoadOrder?.Value, Is.EqualTo(7));
+            extensions.Verify(repository => repository.PatchAsync(
+                It.IsAny<ExtensionPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Once);
+            lifecycle.Verify(manager => manager.InvokeDisableAsync(
+                It.IsAny<Extension>(), It.IsAny<CancellationToken>()), Times.Once);
+            eventBus.Verify(
+                bus => bus.PublishAsync(
+                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == "extension.disabled"),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
     [Test]
     public async Task EnableAsync_PublishesEnabled_WhenExtensionIsEnabled()
     {
@@ -38,15 +183,17 @@ public sealed class ExtensionServiceEventTests
             Version = "1.0.0",
             FilePath = "test.dll",
             AssemblyName = "Test.Extension",
-            Enabled = false
+            Enabled = false,
+            DisabledReason = "Activation failed"
         };
         var extensions = new Mock<IExtensionRepository>();
         extensions
             .Setup(repository => repository.GetByIdAsync(extensionId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(extension);
         extensions
-            .Setup(repository => repository.UpdateAsync(
-                It.Is<Extension>(candidate => candidate.Id == extensionId && candidate.Enabled),
+            .Setup(repository => repository.PatchAsync(
+                It.Is<ExtensionPatch>(patch => patch.Id == extensionId && patch.Enabled!.Value &&
+                    patch.DisabledReason != null && patch.DisabledReason.Value == null),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
@@ -58,12 +205,11 @@ public sealed class ExtensionServiceEventTests
         eventBus
             .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
-        using var httpClient = new HttpClient();
         using var cacheStore = new MemoryCacheStore(TimeProvider.System);
         using var cacheFactory = new MemoryCacheFactory(cacheStore);
         var packageSources = Mock.Of<IExtensionPackageSourceRepository>();
         var subject = new ExtensionService(
-            httpClient,
+            Mock.Of<IHttpClientFactory>(),
             extensions.Object,
             packageSources,
             activationGeneration.Object,
@@ -83,11 +229,12 @@ public sealed class ExtensionServiceEventTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(Extension.Enabled)).True);
+            Assert.That(result, Has.Property(nameof(Extension.DisabledReason)).Null);
             eventBus.Verify(
                 bus => bus.PublishAsync(
                     It.Is<MagpieEvent>(magpieEvent =>
-                        magpieEvent.Name == MagpieEvents.Names.ExtensionEnabled &&
-                        magpieEvent.Context[MagpieEvents.Keys.ExtensionId] == extensionId.ToString("D")),
+                        magpieEvent.Name == "extension.enabled" &&
+                        magpieEvent.Context["extension.id"] == extensionId.ToString("D")),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
         }
@@ -98,8 +245,7 @@ public sealed class ExtensionServiceEventTests
     {
         // Arrange
         var extensionId = Guid.NewGuid();
-        var extensionsRoot = Path.Combine(Path.GetTempPath(), $"magpie-extension-service-{Guid.NewGuid():N}");
-        var extensionDirectory = Path.Combine(extensionsRoot, "test-extension");
+        var extensionDirectory = Path.Combine(_extensionsRoot, "test-extension");
 
         Directory.CreateDirectory(extensionDirectory);
 
@@ -128,7 +274,6 @@ public sealed class ExtensionServiceEventTests
             .Setup(manager => manager.InvokeUninstallAsync(extension, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        using var httpClient = new HttpClient();
         using var cacheStore = new MemoryCacheStore(TimeProvider.System);
         using var cacheFactory = new MemoryCacheFactory(cacheStore);
 
@@ -138,7 +283,7 @@ public sealed class ExtensionServiceEventTests
             cacheFactory,
             NullLogger<FileSystem>.Instance);
         var subject = new ExtensionService(
-            httpClient,
+            Mock.Of<IHttpClientFactory>(),
             extensions.Object,
             Mock.Of<IExtensionPackageSourceRepository>(),
             Mock.Of<IExtensionActivationGenerationRepository>(),
@@ -146,10 +291,10 @@ public sealed class ExtensionServiceEventTests
                 "node-1",
                 false,
                 false,
-                extensionsRoot,
-                extensionsRoot,
-                extensionsRoot,
-                extensionsRoot,
+                _extensionsRoot,
+                _extensionsRoot,
+                _extensionsRoot,
+                _extensionsRoot,
                 DateTime.UtcNow),
             new MagpieHostOptions(),
             lifecycleManager.Object,
@@ -159,24 +304,14 @@ public sealed class ExtensionServiceEventTests
             TimeProvider.System,
             NullLogger<ExtensionService>.Instance);
 
-        try
-        {
-            // Act
-            var result = await subject.UninstallAsync(extensionId, Guid.NewGuid()).ConfigureAwait(false);
+        // Act
+        var result = await subject.UninstallAsync(extensionId, Guid.NewGuid()).ConfigureAwait(false);
 
-            // Assert
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(result, Is.False);
-                Assert.That(Directory.Exists(extensionDirectory), Is.True);
-            }
-        }
-        finally
+        // Assert
+        using (Assert.EnterMultipleScope())
         {
-            if (Directory.Exists(extensionsRoot))
-            {
-                Directory.Delete(extensionsRoot, recursive: true);
-            }
+            Assert.That(result, Is.False);
+            Assert.That(Directory.Exists(extensionDirectory), Is.True);
         }
     }
 
@@ -185,8 +320,7 @@ public sealed class ExtensionServiceEventTests
     {
         // Arrange
         var extensionId = Guid.NewGuid();
-        var extensionsRoot = Path.Combine(Path.GetTempPath(), $"magpie-extension-service-{Guid.NewGuid():N}");
-        var extensionDirectory = Path.Combine(extensionsRoot, "test-extension");
+        var extensionDirectory = Path.Combine(_extensionsRoot, "test-extension");
         Directory.CreateDirectory(extensionDirectory);
         var extension = new Extension
         {
@@ -211,7 +345,6 @@ public sealed class ExtensionServiceEventTests
         lifecycleManager
             .Setup(manager => manager.InvokeUninstallAsync(extension, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
-        using var httpClient = new HttpClient();
         using var cacheStore = new MemoryCacheStore(TimeProvider.System);
         using var cacheFactory = new MemoryCacheFactory(cacheStore);
         var fileSystem = new FileSystem(
@@ -220,7 +353,7 @@ public sealed class ExtensionServiceEventTests
             cacheFactory,
             NullLogger<FileSystem>.Instance);
         var subject = new ExtensionService(
-            httpClient,
+            Mock.Of<IHttpClientFactory>(),
             extensions.Object,
             Mock.Of<IExtensionPackageSourceRepository>(),
             Mock.Of<IExtensionActivationGenerationRepository>(),
@@ -228,10 +361,10 @@ public sealed class ExtensionServiceEventTests
                 "node-1",
                 false,
                 false,
-                extensionsRoot,
-                extensionsRoot,
-                extensionsRoot,
-                extensionsRoot,
+                _extensionsRoot,
+                _extensionsRoot,
+                _extensionsRoot,
+                _extensionsRoot,
                 DateTime.UtcNow),
             new MagpieHostOptions(),
             lifecycleManager.Object,
@@ -241,25 +374,15 @@ public sealed class ExtensionServiceEventTests
             TimeProvider.System,
             NullLogger<ExtensionService>.Instance);
 
-        try
-        {
-            // Act
-            var exception = Assert.ThrowsAsync<InvalidOperationException>(
-                () => subject.UninstallAsync(extensionId, Guid.NewGuid()));
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+            () => subject.UninstallAsync(extensionId, Guid.NewGuid()));
 
-            // Assert
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(exception!.Message, Is.EqualTo("delete failed"));
-                Assert.That(Directory.Exists(extensionDirectory), Is.True);
-            }
-        }
-        finally
+        // Assert
+        using (Assert.EnterMultipleScope())
         {
-            if (Directory.Exists(extensionsRoot))
-            {
-                Directory.Delete(extensionsRoot, recursive: true);
-            }
+            Assert.That(exception!.Message, Is.EqualTo("delete failed"));
+            Assert.That(Directory.Exists(extensionDirectory), Is.True);
         }
     }
 }

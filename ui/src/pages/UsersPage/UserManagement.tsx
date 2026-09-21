@@ -5,14 +5,20 @@ import {
     PencilSimpleIcon,
     ClockIcon,
     PlusIcon,
+    PowerIcon,
     ShieldCheckIcon,
     WarningIcon,
     LockKeyOpenIcon,
 } from '@phosphor-icons/react';
 
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { QuickActionsButton } from '@/components/ui/QuickActionsButton';
 import { Badge } from '@/components/ui/Badge';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Button } from '@/components/ui/Button';
+import { SelectionCircleToggle } from '@/components/ui/SelectionCircleToggle';
 import { Switch } from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/Toast';
 import { useAuth, RoleName } from '@/auth';
@@ -29,6 +35,8 @@ import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteC
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pager } from '@/components/ui/Pager';
 import { UserForm, type UserFormValues } from './UserForm';
+
+import '@/styles/bulk-actions-toolbar.css';
 
 const SYSTEM_PROVIDER_TYPE = 'system';
 
@@ -49,7 +57,6 @@ function toUserFormValues(user: UserItem): UserFormValues {
         role: user.role,
         enabled: user.enabled,
         providerType: user.providerType,
-        externalId: user.externalId ?? undefined,
         email: user.email ?? undefined,
     };
 }
@@ -69,16 +76,18 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
     const returnFocusRef = useRef<HTMLElement | null>(null);
     const [deletingUser, setDeletingUser] = useState<UserItem | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const [isBulkSettingEnabled, setIsBulkSettingEnabled] = useState(false);
     const { toast } = useToast();
+    const runBulk = useBulkRun();
 
     const {
         users,
         isLoading: isLoadingUsers,
         isCreating,
-        isCreatingExternal,
         isUpdating,
         createUser,
-        createExternalUser,
         updateUser,
         toggleUserEnabled,
         deleteUser,
@@ -93,7 +102,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
         return user ? toUserFormValues(user) : editingUser;
     }, [editingUser, users]);
 
-    const isSubmitting = isCreating || isCreatingExternal || isUpdating;
+    const isSubmitting = isCreating || isUpdating;
 
     const handleAddUser = useCallback(() => {
         returnFocusRef.current = document.activeElement as HTMLElement;
@@ -185,19 +194,6 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
                         description: `Magpie updated ${values.username}.`,
                         variant: 'success',
                     });
-                } else if (values.providerType && values.providerType !== 'local') {
-                    await createExternalUser({
-                        username: values.username,
-                        providerType: values.providerType,
-                        externalId: values.externalId ?? '',
-                        role: values.role,
-                        email: values.email ?? null,
-                    });
-                    toast({
-                        title: 'External user created',
-                        description: `Magpie created ${values.username}.`,
-                        variant: 'success',
-                    });
                 } else {
                     await createUser({
                         username: values.username,
@@ -221,7 +217,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
                 throw error;
             }
         },
-        [createUser, createExternalUser, updateUser, toast, closeUserForm],
+        [createUser, updateUser, toast, closeUserForm],
     );
 
     const handleToggleUserEnabled = useCallback(
@@ -241,6 +237,51 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
             }
         },
         [toggleUserEnabled, toast],
+    );
+
+    const selectableUsers = useMemo(
+        () => users.filter((u) => u.id !== authUserId && !isSystemUser(u)),
+        [users, authUserId],
+    );
+    const selectableIds = useMemo(() => selectableUsers.map((u) => u.id), [selectableUsers]);
+    const selection = useBulkSelection({
+        pageRowIds: selectableIds,
+        totalCount: selectableIds.length,
+        resetKey: String(page),
+    });
+    const selectedUsers = useMemo(
+        () => selectableUsers.filter((u) => selection.isRowChecked(u.id)),
+        [selectableUsers, selection],
+    );
+
+    const handleBulkDeleteUsers = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedUsers, selection, {
+                action: (user) => deleteUser(user.id),
+                verb: 'delete',
+                itemNounPlural: 'users',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [deleteUser, runBulk, selectedUsers, selection]);
+
+    const handleBulkSetEnabled = useCallback(
+        async (enabled: boolean) => {
+            setIsBulkSettingEnabled(true);
+            try {
+                await runBulk(selectedUsers, selection, {
+                    action: (user) => toggleUserEnabled(user.id, enabled),
+                    verb: enabled ? 'enable' : 'disable',
+                    itemNounPlural: 'users',
+                });
+            } finally {
+                setIsBulkSettingEnabled(false);
+            }
+        },
+        [runBulk, selectedUsers, selection, toggleUserEnabled],
     );
 
     const handleUnlockUser = useCallback(
@@ -267,11 +308,58 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
     return (
         <>
             <div className="users-page__user-actions" data-component="user-toolbar">
+                <SelectModeToggle
+                    mobileOnly={false}
+                    active={selection.selectionMode}
+                    onToggle={selection.toggleSelectionMode}
+                />
                 <Button variant="primary" size="sm" data-action="add-user" onClick={handleAddUser}>
                     <PlusIcon weight="bold" aria-hidden="true" />
                     <span className="users-page__add-label">Add User</span>
                 </Button>
             </div>
+
+            <BulkActionsToolbar
+                className="users-page__bulk-toolbar"
+                selection={selection}
+                label="User selection actions"
+                itemNounPlural="users"
+            >
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={isBulkSettingEnabled}
+                    disabled={isBulkSettingEnabled}
+                    onClick={() => void handleBulkSetEnabled(true)}
+                    aria-label="Enable selected users"
+                    data-action="bulk-enable"
+                >
+                    <PowerIcon weight="bold" aria-hidden="true" />
+                    <span className="bulk-actions-toolbar__btn-label">Enable</span>
+                </Button>
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={isBulkSettingEnabled}
+                    disabled={isBulkSettingEnabled}
+                    onClick={() => void handleBulkSetEnabled(false)}
+                    aria-label="Disable selected users"
+                    data-action="bulk-disable"
+                >
+                    <PowerIcon weight="bold" aria-hidden="true" />
+                    <span className="bulk-actions-toolbar__btn-label">Disable</span>
+                </Button>
+                <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setIsBulkDeleteOpen(true)}
+                    aria-label="Delete selected users"
+                    data-action="bulk-delete"
+                >
+                    <TrashIcon weight="bold" aria-hidden="true" />
+                    <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                </Button>
+            </BulkActionsToolbar>
 
             <div className="users-page__list" role="list" aria-label="Users">
                 {isLoadingUsers ? (
@@ -294,6 +382,9 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
                             onDelete={handleDeleteUser}
                             onUnlock={handleUnlockUser}
                             isUnlocking={isUnlocking}
+                            selectionMode={selection.selectionMode}
+                            isSelected={selection.isRowChecked(user.id)}
+                            onToggleSelected={(checked) => selection.toggleRow(user.id, checked)}
                         />
                     ))
                 )}
@@ -338,6 +429,59 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
                 itemType="User"
                 isDeleting={isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDeleteUsers}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Users"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="users-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="users"
+                >
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(true)}
+                        aria-label="Enable selected users"
+                        data-action="bulk-enable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Enable
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(false)}
+                        aria-label="Disable selected users"
+                        data-action="bulk-disable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Disable
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected users"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
         </>
     );
 }
@@ -353,6 +497,9 @@ interface UserRowProps {
     onDelete: (id: string) => void;
     onUnlock: (id: string) => void;
     isUnlocking: boolean;
+    selectionMode: boolean;
+    isSelected: boolean;
+    onToggleSelected: (checked: boolean) => void;
 }
 
 function UserRow({
@@ -364,6 +511,9 @@ function UserRow({
     onDelete,
     onUnlock,
     isUnlocking,
+    selectionMode,
+    isSelected,
+    onToggleSelected,
 }: UserRowProps) {
     const variant = roleVariants[user.role] ?? 'default';
     const roleLabelText = RoleName[user.role] ?? 'Unknown';
@@ -382,6 +532,15 @@ function UserRow({
             data-enabled={user.enabled}
             data-locked={isLocked}
         >
+            {selectionMode && (
+                <SelectionCircleToggle
+                    selected={isSelected}
+                    onToggle={() => onToggleSelected(!isSelected)}
+                    disabled={isProtected}
+                    aria-label={`Select ${user.username}`}
+                    data-action="select-row"
+                />
+            )}
             <div className="users-page__item-main">
                 <div className="users-page__item-info">
                     <div className="users-page__item-header">

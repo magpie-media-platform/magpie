@@ -78,6 +78,49 @@ describe('buildExtensionAttributes', () => {
         expect(result).not.toHaveProperty('data-magpie-entity-type');
     });
 
+    it('prefixes slot context entries with the magpie data namespace', () => {
+        const result = buildExtensionAttributes({
+            extension: makeExtension(),
+            apiBaseUrl: '/api',
+            userId: null,
+            username: null,
+            role: null,
+            context: { level: 'episode', 'declares-previews': 'true', 'selection-mode': 'false' },
+        });
+
+        expect(result['data-magpie-level']).toBe('episode');
+        expect(result['data-magpie-declares-previews']).toBe('true');
+        expect(result['data-magpie-selection-mode']).toBe('false');
+    });
+
+    it('omits slot context entries that have no value', () => {
+        const result = buildExtensionAttributes({
+            extension: makeExtension(),
+            apiBaseUrl: '/api',
+            userId: null,
+            username: null,
+            role: null,
+            context: { 'poster-url': undefined, 'preview-title': '' },
+        });
+
+        expect(result).not.toHaveProperty('data-magpie-poster-url');
+        expect(result).not.toHaveProperty('data-magpie-preview-title');
+    });
+
+    it('core attributes override conflicting slot context entries', () => {
+        const result = buildExtensionAttributes({
+            extension: makeExtension({ extensionId: 'real-id' }),
+            apiBaseUrl: '/api',
+            userId: null,
+            username: null,
+            role: null,
+            context: { 'api-base': 'https://evil.example.com', 'extension-id': 'spoofed-id' },
+        });
+
+        expect(result['data-magpie-api-base']).toBe('/api');
+        expect(result['data-magpie-extension-id']).toBe('real-id');
+    });
+
     it('passes through custom extension attributes', () => {
         const result = buildExtensionAttributes({
             extension: makeExtension({ attributes: { 'data-theme': 'dark', 'tab-label': 'Reviews' } }),

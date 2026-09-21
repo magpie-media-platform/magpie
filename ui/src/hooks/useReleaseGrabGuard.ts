@@ -38,12 +38,6 @@ export function useReleaseGrabGuard() {
         setSucceededReleaseIds((current) => addId(current, releaseId));
     }, []);
 
-    const markGrabFailed = useCallback((releaseId: string) => {
-        lockedReleaseIdsRef.current.delete(releaseId);
-        setPendingReleaseIds((current) => removeId(current, releaseId));
-        setSucceededReleaseIds((current) => removeId(current, releaseId));
-    }, []);
-
     const clearGrab = useCallback((releaseId: string) => {
         lockedReleaseIdsRef.current.delete(releaseId);
         setPendingReleaseIds((current) => removeId(current, releaseId));
@@ -55,7 +49,7 @@ export function useReleaseGrabGuard() {
         succeededReleaseIds,
         tryBeginGrab,
         markGrabSucceeded,
-        markGrabFailed,
+        markGrabFailed: clearGrab,
         clearGrab,
     };
 }

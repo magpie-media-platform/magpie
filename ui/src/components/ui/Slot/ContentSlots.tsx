@@ -1,6 +1,18 @@
 import type { ReactNode } from 'react';
 
+import type { ContentPreviewClip } from '@/types/content';
+
+import type { SlotContext } from './buildExtensionAttributes';
 import { Slot } from './Slot';
+
+function previewContext(preview: ContentPreviewClip | undefined): SlotContext {
+    return {
+        'preview-url': preview?.url,
+        'preview-kind': preview?.kind,
+        'preview-title': preview?.title,
+        'preview-embed-kind': preview?.embedKind,
+    };
+}
 
 export interface ContentSlotProps {
     children?: ReactNode;
@@ -31,6 +43,57 @@ export function ContentListColumnsSlot({ children, className, entityId, entityTy
 }
 
 ContentListColumnsSlot.displayName = 'ContentListColumnsSlot';
+
+export interface ContentGalleryPosterSlotProps {
+    children?: ReactNode;
+
+    className?: string;
+
+    contentId: string;
+
+    level: string;
+
+    posterUrl?: string;
+
+    declaresPreviews: boolean;
+
+    selectionMode: boolean;
+
+    preview?: ContentPreviewClip;
+}
+
+export function ContentGalleryPosterSlot({
+    children,
+    className,
+    contentId,
+    level,
+    posterUrl,
+    declaresPreviews,
+    selectionMode,
+    preview,
+}: ContentGalleryPosterSlotProps) {
+    if (selectionMode) {
+        return <>{children}</>;
+    }
+
+    return (
+        <Slot
+            slot="content.gallery.poster"
+            className={className}
+            entityId={contentId}
+            context={{
+                level,
+                'poster-url': posterUrl,
+                'declares-previews': String(declaresPreviews),
+                ...previewContext(preview),
+            }}
+        >
+            {children}
+        </Slot>
+    );
+}
+
+ContentGalleryPosterSlot.displayName = 'ContentGalleryPosterSlot';
 
 export function ContentListActionsSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
@@ -72,16 +135,6 @@ export function ContentDetailsMetadataSlot({ children, className, entityId, enti
 
 ContentDetailsMetadataSlot.displayName = 'ContentDetailsMetadataSlot';
 
-export function ContentDetailsTabsSlot({ children, className, entityId, entityType }: ContentSlotProps) {
-    return (
-        <Slot slot="content.details.tabs" className={className} entityId={entityId} entityType={entityType}>
-            {children}
-        </Slot>
-    );
-}
-
-ContentDetailsTabsSlot.displayName = 'ContentDetailsTabsSlot';
-
 export function ContentDetailsOverviewSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
         <Slot slot="content.details.overview" className={className} entityId={entityId} entityType={entityType}>
@@ -101,13 +154,3 @@ export function ContentDetailsFilesSlot({ children, className, entityId, entityT
 }
 
 ContentDetailsFilesSlot.displayName = 'ContentDetailsFilesSlot';
-
-export function ContentDetailsHistorySlot({ children, className, entityId, entityType }: ContentSlotProps) {
-    return (
-        <Slot slot="content.details.history" className={className} entityId={entityId} entityType={entityType}>
-            {children}
-        </Slot>
-    );
-}
-
-ContentDetailsHistorySlot.displayName = 'ContentDetailsHistorySlot';

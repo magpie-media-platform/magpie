@@ -806,7 +806,7 @@ describe('DownloadClientForm schema integration', () => {
         );
 
         await screen.findByDisplayValue('qBittorrent');
-        await user.click(screen.getByRole('button', { name: 'Clear Password' }));
+        await user.click(screen.getByRole('button', { name: 'Replace Password' }));
         const passwordInput = document.querySelector('[data-field="password"]') as HTMLInputElement;
         await user.type(passwordInput, 'new-secret');
         await user.click(screen.getByRole('button', { name: /test/i }));

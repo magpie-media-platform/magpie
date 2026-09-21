@@ -41,7 +41,7 @@
 
     .overlay-close {
         position: absolute;
-        top: var(--space-md);
+        top: var(--overlay-close-top, var(--space-md));
         right: var(--space-md);
         display: flex;
         align-items: center;

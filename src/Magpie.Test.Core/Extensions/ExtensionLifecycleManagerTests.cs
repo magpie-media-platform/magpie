@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Extensions;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Services;
@@ -25,18 +26,28 @@ public sealed class ExtensionLifecycleManagerTests
     private TestExtension _extension = null!;
     private Mock<IExtensionRepository> _repository = null!;
     private Mock<IFileSystem> _fileSystem = null!;
+    private ExtensionPatch? _appliedPatch;
     private Extension? _updatedRow;
+    private IServiceScopeFactory _scopeFactory = null!;
     private IExtensionLifecycleManager _subject = null!;
 
     [SetUp]
     public void SetUp()
     {
         _extension = new TestExtension();
+        _appliedPatch = null;
         _updatedRow = null;
         _repository = new Mock<IExtensionRepository>();
         _repository
             .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
+        _repository
+            .Setup(candidate => candidate.PatchAsync(
+                It.IsAny<ExtensionPatch>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<ExtensionPatch, Guid?, CancellationToken>((patch, _, _) => _appliedPatch = patch)
+            .ReturnsAsync(true);
         _repository
             .Setup(candidate => candidate.UpdateAsync(
                 It.IsAny<Extension>(),
@@ -65,12 +76,62 @@ public sealed class ExtensionLifecycleManagerTests
         scope.SetupGet(candidate => candidate.ServiceProvider).Returns(serviceProvider.Object);
         var scopeFactory = new Mock<IServiceScopeFactory>();
         scopeFactory.Setup(factory => factory.CreateScope()).Returns(scope.Object);
+        _scopeFactory = scopeFactory.Object;
         _subject = new ExtensionLifecycleManager(
             new ExtensionLoadContext([_extension], []),
             Mock.Of<IEventBus>(),
-            scopeFactory.Object,
-            TimeProvider.System,
+            _scopeFactory,
+            _repository.Object,
+            _fileSystem.Object,
+            new("test-node", false, false, ".", ".", ".", ".", DateTime.UtcNow),
+            NullLoggerFactory.Instance,
             NullLogger<ExtensionLifecycleManager>.Instance);
+    }
+
+    [Test]
+    public async Task DispatchStartupHooksAsync_PatchesOnlyTheDisableFields_WhenAnExtensionFailsToLoad()
+    {
+        // Arrange
+        var extensionId = new Guid("11111111-1111-1111-1111-111111111111");
+        var partialRow = new Extension
+        {
+            Id = extensionId,
+            PackageId = "Magpie.Extensions.Broken",
+            Name = "Broken extension",
+            Version = "1.0.0",
+            FilePath = "broken.dll",
+            AssemblyName = "Broken",
+        };
+        var subject = new ExtensionLifecycleManager(
+            new ExtensionLoadContext([], [partialRow]),
+            Mock.Of<IEventBus>(),
+            _scopeFactory,
+            _repository.Object,
+            _fileSystem.Object,
+            new("test-node", false, false, ".", ".", ".", ".", DateTime.UtcNow),
+            NullLoggerFactory.Instance,
+            NullLogger<ExtensionLifecycleManager>.Instance);
+
+        // Act
+        await subject.DispatchStartupHooksAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_appliedPatch?.Id, Is.EqualTo(extensionId));
+            Assert.That(_appliedPatch?.Enabled?.Value, Is.False);
+            Assert.That(_appliedPatch?.DisabledReason?.Value, Is.EqualTo("The extension assembly failed to load."));
+            Assert.That(_appliedPatch?.NuGetId, Is.Null);
+            Assert.That(_appliedPatch?.PackageRepository, Is.Null);
+            Assert.That(_appliedPatch?.AutoUpgrade, Is.Null);
+            Assert.That(_appliedPatch?.LoadOrder, Is.Null);
+            _repository.Verify(
+                candidate => candidate.UpdateAsync(
+                    It.IsAny<Extension>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 
     [Test]
@@ -127,11 +188,14 @@ public sealed class ExtensionLifecycleManagerTests
         scope.SetupGet(candidate => candidate.ServiceProvider).Returns(serviceProvider.Object);
         var scopeFactory = new Mock<IServiceScopeFactory>();
         scopeFactory.Setup(factory => factory.CreateScope()).Returns(scope.Object);
-        IExtensionLifecycleManager subject = new ExtensionLifecycleManager(
+        var subject = new ExtensionLifecycleManager(
             new ExtensionLoadContext([lifecycle.Object], []),
             Mock.Of<IEventBus>(),
             scopeFactory.Object,
-            TimeProvider.System,
+            repository.Object,
+            _fileSystem.Object,
+            new("test-node", false, false, ".", ".", ".", ".", DateTime.UtcNow),
+            NullLoggerFactory.Instance,
             NullLogger<ExtensionLifecycleManager>.Instance);
 
         // Act
@@ -213,7 +277,7 @@ public sealed class ExtensionLifecycleManagerTests
         };
         var assemblyMatch = new Extension
         {
-            Id = new Guid("33333333-3333-3333-3333-333333333333"),
+            Id = Guid.NewGuid(),
             AssemblyName = runtimeName,
             FilePath = "assembly-match.dll",
             Name = "Assembly match",

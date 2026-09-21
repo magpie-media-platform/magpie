@@ -129,17 +129,27 @@ describe('PackageSourceForm validation', () => {
         const secret = screen.getByLabelText('Secret');
         expect(secret).toHaveAttribute('readonly');
         expect(secret).toHaveAttribute('placeholder', '********');
-        expect(screen.getByRole('button', { name: 'Clear Secret' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Replace Secret' })).toBeInTheDocument();
     });
 
     it('requires a nonblank Basic secret when replacing a stored secret', async () => {
         const { onSubmit } = renderForm(existingBasicSource());
 
-        fireEvent.click(screen.getByRole('button', { name: 'Clear Secret' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Replace Secret' }));
         fireEvent.change(screen.getByLabelText('Secret'), { target: { value: '   ' } });
         save();
 
         expect(await screen.findByText('secret is required for basic credentials.')).toBeInTheDocument();
         expect(onSubmit).not.toHaveBeenCalled();
     });
+});
+
+it('names every select when the source form is open', () => {
+    // Arrange
+    const onSubmit = vi.fn();
+    // Act
+    render(<PackageSourceForm open onOpenChange={vi.fn()} onSubmit={onSubmit} />);
+    // Assert
+    expect(screen.getByRole('button', { name: 'Discovery filter' })).toHaveTextContent('Require NuGet tag');
+    expect(screen.getByRole('button', { name: 'Credentials' })).toHaveTextContent('None');
 });

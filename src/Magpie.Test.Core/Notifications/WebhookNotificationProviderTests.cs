@@ -66,6 +66,7 @@ public sealed class WebhookNotificationProviderTests
     [Test]
     public void ProviderType_ReturnsWebhook_WhenRead()
     {
+        // Act
         // Assert
         Assert.That(_subject.ProviderType, Is.EqualTo("webhook"));
     }
@@ -73,7 +74,6 @@ public sealed class WebhookNotificationProviderTests
     [Test]
     public void SettingsSchema_ContainsUrlMethodAndHeaders_WhenRead()
     {
-        // Arrange
         // Act
         var keys = _subject.SettingsSchema.Select(s => s.Key).ToArray();
 
@@ -82,7 +82,7 @@ public sealed class WebhookNotificationProviderTests
     }
 
     [Test]
-    public async Task SendAsync_PostsRule_WithExpectedPayload()
+    public async Task SendAsync_PostsRule_WhenTheRuleAndEventAreProvided()
     {
         // Arrange
         var request = _http.Expect(HttpMethod.Post, "https://example.test/hook")
@@ -221,7 +221,7 @@ public sealed class WebhookNotificationProviderTests
     }
 
     [Test]
-    public void SendAsync_Throws_OnServerError()
+    public void SendAsync_Throws_WhenServerError()
     {
         // Arrange
         var request = _http.Expect(HttpMethod.Post, "https://example.test/fail")
@@ -256,7 +256,7 @@ public sealed class WebhookNotificationProviderTests
     }
 
     [Test]
-    public void SendAsync_Throws_OnTooManyRequests()
+    public void SendAsync_Throws_WhenTooManyRequests()
     {
         // Arrange
         var request = _http.Expect(HttpMethod.Post, "https://example.test/throttled")
@@ -291,7 +291,7 @@ public sealed class WebhookNotificationProviderTests
     }
 
     [Test]
-    public void SendAsync_Throws_OnTransportException()
+    public void SendAsync_Throws_WhenTransportException()
     {
         // Arrange
         var request = _http.Expect(HttpMethod.Post, "https://example.test/down")
@@ -330,7 +330,7 @@ public sealed class WebhookNotificationProviderTests
     }
 
     [Test]
-    public void SendAsync_Throws_OnTimeout()
+    public void SendAsync_Throws_WhenTimeout()
     {
         // Arrange
         var request = _http.Expect(HttpMethod.Post, "https://example.test/slow")
@@ -365,7 +365,7 @@ public sealed class WebhookNotificationProviderTests
     }
 
     [Test]
-    public void SendAsync_DoesNotThrow_OnClientError()
+    public void SendAsync_DoesNotThrow_WhenClientError()
     {
         // Arrange
         var request = _http.Expect(HttpMethod.Post, "https://example.test/bad")
@@ -400,7 +400,7 @@ public sealed class WebhookNotificationProviderTests
     }
 
     [Test]
-    public void SendAsync_DoesNotThrow_OnNotFound()
+    public void SendAsync_DoesNotThrow_WhenNotFound()
     {
         // Arrange
         var request = _http.Expect(HttpMethod.Post, "https://example.test/missing")
@@ -475,23 +475,19 @@ public sealed class WebhookNotificationProviderTests
     }
 
     [Test]
+    [NonParallelizable]
     public async Task SendAsync_CapsConcurrency_WhenMaximumIsReached()
     {
         // Arrange
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reachedCap = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var inFlight = 0;
-        var peak = 0;
-        var peakLock = new object();
         var request = _http.When(HttpMethod.Post, "https://example.test/hook/*")
             .Respond(async _ =>
             {
-                var current = Interlocked.Increment(ref inFlight);
-                lock (peakLock)
+                if (Interlocked.Increment(ref inFlight) == 8)
                 {
-                    if (current > peak)
-                    {
-                        peak = current;
-                    }
+                    reachedCap.SetResult();
                 }
 
                 try
@@ -530,31 +526,17 @@ public sealed class WebhookNotificationProviderTests
             default))
             .ToArray();
 
-        try
-        {
-            var deadline = DateTime.UtcNow.AddSeconds(2);
-            while (DateTime.UtcNow < deadline &&
-                Volatile.Read(ref inFlight) < WebhookNotificationProvider.MaxConcurrency)
-            {
-                // Act
-                await Task.Delay(10).ConfigureAwait(false);
-            }
+        // Act
+        await reachedCap.Task.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        var concurrentAtCap = Volatile.Read(ref inFlight);
+        release.SetResult();
+        await Task.WhenAll(sends).ConfigureAwait(false);
 
-            // Assert
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(
-                    Volatile.Read(ref inFlight),
-                    Is.GreaterThanOrEqualTo(WebhookNotificationProvider.MaxConcurrency));
-                Assert.That(peak, Is.LessThanOrEqualTo(WebhookNotificationProvider.MaxConcurrency));
-            }
-        }
-        finally
+        // Assert
+        using (Assert.EnterMultipleScope())
         {
-            release.SetResult();
-            await Task.WhenAll(sends).ConfigureAwait(false);
+            Assert.That(concurrentAtCap, Is.EqualTo(8));
+            Assert.That(_http.GetMatchCount(request), Is.EqualTo(20));
         }
-
-        Assert.That(_http.GetMatchCount(request), Is.EqualTo(rules.Length));
     }
 }

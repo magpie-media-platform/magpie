@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { createElement } from 'react';
 
 vi.mock('@/lib/api', () => ({
@@ -22,7 +23,7 @@ function createWrapper() {
         },
     });
     return ({ children }: { children: React.ReactNode }) =>
-        createElement(QueryClientProvider, { client: queryClient }, children);
+        createElement(QueryClientProvider, { client: queryClient }, createElement(MemoryRouter, null, children));
 }
 
 function renderWithClient(ui: React.ReactElement) {
@@ -49,7 +50,7 @@ describe('ExecutionRow', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
-        mockApiGet.mockResolvedValue({ root: null, totalCount: 0 });
+        mockApiGet.mockResolvedValue({ root: null, items: [], totalCount: 0 });
     });
 
     it('renders the humanized job type name', () => {
@@ -70,6 +71,24 @@ describe('ExecutionRow', () => {
     it('shows status message when present', () => {
         renderWithClient(<ExecutionRow execution={makeExecution({ statusMessage: 'Processing items' })} />);
         expect(screen.getByText('Processing items')).toBeInTheDocument();
+    });
+
+    it('marks the status message as live for a running execution', () => {
+        renderWithClient(
+            <ExecutionRow
+                execution={makeExecution({ status: 'Running', completedAt: null, statusMessage: 'Importing' })}
+            />,
+        );
+        const message = screen.getByText('Importing').closest('.execution-row__message');
+        expect(message).toHaveAttribute('data-message-kind', 'live');
+        expect(message).toHaveTextContent('Now');
+    });
+
+    it('marks the status message as a result for a finished execution', () => {
+        renderWithClient(<ExecutionRow execution={makeExecution({ statusMessage: 'Imported 9 files' })} />);
+        const message = screen.getByText('Imported 9 files').closest('.execution-row__message');
+        expect(message).toHaveAttribute('data-message-kind', 'result');
+        expect(message).toHaveTextContent('Result');
     });
 
     it('always renders an expandable details panel (collapsed by default)', () => {
@@ -228,16 +247,17 @@ describe('ExecutionRow', () => {
         expect(updatedRoot).toHaveAttribute('data-status', 'completed');
     });
 
-    it('renders the execution-detail panel when expanded', async () => {
+    it('renders the execution-detail panel as one untabbed surface when expanded', async () => {
         const user = userEvent.setup();
         renderWithClient(
             <ExecutionRow execution={makeExecution({ correlationId: null, statusMessage: 'Processing' })} />,
         );
         await user.click(screen.getByTestId('execution-row__trigger'));
 
-        expect(screen.getByRole('tab', { name: /execution details/i })).toHaveAttribute('aria-selected', 'true');
-        expect(screen.getByTestId('execution-row__logs-list')).toBeInTheDocument();
-        expect(screen.getByRole('tab', { name: /execution trace/i })).toBeInTheDocument();
+        expect(screen.getByTestId('execution-detail')).toBeInTheDocument();
+        expect(screen.queryAllByRole('tab')).toHaveLength(0);
+        expect(screen.getByTestId('execution-detail__details')).toBeInTheDocument();
+        expect(screen.getByTestId('execution-detail__ledger')).toBeInTheDocument();
     });
 });
 
@@ -248,7 +268,7 @@ describe('ExecutionRow deferred status', () => {
         vi.clearAllMocks();
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2024-01-15T12:00:00Z'));
-        mockApiGet.mockResolvedValue({ root: null, totalCount: 0 });
+        mockApiGet.mockResolvedValue({ root: null, items: [], totalCount: 0 });
     });
 
     afterEach(() => {

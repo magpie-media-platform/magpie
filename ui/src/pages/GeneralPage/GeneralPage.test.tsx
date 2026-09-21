@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -327,7 +327,7 @@ describe('GeneralPage save', () => {
         await screen.findByText('Settings Saved');
 
         act(() => {
-            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), mockSettingsGroup);
+            queryClient.setQueryData(settingsQueryKeys.groups, [mockSettingsGroup]);
         });
 
         await waitFor(() => {
@@ -355,12 +355,14 @@ describe('GeneralPage save', () => {
         });
 
         act(() => {
-            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
-                ...mockSettingsGroup,
-                settings: mockSettingsGroup.settings.map((setting) =>
-                    setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
-                ),
-            });
+            queryClient.setQueryData(settingsQueryKeys.groups, [
+                {
+                    ...mockSettingsGroup,
+                    settings: mockSettingsGroup.settings.map((setting) =>
+                        setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
+                    ),
+                },
+            ]);
         });
 
         await waitFor(() => {
@@ -381,12 +383,14 @@ describe('GeneralPage save', () => {
         await user.type(input, 'Draft Name');
 
         act(() => {
-            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
-                ...mockSettingsGroup,
-                settings: mockSettingsGroup.settings.map((setting) =>
-                    setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
-                ),
-            });
+            queryClient.setQueryData(settingsQueryKeys.groups, [
+                {
+                    ...mockSettingsGroup,
+                    settings: mockSettingsGroup.settings.map((setting) =>
+                        setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
+                    ),
+                },
+            ]);
         });
         await screen.findByText('Settings changed elsewhere');
 
@@ -410,12 +414,14 @@ describe('GeneralPage save', () => {
         });
 
         act(() => {
-            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
-                ...mockSettingsGroup,
-                settings: mockSettingsGroup.settings.map((setting) =>
-                    setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
-                ),
-            });
+            queryClient.setQueryData(settingsQueryKeys.groups, [
+                {
+                    ...mockSettingsGroup,
+                    settings: mockSettingsGroup.settings.map((setting) =>
+                        setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
+                    ),
+                },
+            ]);
         });
 
         await waitFor(() => {
@@ -437,12 +443,14 @@ describe('GeneralPage save', () => {
         await user.type(input, 'Draft Name');
 
         act(() => {
-            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
-                ...mockSettingsGroup,
-                settings: mockSettingsGroup.settings.map((setting) =>
-                    setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
-                ),
-            });
+            queryClient.setQueryData(settingsQueryKeys.groups, [
+                {
+                    ...mockSettingsGroup,
+                    settings: mockSettingsGroup.settings.map((setting) =>
+                        setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
+                    ),
+                },
+            ]);
         });
 
         await user.click(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement);
@@ -511,12 +519,14 @@ describe('GeneralPage save', () => {
         await user.clear(input);
         await user.type(input, 'Newer Draft');
         act(() => {
-            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
-                ...mockSettingsGroup,
-                settings: mockSettingsGroup.settings.map((setting) =>
-                    setting.key === 'instanceName' ? { ...setting, value: 'Other User Change' } : setting,
-                ),
-            });
+            queryClient.setQueryData(settingsQueryKeys.groups, [
+                {
+                    ...mockSettingsGroup,
+                    settings: mockSettingsGroup.settings.map((setting) =>
+                        setting.key === 'instanceName' ? { ...setting, value: 'Other User Change' } : setting,
+                    ),
+                },
+            ]);
         });
         await screen.findByText('Settings changed elsewhere');
 
@@ -560,12 +570,14 @@ describe('GeneralPage save', () => {
         await user.clear(input);
         await user.type(input, 'Newer Draft');
         act(() => {
-            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
-                ...mockSettingsGroup,
-                settings: mockSettingsGroup.settings.map((setting) =>
-                    setting.key === 'instanceName' ? { ...setting, value: 'Submitted Name' } : setting,
-                ),
-            });
+            queryClient.setQueryData(settingsQueryKeys.groups, [
+                {
+                    ...mockSettingsGroup,
+                    settings: mockSettingsGroup.settings.map((setting) =>
+                        setting.key === 'instanceName' ? { ...setting, value: 'Submitted Name' } : setting,
+                    ),
+                },
+            ]);
         });
         await screen.findByText('Settings changed elsewhere');
 
@@ -633,4 +645,21 @@ describe('GeneralPage error state', () => {
             expect(screen.getByText('Settings will be created on first save.')).toBeInTheDocument();
         });
     });
+});
+
+it('loads settings on retry after the initial request fails', async () => {
+    // Arrange
+    const user = userEvent.setup();
+    mockApiGet.mockRejectedValue(new Error('Unavailable'));
+    render(<GeneralPage />, { wrapper: createWrapper() });
+    const alert = await screen.findByTestId('settings-error');
+    expect(within(alert).getByRole('paragraph')).toHaveTextContent(/^Failed to load settings\.$/);
+    expect(alert).not.toHaveTextContent('save the settings');
+    expect(screen.queryByLabelText('Instance Name')).not.toBeInTheDocument();
+    // Act
+    mockApiGet.mockResolvedValue([mockSettingsGroup]);
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    // Assert
+    expect(await screen.findByLabelText('Instance Name')).toHaveValue('My Magpie');
+    expect(screen.queryByTestId('settings-error')).not.toBeInTheDocument();
 });

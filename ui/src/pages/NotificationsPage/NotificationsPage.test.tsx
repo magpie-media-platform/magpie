@@ -133,7 +133,7 @@ function dataRows() {
     const table = screen.getByRole('grid');
     return within(table)
         .getAllByRole('row')
-        .filter((r) => within(r).queryAllByRole('cell').length > 0);
+        .filter((r) => within(r).queryAllByRole('gridcell').length > 0);
 }
 
 describe('NotificationsPage', () => {
@@ -492,7 +492,7 @@ describe('NotificationsPage row actions', () => {
         vi.mocked(apiPost).mockImplementation((url: string) => {
             if (url.endsWith('/test')) {
                 return Promise.reject(
-                    new ApiError(502, 'Notification test delivery failed', {
+                    new ApiError(502, 'Webhook delivery failed due to a transport error.', {
                         type: 'https://httpstatuses.io/502',
                         title: 'Notification test delivery failed',
                         status: 502,
@@ -584,5 +584,85 @@ describe('NotificationsPage empty state', () => {
 
         expect(document.querySelector('[data-action="add-rule"]')).toBeInTheDocument();
         expect(document.querySelector('[data-action="add-rule-empty"]')).not.toBeInTheDocument();
+    });
+});
+
+describe('NotificationsPage (mobile card collapse)', () => {
+    it('marks the name cell as header role and the select column as hidden (no layout-participating checkbox)', async () => {
+        render(
+            <TestWrapper>
+                <NotificationsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => expect(dataRows().length).toBe(2));
+        expect(document.querySelector('td[data-column="name"]')).toHaveAttribute('data-mobile-role', 'header');
+        expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
+    });
+
+    it('bulk-deletes every selected rule', async () => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <NotificationsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => expect(dataRows().length).toBe(2));
+
+        await user.click(screen.getByLabelText('Select Failures Webhook'));
+        await user.click(screen.getByLabelText('Select System Alerts'));
+        await user.click(screen.getByRole('button', { name: 'Delete selected notification rules' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(apiDelete).toHaveBeenCalledWith('/notification-rules/rule-1');
+            expect(apiDelete).toHaveBeenCalledWith('/notification-rules/rule-2');
+        });
+    });
+
+    it.each([
+        ['rule-1', false],
+        ['rule-2', true],
+    ])('toggles %s with only the enabled flag', async (id, enabled) => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <NotificationsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => expect(dataRows().length).toBe(2));
+        await user.click(document.querySelector(`[data-row-id="${id}"] [data-action="toggle-enabled"]`) as HTMLElement);
+
+        await waitFor(() => {
+            expect(apiPatch).toHaveBeenCalledExactlyOnceWith(`/notification-rules/${id}`, {
+                enabled: { value: enabled },
+            });
+        });
+    });
+
+    it.each([
+        ['Enable', true],
+        ['Disable', false],
+    ])('bulk-%s rules with only the enabled flag', async (action, enabled) => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <NotificationsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => expect(dataRows().length).toBe(2));
+
+        await user.click(screen.getByLabelText('Select Failures Webhook'));
+        await user.click(screen.getByLabelText('Select System Alerts'));
+        await user.click(screen.getByRole('button', { name: `${action} selected notification rules` }));
+
+        await waitFor(() => {
+            expect(apiPatch).toHaveBeenCalledTimes(2);
+            expect(apiPatch).toHaveBeenCalledWith('/notification-rules/rule-1', { enabled: { value: enabled } });
+            expect(apiPatch).toHaveBeenCalledWith('/notification-rules/rule-2', { enabled: { value: enabled } });
+        });
     });
 });

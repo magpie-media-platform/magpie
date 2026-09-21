@@ -12,24 +12,30 @@ import {
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { Role, useAuth } from '@/auth';
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { Badge } from '@/components/ui/Badge';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
-import { DataTable } from '@/components/ui/DataTable';
+import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useToast } from '@/components/ui/Toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useQualityTierLists, type ApiQualityTierList } from '@/hooks/useQualityTierLists';
+import { useQualityTierLists, type ApiQualityTierList, type QualityTierListPatch } from '@/hooks/useQualityTierLists';
 import { useTags } from '@/hooks/useTags';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { tagsPatch } from '@/lib/tagsPatch';
 import { TierListForm, type TierListFormValues } from './TierListForm';
 
+import '@/styles/bulk-actions-toolbar.css';
 import '@/styles/card-actions.css';
 import './QualityTiersPage.css';
 
@@ -60,20 +66,34 @@ export function QualityTiersPage() {
     const canManage = hasRole(Role.Manager);
     const navigate = useNavigate();
     const { toast } = useToast();
+    const runBulk = useBulkRun();
     const [formOpen, , openForm, closeForm] = useToggle();
+    const [editingTierListId, setEditingTierListId] = useState<string | null>(null);
     const [cloningIds, setCloningIds] = useState<Set<string>>(new Set());
     const [deletingTierList, setDeletingTierList] = useState<TierListDisplay | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [pageRowIds, setPageRowIds] = useState<string[]>([]);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
     const {
         tierLists: apiTierLists,
         isLoading,
         error,
         createTierList,
+        updateTierList,
         deleteTierList,
         refetch,
     } = useQualityTierLists();
     const { tags } = useTags();
+    const editingTierList = useMemo(
+        () => apiTierLists.find((candidate) => candidate.id === editingTierListId) ?? null,
+        [apiTierLists, editingTierListId],
+    );
+    const { tags: editingTierListTags, isLoading: isLoadingEditingTierListTags } = useTags(
+        editingTierListId ? { entityId: editingTierListId } : undefined,
+    );
+    const editingTagsLoaded = !editingTierListId || !isLoadingEditingTierListTags;
     const { sorting, filters, setSorting, setFilters } = useUrlTableState({
         defaultSort: DEFAULT_SORTING,
         defaultFilters: DEFAULT_FILTERS,
@@ -100,6 +120,30 @@ export function QualityTiersPage() {
             return nameMatches && mimeMatches;
         });
     }, [filters, tierLists]);
+    const selection = useBulkSelection({
+        pageRowIds,
+        totalCount: filteredTierLists.length,
+        resetKey: JSON.stringify(filters),
+    });
+    const selectedTierLists = useMemo(
+        () => filteredTierLists.filter((t) => selection.isRowChecked(t.id)),
+        [filteredTierLists, selection],
+    );
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedTierLists, selection, {
+                action: (tierList) => deleteTierList(tierList.id),
+                verb: 'delete',
+                itemNounPlural: 'tier lists',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [deleteTierList, runBulk, selectedTierLists, selection]);
+
     const handleClone = useCallback(
         async (tierList: TierListDisplay) => {
             const source = apiTierLists.find((candidate) => candidate.id === tierList.id);
@@ -112,6 +156,7 @@ export function QualityTiersPage() {
                     name: `${tierList.name} (Copy)`,
                     mimeTypes: tierList.mimeTypes,
                     upgradeAllowed: tierList.upgradeAllowed,
+                    rules: source.rules ?? [],
                     qualityTierRanks: source.qualityTierRanks.map((rank) => ({
                         qualityTierId: rank.qualityTierId,
                         ordinal: rank.ordinal,
@@ -132,8 +177,31 @@ export function QualityTiersPage() {
         [apiTierLists, createTierList, toast],
     );
 
+    const handleAdd = useCallback(() => {
+        setEditingTierListId(null);
+        openForm();
+    }, [openForm]);
+
+    const handleEdit = useCallback(
+        (tierListId: string) => {
+            setEditingTierListId(tierListId);
+            openForm();
+        },
+        [openForm],
+    );
+
     const columns = useMemo<ColumnDef<TierListDisplay>[]>(
         () => [
+            ...(canManage
+                ? [
+                      selectColumn<TierListDisplay>({
+                          selection,
+                          getId: (row) => row.id,
+                          headerLabel: 'Select all tier lists',
+                          rowLabel: (row) => row.name,
+                      }),
+                  ]
+                : []),
             {
                 id: 'name',
                 accessorKey: 'name',
@@ -147,7 +215,7 @@ export function QualityTiersPage() {
                         placeholder="Contains..."
                     />
                 ),
-                meta: { headerLabel: 'Name' },
+                meta: { headerLabel: 'Name', mobileRole: 'header' },
                 cell: ({ row }) => (
                     <Link className="quality-tiers-page__name-link" to={`/admin/quality-tiers/${row.original.id}`}>
                         {row.original.name}
@@ -213,7 +281,7 @@ export function QualityTiersPage() {
                                 <button
                                     type="button"
                                     className="card-actions__btn"
-                                    onClick={() => void navigate(`/admin/quality-tiers/${row.original.id}`)}
+                                    onClick={() => handleEdit(row.original.id)}
                                     aria-label={`Edit ${row.original.name}`}
                                     data-action="edit"
                                 >
@@ -235,7 +303,7 @@ export function QualityTiersPage() {
                     ) : null,
             },
         ],
-        [canManage, cloningIds, filters, handleClone, mimeOptions, navigate, setFilters],
+        [canManage, selection, cloningIds, filters, handleClone, handleEdit, mimeOptions, setFilters],
     );
 
     const handleConfirmDelete = useCallback(async () => {
@@ -258,26 +326,71 @@ export function QualityTiersPage() {
         async (values: TierListFormValues) => {
             setIsSubmitting(true);
             try {
+                if (values.id) {
+                    const originalTagNames = editingTierListTags.map((tag) => tag.name);
+                    const patch: QualityTierListPatch = {
+                        name: { value: values.name },
+                        mimeTypes: { value: values.mimeTypes },
+                        upgradeAllowed: { value: values.upgradeAllowed },
+                    };
+                    const tags = tagsPatch(values.tags, originalTagNames);
+                    if (tags) {
+                        patch.tags = tags;
+                    }
+                    await updateTierList(values.id, patch);
+                    toast({ title: 'Updated', description: `Updated "${values.name}"`, variant: 'success' });
+                    closeForm();
+                    return;
+                }
+
                 const created = await createTierList({
                     name: values.name,
                     mimeTypes: values.mimeTypes,
                     upgradeAllowed: values.upgradeAllowed,
                 });
                 toast({ title: 'Created', description: `Created "${values.name}"`, variant: 'success' });
+                if (values.tags.length > 0) {
+                    try {
+                        await updateTierList(created.id, { tags: { add: values.tags } });
+                    } catch {
+                        toast({
+                            title: 'Tags not saved',
+                            description: `Created "${values.name}", but failed to assign its tags.`,
+                            variant: 'error',
+                        });
+                    }
+                }
                 closeForm();
                 void navigate(`/admin/quality-tiers/${created.id}`);
             } catch {
-                toast({ title: 'Create failed', description: 'Failed to create the tier list.', variant: 'error' });
+                toast({
+                    title: values.id ? 'Update failed' : 'Create failed',
+                    description: `Failed to ${values.id ? 'update' : 'create'} the tier list.`,
+                    variant: 'error',
+                });
             } finally {
                 setIsSubmitting(false);
             }
         },
-        [closeForm, createTierList, navigate, toast],
+        [closeForm, createTierList, editingTierListTags, navigate, toast, updateTierList],
     );
 
+    const formInitialValues: TierListFormValues | null = useMemo(() => {
+        if (!editingTierList) {
+            return null;
+        }
+        return {
+            id: editingTierList.id,
+            name: editingTierList.name,
+            mimeTypes: editingTierList.mimeTypes ?? [],
+            upgradeAllowed: editingTierList.upgradeAllowed,
+            tags: editingTierListTags.map((tag) => tag.name),
+        };
+    }, [editingTierList, editingTierListTags]);
+
     const addTierActions: QuickAction[] = useMemo(
-        () => [{ id: 'add-tier', label: 'Add Tier List', icon: <PlusIcon weight="bold" />, onClick: openForm }],
-        [openForm],
+        () => [{ id: 'add-tier', label: 'Add Tier List', icon: <PlusIcon weight="bold" />, onClick: handleAdd }],
+        [handleAdd],
     );
 
     return (
@@ -293,7 +406,7 @@ export function QualityTiersPage() {
                     icon={<SlidersHorizontalIcon weight="duotone" aria-hidden="true" />}
                     actions={
                         canManage && (
-                            <Button variant="primary" size="sm" data-action="add-tier-list" onClick={openForm}>
+                            <Button variant="primary" size="sm" data-action="add-tier-list" onClick={handleAdd}>
                                 <PlusIcon weight="bold" aria-hidden="true" />
                                 Add Tier List
                             </Button>
@@ -319,26 +432,61 @@ export function QualityTiersPage() {
                         description="A tier list defines preferred release quality."
                     />
                 ) : (
-                    <DataTable<TierListDisplay>
-                        columns={columns}
-                        data={filteredTierLists}
-                        sorting={sorting}
-                        onSortingChange={(updater) =>
-                            setSorting(typeof updater === 'function' ? updater(sorting) : updater)
-                        }
-                        getRowId={(tierList) => tierList.id}
-                        aria-label="Quality tiers"
-                        emptyState={<EmptyState title="No tier lists match the filters" size="sm" />}
-                    />
+                    <>
+                        {canManage && (
+                            <>
+                                <BulkActionsToolbar
+                                    selection={selection}
+                                    label="Tier list selection actions"
+                                    itemNounPlural="tier lists"
+                                >
+                                    <Button
+                                        variant="destructive"
+                                        size="sm"
+                                        onClick={() => setIsBulkDeleteOpen(true)}
+                                        aria-label="Delete selected tier lists"
+                                        data-action="bulk-delete"
+                                    >
+                                        <TrashIcon weight="bold" aria-hidden="true" />
+                                        <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                                    </Button>
+                                </BulkActionsToolbar>
+
+                                <SelectModeToggle
+                                    active={selection.selectionMode}
+                                    onToggle={selection.toggleSelectionMode}
+                                />
+                            </>
+                        )}
+
+                        <DataTable<TierListDisplay>
+                            columns={columns}
+                            data={filteredTierLists}
+                            sorting={sorting}
+                            onSortingChange={(updater) =>
+                                setSorting(typeof updater === 'function' ? updater(sorting) : updater)
+                            }
+                            getRowId={(tierList) => tierList.id}
+                            onPageRowIdsChange={setPageRowIds}
+                            aria-label="Quality tiers"
+                            emptyState={<EmptyState title="No tier lists match the filters" size="sm" />}
+                            mobileSelectionActive={canManage ? selection.selectionMode : undefined}
+                            mobileSelectionOverlay={{
+                                isSelected: (tierList) => selection.isRowChecked(tierList.id),
+                                onToggle: (tierList) =>
+                                    selection.toggleRow(tierList.id, !selection.isRowChecked(tierList.id)),
+                            }}
+                        />
+                    </>
                 )}
             </PullToRefresh>
 
             {canManage && <QuickActionsButton actions={addTierActions} title="Add Tier List" />}
 
             <TierListForm
-                open={formOpen}
+                open={formOpen && editingTagsLoaded}
                 onOpenChange={(open) => !open && closeForm()}
-                initialValues={null}
+                initialValues={formInitialValues}
                 tags={tags}
                 onSubmit={handleFormSubmit}
                 isSubmitting={isSubmitting}
@@ -352,6 +500,35 @@ export function QualityTiersPage() {
                 itemType="Tier List"
                 isDeleting={isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Tier Lists"
+                isDeleting={isBulkDeleting}
+            />
+
+            {canManage && selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="quality-tiers-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="tier lists"
+                >
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected tier lists"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
         </div>
     );
 }

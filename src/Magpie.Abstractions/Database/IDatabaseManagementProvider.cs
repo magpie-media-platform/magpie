@@ -15,7 +15,7 @@ public interface IDatabaseManagementProvider
     string Provider { get; }
 
     /// <summary>
-    /// Gets whether the database accepts a connection.
+    /// Determines whether the database accepts a connection.
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<bool> CanConnectAsync(CancellationToken cancellationToken = default);

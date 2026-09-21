@@ -17,6 +17,16 @@ namespace Magpie.Sdk.Api;
 public sealed record AuthenticatedUser(Guid Id, Role Role = Role.Viewer)
 {
     /// <summary>
+    /// The id of the authenticated user.
+    /// </summary>
+    public Guid Id { get; set; } = Id;
+
+    /// <summary>
+    /// The highest role of the user.
+    /// </summary>
+    public Role Role { get; set; } = Role;
+
+    /// <summary>
     /// Binds the authenticated user from the HTTP context.
     /// </summary>
     /// <param name="context">The HTTP context of the current request</param>

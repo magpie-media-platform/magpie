@@ -24,4 +24,9 @@ public enum InteractiveReleaseGrabResult
     /// No download client is enabled.
     /// </summary>
     NoDownloadClient,
+
+    /// <summary>
+    /// An acquisition of the same release is already running.
+    /// </summary>
+    AlreadyInProgress,
 }

@@ -6,12 +6,12 @@ using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class SubjectTypeEndpointGroup(
-    ISubjectKindRegistry subjectKindRegistry) : IApiEndpointGroup
+internal sealed class SubjectTypeEndpointGroup : IApiEndpointGroup
 {
     public string Name => "subject-types";
 
@@ -23,7 +23,7 @@ internal sealed class SubjectTypeEndpointGroup(
             .RequireViewer();
     }
 
-    internal IResult GetSubjectTypes()
+    internal IResult GetSubjectTypes([FromServices] ISubjectKindRegistry subjectKindRegistry)
     {
         var definitions = subjectKindRegistry.Definitions.ToArray();
 

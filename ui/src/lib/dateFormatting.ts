@@ -18,7 +18,7 @@ export function formatShortDate(dateStr: string | null | undefined, fallback = '
         if (isNaN(date.getTime())) {
             return 'Unknown';
         }
-        return date.toLocaleDateString('en-US', {
+        return date.toLocaleDateString(undefined, {
             month: 'short',
             day: 'numeric',
             year: 'numeric',
@@ -62,6 +62,9 @@ function formatDateWithParser(dateStr: string, fallback: string, parser: (value:
 }
 
 export function formatDateTime(dateStr: string): string {
+    if (isUnknownDateSentinel(dateStr)) {
+        return '-';
+    }
     try {
         const date = parseUtcInstant(dateStr);
         if (isNaN(date.getTime())) {
@@ -81,7 +84,7 @@ export function formatDateTime(dateStr: string): string {
 
 export function formatUtcDate(dateStr: string): string {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', {
+    return date.toLocaleDateString(undefined, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -91,7 +94,7 @@ export function formatUtcDate(dateStr: string): string {
 
 export function formatUtcDateTime(dateStr: string): string {
     const date = new Date(dateStr);
-    return date.toLocaleString('en-US', {
+    return date.toLocaleString(undefined, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -99,6 +102,12 @@ export function formatUtcDateTime(dateStr: string): string {
         minute: '2-digit',
         timeZone: 'UTC',
     });
+}
+
+export function toLocalDateKey(date: Date): string {
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${date.getFullYear()}-${month}-${day}`;
 }
 
 export function formatCalendarDate(date: Date): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -309,6 +309,91 @@ describe('WantedPage', () => {
         expect(mockMutateAsync).toHaveBeenNthCalledWith(2, { id: 'episode-2', mode: 'Queue' });
         expect(mockMutateAsync).not.toHaveBeenCalledWith({ id: 'show-1', mode: 'Queue' });
         expect(mockMutateAsync).not.toHaveBeenCalledWith({ id: 'season-1', mode: 'Queue' });
+    });
+
+    it('keeps the selected container available for retry after a partial search failure', async () => {
+        // Arrange
+        setContentResponse((parentId) => (parentId === 'show-1' ? [episodeOne, episodeTwo] : [show]));
+        mockMutateAsync
+            .mockResolvedValueOnce({ executionId: 'job-1' })
+            .mockRejectedValueOnce(new Error('Queue failed'));
+        const user = userEvent.setup();
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+        await user.click(await screen.findByRole('checkbox', { name: 'Select The Show' }));
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Search Now' }));
+
+        // Assert
+        expect(await screen.findByText('Searches partially queued')).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', { name: 'Select The Show' })).toBeChecked();
+        await user.click(screen.getByRole('button', { name: 'Search Now' }));
+        await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Select The Show' })).not.toBeChecked());
+        expect(mockMutateAsync).toHaveBeenCalledWith({ id: 'episode-2', mode: 'Queue' });
+    });
+
+    it('keeps cached descendant counts when unrelated container fields change', async () => {
+        // Arrange
+        setContentResponse((parentId) => (parentId === 'show-1' ? [episodeOne] : [show]));
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        render(
+            <QueryClientProvider client={client}>
+                <MemoryRouter>
+                    <ToastStateProvider>
+                        <TooltipProvider>
+                            <WantedPage />
+                        </TooltipProvider>
+                    </ToastStateProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        expect(await screen.findByText('1 missing descendant')).toBeInTheDocument();
+        vi.mocked(apiGet).mockClear();
+
+        // Act
+        await act(() =>
+            client.setQueryData(['wanted', 'list', { parentId: null }], {
+                items: [{ ...show, contentItem: { ...show.contentItem, dateLastSearched: '2026-09-08T00:00:00Z' } }],
+                totalItems: 1,
+            }),
+        );
+
+        // Assert
+        expect(screen.getByText('1 missing descendant')).toBeInTheDocument();
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(apiGet).not.toHaveBeenCalled();
+    });
+
+    it('replaces broken wanted artwork with its placeholder', async () => {
+        // Arrange
+        setContentResponse(() => [
+            {
+                ...movie,
+                metadataContainer: {
+                    id: 'metadata',
+                    contributions: [
+                        {
+                            id: 'contribution',
+                            ordinal: 0,
+                            locked: false,
+                            providerType: 'provider-a',
+                            images: [{ type: 'poster', url: '/broken.jpg' }],
+                        },
+                    ],
+                },
+            },
+        ]);
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+        const poster = await screen.findByAltText('Missing Movie artwork');
+
+        // Act
+        fireEvent.error(poster);
+
+        // Assert
+        expect(screen.queryByAltText('Missing Movie artwork')).not.toBeInTheDocument();
+        expect(document.querySelector('.wanted-page__poster--placeholder')).toBeInTheDocument();
     });
 
     it('offers page-scoped selection controls on mobile cards', async () => {

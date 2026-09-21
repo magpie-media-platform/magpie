@@ -14,6 +14,7 @@ import {
 import { useToast } from '@/components/ui/Toast';
 import { foldDefaultsIntoBaseline } from '@/hooks/useFormDirty';
 import { isAbortError } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import { buildSettingsPatch } from '@/lib/integrationSettings';
 import { useIndexerConnectionMutations, type ApiIndexerConnection } from '@/hooks/useIndexers';
 
@@ -143,7 +144,7 @@ export function ConfigureInstanceDialog({
             }
             toast({
                 title: definitionName || 'Indexer',
-                description: err instanceof Error ? err.message : 'Failed to test connection',
+                description: getErrorMessage(err, 'Failed to test connection'),
                 variant: 'error',
             });
         }
@@ -188,7 +189,7 @@ export function ConfigureInstanceDialog({
             } catch (err) {
                 toast({
                     title: definitionName || 'Indexer',
-                    description: err instanceof Error ? err.message : 'Failed to save instance',
+                    description: getErrorMessage(err, 'Failed to save instance'),
                     variant: 'error',
                 });
             } finally {

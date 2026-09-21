@@ -70,6 +70,30 @@ function scanCache(queryClient: QueryClient): CacheScan {
     return { details, inspectors };
 }
 
+interface ScanCacheEntry {
+    scan: CacheScan;
+    stale: boolean;
+}
+
+const scanCaches = new WeakMap<QueryClient, ScanCacheEntry>();
+
+function currentScan(queryClient: QueryClient): CacheScan {
+    const existing = scanCaches.get(queryClient);
+    if (!existing) {
+        const entry: ScanCacheEntry = { scan: scanCache(queryClient), stale: false };
+        scanCaches.set(queryClient, entry);
+        queryClient.getQueryCache().subscribe(() => {
+            entry.stale = true;
+        });
+        return entry.scan;
+    }
+    if (existing.stale) {
+        existing.scan = scanCache(queryClient);
+        existing.stale = false;
+    }
+    return existing.scan;
+}
+
 function ancestorsOf(subjectId: string, details: ReadonlyMap<string, ApiContentHierarchyItem>): string[] {
     const detail = details.get(subjectId);
     if (!detail) {
@@ -137,9 +161,7 @@ function sameObservations(left: readonly unknown[], right: readonly unknown[]): 
 
 /**
  * Builds the one relevance snapshot a content surface shares across its hooks, from data already in cache.
- *
- * The snapshot is rebuilt whenever any observed query datum is replaced, and reused by reference otherwise, so
- * every hook on a surface compares events against one shared and current view. It never issues a request.
+ * The snapshot is rebuilt whenever any observed query datum is replaced, and reused by reference otherwise.
  */
 export function contentRelevanceSnapshot(
     queryClient: QueryClient,
@@ -152,7 +174,7 @@ export function contentRelevanceSnapshot(
     const sorted = [...entityIds].sort();
     const key = sorted.join(',');
     const cache = cacheFor(queryClient);
-    const { observed, snapshot } = build(sorted, scanCache(queryClient));
+    const { observed, snapshot } = build(sorted, currentScan(queryClient));
     const existing = cache.get(key);
     if (existing && sameObservations(existing.observed, observed)) {
         return existing.snapshot;
@@ -173,10 +195,7 @@ export function contentRelevanceSnapshot(
 
 /**
  * Whether an event impact touches the active snapshot, matching each event role against the matching active role.
- *
- * Roles are never crossed: an event's containing hierarchy is only ever compared against the surface's own
- * subjects, so a sibling sharing the surface's parent does not read as relevant. A scope the producer had to
- * truncate cannot be proven irrelevant, so it falls back to one bounded refetch.
+ * A scope the producer had to truncate cannot be proven irrelevant, so it falls back to one bounded refetch.
  */
 export function impactIntersectsSnapshot(impact: ContentEventImpact, snapshot: ContentRelevanceSnapshot): boolean {
     if (impact.subtreeTruncated || impact.batchTruncated) {

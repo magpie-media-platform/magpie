@@ -224,3 +224,23 @@ describe('DeleteConfirmDialog', () => {
         expect(onCancel).toHaveBeenCalled();
     });
 });
+
+it('associates each extra-toggle label with its own dialog control', () => {
+    render(
+        <>
+            <DeleteConfirmDialog
+                {...defaultProps}
+                extraToggle={{ label: 'Delete files', checked: false, onChange: vi.fn() }}
+            />
+            <DeleteConfirmDialog
+                {...defaultProps}
+                extraToggle={{ label: 'Delete records', checked: true, onChange: vi.fn() }}
+            />
+        </>,
+    );
+    const files = screen.getByLabelText('Delete files');
+    const records = screen.getByLabelText('Delete records');
+    expect(files).toHaveAttribute('aria-checked', 'false');
+    expect(records).toHaveAttribute('aria-checked', 'true');
+    expect(files.id).not.toBe(records.id);
+});

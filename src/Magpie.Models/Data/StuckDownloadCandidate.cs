@@ -76,7 +76,7 @@ public record StuckDownloadCandidate
     public required string ClientName { get; init; }
 
     /// <summary>
-    /// The settings of the download client, keyed by name.
+    /// The readable settings of the download client keyed by name, or null if the settings cannot be read.
     /// </summary>
-    public required IReadOnlyDictionary<string, string> Settings { get; init; }
+    public required IReadOnlyDictionary<string, string>? Settings { get; init; }
 }

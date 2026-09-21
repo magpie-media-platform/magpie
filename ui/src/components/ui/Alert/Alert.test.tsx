@@ -12,26 +12,26 @@ describe('Alert', () => {
         expect(screen.getByText('Alert message')).toBeInTheDocument();
     });
 
-    it('has role="alert"', () => {
+    it('announces informational content politely', () => {
         render(<Alert>Accessible alert</Alert>);
-        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(screen.getByRole('status')).toBeInTheDocument();
     });
 
     it('applies default info variant class', () => {
         render(<Alert>Info alert</Alert>);
-        const alert = screen.getByRole('alert');
+        const alert = screen.getByRole('status');
         expect(alert).toHaveClass('alert');
         expect(alert).toHaveAttribute('data-variant', 'info');
     });
 
-    it('applies variant classes', () => {
-        const variants = ['info', 'success', 'warning', 'error'] as const;
-
-        variants.forEach((variant) => {
-            const { unmount } = render(<Alert variant={variant}>{variant}</Alert>);
-            expect(screen.getByRole('alert')).toHaveAttribute('data-variant', variant);
-            unmount();
-        });
+    it.each([
+        ['info', 'status'],
+        ['success', 'status'],
+        ['warning', 'alert'],
+        ['error', 'alert'],
+    ] as const)('announces %s with role %s', (variant, role) => {
+        render(<Alert variant={variant}>{variant}</Alert>);
+        expect(screen.getByRole(role)).toHaveAttribute('data-variant', variant);
     });
 
     it('renders title', () => {
@@ -89,7 +89,7 @@ describe('Alert', () => {
 
     it('applies custom className', () => {
         render(<Alert className="custom-alert">Custom</Alert>);
-        expect(screen.getByRole('alert')).toHaveClass('custom-alert');
+        expect(screen.getByRole('status')).toHaveClass('custom-alert');
     });
 
     it('passes through additional props', () => {
@@ -100,13 +100,13 @@ describe('Alert', () => {
     it('renders title without description', () => {
         render(<Alert title="Title only" />);
         expect(screen.getByText('Title only')).toBeInTheDocument();
-        expect(screen.queryByRole('alert')?.querySelector('.alert__description')).not.toBeInTheDocument();
+        expect(screen.getByRole('status').querySelector('.alert__description')).not.toBeInTheDocument();
     });
 
     it('renders description without title', () => {
         render(<Alert>Description only</Alert>);
         expect(screen.getByText('Description only')).toBeInTheDocument();
-        expect(screen.queryByRole('alert')?.querySelector('.alert__title')).not.toBeInTheDocument();
+        expect(screen.getByRole('status').querySelector('.alert__title')).not.toBeInTheDocument();
     });
 
     it('renders both title and description', () => {

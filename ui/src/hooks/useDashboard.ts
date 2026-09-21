@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { apiGet, buildUrl } from '@/lib/api';
+import { toLocalDateKey } from '@/lib/dateFormatting';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import type { ApiContentStats, PagedContentHierarchyItems } from '@/types/content';
 import { ACTIVE_DOWNLOAD_STATUSES } from '@/types/downloads';
@@ -41,14 +42,13 @@ export type {
 export type { IntegrationStatus, DownloadStatus, JobExecutionStatus } from './dashboardTransforms';
 
 export const dashboardQueryKeys = {
-    all: ['dashboard'] as const,
     downloadClients: ['dashboard', 'download-clients'] as const,
     mediaServers: ['dashboard', 'media-servers'] as const,
     downloads: ['dashboard', 'downloads'] as const,
     jobs: ['dashboard', 'jobs'] as const,
     contentStats: ['dashboard', 'content-stats'] as const,
     recentContent: ['dashboard', 'recent-content'] as const,
-    upcomingContent: ['dashboard', 'upcoming-content'] as const,
+    upcomingContent: (today: string) => ['dashboard', 'upcoming-content', today] as const,
 };
 
 async function fetchDownloadClients(): Promise<ApiDownloadClient[]> {
@@ -66,13 +66,13 @@ async function fetchDownloads(): Promise<PagedList<ApiDownload>> {
             pageNumber: 1,
             pageSize: 10,
             sortBy: 'CreatedAt',
-            sortDirection: 2,
+            sortDirection: 'Descending',
         }),
     );
 }
 
 async function fetchJobExecutions(): Promise<PagedList<ApiJobExecution>> {
-    return apiGet<PagedList<ApiJobExecution>>('/jobs?pageSize=10&sortBy=createdAt&sortDirection=2');
+    return apiGet<PagedList<ApiJobExecution>>('/jobs?pageSize=10&sortBy=createdAt&sortDirection=Descending');
 }
 
 async function fetchContentStats(): Promise<ApiContentStats> {
@@ -84,19 +84,18 @@ async function fetchRecentContent(): Promise<PagedContentHierarchyItems> {
         buildUrl('/content', {
             pageSize: 10,
             sortBy: 'createdAt',
-            sortDirection: 2,
+            sortDirection: 'Descending',
         }),
     );
 }
 
-async function fetchUpcomingContent(): Promise<PagedContentWithDates> {
-    const today = new Date().toISOString().split('T')[0];
+async function fetchUpcomingContent(today: string): Promise<PagedContentWithDates> {
     return apiGet<PagedContentWithDates>(
         buildUrl('/content', {
             filter: `publishDate >= "${today}"`,
             pageSize: 5,
             sortBy: 'publishDate',
-            sortDirection: 1,
+            sortDirection: 'Ascending',
         }),
     );
 }
@@ -264,6 +263,7 @@ export function useRecentContent(limit = 3) {
 }
 
 export function useUpcomingContent() {
+    const today = toLocalDateKey(new Date());
     useInvalidateQueriesOnEvents(
         [
             'content.hierarchyItem.created',
@@ -272,12 +272,12 @@ export function useUpcomingContent() {
             'content.fulfillment.changed',
             'metadata.refreshed',
         ],
-        [dashboardQueryKeys.upcomingContent],
+        [dashboardQueryKeys.upcomingContent(today)],
         { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'dashboard:upcoming-content' },
     );
     return useQuery({
-        queryKey: dashboardQueryKeys.upcomingContent,
-        queryFn: fetchUpcomingContent,
+        queryKey: dashboardQueryKeys.upcomingContent(today),
+        queryFn: () => fetchUpcomingContent(today),
         select: (data) => mapUpcomingContent(data.items),
         staleTime: POLLING_INTERVALS.slow / 2,
     });

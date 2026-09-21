@@ -6,12 +6,12 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -28,28 +28,53 @@ internal sealed class ContentRepository(
     TimeProvider timeProvider,
     ILogger<ContentRepository> logger) : IContentRepository
 {
-    private static Models.MagpieEvent ContentFulfillmentChanged(
-        ContentEventImpact impact,
-        FulfillmentStatus from,
-        FulfillmentStatus to)
-    {
-        var context = impact.ToContext();
-        context[MagpieEvents.Keys.ContentFulfillmentFrom] = from.ToString();
-        context[MagpieEvents.Keys.ContentFulfillmentTo] = to.ToString();
+    private static bool IsFulfilled(FulfillmentStatus status) =>
+        status is FulfillmentStatus.Fulfilled or FulfillmentStatus.FulfilledExternally;
 
-        return new(Guid.Empty, MagpieEvents.Names.ContentFulfillmentChanged, context, default, default, null);
+    private IQueryable<ContentItem> ApplySort(IQueryable<ContentItem> items, SortParameter? sort)
+    {
+        var property = context.Model.FindEntityType(typeof(ContentItem))!.GetProperties()
+            .Where(candidate => !candidate.IsShadowProperty() &&
+                (candidate.ClrType.IsValueType || candidate.ClrType == typeof(string) ||
+                    candidate.ClrType == typeof(Uri)))
+            .Select(candidate => candidate.Name)
+            .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
+        if (sort is null || property is null)
+        {
+            return items.OrderBy(item => item.Id);
+        }
+
+        return sort.Direction == SortDirection.Ascending
+            ? items.OrderBy(item => EF.Property<object>(item, property)).ThenBy(item => item.Id)
+            : items.OrderByDescending(item => EF.Property<object>(item, property)).ThenBy(item => item.Id);
     }
 
     public async Task<IEnumerable<ContentItem>> ListAllAsync(CancellationToken cancellationToken = default)
     {
-        return await context.ContentItems.AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await context.ContentItems.AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The content item repository failed to list the items.");
+            throw;
+        }
     }
 
     public async Task<ContentItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        return await context.ContentItems.AsNoTracking()
-            .FirstOrDefaultAsync(item => item.Id == id, cancellationToken)
-            .ConfigureAwait(false);
+        try
+        {
+            return await context.ContentItems.AsNoTracking()
+                .FirstOrDefaultAsync(item => item.Id == id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The content item repository failed to read item {ContentItemId}.", id);
+            throw;
+        }
     }
 
     public async Task<PagedList<ContentItem>> QueryAsync(
@@ -58,28 +83,36 @@ internal sealed class ContentRepository(
         SortParameter? sort,
         CancellationToken cancellationToken = default)
     {
-        var items = context.ContentItems.AsNoTracking().AsQueryable();
-        if (query.ContentHierarchyItemId is { } hierarchyItemId)
+        try
         {
-            items = items.Where(item => item.ContentHierarchyItemId == hierarchyItemId);
+            var items = context.ContentItems.AsNoTracking().AsQueryable();
+            if (query.ContentHierarchyItemId is { } hierarchyItemId)
+            {
+                items = items.Where(item => item.ContentHierarchyItemId == hierarchyItemId);
+            }
+
+            if (query.ContentHierarchyItemIds is { } hierarchyItemIds)
+            {
+                items = items.Where(item => hierarchyItemIds.Contains(item.ContentHierarchyItemId));
+            }
+
+            items = ApplySort(items, sort);
+            var totalItems = await items.CountAsync(cancellationToken).ConfigureAwait(false);
+            items = items.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
+
+            return new PagedList<ContentItem>
+            {
+                Items = await items.ToListAsync(cancellationToken).ConfigureAwait(false),
+                TotalItems = totalItems,
+                PageNumber = paging.PageNumber,
+                PageSize = paging.PageSize
+            };
         }
-
-        if (query.ContentHierarchyItemIds is { } hierarchyItemIds)
+        catch (Exception ex)
         {
-            items = items.Where(item => hierarchyItemIds.Contains(item.ContentHierarchyItemId));
+            logger.LogError(ex, "The content item repository failed to query the items.");
+            throw;
         }
-
-        items = items.OrderBy(item => item.Id);
-        var totalItems = await items.CountAsync(cancellationToken).ConfigureAwait(false);
-        items = items.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
-
-        return new PagedList<ContentItem>
-        {
-            Items = await items.ToListAsync(cancellationToken).ConfigureAwait(false),
-            TotalItems = totalItems,
-            PageNumber = paging.PageNumber,
-            PageSize = paging.PageSize
-        };
     }
 
     public async Task<ContentItem> CreateAsync(
@@ -90,21 +123,24 @@ internal sealed class ContentRepository(
         try
         {
             contentItem.CreatedByUserId = createdByUserId;
+            if (IsFulfilled(contentItem.Fulfillment))
+            {
+                contentItem.FulfilledAt ??= contentItem.CreatedAt == default
+                    ? timeProvider.GetUtcNow().UtcDateTime
+                    : contentItem.CreatedAt;
+            }
+
             context.ContentItems.Add(contentItem);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return contentItem;
         }
-        catch (DbUpdateException ex)
-        {
-            context.ChangeTracker.Clear();
-            logger.LogError(
-                ex,
-                "The content item repository failed to create the item for hierarchy item {ContentHierarchyItemId}.",
-                contentItem.ContentHierarchyItemId);
-            throw;
-        }
         catch (Exception ex)
         {
+            if (ex is DbUpdateException)
+            {
+                context.ChangeTracker.Clear();
+            }
+
             logger.LogError(
                 ex,
                 "The content item repository failed to create the item for hierarchy item {ContentHierarchyItemId}.",
@@ -118,30 +154,46 @@ internal sealed class ContentRepository(
         Guid? modifiedByUserId,
         CancellationToken cancellationToken = default)
     {
-        var current = await GetByIdAsync(contentItem.Id, cancellationToken).ConfigureAwait(false);
-        if (current is null)
+        try
         {
-            return false;
-        }
+            var current = await GetByIdAsync(contentItem.Id, cancellationToken).ConfigureAwait(false);
+            if (current is null)
+            {
+                return false;
+            }
 
-        var now = contentItem.ModifiedAt ?? timeProvider.GetUtcNow().UtcDateTime;
-        await UpdateFulfillmentAsync(
-            contentItem.Id,
-            contentItem.Fulfillment,
-            now,
-            modifiedByUserId,
-            cancellationToken).ConfigureAwait(false);
-        await context.ContentItems
-            .Where(item => item.Id == contentItem.Id)
-            .ExecuteUpdateAsync(
-                update => update
-                    .SetProperty(item => item.QualityStatus, contentItem.QualityStatus)
-                    .SetProperty(item => item.DateLastSearched, contentItem.DateLastSearched)
-                    .SetProperty(item => item.ModifiedAt, now)
-                    .SetProperty(item => item.ModifiedByUserId, modifiedByUserId),
-                cancellationToken)
-            .ConfigureAwait(false);
-        return true;
+            var now = contentItem.ModifiedAt ?? timeProvider.GetUtcNow().UtcDateTime;
+            await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
+                {
+                    contentItem.FulfilledAt = await UpdateFulfillmentAsync(
+                        contentItem.Id,
+                        contentItem.Fulfillment,
+                        now,
+                        modifiedByUserId,
+                        ct).ConfigureAwait(false);
+                    await context.ContentItems
+                        .Where(item => item.Id == contentItem.Id)
+                        .ExecuteUpdateAsync(
+                            update => update
+                                .SetProperty(item => item.QualityStatus, contentItem.QualityStatus)
+                                .SetProperty(item => item.DateLastSearched, contentItem.DateLastSearched)
+                                .SetProperty(item => item.ModifiedAt, now)
+                                .SetProperty(item => item.ModifiedByUserId, modifiedByUserId),
+                            ct)
+                        .ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The content item repository failed to update item {ContentItemId}.",
+                contentItem.Id);
+            throw;
+        }
     }
 
     public async Task<bool> DeleteAsync(
@@ -149,12 +201,20 @@ internal sealed class ContentRepository(
         Guid? deletedByUserId,
         CancellationToken cancellationToken = default)
     {
-        return await context.ContentItems.Where(item => item.Id == id)
-            .ExecuteDeleteAsync(cancellationToken)
-            .ConfigureAwait(false) > 0;
+        try
+        {
+            return await context.ContentItems.Where(item => item.Id == id)
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false) > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The content item repository failed to delete item {ContentItemId}.", id);
+            throw;
+        }
     }
 
-    private async Task UpdateFulfillmentAsync(
+    private async Task<DateTime?> UpdateFulfillmentAsync(
         Guid contentItemId,
         FulfillmentStatus fulfillment,
         DateTime now,
@@ -171,6 +231,7 @@ internal sealed class ContentRepository(
                 select new
                 {
                     c.Fulfillment,
+                    c.FulfilledAt,
                     c.RequestedViaWishlistId,
                     i.Id,
                     i.MetadataContainerId,
@@ -184,11 +245,18 @@ internal sealed class ContentRepository(
                 .FirstOrDefaultAsync(cancellationToken)
                 .ConfigureAwait(false);
 
+            var fulfilledAt = IsFulfilled(fulfillment)
+                ? current is not null && IsFulfilled(current.Fulfillment)
+                    ? current.FulfilledAt
+                    : now
+                : null;
+
             await context.ContentItems
                 .Where(c => c.Id == contentItemId)
                 .ExecuteUpdateAsync(
                     s => s
                         .SetProperty(c => c.Fulfillment, fulfillment)
+                        .SetProperty(c => c.FulfilledAt, fulfilledAt)
                         .SetProperty(c => c.ModifiedAt, (DateTime?)now)
                         .SetProperty(c => c.ModifiedByUserId, userId),
                     cancellationToken)
@@ -226,10 +294,12 @@ internal sealed class ContentRepository(
                 };
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        ContentFulfillmentChanged(impact, from, fulfillment),
+                        ContentEventBuilder.BuildContentFulfillmentChangedEvent(impact, from, fulfillment),
                         token),
                     cancellationToken).ConfigureAwait(false);
             }
+
+            return fulfilledAt;
         }
         catch (Exception ex)
         {

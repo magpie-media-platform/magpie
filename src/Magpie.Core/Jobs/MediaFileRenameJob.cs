@@ -16,11 +16,11 @@ internal sealed class MediaFileRenameJob(
     IMediaFileRepository mediaFileRepository,
     IContentRepository contentRepository,
     IContentFileService contentFileService,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "MediaFileRename",
+        JobType = MagpieJobs.Types.MediaFileRename,
         DisplayName = "Media file rename",
         Description = "Renames one media file using its effective rename template.",
         Category = "Content",
@@ -30,15 +30,17 @@ internal sealed class MediaFileRenameJob(
         FailurePolicy = JobFailurePolicy.Retry,
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
-        LockPartitionFields = [MediaFileIdParameter],
-        Parameters = [new(MediaFileIdParameter, "The media file id to rename.", DataType.String, true, null)],
+        LockPartitionFields = [MagpieJobs.Parameters.MediaFileId],
+        Parameters =
+        [
+            new(MagpieJobs.Parameters.MediaFileId, "The media file id to rename.", DataType.String, true, null)
+        ],
     };
-
-    private const string MediaFileIdParameter = "mediaFileId";
 
     public Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
-        if (!context.Parameters.TryGetValue(MediaFileIdParameter, out var raw) || string.IsNullOrWhiteSpace(raw))
+        if (!context.Parameters.TryGetValue(MagpieJobs.Parameters.MediaFileId, out var raw) ||
+            string.IsNullOrWhiteSpace(raw))
         {
             throw new ArgumentException("A media file ID is required.");
         }
@@ -56,14 +58,14 @@ internal sealed class MediaFileRenameJob(
             cancellationToken);
     }
 
-    internal async Task RenameAsync(
+    private async Task RenameAsync(
         Guid mediaFileId,
         Guid? userId,
         Guid? correlationId,
-        IProgressReporter? progress,
+        IProgressReporter progress,
         CancellationToken cancellationToken = default)
     {
-        progress?.Report(0, "The rename job will load the media file.");
+        progress.Report(0, "The rename job will load the media file.");
 
         var mediaFile = await mediaFileRepository
             .GetByIdAsync(mediaFileId, cancellationToken)
@@ -82,7 +84,7 @@ internal sealed class MediaFileRenameJob(
                 $"Media file {mediaFileId} references missing content item {mediaFile.ContentItemId}.");
         }
 
-        progress?.Report(null, "The rename job will get the target path.");
+        progress.Report(null, "The rename job will get the target path.");
         var preview = await contentFileService
             .PreviewRenameAsync(
                 contentItem.ContentHierarchyItemId,
@@ -90,10 +92,10 @@ internal sealed class MediaFileRenameJob(
                 cancellationToken)
             .ConfigureAwait(false);
 
-        progress?.Report(null, "The rename job will rename the file.");
+        progress.Report(null, "The rename job will rename the file.");
         await contentFileService
             .ExecuteRenameAsync(preview, userId, correlationId, cancellationToken)
             .ConfigureAwait(false);
-        progress?.Report(1, "The file rename completed.");
+        progress.Report(1, "The file rename completed.");
     }
 }

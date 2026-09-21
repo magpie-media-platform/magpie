@@ -32,7 +32,9 @@ export function useScrollRestoration() {
 
     useEffect(() => {
         const scroller = document.querySelector<HTMLElement>(
-            isMobile ? '.app-shell__main, .admin-shell__main' : '.app-shell__main-wrapper, .admin-shell__main-wrapper',
+            isMobile
+                ? '[data-component="app-shell-main"], [data-component="admin-shell-main"]'
+                : '[data-component="app-shell-main-wrapper"], [data-component="admin-shell-main-wrapper"]',
         );
         if (!scroller) {
             return;

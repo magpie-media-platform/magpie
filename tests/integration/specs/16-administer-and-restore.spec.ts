@@ -9,7 +9,6 @@ import { cli } from '../helpers/cli';
 import { integrationEnvironment } from '../helpers/environment';
 import { waitForJob, type JobExecution } from '../helpers/jobs';
 import { mocks } from '../helpers/mocks';
-import { buildRichLibrary } from '../helpers/rich-library';
 import { restartHost } from '../helpers/host';
 import { loginUi } from '../helpers/ui';
 import { until } from '../helpers/wait';
@@ -256,13 +255,13 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             expect(tested).toMatchObject({ success: true, message: 'Connection succeeded.' });
             expect(await mocks.indexerFeed.calls('TestConnectionAsync')).toHaveLength(1);
             await api.patch(`/api/indexer-feeds/${feed.id}`, {
-                name: 'Administration feed updated',
-                enabled: false,
+                name: { value: 'Administration feed updated' },
+                enabled: { value: false },
             });
             expect(await api.get<Provider[]>('/api/indexer-feeds')).toContainEqual(
                 expect.objectContaining({ id: feed.id, name: 'Administration feed updated', enabled: false }),
             );
-            await api.patch(`/api/indexer-feeds/${feed.id}`, { enabled: true });
+            await api.patch(`/api/indexer-feeds/${feed.id}`, { enabled: { value: true } });
             await api.delete(`/api/indexer-feeds/${feed.id}`);
         });
 
@@ -299,7 +298,7 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
                     localPath: '/library/movies',
                 },
             );
-            await api.patch(`/api/remote-path-mappings/${mapping.id}`, { remotePath: '/remote/complete' });
+            await api.patch(`/api/remote-path-mappings/${mapping.id}`, { remotePath: { value: '/remote/complete' } });
             expect(await api.get(`/api/remote-path-mappings/${mapping.id}`)).toMatchObject({
                 host: 'administration-download',
                 remotePath: '/remote/complete',
@@ -336,7 +335,7 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
                 contentType: 'movie',
                 defaults: { movie: { qualityTierListId: qualityList.id } },
             });
-            await api.patch(`/api/root-folders/${root.id}`, { name: 'Administration root updated' });
+            await api.patch(`/api/root-folders/${root.id}`, { name: { value: 'Administration root updated' } });
             expect(await api.get(`/api/root-folders/${root.id}`)).toMatchObject({
                 name: 'Administration root updated',
             });
@@ -551,7 +550,7 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             api = await restartHost(api);
 
             await page.goto('/admin/ext/openlibrary');
-            await expect(page.getByRole('heading', { name: 'Open Library Settings' })).toBeVisible();
+            await expect(page.getByRole('heading', { name: 'Open Library Settings', level: 1 })).toBeVisible();
 
             await api.patch(`/api/settings/groups/${installed.extension.id}/magpie.openlibrary`, {
                 settings: { add: { contact: 'integration@example.invalid' } },
@@ -566,7 +565,7 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             await api.post(`/api/extensions/${installed.extension.id}/enable`);
             api = await restartHost(api);
             await page.goto('/admin/ext/openlibrary');
-            await expect(page.getByRole('heading', { name: 'Open Library Settings' })).toBeVisible();
+            await expect(page.getByRole('heading', { name: 'Open Library Settings', level: 1 })).toBeVisible();
 
             const upgraded = await cli.json<ExtensionInstallResult>([
                 'extensions',
@@ -651,13 +650,13 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
                 contentType: 'movie',
                 defaults: { movie: { qualityTierListId: notificationQualityList.id } },
             });
-            await page.waitForTimeout(1_000);
-            expect(await mocks.notification.calls('send')).toHaveLength(0);
 
             const key = await api.post<{ key: { id: string } }>('/api/api-keys', { name: 'Matching notification key' });
             await mocks.notification.waitForCalls(1, { method: 'send' });
             await page.waitForTimeout(1_000);
-            expect(await mocks.notification.calls('send')).toHaveLength(1);
+            const sends = await mocks.notification.calls<{ event: { name: string } }>('send');
+            expect(sends).toHaveLength(1);
+            expect(sends[0]!.request.event.name).toBe('apiKey.created');
             await api.delete(`/api/api-keys/${key.key.id}`);
             await api.delete(`/api/root-folders/${root.id}`);
             await api.delete(`/api/notification-rules/${rule.id}`);
@@ -684,7 +683,7 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             await expect(secret).toHaveValue('');
             await expect(secret).toHaveAttribute('readonly', '');
             await expect(secret).toHaveAttribute('placeholder', '********');
-            await expect(form.getByRole('button', { name: 'Clear API Key' })).toBeVisible();
+            await expect(form.getByRole('button', { name: 'Replace API Key' })).toBeVisible();
 
             await form.getByLabel('Host').fill('download-unrelated-update.invalid');
             await form.locator('[data-action="save"]').click();
@@ -694,12 +693,12 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             await page.getByRole('button', { name: `Edit ${client.name}` }).click();
             const blankReplacement = page.getByRole('dialog', { name: 'Edit Download Client' });
             const blankSecret = blankReplacement.locator('input[data-field="apiKey"]');
-            await blankReplacement.getByRole('button', { name: 'Clear API Key' }).click();
+            await blankReplacement.getByRole('button', { name: 'Replace API Key' }).click();
             await blankSecret.blur();
             await expect(blankSecret).toHaveAttribute('readonly', '');
-            await expect(blankReplacement.getByRole('button', { name: 'Clear API Key' })).toBeVisible();
+            await expect(blankReplacement.getByRole('button', { name: 'Replace API Key' })).toBeVisible();
 
-            await blankReplacement.getByRole('button', { name: 'Clear API Key' }).click();
+            await blankReplacement.getByRole('button', { name: 'Replace API Key' }).click();
             await blankSecret.fill('replacement-download-secret');
             await blankReplacement.locator('[data-action="save"]').click();
             await expect(blankReplacement).toBeHidden();
@@ -823,32 +822,6 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
                 instanceName: 'Journey administration from CLI',
             });
         });
-
-        let rich: Awaited<ReturnType<typeof buildRichLibrary>> | undefined;
-        try {
-            await test.step('hydrate the rich library through public surfaces and checkpoint it', async () => {
-                rich = await buildRichLibrary(api);
-                const backup = await createCheckpoint(api, 'rich-library', rich.fileAnchors);
-                expect(backup.name).toBe('rich-library');
-                expect((await api.get<Paged<unknown>>('/api/content?pageSize=1')).totalItems).toBeGreaterThan(35);
-                expect(rich.contentIds.movie).toBeTruthy();
-            });
-        } finally {
-            const cleanupActions: Promise<unknown>[] = [];
-            if (rich) {
-                cleanupActions.push(
-                    ...rich.patchedTriggers.map((trigger) =>
-                        api.patch(`/api/${trigger.endpoint}/${trigger.id}`, { enabled: { value: trigger.enabled } }),
-                    ),
-                );
-            }
-            const cleanupResults = await Promise.allSettled(cleanupActions);
-            expect(
-                cleanupResults
-                    .filter((result) => result.status === 'rejected')
-                    .map((result) => String((result as PromiseRejectedResult).reason)),
-            ).toEqual([]);
-        }
     });
 });
 

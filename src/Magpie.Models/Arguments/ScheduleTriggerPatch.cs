@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 
 using Magpie.Models.Enums;
 using Magpie.Models.Patch;
@@ -39,4 +40,10 @@ public sealed record ScheduleTriggerPatch
     /// The patch for the job parameters.
     /// </summary>
     public DictionaryPatch<string, string, string>? Parameters { get; init; }
+
+    /// <summary>
+    /// The patch for the UTC time of the next run.
+    /// </summary>
+    [JsonIgnore]
+    public ScalarPatch<DateTime?>? NextRunAt { get; init; }
 }

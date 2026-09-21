@@ -167,3 +167,17 @@ describe('SaveFilterDialog', () => {
         });
     });
 });
+
+it('gives simultaneous dialog inputs distinct label targets', () => {
+    render(
+        <>
+            <SaveFilterDialog {...defaultProps} />
+            <SaveFilterDialog {...defaultProps} />
+        </>,
+    );
+    const inputs = document.querySelectorAll<HTMLInputElement>('[data-component="save-filter-dialog"] input');
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0].id).not.toBe(inputs[1].id);
+    expect(inputs[0].labels?.[0]).toHaveTextContent('Filter Name');
+    expect(inputs[1].labels?.[0]).toHaveTextContent('Filter Name');
+});

@@ -51,6 +51,11 @@ public sealed record WishlistPatch : TagsPatch
     public ScalarPatch<bool>? Enabled { get; init; }
 
     /// <summary>
+    /// The patch for the monitoring state of added content.
+    /// </summary>
+    public ScalarPatch<bool?>? Monitoring { get; init; }
+
+    /// <summary>
     /// The patch for the UTC time of the last sync.
     /// </summary>
     public ScalarPatch<DateTime?>? LastSyncedAt { get; init; }

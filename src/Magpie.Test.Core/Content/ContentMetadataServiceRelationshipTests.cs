@@ -34,8 +34,8 @@ public sealed class ContentMetadataServiceRelationshipTests
             {
                 Id = itemId,
                 MetadataContainerId = containerId,
-                ContentType = "scene",
-                Level = "scene",
+                ContentType = "item",
+                Level = "item",
                 Slug = "court-ordered-smoothie",
                 Name = "Court Ordered Smoothie",
             });
@@ -57,7 +57,7 @@ public sealed class ContentMetadataServiceRelationshipTests
                         [
                             new Relationship
                             {
-                                Kind = "performer",
+                                Kind = "director",
                                 RelatedMetadataContainerId = relatedContainerId,
                             },
                         ],
@@ -92,7 +92,7 @@ public sealed class ContentMetadataServiceRelationshipTests
 
         // Act
         var result = await subject
-            .GetRelatedMetadataAsync(itemId, ["performer"])
+            .GetRelatedMetadataAsync(itemId, ["director"])
             .ConfigureAwait(false);
 
         // Assert

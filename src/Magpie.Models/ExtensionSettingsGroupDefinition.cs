@@ -11,15 +11,15 @@ public sealed record ExtensionSettingsGroupDefinition
     /// <summary>
     /// The id of the extension that owns the settings group.
     /// </summary>
-    public required Guid ExtensionId { get; init; }
+    public required Guid ExtensionId { get; set; }
 
     /// <summary>
     /// The name of the settings group.
     /// </summary>
-    public required string Name { get; init; }
+    public required string Name { get; set; }
 
     /// <summary>
     /// The setting definitions of the group.
     /// </summary>
-    public IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; init; } = [];
+    public IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; set; } = [];
 }

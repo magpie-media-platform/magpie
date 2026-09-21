@@ -24,6 +24,11 @@ public sealed record MediaFileQuery
     public IReadOnlyCollection<string>? FilePaths { get; init; }
 
     /// <summary>
+    /// The directory that the file paths must be under, or <c>null</c> for all paths.
+    /// </summary>
+    public string? FilePathPrefix { get; init; }
+
+    /// <summary>
     /// The UTC cutoff for missing or stale media info, or <c>null</c> for all files.
     /// </summary>
     public DateTime? MediaInfoStaleBefore { get; init; }

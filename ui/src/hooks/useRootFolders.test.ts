@@ -261,20 +261,20 @@ describe('useRootFolders', () => {
 
             await act(async () => {
                 await result.current.updateFolder('folder-1', {
-                    name: 'Movies Updated',
-                    path: '/media/movies-new',
-                    contentType: 'ct-movies',
+                    name: { value: 'Movies Updated' },
+                    path: { value: '/media/movies-new' },
+                    contentType: { value: 'ct-movies' },
                     defaultMonitoring: { value: true },
-                    upgradeFileHandling: 'Replace',
+                    upgradeFileHandling: { value: 'Replace' },
                 });
             });
 
             expect(mockApiPatch).toHaveBeenCalledWith('/root-folders/folder-1', {
-                name: 'Movies Updated',
-                path: '/media/movies-new',
-                contentType: 'ct-movies',
+                name: { value: 'Movies Updated' },
+                path: { value: '/media/movies-new' },
+                contentType: { value: 'ct-movies' },
                 defaultMonitoring: { value: true },
-                upgradeFileHandling: 'Replace',
+                upgradeFileHandling: { value: 'Replace' },
             });
         });
 
@@ -297,11 +297,11 @@ describe('useRootFolders', () => {
 
             act(() => {
                 void result.current.updateFolder('folder-1', {
-                    name: 'Updated',
-                    path: '/updated',
-                    contentType: 'ct-movies',
+                    name: { value: 'Updated' },
+                    path: { value: '/updated' },
+                    contentType: { value: 'ct-movies' },
                     defaultMonitoring: { value: true },
-                    upgradeFileHandling: 'Replace',
+                    upgradeFileHandling: { value: 'Replace' },
                 });
             });
 
@@ -416,10 +416,7 @@ describe('useRootFolders', () => {
     describe('query keys', () => {
         it('should export query keys for external use', async () => {
             const { rootFolderQueryKeys } = await import('./useRootFolders');
-
-            expect(rootFolderQueryKeys.all).toEqual(['root-folders']);
             expect(rootFolderQueryKeys.list()).toEqual(['root-folders', 'list']);
-            expect(rootFolderQueryKeys.detail('folder-1')).toEqual(['root-folders', 'detail', 'folder-1']);
         });
     });
 });

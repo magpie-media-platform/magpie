@@ -1,3 +1,4 @@
+import { EXTENSION_CATALOG_EVENTS } from '@/lib/extensionCatalogEvents';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { useAuth } from '@/auth';
@@ -19,7 +20,7 @@ import type {
     JobScopeValue,
     JobTriggerModeValue,
 } from '@/types/jobs';
-import type { PagedList } from '@/types/paging';
+import type { PagedList, SortDirectionName } from '@/types/paging';
 
 export type {
     JobExecutionEffectiveStatusValue,
@@ -28,15 +29,6 @@ export type {
     JobScopeValue,
     JobTriggerModeValue,
 } from '@/types/jobs';
-
-export const jobExecutionStatusLabels: Record<JobExecutionStatusValue, string> = {
-    Queued: 'Queued',
-    Running: 'Running',
-    Completed: 'Completed',
-    Failed: 'Failed',
-    Cancelled: 'Cancelled',
-    CancellationRequested: 'Cancellation Requested',
-};
 
 export const terminalJobExecutionStatuses: ReadonlySet<JobExecutionStatusValue> = new Set([
     'Completed',
@@ -63,8 +55,6 @@ export const jobScopeLabels: Record<JobScopeValue, string> = {
     Content: 'Content',
     User: 'User',
 };
-
-export type RoleValue = 'Viewer' | 'Requester' | 'Manager' | 'Admin';
 
 export interface ApiJobSpec {
     jobType: string;
@@ -125,6 +115,10 @@ export interface ApiJobExecution {
 
     notBeforeAt?: string | null;
 
+    attempt?: number | null;
+
+    originalExecutionId?: string | null;
+
     startedAt?: string | null;
 
     completedAt?: string | null;
@@ -147,6 +141,8 @@ export interface JobExecutionQueryParams {
 
     eventTriggerId?: string;
 
+    correlationId?: string;
+
     status?: JobExecutionEffectiveStatusValue[];
 
     mine?: boolean;
@@ -159,7 +155,7 @@ export interface JobExecutionQueryParams {
 
     sortBy?: string;
 
-    sortDirection?: 0 | 1 | 2;
+    sortDirection?: SortDirectionName;
 }
 
 export const displayStatusToWireStatuses: Record<string, JobExecutionEffectiveStatusValue[]> = {
@@ -183,17 +179,6 @@ export const jobQueryKeys = {
     list: (params?: JobExecutionQueryParams) => ['jobs', 'list', params ?? {}] as const,
     detail: (id: string) => ['jobs', 'detail', id] as const,
 };
-
-const jobExecutionEvents = [
-    'job.execution.created',
-    'job.execution.queued',
-    'job.execution.started',
-    'job.execution.progress.changed',
-    'job.execution.completed',
-    'job.execution.failed',
-    'job.execution.cancellationRequested',
-    'job.execution.cancelled',
-] as const;
 
 export const jobExecutionListEvents = [
     'job.execution.created',
@@ -250,17 +235,10 @@ async function cancelJob(id: string): Promise<void> {
 }
 
 export function useJobSpecs(userTriggerMode?: JobTriggerModeValue) {
-    useInvalidateQueriesOnEvents(
-        [
-            'extension.installed',
-            'extension.enabled',
-            'extension.disabled',
-            'extension.uninstalled',
-            'extension.upgraded',
-        ],
-        [jobQueryKeys.specs(userTriggerMode)],
-        { exact: true, owner: 'jobs:specs' },
-    );
+    useInvalidateQueriesOnEvents(EXTENSION_CATALOG_EVENTS, [jobQueryKeys.specs(userTriggerMode)], {
+        exact: true,
+        owner: 'jobs:specs',
+    });
     const specsQuery = useQuery({
         queryKey: jobQueryKeys.specs(userTriggerMode),
         queryFn: () => fetchJobSpecs(userTriggerMode),
@@ -279,6 +257,7 @@ export function useJobs(params?: JobExecutionQueryParams) {
     const { user } = useAuth();
     const queryClient = useQueryClient();
     const hasFilters = !!(
+        params?.correlationId ||
         params?.eventTriggerId ||
         params?.extensionId ||
         params?.jobType ||
@@ -379,7 +358,7 @@ export function useJobs(params?: JobExecutionQueryParams) {
 }
 
 export function useJobExecution(id: string, enabled = true) {
-    useJobExecutionInvalidation(jobQueryKeys.detail(id), jobExecutionEvents, enabled && Boolean(id), [id]);
+    useJobExecutionInvalidation(jobQueryKeys.detail(id), jobExecutionListEvents, enabled && Boolean(id), [id]);
     const jobQuery = useQuery({
         queryKey: jobQueryKeys.detail(id),
         queryFn: () => fetchJobExecutionById(id),

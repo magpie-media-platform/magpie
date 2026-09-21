@@ -1,3 +1,4 @@
+import type { ScalarPatch } from '@/types/patch';
 import { useMemo } from 'react';
 import { useQuery, useMutation, useQueries, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 
@@ -29,9 +30,9 @@ interface CreateContentFilterRequest {
 }
 
 interface UpdateContentFilterRequest {
-    name?: { value: string };
-    criteria?: { value: ContentFilterCriteria };
-    ownerLock?: { value: boolean | null };
+    name?: ScalarPatch<string>;
+    criteria?: ScalarPatch<ContentFilterCriteria>;
+    ownerLock?: ScalarPatch<boolean | null>;
 }
 
 export interface ContentFilterItem {
@@ -50,7 +51,6 @@ export const contentFilterQueryKeys = {
     all: ['content-filters'] as const,
     shared: ['content-filters', 'shared'] as const,
     my: ['content-filters', 'my'] as const,
-    detail: (id: string) => ['content-filters', 'detail', id] as const,
     formattedCriteria: (fingerprint: string) => ['content-filters', 'formatted-criteria', fingerprint] as const,
     filterFormattedCriteria: (id: string, fingerprint: string) =>
         ['content-filters', 'formatted-criteria', id, fingerprint] as const,
@@ -203,7 +203,7 @@ export function useCreateContentFilter() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({ isShared: _isShared, ...request }: CreateContentFilterRequest & { isShared: boolean }) => {
+        mutationFn: async (request: CreateContentFilterRequest) => {
             return apiPost<ContentFilter>('/content-filters', request);
         },
         onSuccess: () => {
@@ -216,11 +216,7 @@ export function useUpdateContentFilter() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({
-            id,
-            isShared: _isShared,
-            ...request
-        }: UpdateContentFilterRequest & { id: string; isShared: boolean }) => {
+        mutationFn: async ({ id, ...request }: UpdateContentFilterRequest & { id: string }) => {
             return apiPatch<void>(`/content-filters/${id}`, request);
         },
         onSuccess: () => {
@@ -233,7 +229,7 @@ export function useDeleteContentFilter() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({ id, isShared: _isShared }: { id: string; isShared: boolean }) => {
+        mutationFn: async ({ id }: { id: string }) => {
             return apiDelete<void>(`/content-filters/${id}`);
         },
         onSuccess: () => {

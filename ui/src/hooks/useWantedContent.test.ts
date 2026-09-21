@@ -143,6 +143,60 @@ describe('useWantedContent', () => {
         expect(result.current.upgradeItems.map((item) => item.id)).toEqual(['content-upgradable-1']);
     });
 
+    it('stops the shared child loader at fifty pages', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockResolvedValue({
+            items: Array(200).fill(missingItem),
+            pageNumber: 1,
+            pageSize: 200,
+            totalItems: 10200,
+        });
+        // Act
+        const children = await fetchWantedChildren('parent-1');
+        // Assert
+        expect(apiGet).toHaveBeenCalledTimes(50);
+        expect(apiGet).toHaveBeenLastCalledWith(expect.stringContaining('pageNumber=50&pageSize=200'));
+        expect(children.map((item) => item.id)).toEqual(['content-missing-1']);
+    });
+
+    it('reports the list as truncated when the loaded rows fall short of the server total', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockResolvedValue({
+            items: Array(200).fill(missingItem),
+            pageNumber: 1,
+            pageSize: 200,
+            totalItems: 10200,
+        });
+        const { Wrapper } = createWrapper();
+        // Act
+        const { result } = renderHook(() => useWantedContent(), { wrapper: Wrapper });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        // Assert
+        expect(result.current.isTruncated).toBe(true);
+    });
+
+    it('reports the list as complete when every row is loaded', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockResolvedValue(pageOf([missingItem]));
+        const { Wrapper } = createWrapper();
+        // Act
+        const { result } = renderHook(() => useWantedContent(), { wrapper: Wrapper });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        // Assert
+        expect(result.current.isTruncated).toBe(false);
+    });
+
+    it('counts overlapping wanted and upgrade rows once', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockResolvedValue(pageOf([missingItem]));
+        const { Wrapper } = createWrapper();
+        // Act
+        const { result } = renderHook(() => useWantedContent(), { wrapper: Wrapper });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        // Assert
+        expect(result.current.totalItems).toBe(1);
+    });
+
     it('loads monitored descendants through the same content route', async () => {
         await fetchWantedChildren('parent-1');
 

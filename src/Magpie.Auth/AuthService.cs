@@ -41,7 +41,7 @@ internal sealed class AuthService(
     {
         [Permissions.ContentView] = Role.Viewer,
         [Permissions.ContentEdit] = Role.Manager,
-        [Permissions.ContentAdd] = Role.Manager,
+        [Permissions.ContentAdd] = Role.Requester,
         [Permissions.ContentDelete] = Role.Manager,
         [Permissions.ContentRequest] = Role.Requester,
         [Permissions.SubjectsView] = Role.Viewer,
@@ -53,29 +53,29 @@ internal sealed class AuthService(
         [Permissions.ClientsManage] = Role.Admin,
         [Permissions.ServersManage] = Role.Admin,
         [Permissions.FoldersManage] = Role.Admin,
-        [Permissions.JobsView] = Role.Admin,
-        [Permissions.JobsRun] = Role.Manager,
+        [Permissions.JobsView] = Role.Viewer,
+        [Permissions.JobsRun] = Role.Requester,
         [Permissions.JobsSchedule] = Role.Requester,
-        [Permissions.JobsManage] = Role.Admin,
+        [Permissions.JobsManage] = Role.Manager,
         [Permissions.WishlistsView] = Role.Viewer,
         [Permissions.WishlistsOwn] = Role.Requester,
-        [Permissions.WishlistsManage] = Role.Manager,
-        [Permissions.QualityView] = Role.Admin,
+        [Permissions.WishlistsManage] = Role.Requester,
+        [Permissions.QualityView] = Role.Viewer,
         [Permissions.QualityManage] = Role.Admin,
         [Permissions.TagsView] = Role.Viewer,
         [Permissions.TagsManage] = Role.Manager,
         [Permissions.FiltersView] = Role.Viewer,
-        [Permissions.FiltersOwn] = Role.Requester,
-        [Permissions.FiltersManage] = Role.Manager,
+        [Permissions.FiltersOwn] = Role.Viewer,
+        [Permissions.FiltersManage] = Role.Viewer,
         [Permissions.ActivityView] = Role.Viewer,
         [Permissions.CalendarView] = Role.Viewer,
-        [Permissions.SystemView] = Role.Admin,
-        [Permissions.SettingsView] = Role.Admin,
+        [Permissions.SystemView] = Role.Viewer,
+        [Permissions.SettingsView] = Role.Manager,
         [Permissions.SettingsEdit] = Role.Admin,
         [Permissions.UsersManage] = Role.Admin,
         [Permissions.ExtensionsManage] = Role.Admin,
         [Permissions.BackupsManage] = Role.Admin,
-        [Permissions.FilesBrowse] = Role.Admin,
+        [Permissions.FilesBrowse] = Role.Manager,
     }.AsReadOnly();
 
     private static MagpieEvent BuildUserLockedOut(
@@ -113,7 +113,7 @@ internal sealed class AuthService(
         }
 
         logger.LogDebug(
-            "Credential authentication failed for user {Username}. No provider accepted the credentials",
+            "No credential provider accepted the credentials for user {Username}",
             username);
         return null;
     }

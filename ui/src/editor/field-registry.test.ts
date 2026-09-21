@@ -29,10 +29,6 @@ describe('Field Registry', () => {
             publishDate: 'date',
             duration: 'timespan',
             productionStatus: 'string',
-            fileKind: 'string',
-            mimeType: 'string',
-            filePath: 'string',
-            fileSize: 'long',
         };
 
         it('has all expected content scalar fields', () => {
@@ -306,8 +302,8 @@ describe('Field Registry', () => {
             expect(getScalarField(contentFieldRegistry, 'Name')?.name).toBe('name');
             expect(getScalarField(contentFieldRegistry, 'NAME')?.name).toBe('name');
             expect(getScalarField(contentFieldRegistry, 'nAmE')?.name).toBe('name');
-            expect(getScalarField(contentFieldRegistry, 'fileSize')?.name).toBe('fileSize');
-            expect(getScalarField(contentFieldRegistry, 'FILESIZE')?.name).toBe('fileSize');
+            expect(getScalarField(contentFieldRegistry, 'rootFolderId')?.name).toBe('rootFolderId');
+            expect(getScalarField(contentFieldRegistry, 'ROOTFOLDERID')?.name).toBe('rootFolderId');
         });
 
         it('getCollectionField is case-insensitive for names', () => {
@@ -365,7 +361,7 @@ describe('Field Registry', () => {
         it('returns all scalar and collection field names for content', () => {
             const names = getAllFieldNames(contentFieldRegistry);
             expect(names).toContain('name');
-            expect(names).toContain('fileSize');
+            expect(names).not.toContain('fileSize');
             expect(names).toContain('monitoring');
             expect(names).toContain('genre');
             expect(names).toContain('tag');
@@ -379,7 +375,7 @@ describe('Field Registry', () => {
 
         it('returns correct count for content registry', () => {
             const names = getAllFieldNames(contentFieldRegistry);
-            expect(names.length).toBe(33);
+            expect(names.length).toBe(29);
         });
 
         it('returns all scalar and collection field names for subject', () => {
@@ -479,12 +475,11 @@ describe('Field Registry', () => {
     });
 
     describe('Registry Completeness Cross-Check', () => {
-        it('content registry supports all fields used in grammar tests', () => {
+        it('content registry supports the advertised query fields', () => {
             const queriedContentFields = [
                 'name',
                 'monitoring',
                 'contentType',
-                'fileSize',
                 'title',
                 'publishDate',
                 'duration',

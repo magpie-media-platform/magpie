@@ -154,6 +154,8 @@ async function injectProtectedRelativeScript(apiBaseUrl: string, asset: Asset): 
     script.magpieExtensionContext = Object.freeze({
         apiBaseUrl,
         extensionId: asset.extensionId,
+        fetch: (path: string, options: Parameters<typeof apiFetchResponse>[1]) =>
+            apiFetchResponse(path, { baseUrl: apiBaseUrl, ...options }),
         loadAssetText: (relativePath: string) =>
             loadProtectedRelativeAssetText(apiBaseUrl, asset.extensionId, relativePath),
         waitUntil: (work: PromiseLike<unknown>) => {
@@ -244,7 +246,9 @@ async function injectProtectedRelativeStyle(apiBaseUrl: string, asset: Asset): P
 async function injectAsset(apiBaseUrl: string, asset: Asset): Promise<HTMLElement | null> {
     const kind = normalizeAssetKind(asset);
     if (!kind) {
-        console.warn(`[ExtensionLoader] Unknown asset kind "${asset.kind}" for asset "${asset.name}".`);
+        if (import.meta.env.DEV) {
+            console.warn(`[ExtensionLoader] Unknown asset kind "${asset.kind}" for asset "${asset.name}".`);
+        }
         return null;
     }
 
@@ -265,7 +269,9 @@ async function injectAsset(apiBaseUrl: string, asset: Asset): Promise<HTMLElemen
             return injectStyle(url, asset.integrity);
         case 'Link':
             if (!asset.linkRel) {
-                console.warn(`[ExtensionLoader] Link asset "${asset.name}" has no rel attribute.`);
+                if (import.meta.env.DEV) {
+                    console.warn(`[ExtensionLoader] Link asset "${asset.name}" has no rel attribute.`);
+                }
                 return null;
             }
             if (asset.url) {
@@ -397,10 +403,12 @@ export class ExtensionLoader {
                     return false;
                 }
                 if (!isValidCustomElementName(ext.tagName)) {
-                    console.warn(
-                        `[ExtensionLoader] Extension "${ext.name}" has invalid tagName "${ext.tagName}": ` +
-                            `custom element names must contain a hyphen.`,
-                    );
+                    if (import.meta.env.DEV) {
+                        console.warn(
+                            `[ExtensionLoader] Extension "${ext.name}" has invalid tagName "${ext.tagName}": ` +
+                                `custom element names must contain a hyphen.`,
+                        );
+                    }
                     return false;
                 }
                 return true;

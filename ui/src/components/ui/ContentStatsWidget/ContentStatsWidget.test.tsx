@@ -59,16 +59,16 @@ describe('ContentStatsWidget', () => {
         expect(screen.getByText('Fulfilled')).toBeInTheDocument();
         expect(screen.getByText('External')).toBeInTheDocument();
 
-        const missingRow = screen.getByText('Missing').closest('.content-stats-widget__row');
+        const missingRow = screen.getByText('Missing').closest('.status-row');
         expect(missingRow).toHaveTextContent('5');
 
-        const upgradableRow = screen.getByText('Upgradable').closest('.content-stats-widget__row');
+        const upgradableRow = screen.getByText('Upgradable').closest('.status-row');
         expect(upgradableRow).toHaveTextContent('3');
 
-        const fulfilledRow = screen.getByText('Fulfilled').closest('.content-stats-widget__row');
+        const fulfilledRow = screen.getByText('Fulfilled').closest('.status-row');
         expect(fulfilledRow).toHaveTextContent('42');
 
-        const externalRow = screen.getByText('External').closest('.content-stats-widget__row');
+        const externalRow = screen.getByText('External').closest('.status-row');
         expect(externalRow).toHaveTextContent('8');
     });
 
@@ -98,14 +98,14 @@ describe('ContentStatsWidget loading state', () => {
     it('shows skeleton rows when loading', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} loading />);
 
-        const skeletonRows = document.querySelectorAll('.content-stats-widget__row--skeleton');
+        const skeletonRows = document.querySelectorAll('.status-row [data-component="skeleton"]');
         expect(skeletonRows.length).toBe(5);
     });
 
     it('shows skeleton items when loading', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} loading />);
 
-        const skeletonItems = document.querySelectorAll('.content-stats-widget__item--skeleton');
+        const skeletonItems = document.querySelectorAll('.content-stats-widget__item[data-component="skeleton"]');
         expect(skeletonItems.length).toBe(2);
     });
 
@@ -167,7 +167,7 @@ describe('ContentStatsWidget recent items', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={recentItems} />);
 
         const items = document.querySelectorAll(
-            '.content-stats-widget__item:not(.content-stats-widget__item--skeleton)',
+            '.content-stats-widget__item:not(.content-stats-widget__item[data-component="skeleton"])',
         );
         expect(items[0]).toHaveAttribute('data-status', 'fulfilled');
         expect(items[1]).toHaveAttribute('data-status', 'missing');
@@ -236,7 +236,7 @@ describe('ContentStatsWidget navigation', () => {
 
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} getStatusUrl={getStatusUrl} />);
 
-        const missingRow = screen.getByText('Missing').closest('.content-stats-widget__row');
+        const missingRow = screen.getByText('Missing').closest('.status-row');
         expect(missingRow?.tagName).toBe('A');
         expect(missingRow).toHaveAttribute('href', '/library?fulfillment=missing');
     });
@@ -244,7 +244,7 @@ describe('ContentStatsWidget navigation', () => {
     it('renders status rows as divs when getStatusUrl is not provided', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} />);
 
-        const missingRow = screen.getByText('Missing').closest('.content-stats-widget__row');
+        const missingRow = screen.getByText('Missing').closest('.status-row');
         expect(missingRow?.tagName).toBe('DIV');
     });
 
@@ -258,7 +258,7 @@ describe('ContentStatsWidget navigation', () => {
             />,
         );
 
-        const missingRow = screen.getByText('Missing').closest('.content-stats-widget__row');
+        const missingRow = screen.getByText('Missing').closest('.status-row');
         expect(missingRow?.tagName).toBe('DIV');
         expect(missingRow).not.toHaveAttribute('data-clickable');
     });
@@ -268,7 +268,7 @@ describe('ContentStatsWidget navigation', () => {
 
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} getStatusUrl={getStatusUrl} />);
 
-        const missingRow = screen.getByText('Missing').closest('.content-stats-widget__row');
+        const missingRow = screen.getByText('Missing').closest('.status-row');
         expect(missingRow).toHaveAttribute('data-clickable');
     });
 
@@ -370,19 +370,11 @@ describe('ContentStatsWidget data attributes', () => {
     it('applies data-status to each status row', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} />);
 
-        expect(screen.getByText('Missing').closest('.content-stats-widget__row')).toHaveAttribute(
-            'data-status',
-            'missing',
-        );
-        expect(screen.getByText('Upgradable').closest('.content-stats-widget__row')).toHaveAttribute(
-            'data-status',
-            'upgradable',
-        );
-        expect(screen.getByText('Fulfilled').closest('.content-stats-widget__row')).toHaveAttribute(
-            'data-status',
-            'fulfilled',
-        );
-        expect(screen.getByText('External').closest('.content-stats-widget__row')).toHaveAttribute(
+        expect(screen.getByText('Missing').closest('.status-row')).toHaveAttribute('data-status', 'missing');
+        expect(screen.getByText('Missing').closest('.status-row')).toHaveAttribute('data-status', 'missing');
+        expect(screen.getByText('Upgradable').closest('.status-row')).toHaveAttribute('data-status', 'upgradable');
+        expect(screen.getByText('Fulfilled').closest('.status-row')).toHaveAttribute('data-status', 'fulfilled');
+        expect(screen.getByText('External').closest('.status-row')).toHaveAttribute(
             'data-status',
             'fulfilledExternally',
         );
@@ -404,7 +396,7 @@ describe('ContentStatsWidget accessibility', () => {
         const getStatusUrl = (status: FulfillmentStatus) => `/library?fulfillment=${status}`;
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} getStatusUrl={getStatusUrl} />);
 
-        const missingRow = screen.getByText('Missing').closest('.content-stats-widget__row');
+        const missingRow = screen.getByText('Missing').closest('.status-row');
         expect(missingRow).toHaveAttribute('aria-label', 'View 5 missing items');
     });
 
@@ -430,7 +422,7 @@ describe('ContentStatsWidget accessibility', () => {
     it('status indicators are hidden from screen readers', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} />);
 
-        const indicators = document.querySelectorAll('.content-stats-widget__indicator');
+        const indicators = document.querySelectorAll('.status-row__indicator');
         indicators.forEach((indicator) => {
             expect(indicator).toHaveAttribute('aria-hidden', 'true');
         });

@@ -98,7 +98,6 @@ export function FirstIndexerStep({ onAdvance }: FirstIndexerStepProps): ReactNod
             <IndexerForm
                 open={formOpen}
                 onOpenChange={setFormOpen}
-                initialValues={null}
                 onSubmit={handleSubmit}
                 isSubmitting={isCreatingIndexer}
             />

@@ -8,10 +8,10 @@ public sealed record DatabaseSetupResult
     /// <summary>
     /// The id of the configured database provider.
     /// </summary>
-    public required string Provider { get; set; }
+    public required string Provider { get; init; }
 
     /// <summary>
     /// Whether the host must restart for the configuration to take effect.
     /// </summary>
-    public required bool RestartRequired { get; set; }
+    public required bool RestartRequired { get; init; }
 }

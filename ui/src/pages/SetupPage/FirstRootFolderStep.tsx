@@ -104,6 +104,7 @@ export function FirstRootFolderStep({ onAdvance }: FirstRootFolderStepProps): Re
                 onOpenChange={setFormOpen}
                 initialValues={null}
                 contentTypes={contentTypes}
+                contentTypesWithFolders={folders.map((folder) => folder.contentType)}
                 onSubmit={handleSubmit}
                 isSubmitting={isCreating}
             />

@@ -24,11 +24,6 @@ internal static class CommandHttpRequestExecutionExtensions
         TextWriter error,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(transportOptions);
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(error);
-
         var transportFactory = new CommandTransportFactory(localAppFactory);
 
         ICommandTransport transport;
@@ -169,7 +164,11 @@ internal static class CommandHttpRequestExecutionExtensions
     {
         var contentDisposition = response.Content.Headers.ContentDisposition;
         var fileName = contentDisposition?.FileNameStar ?? contentDisposition?.FileName;
-        return fileName?.Trim('"');
+        var name = Path.GetFileName(fileName?.Trim('"').Replace('\\', '/'));
+        return string.IsNullOrWhiteSpace(name) || name is "." or ".." ||
+            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.Contains(':')
+                ? null
+                : name;
     }
 
     private static Task WriteTransportFailureAsync(Exception exception, TextWriter error)

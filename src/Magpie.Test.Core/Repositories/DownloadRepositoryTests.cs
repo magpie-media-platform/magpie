@@ -5,7 +5,9 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
@@ -14,9 +16,9 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -29,12 +31,13 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class DownloadRepositoryTests
+public sealed class DownloadRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IDownloadRepository _subject = null!;
     private ITransactionManager _transactionManager = null!;
     private List<MagpieEvent> _publishedEvents = null!;
+    private Mock<IDataProtectionService> _protector = null!;
     private Guid _userId;
     private Guid _downloadClientId;
 
@@ -79,7 +82,9 @@ public class DownloadRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         _transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _publishedEvents = [];
@@ -89,12 +94,18 @@ public class DownloadRepositoryTests
             .Callback((MagpieEvent magpieEvent, CancellationToken _) => _publishedEvents.Add(magpieEvent))
             .Returns(Task.CompletedTask);
 
+        _protector = new Mock<IDataProtectionService>();
+        _protector.Setup(p => p.Unprotect(It.IsAny<IReadOnlyDictionary<string, string>>()))
+            .Returns((IReadOnlyDictionary<string, string> settings) => new Dictionary<string, string>(settings));
+
         _subject = new DownloadRepository(
             _context,
             auditRecordRepository,
             _transactionManager,
             eventBus.Object,
-            loggerFactory.CreateLogger<DownloadRepository>());
+            loggerFactory.CreateLogger<DownloadRepository>(),
+            _protector.Object,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -105,7 +116,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task UpdateRefreshedStatusAsync_DefersStatusEvent_UntilWrappedTransactionCommits()
+    public async Task UpdateRefreshedStatusAsync_DefersStatusEvent_WhenTheOuterTransactionIsOpen()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -147,7 +158,7 @@ public class DownloadRepositoryTests
         {
             Assert.That(eventsDuringTransaction, Is.Zero);
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
-            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.DownloadCompleted));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("download.completed"));
         }
     }
 
@@ -169,9 +180,8 @@ public class DownloadRepositoryTests
         _publishedEvents.Clear();
 
         // Act
-        // Assert
-        Assert.That(
-            async () => await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        var act = (AsyncTestDelegate)(async () =>
+            await _transactionManager.ExecuteWithTransactionAsync(async ct =>
             {
                 await _subject.UpdateRefreshedStatusAsync(
                     download.Id,
@@ -188,8 +198,10 @@ public class DownloadRepositoryTests
                     _userId,
                     ct).ConfigureAwait(false);
                 throw new InvalidOperationException("boom");
-            }).ConfigureAwait(false),
-            Throws.InstanceOf<InvalidOperationException>());
+            }).ConfigureAwait(false));
+
+        // Assert
+        Assert.ThrowsAsync<InvalidOperationException>(act);
         Assert.That(_publishedEvents, Is.Empty);
     }
 
@@ -404,7 +416,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByContentItemId_IgnoresCandidateScopeWithoutDownload()
+    public async Task QueryAsync_FiltersByContentItemId_WhenOnlyCandidateScopeExists()
     {
         // Arrange
         var metadataContainerId = Guid.NewGuid();
@@ -468,7 +480,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByContentItemId_ReturnsDownloadWithRealizedScope()
+    public async Task QueryAsync_FiltersByContentItemId_WhenRealizedScopeExists()
     {
         // Arrange
         var metadataContainerId = Guid.NewGuid();
@@ -824,7 +836,7 @@ public class DownloadRepositoryTests
 
         // Assert
         var updated = await _subject.GetByIdAsync(download.Id).ConfigureAwait(false);
-        var downloadEvent = _publishedEvents.Single(e => e.Name == MagpieEvents.Names.DownloadUpdated);
+        var downloadEvent = _publishedEvents.Single(e => e.Name == "download.updated");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -834,8 +846,8 @@ public class DownloadRepositoryTests
             Assert.That(updated, Has.Property(nameof(updated.OutputPath)).EqualTo("/new/path"));
             Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_userId));
             Assert.That(updated, Has.Property(nameof(updated.ModifiedAt)).Not.Null);
-            Assert.That(downloadEvent.Context[MagpieEvents.Keys.DownloadId], Is.EqualTo(download.Id.ToString("D")));
-            Assert.That(downloadEvent.Context[MagpieEvents.Keys.DownloadChangedFields], Does.Contain("title"));
+            Assert.That(downloadEvent.Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
+            Assert.That(downloadEvent.Context["download.changedFields"], Does.Contain("title"));
         }
     }
 
@@ -909,12 +921,12 @@ public class DownloadRepositoryTests
 
         // Assert
         var deleted = await _subject.GetByIdAsync(download.Id).ConfigureAwait(false);
-        var downloadEvent = _publishedEvents.Single(e => e.Name == MagpieEvents.Names.DownloadDeleted);
+        var downloadEvent = _publishedEvents.Single(e => e.Name == "download.deleted");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
             Assert.That(deleted, Is.Null);
-            Assert.That(downloadEvent.Context[MagpieEvents.Keys.DownloadId], Is.EqualTo(download.Id.ToString("D")));
+            Assert.That(downloadEvent.Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
         }
     }
 
@@ -1143,7 +1155,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByStatuses_Set()
+    public async Task QueryAsync_ReturnsMatchingStatuses_WhenAStatusSetIsProvided()
     {
         // Arrange
         _context.Downloads.AddRange(
@@ -1191,7 +1203,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_SortsByDateCompletedDescending_UsingTerminalTimestamp()
+    public async Task QueryAsync_SortsByDateCompletedDescending_WhenCompletionDatesDiffer()
     {
         // Arrange
         var completed = new Download
@@ -1243,7 +1255,75 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task BulkDeleteAsync_DeletesOnlyTheFilteredSet_AndReturnsCount()
+    public async Task QueryAsync_ReturnsLatestScopedImport_WhenHistoryIncludesUnrelatedAndIncompleteDownloads()
+    {
+        // Arrange
+        var node = new ContentHierarchyItem
+        {
+            ContentType = "type-a",
+            Level = "leaf",
+            Slug = "example",
+            Name = "Example",
+            MetadataContainer = new MetadataContainer()
+        };
+        var older = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "older",
+            Title = "Older",
+            Status = DownloadStatus.Imported,
+            DateCompleted = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var latest = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "latest",
+            Title = "Latest",
+            Status = DownloadStatus.Imported,
+            ModifiedAt = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var unrelated = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "unrelated",
+            Title = "Unrelated",
+            Status = DownloadStatus.Imported,
+            DateCompleted = new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var incomplete = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "incomplete",
+            Title = "Incomplete",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = new DateTime(2026, 1, 4, 0, 0, 0, DateTimeKind.Utc)
+        };
+        _context.ContentHierarchyItems.Add(node);
+        _context.Downloads.AddRange(older, latest, unrelated, incomplete);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.DownloadScopes.AddRange(
+            new DownloadScope { DownloadId = older.Id, ContentHierarchyItemId = node.Id },
+            new DownloadScope { DownloadId = latest.Id, ContentHierarchyItemId = node.Id },
+            new DownloadScope { DownloadId = incomplete.Id, ContentHierarchyItemId = node.Id });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(
+            new DownloadQuery { ContentHierarchyItemIds = [node.Id], Status = DownloadStatus.Imported },
+            new PagingParameter { PageNumber = 1, PageSize = 1 },
+            new SortParameter { PropertyName = "DateCompleted", Direction = SortDirection.Descending })
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Items.Single().ExternalId, Is.EqualTo("latest"));
+            Assert.That(result.TotalItems, Is.EqualTo(2));
+        }
+    }
+
+    [Test]
+    public async Task BulkDeleteAsync_DeletesMatchingRowsAndReturnsCount_WhenFiltersAreSet()
     {
         // Arrange
         var keep = new Download
@@ -1281,8 +1361,8 @@ public class DownloadRepositoryTests
         // Assert
         var remaining = await _context.Downloads.AsNoTracking().ToListAsync().ConfigureAwait(false);
         var deletedIds = _publishedEvents
-            .Where(e => e.Name == MagpieEvents.Names.DownloadDeleted)
-            .Select(e => e.Context[MagpieEvents.Keys.DownloadId]);
+            .Where(e => e.Name == "download.deleted")
+            .Select(e => e.Context["download.id"]);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Count, Is.EqualTo(2));
@@ -1375,7 +1455,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task BulkDeleteAsync_WritesOneAuditRecord_ForTheWholeDelete()
+    public async Task BulkDeleteAsync_WritesOneAuditRecord_WhenMultipleDownloadsAreDeleted()
     {
         // Arrange
         _context.Downloads.AddRange(
@@ -1507,7 +1587,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task MarkFailedAsync_RetainsReleaseScope_ForDownload()
+    public async Task MarkFailedAsync_RetainsReleaseScope_WhenADownloadFails()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -1630,6 +1710,7 @@ public class DownloadRepositoryTests
     [Test]
     [TestCase(DownloadStatus.Cancelled)]
     [TestCase(DownloadStatus.Imported)]
+    [TestCase(DownloadStatus.Importing)]
     public async Task UpdateRefreshedStatusAsync_ReturnsFalseAndKeepsStatus_WhenDownloadIsTerminal(
         DownloadStatus status)
     {
@@ -1715,8 +1796,8 @@ public class DownloadRepositoryTests
             Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Downloading));
             Assert.That(stored.Progress, Is.EqualTo(0.5m));
             Assert.That(downloadEvents, Has.Count.EqualTo(1));
-            Assert.That(downloadEvents[0].Name, Is.EqualTo(MagpieEvents.Names.DownloadUpdated));
-            Assert.That(downloadEvents[0].Context[MagpieEvents.Keys.DownloadId], Is.EqualTo(download.Id.ToString("D")));
+            Assert.That(downloadEvents[0].Name, Is.EqualTo("download.updated"));
+            Assert.That(downloadEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
         }
     }
 
@@ -1829,7 +1910,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryQueueEntriesAsync_ResolvesTitleViaScopeRows_PreferringGrabTargetOverCoveredChildren()
+    public async Task QueryQueueEntriesAsync_ResolvesTitleViaScopeRows_WhenGrabTargetAndChildrenHaveTitles()
     {
         // Arrange
         var seasonContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1914,7 +1995,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryQueueEntriesAsync_LeavesContentFieldsNull_ForOrphanDownload()
+    public async Task QueryQueueEntriesAsync_LeavesContentFieldsNull_WhenTheDownloadHasNoContent()
     {
         // Arrange
         _context.Downloads.Add(new Download
@@ -2044,9 +2125,15 @@ public class DownloadRepositoryTests
         };
         contribution.Images.Add(new Image
         {
-            Ordinal = 0,
+            Ordinal = 4,
             Type = "poster",
             Url = new Uri("https://images.example/poster.jpg")
+        });
+        contribution.Images.Add(new Image
+        {
+            Ordinal = 0,
+            Type = "backdrop",
+            Url = new Uri("https://images.example/backdrop.jpg")
         });
         _context.MetadataContributions.Add(contribution);
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -2125,7 +2212,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryQueueEntriesAsync_LeavesPosterAndReleaseInfoUrlNull_ForOrphanAndNoPoster()
+    public async Task QueryQueueEntriesAsync_LeavesPosterAndReleaseInfoUrlNull_WhenTheDownloadHasNoPoster()
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -2417,7 +2504,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryQueueEntriesAsync_SortsByDateCompletedDescending_UsingTerminalTimestamp()
+    public async Task QueryQueueEntriesAsync_SortsByDateCompletedDescending_WhenCompletionDatesDiffer()
     {
         // Arrange
         _context.Downloads.AddRange(
@@ -2464,7 +2551,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task QueryQueueEntriesAsync_SortsByProgress_FromCamelCaseSortKey()
+    public async Task QueryQueueEntriesAsync_SortsByProgress_WhenCamelCaseSortKeyIsProvided()
     {
         // Arrange
         var chains = new Dictionary<string, (Guid ReleaseId, Guid ContentItemId, Guid HierarchyItemId, string Name)>();
@@ -2726,18 +2813,21 @@ public class DownloadRepositoryTests
     public async Task ListStuckCandidatesAsync_AnchorsOnCreatedAt_WhenLastProgressAtIsNull()
     {
         // Arrange
-        var now = DateTime.UtcNow;
-        var agedTime = new FakeTimeProvider(DateTimeOffset.UtcNow.AddHours(-3));
+        var now = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc);
+        var agedTime = new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 9, 0, 0, TimeSpan.Zero));
         var agedRepository = new DownloadRepository(
             _context,
             new AuditRecordRepository(
                 _context,
                 Mock.Of<IEventBus>(),
                 NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
-                new TransactionManager(_context, NullLogger<TransactionManager>.Instance)),
+                new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+                Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             NullLoggerFactory.Instance.CreateLogger<DownloadRepository>(),
+            _protector.Object,
             agedTime);
         var aged = new Download
         {
@@ -2772,7 +2862,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task ListStuckCandidatesAsync_ExcludesPausedRows_DespiteOldProgressAnchor()
+    public async Task ListStuckCandidatesAsync_ExcludesPausedRows_WhenPausedProgressIsOld()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -2795,7 +2885,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task ListStuckCandidatesAsync_ExcludesRowsOnUnhealthyOrStaleClients_IncludesUnknown()
+    public async Task ListStuckCandidatesAsync_ExcludesUnhealthyAndStaleClients_WhenClientHealthVaries()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -2966,7 +3056,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task ListCleanupCandidatesAsync_ReturnsUnstampedTerminalRows_ExcludingAlreadyStamped()
+    public async Task ListCleanupCandidatesAsync_ReturnsUnstampedTerminalRows_WhenRemovalTimestampsDiffer()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -3155,7 +3245,7 @@ public class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task DeleteClearedFailedDownloadsAsync_DeletesAgedFailedRows_KeepsFreshFailedAndOtherStatuses()
+    public async Task DeleteClearedFailedDownloadsAsync_DeletesOnlyAgedFailures_WhenAgeAndStatusVary()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -3223,10 +3313,13 @@ public class DownloadRepositoryTests
                 _context,
                 Mock.Of<IEventBus>(),
                 NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
-                new TransactionManager(_context, NullLogger<TransactionManager>.Instance)),
+                new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+                Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             NullLoggerFactory.Instance.CreateLogger<DownloadRepository>(),
+            _protector.Object,
             agedTime);
         var agedNoTimestamp = new Download
         {
@@ -3471,8 +3564,8 @@ public class DownloadRepositoryTests
             Assert.That(deleted, Is.EqualTo(1));
             Assert.That(await _context.Downloads.AnyAsync(d => d.Id == orphan.Id).ConfigureAwait(false), Is.False);
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
-            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.DownloadDeleted));
-            Assert.That(_publishedEvents[0].Context[MagpieEvents.Keys.DownloadId], Is.EqualTo(orphan.Id.ToString("D")));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("download.deleted"));
+            Assert.That(_publishedEvents[0].Context["download.id"], Is.EqualTo(orphan.Id.ToString("D")));
         }
     }
 
@@ -3554,8 +3647,8 @@ public class DownloadRepositoryTests
             Assert.That(transitioned, Is.True);
             Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Importing));
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
-            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.DownloadUpdated));
-            Assert.That(_publishedEvents[0].Context[MagpieEvents.Keys.DownloadChangedFields], Is.EqualTo("status"));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("download.updated"));
+            Assert.That(_publishedEvents[0].Context["download.changedFields"], Is.EqualTo("status"));
         }
     }
 
@@ -3618,7 +3711,7 @@ public class DownloadRepositoryTests
         {
             Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Imported));
             Assert.That(downloadEvents, Has.Count.EqualTo(1));
-            Assert.That(downloadEvents[0].Name, Is.EqualTo(MagpieEvents.Names.DownloadImported));
+            Assert.That(downloadEvents[0].Name, Is.EqualTo("download.imported"));
         }
     }
 
@@ -3701,14 +3794,14 @@ public class DownloadRepositoryTests
         {
             Assert.That(applied, Is.True);
             Assert.That(downloadEvents, Has.Count.EqualTo(1));
-            Assert.That(downloadEvents[0].Name, Is.EqualTo(MagpieEvents.Names.DownloadStalled));
-            Assert.That(downloadEvents[0].Context[MagpieEvents.Keys.DownloadStallReason], Is.EqualTo("client stalled"));
+            Assert.That(downloadEvents[0].Name, Is.EqualTo("download.stalled"));
+            Assert.That(downloadEvents[0].Context["download.stallReason"], Is.EqualTo("client stalled"));
         }
     }
 
-    [TestCase(DownloadStatus.Downloaded, MagpieEvents.Names.DownloadCompleted)]
-    [TestCase(DownloadStatus.Failed, MagpieEvents.Names.DownloadFailed)]
-    [TestCase(DownloadStatus.Stalled, MagpieEvents.Names.DownloadStalled)]
+    [TestCase(DownloadStatus.Downloaded, "download.completed")]
+    [TestCase(DownloadStatus.Failed, "download.failed")]
+    [TestCase(DownloadStatus.Stalled, "download.stalled")]
     public async Task UpdateRefreshedStatusAsync_PublishesSingleSemanticEvent_WhenStatusTransitions(
         DownloadStatus status,
         string expectedEventName)
@@ -3750,12 +3843,12 @@ public class DownloadRepositoryTests
             Assert.That(applied, Is.True);
             Assert.That(downloadEvents, Has.Count.EqualTo(1));
             Assert.That(downloadEvents[0].Name, Is.EqualTo(expectedEventName));
-            Assert.That(downloadEvents[0].Context[MagpieEvents.Keys.DownloadId], Is.EqualTo(download.Id.ToString("D")));
+            Assert.That(downloadEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
         }
     }
 
     [Test]
-    public async Task ListImportedByContentHierarchyItemAsync_ReturnsImportedDownloadCoveringItem_WithinWindow()
+    public async Task ListImportedByContentHierarchyItemAsync_ReturnsMatchingImports_WhenInsideTheWindow()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -3812,6 +3905,349 @@ public class DownloadRepositoryTests
             Assert.That(downloads[0].ReleaseIdentityKeys, Has.Count.EqualTo(1));
             Assert.That(identity.Authority, Is.EqualTo("provider"));
             Assert.That(identity.Value, Is.EqualTo("pack-key"));
+        }
+    }
+
+    [Test]
+    public async Task ListClientResidentByContentItemsAsync_LoadsTheScopes_WhenADownloadIsResident()
+    {
+        // Arrange
+        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var hierarchyItem = new ContentHierarchyItem
+        {
+            MetadataContainerId = container.Id,
+            ContentType = "test",
+            Level = "level",
+            Slug = Guid.NewGuid().ToString("N"),
+            Name = $"Item-{Guid.NewGuid():N}",
+            Monitoring = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var contentItem = new ContentItem
+        {
+            ContentHierarchyItemId = hierarchyItem.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(contentItem);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "resident-ext",
+            Title = "Resident",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.DownloadScopes.Add(new DownloadScope
+        {
+            DownloadId = download.Id,
+            ContentHierarchyItemId = hierarchyItem.Id
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.ListClientResidentByContentItemsAsync([contentItem.Id]).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Select(item => item.Id), Is.EqualTo([download.Id]));
+            Assert.That(
+                result[0].Scope.Select(scope => scope.ContentHierarchyItemId),
+                Is.EqualTo([hierarchyItem.Id]));
+        }
+    }
+
+    [TestCase("posterUrl")]
+    [TestCase("providerType")]
+    [TestCase("contentMetadataTitle")]
+    [TestCase("contentHierarchyItemId")]
+    [TestCase("contentHierarchyParentId")]
+    [TestCase("releaseInfoUrl")]
+    [TestCase("canPause")]
+    [TestCase("canResume")]
+    [TestCase("canForceStart")]
+    [TestCase("scope")]
+    public async Task QueryQueueEntriesAsync_ReturnsPage_WhenSortIsNotMapped(string propertyName)
+    {
+        // Arrange
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Queue entry",
+            ExternalId = "queue-entry"
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.QueryQueueEntriesAsync(
+            new(), new() { PageNumber = 1, PageSize = 10 },
+            new() { PropertyName = propertyName, Direction = SortDirection.Ascending })
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(page.Items.Select(d => d.Title), Is.EqualTo(["Queue entry"]));
+    }
+
+    [Test]
+    public async Task BulkPatchAsync_RollsBackAllRows_WhenAuditFails()
+    {
+        // Arrange
+        _context.Downloads.AddRange(
+            new Download
+            {
+                DownloadClientId = _downloadClientId,
+                Title = "First",
+                ExternalId = "first",
+                Status = DownloadStatus.Downloading
+            },
+            new Download
+            {
+                DownloadClientId = _downloadClientId,
+                Title = "Second",
+                ExternalId = "second",
+                Status = DownloadStatus.Downloading
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var audit = new Mock<IAuditRecordRepository>();
+        audit.Setup(a => a.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Audit failed."));
+        var subject = new DownloadRepository(_context, audit.Object, _transactionManager,
+            Mock.Of<IEventBus>(), NullLogger<DownloadRepository>.Instance, _protector.Object,
+            new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+
+        // Act
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await subject.BulkPatchAsync(
+            new() { Filter = new(), Patch = new() { Status = new() { Value = DownloadStatus.Cancelled } } },
+            _userId).ConfigureAwait(false));
+
+        // Assert
+        var statuses = await _context.Downloads.AsNoTracking().Select(d => d.Status).ToListAsync()
+            .ConfigureAwait(false);
+        Assert.That(statuses, Is.EqualTo([DownloadStatus.Downloading, DownloadStatus.Downloading]));
+    }
+
+    [Test]
+    public async Task BulkPatchAsync_WritesAuditForEachDownload_WhenMultipleRowsMatch()
+    {
+        // Arrange
+        _context.Downloads.AddRange(
+            new Download
+            {
+                Id = Guid.Parse("db6fb62d-844b-4db7-9834-77f06b3d6846"),
+                DownloadClientId = _downloadClientId,
+                Title = "First",
+                ExternalId = "first",
+                Status = DownloadStatus.Downloading
+            },
+            new Download
+            {
+                Id = Guid.Parse("0f30ee1a-43c9-4d33-b295-cf82f21ab143"),
+                DownloadClientId = _downloadClientId,
+                Title = "Second",
+                ExternalId = "second",
+                Status = DownloadStatus.Downloading
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.BulkPatchAsync(
+            new() { Filter = new(), Patch = new() { Status = new() { Value = DownloadStatus.Cancelled } } },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var audits = await _context.AuditRecords.AsNoTracking().OrderBy(a => a.Detail).ToListAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Count, Is.EqualTo(2));
+            Assert.That(audits.Select(a => a.EntityId), Is.EqualTo(
+            [
+                "db6fb62d-844b-4db7-9834-77f06b3d6846", "0f30ee1a-43c9-4d33-b295-cf82f21ab143"
+            ]));
+            Assert.That(audits.Select(a => a.Detail), Is.EqualTo(
+            [
+                "Updated download First.", "Updated download Second."
+            ]));
+            Assert.That(audits.Select(a => a.EntityType), Is.All.EqualTo("Download"));
+            Assert.That(audits.Select(a => a.Operation), Is.All.EqualTo("Patch"));
+            Assert.That(audits.Select(a => a.UserId), Is.All.EqualTo(_userId));
+            Assert.That(_publishedEvents, Has.Count.EqualTo(2));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_WritesAuditWithTitle_WhenDownloadExists()
+    {
+        // Arrange
+        var download = new Download
+        {
+            Id = Guid.Parse("db6fb62d-844b-4db7-9834-77f06b3d6846"),
+            DownloadClientId = _downloadClientId,
+            Title = "First",
+            ExternalId = "first",
+            Status = DownloadStatus.Downloading
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.PatchAsync(
+            new() { Id = download.Id, Status = new() { Value = DownloadStatus.Cancelled } },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var audit = await _context.AuditRecords.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(audit.EntityId, Is.EqualTo("db6fb62d-844b-4db7-9834-77f06b3d6846"));
+            Assert.That(audit.Detail, Is.EqualTo("Updated download First."));
+            Assert.That(audit.EntityType, Is.EqualTo("Download"));
+            Assert.That(audit.Operation, Is.EqualTo("Patch"));
+            Assert.That(audit.UserId, Is.EqualTo(_userId));
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task DeleteClearedFailedDownloadsAsync_RollsBackDeletion_WhenAuditFails()
+    {
+        // Arrange
+        _context.Downloads.Add(new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Failed",
+            ExternalId = "failed",
+            Status = DownloadStatus.Failed,
+            CreatedAt = new DateTime(2026, 1, 1)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var audit = new Mock<IAuditRecordRepository>();
+        audit.Setup(a => a.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Audit failed."));
+        var subject = new DownloadRepository(_context, audit.Object, _transactionManager,
+            Mock.Of<IEventBus>(), NullLogger<DownloadRepository>.Instance, _protector.Object,
+            new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+
+        // Act
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await subject.DeleteClearedFailedDownloadsAsync(
+            new DateTime(2026, 2, 1)).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ListCandidatesAsync_DecryptsSettings_WhenClientIsProtected(bool stuck)
+    {
+        // Arrange
+        _context.Downloads.Add(new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Candidate",
+            ExternalId = "candidate",
+            Status = stuck ? DownloadStatus.Downloading : DownloadStatus.Failed,
+            CreatedAt = new DateTime(2026, 1, 1)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _protector.Setup(p => p.Unprotect(It.IsAny<IReadOnlyDictionary<string, string>>()))
+            .Returns(new Dictionary<string, string> { ["password"] = "clear-value" });
+
+        // Act
+        var settings = stuck
+            ? (await _subject.ListStuckCandidatesAsync(new DateTime(2026, 2, 1), new DateTime(2026, 2, 1))
+                .ConfigureAwait(false)).Single().Settings
+            : (await _subject.ListCleanupCandidatesAsync().ConfigureAwait(false)).Single().Settings;
+
+        // Assert
+        Assert.That(settings?["password"], Is.EqualTo("clear-value"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ListCandidatesAsync_ReportsNullSettings_WhenSettingsCannotBeRead(bool stuck)
+    {
+        // Arrange
+        _context.Downloads.Add(new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Candidate",
+            ExternalId = "candidate",
+            Status = stuck ? DownloadStatus.Downloading : DownloadStatus.Failed,
+            CreatedAt = new DateTime(2026, 1, 1)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _protector.Setup(p => p.Unprotect(It.IsAny<IReadOnlyDictionary<string, string>>()))
+            .Throws(new InvalidOperationException("Unreadable settings."));
+
+        // Act
+        var settings = stuck
+            ? (await _subject.ListStuckCandidatesAsync(new DateTime(2026, 2, 1), new DateTime(2026, 2, 1))
+                .ConfigureAwait(false)).Single().Settings
+            : (await _subject.ListCleanupCandidatesAsync().ConfigureAwait(false)).Single().Settings;
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(settings, Is.Null);
+            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task MarkImportingAsync_RollsBackDownload_WhenAcquisitionWriteFails()
+    {
+        // Arrange
+        var node = new ContentHierarchyItem
+        {
+            MetadataContainer = new(),
+            ContentType = "test",
+            Level = "item",
+            Slug = "test",
+            Name = "Test",
+            ContentItem = new() { ActiveAcquisitionStatus = DownloadStatus.Downloaded }
+        };
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Downloaded",
+            ExternalId = "downloaded",
+            Status = DownloadStatus.Downloaded
+        };
+        _context.ContentHierarchyItems.Add(node);
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.DownloadScopes.Add(new() { DownloadId = download.Id, ContentHierarchyItemId = node.Id });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        await _context.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER acquisition_failure BEFORE UPDATE OF ActiveAcquisitionStatus ON content_item
+            BEGIN
+                SELECT RAISE(ABORT, 'Acquisition write failed.');
+            END;
+            """).ConfigureAwait(false);
+
+        // Act
+        Assert.ThrowsAsync<SqliteException>(async () =>
+            await _subject.MarkImportingAsync(download.Id, DateTime.UtcNow, _userId).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await _context.Downloads.AsNoTracking().Select(d => d.Status).SingleAsync()
+                .ConfigureAwait(false), Is.EqualTo(DownloadStatus.Downloaded));
+            Assert.That(await _context.ContentItems.AsNoTracking().Select(c => c.ActiveAcquisitionStatus)
+                .SingleAsync().ConfigureAwait(false), Is.EqualTo(DownloadStatus.Downloaded));
+            Assert.That(_publishedEvents, Is.Empty);
         }
     }
 }

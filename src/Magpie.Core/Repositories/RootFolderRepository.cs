@@ -9,6 +9,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
@@ -25,9 +26,9 @@ internal sealed class RootFolderRepository(
     IContentHierarchyItemRepository contentHierarchyItemRepository,
     IEventBus eventBus,
     ILogger<RootFolderRepository> logger,
-    TimeProvider? timeProvider = null) : IRootFolderRepository
+    TimeProvider timeProvider) : IRootFolderRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     private static bool IsUnderAnyRoot(string filePath, IReadOnlyCollection<string> rootPaths)
     {
@@ -62,6 +63,52 @@ internal sealed class RootFolderRepository(
     private static string NormalizePath(string path)
     {
         return path.Replace('\\', '/').TrimEnd('/');
+    }
+
+    private static List<string> ChangedFields(RootFolderPatch patch)
+    {
+        var fields = new List<string>();
+        if (patch.Name is not null)
+        {
+            fields.Add("name");
+        }
+
+        if (patch.Path is not null)
+        {
+            fields.Add("path");
+        }
+
+        if (patch.ContentType is not null)
+        {
+            fields.Add("contentType");
+        }
+
+        if (patch.IsDefault is not null)
+        {
+            fields.Add("isDefault");
+        }
+
+        if (patch.DefaultMonitoring is not null)
+        {
+            fields.Add("defaultMonitoring");
+        }
+
+        if (patch.RenameTemplate is not null)
+        {
+            fields.Add("renameTemplate");
+        }
+
+        if (patch.UpgradeFileHandling is not null)
+        {
+            fields.Add("upgradeFileHandling");
+        }
+
+        if (patch.Defaults is not null)
+        {
+            fields.Add("defaults");
+        }
+
+        return fields;
     }
 
     private static List<string> ChangedFields(RootFolder current, RootFolder model)
@@ -125,6 +172,52 @@ internal sealed class RootFolderRepository(
         }
 
         return fields;
+    }
+
+    private async Task<Guid?> PromoteDefaultIfMissingAsync(
+        string contentType,
+        DateTime now,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken)
+    {
+        var hasDefault = await context.RootFolders
+            .AsNoTracking()
+            .AnyAsync(folder => folder.ContentType == contentType && folder.IsDefault, cancellationToken)
+            .ConfigureAwait(false);
+        if (hasDefault)
+        {
+            return null;
+        }
+
+        var successorId = await context.RootFolders
+            .AsNoTracking()
+            .Where(folder => folder.ContentType == contentType)
+            .OrderBy(folder => folder.CreatedAt)
+            .ThenBy(folder => folder.Id)
+            .Select(folder => (Guid?)folder.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (successorId is null)
+        {
+            return null;
+        }
+
+        await context.RootFolders
+            .Where(folder => folder.Id == successorId)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(folder => folder.IsDefault, true)
+                    .SetProperty(folder => folder.ModifiedAt, now)
+                    .SetProperty(folder => folder.ModifiedByUserId, modifiedByUserId),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        logger.LogDebug(
+            "The root folder {RootFolderId} became the default of content type {ContentType} because the type " +
+            "was left without one.",
+            successorId,
+            contentType);
+        return successorId;
     }
 
     public async Task<IEnumerable<RootFolder>> ListAllAsync(CancellationToken cancellationToken)
@@ -245,6 +338,7 @@ internal sealed class RootFolderRepository(
         {
             var changedFields = new List<string>();
             var unmarkedDefaultIds = new List<Guid>();
+            var promotedDefaultIds = new List<Guid>();
             var invalidatedCandidateIds = new List<Guid>();
             var applied = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
@@ -313,6 +407,19 @@ internal sealed class RootFolderRepository(
                             },
                             cancellationToken).ConfigureAwait(false);
 
+                        foreach (var contentType in new[] { current.ContentType, model.ContentType }.Distinct())
+                        {
+                            var promotedId = await PromoteDefaultIfMissingAsync(
+                                contentType,
+                                now,
+                                modifiedByUserId,
+                                cancellationToken).ConfigureAwait(false);
+                            if (promotedId is { } id)
+                            {
+                                promotedDefaultIds.Add(id);
+                            }
+                        }
+
                         invalidatedCandidateIds.AddRange(await InvalidateOrphanedImportCandidatesAsync(
                             now,
                             modifiedByUserId,
@@ -334,7 +441,7 @@ internal sealed class RootFolderRepository(
 
             if (applied)
             {
-                foreach (var id in unmarkedDefaultIds)
+                foreach (var id in unmarkedDefaultIds.Concat(promotedDefaultIds))
                 {
                     await transactionManager.OnCommittedAsync(
                         token => eventBus.PublishAsync(
@@ -371,6 +478,173 @@ internal sealed class RootFolderRepository(
         }
     }
 
+    public async Task<bool> PatchAsync(
+        RootFolderPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var unmarkedDefaultIds = new List<Guid>();
+            var promotedDefaultIds = new List<Guid>();
+            var invalidatedCandidateIds = new List<Guid>();
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var model = await context.RootFolders
+                        .FirstOrDefaultAsync(r => r.Id == patch.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (model is null)
+                    {
+                        return false;
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var previousContentType = model.ContentType;
+                    if (patch.Name is not null)
+                    {
+                        model.Name = patch.Name.Value;
+                    }
+
+                    if (patch.Path is not null)
+                    {
+                        model.Path = patch.Path.Value;
+                    }
+
+                    if (patch.ContentType is not null)
+                    {
+                        model.ContentType = patch.ContentType.Value;
+                    }
+
+                    if (patch.IsDefault is not null)
+                    {
+                        model.IsDefault = patch.IsDefault.Value;
+                    }
+
+                    if (patch.DefaultMonitoring is not null)
+                    {
+                        model.DefaultMonitoring = patch.DefaultMonitoring.Value;
+                    }
+
+                    if (patch.RenameTemplate is not null)
+                    {
+                        model.RenameTemplate = patch.RenameTemplate.Value;
+                    }
+
+                    if (patch.UpgradeFileHandling is not null)
+                    {
+                        model.UpgradeFileHandling = patch.UpgradeFileHandling.Value;
+                    }
+
+                    if (patch.Defaults is not null)
+                    {
+                        model.Defaults = patch.Defaults.Value;
+                        context.Entry(model).Property(r => r.Defaults).IsModified = true;
+                    }
+
+                    if (model.IsDefault)
+                    {
+                        unmarkedDefaultIds.AddRange(await (
+                            from folder in context.RootFolders.AsNoTracking()
+                            where folder.Id != model.Id &&
+                                folder.ContentType == model.ContentType &&
+                                folder.IsDefault
+                            select folder.Id)
+                            .ToListAsync(cancellationToken)
+                            .ConfigureAwait(false));
+                        await context.RootFolders
+                            .Where(folder => folder.Id != model.Id &&
+                                folder.ContentType == model.ContentType &&
+                                folder.IsDefault)
+                            .ExecuteUpdateAsync(
+                                setters => setters.SetProperty(folder => folder.IsDefault, false),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    model.ModifiedAt = now;
+                    model.ModifiedByUserId = modifiedByUserId;
+
+                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (updated > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.System,
+                                Operation = "Patch",
+                                EntityId = patch.Id.ToString(),
+                                EntityType = nameof(RootFolder),
+                                Detail = $"Updated root folder {model.Name}",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+
+                        foreach (var contentType in new[] { previousContentType, model.ContentType }.Distinct())
+                        {
+                            var promotedId = await PromoteDefaultIfMissingAsync(
+                                contentType,
+                                now,
+                                modifiedByUserId,
+                                cancellationToken).ConfigureAwait(false);
+                            if (promotedId is { } id)
+                            {
+                                promotedDefaultIds.Add(id);
+                            }
+                        }
+
+                        invalidatedCandidateIds.AddRange(await InvalidateOrphanedImportCandidatesAsync(
+                            now,
+                            modifiedByUserId,
+                            cancellationToken).ConfigureAwait(false));
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (!patched)
+            {
+                return false;
+            }
+
+            await transactionManager.OnCommittedAsync(
+                token => eventBus.PublishAsync(
+                    RootFolderEventBuilder.BuildRootFolderUpdatedEvent(patch.Id, ChangedFields(patch)),
+                    token),
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var id in unmarkedDefaultIds.Concat(promotedDefaultIds))
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        RootFolderEventBuilder.BuildRootFolderUpdatedEvent(id, ["isDefault"]),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var id in invalidatedCandidateIds)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(id),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            await contentHierarchyItemRepository.RecomputeAllEffectiveValuesAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The root folder repository failed to patch root folder {RootFolderId}.", patch.Id);
+            throw;
+        }
+    }
+
     private async Task<IReadOnlyList<Guid>> InvalidateOrphanedImportCandidatesAsync(
         DateTime now,
         Guid? modifiedByUserId,
@@ -383,7 +657,8 @@ internal sealed class RootFolderRepository(
             .ConfigureAwait(false);
         var pending = await (
             from m in context.LibraryImportCandidates.AsNoTracking()
-            where m.Status == LibraryImportCandidateStatus.Pending
+            where m.Status == LibraryImportCandidateStatus.Pending ||
+                m.Status == LibraryImportCandidateStatus.MatchingPending
             select new { m.Id, m.FilePath })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -412,7 +687,7 @@ internal sealed class RootFolderRepository(
                 Category = AuditCategories.Content,
                 Operation = "Invalidate",
                 EntityType = nameof(LibraryImportCandidate),
-                Detail = $"Invalidated {orphanedIds.Count} library import candidate(es) " +
+                Detail = $"Invalidated {orphanedIds.Count} library import candidates " +
                     "left outside all configured root folders after a root-folder change",
                 Timestamp = now,
                 UserId = modifiedByUserId
@@ -430,6 +705,7 @@ internal sealed class RootFolderRepository(
     {
         try
         {
+            var promotedDefaultIds = new List<Guid>();
             var removed = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
@@ -473,6 +749,16 @@ internal sealed class RootFolderRepository(
                                 UserId = deletedByUserId
                             },
                             cancellationToken).ConfigureAwait(false);
+
+                        var promotedId = await PromoteDefaultIfMissingAsync(
+                            model.ContentType,
+                            now,
+                            deletedByUserId,
+                            cancellationToken).ConfigureAwait(false);
+                        if (promotedId is { } successorId)
+                        {
+                            promotedDefaultIds.Add(successorId);
+                        }
                     }
 
                     return deleted > 0;
@@ -484,6 +770,15 @@ internal sealed class RootFolderRepository(
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(RootFolderEventBuilder.BuildRootFolderDeletedEvent(id), token),
                     cancellationToken).ConfigureAwait(false);
+                foreach (var promotedId in promotedDefaultIds)
+                {
+                    await transactionManager.OnCommittedAsync(
+                        token => eventBus.PublishAsync(
+                            RootFolderEventBuilder.BuildRootFolderUpdatedEvent(promotedId, ["isDefault"]),
+                            token),
+                        cancellationToken).ConfigureAwait(false);
+                }
+
                 await contentHierarchyItemRepository.RecomputeAllEffectiveValuesAsync(cancellationToken)
                     .ConfigureAwait(false);
             }

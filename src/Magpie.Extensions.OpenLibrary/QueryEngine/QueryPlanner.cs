@@ -34,16 +34,6 @@ internal sealed class QueryPlanner : IQueryPlanner
     private const string CanonicalReferenceDisplayName = "Open Library";
     private const string CanonicalWorkUrlPrefix = "https://openlibrary.org/works/";
 
-    private const string ReferenceWarning =
-        "Open Library supports only the canonical work reference. It does not support the requested reference " +
-        "criteria.";
-
-    private const string ImageValueWarning =
-        "Open Library supports only cover presence criteria. It does not support image value criteria.";
-
-    private const string UnenforceableRoleWarning =
-        "Open Library does not support the requested relationship role. Results can include or omit matching works.";
-
     private static readonly IReadOnlyList<(string Kind, QueryField Field, string SourceField)>
         SubjectFacets =
         [
@@ -53,37 +43,6 @@ internal sealed class QueryPlanner : IQueryPlanner
         ];
 
     private static readonly IReadOnlyList<string> ProviderIdentities = [Constants.ProviderType];
-
-    private static readonly IReadOnlyList<string> SourceIdentities =
-    [
-        Constants.ProviderType,
-        Constants.ProviderType,
-        Constants.IsbnSource
-    ];
-
-    private static PlannedCriterion Unsupported(
-        string diagnostic,
-        string? filter = null)
-    {
-        return new PlannedCriterion
-        {
-            Warning = diagnostic
-        };
-    }
-
-    private static PlannedCriterion Invalid(string diagnostic, string? filter = null)
-    {
-        return new PlannedCriterion
-        {
-            Warning = diagnostic
-        };
-    }
-
-    private static string Approximate(string diagnostic, string? filter = null) =>
-        diagnostic;
-
-    private static string TooBroad(string diagnostic) =>
-        diagnostic;
 
     public QueryPlan Plan(QueryRequest request)
     {
@@ -187,10 +146,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             var workOlid = request.Value.NormalizeOlid('W');
             return workOlid is null
-                ? Empty(
-                    request,
-                    RefusalIdentityEmpty,
-                    Invalid("Open Library requires a valid Open Library identifier for a work.", "Identifier").Warning)
+                ? Empty(request, RefusalIdentityEmpty)
                 : new QueryPlan
                 {
                     Root = new PlanNode
@@ -212,7 +168,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             var isbn = request.Value.NormalizeIsbn();
             return isbn is null
-                ? Empty(request, RefusalIdentityEmpty, Invalid("Open Library requires a valid ISBN.", "ISBN").Warning)
+                ? Empty(request, RefusalIdentityEmpty)
                 : new QueryPlan
                 {
                     Root = new PlanNode
@@ -230,10 +186,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 };
         }
 
-        return Empty(
-            request,
-            RefusalIdentityEmpty,
-            Invalid("Open Library does not recognize the requested identifier source.", "Identifier").Warning);
+        return Empty(request, RefusalIdentityEmpty);
     }
 
     private PlannedCriterion PlanTitle(PropertyCriterion<string> criterion)
@@ -246,13 +199,13 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (!IsTextOperator(op))
         {
-            return Unsupported("Open Library does not support the requested title operator.", "Title");
+            return KnownEmpty();
         }
 
         var values = Strings(criterion);
         if (values.Count == 0)
         {
-            return Invalid("Open Library requires a nonblank title value.", "Title");
+            return KnownEmpty();
         }
 
         var filter = StringFilter(QueryField.Title, op, negate, values);
@@ -279,9 +232,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                             ? WildcardPlacement.Trailing
                             : WildcardPlacement.Leading)
                 ],
-                Warning = Approximate(
-                    "Open Library may miss matches when a title filter uses \"Starts with\" or \"Ends with\".",
-                    "Title"),
                 RecallBoundedSource = true
             };
         }
@@ -290,9 +240,6 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             Filters = [filter],
             SourceTerms = [Term("title", values)],
-            Warning = op == CriteriaValueOperator.ContainsString
-                ? Approximate("Open Library title text analysis may omit a matching work.", "Title")
-                : null,
             RecallBoundedSource = op == CriteriaValueOperator.ContainsString
         };
     }
@@ -307,15 +254,13 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (!IsTextOperator(op))
         {
-            return Unsupported(
-                "Open Library does not support the requested original-title operator.",
-                "Original title");
+            return KnownEmpty();
         }
 
         var values = Strings(criterion);
         if (values.Count == 0)
         {
-            return Invalid("Open Library requires a nonblank original-title value.", "Original title");
+            return KnownEmpty();
         }
 
         var filter = StringFilter(QueryField.OriginalTitle, op, negate, values);
@@ -342,9 +287,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                             ? WildcardPlacement.Trailing
                             : WildcardPlacement.Leading)
                 ],
-                Warning = Approximate(
-                    "Open Library may miss matches when a title filter uses \"Starts with\" or \"Ends with\".",
-                    "Original title"),
                 RecallBoundedSource = true
             };
         }
@@ -353,9 +295,6 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             Filters = [filter],
             SourceTerms = [Term("title", values)],
-            Warning = op == CriteriaValueOperator.ContainsString
-                ? Approximate("Open Library title text analysis may omit a matching work.", "Original title")
-                : null,
             RecallBoundedSource = op == CriteriaValueOperator.ContainsString
         };
     }
@@ -374,12 +313,10 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (op is not CriteriaValueOperator.Equals and not CriteriaValueOperator.In)
         {
-            return Unsupported("Open Library does not support the requested language operator.", "Language");
+            return KnownEmpty();
         }
 
-        var sourceValues = Strings(criterion);
-        var hasUnmappedTwoLetterCode = sourceValues.Any(value => value.IsUnmappedTwoLetterLanguage());
-        var values = sourceValues
+        var values = Strings(criterion)
             .Select(value => value.NormalizeLanguage())
             .Where(value => value is not null)
             .Cast<string>()
@@ -387,7 +324,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             .ToArray();
         if (values.Length == 0)
         {
-            return Invalid("Open Library requires two- or three-letter language codes.", "Language");
+            return negate ? Satisfied() : KnownEmpty();
         }
 
         var filter = StringFilter(QueryField.Language, op, negate, values);
@@ -395,22 +332,12 @@ internal sealed class QueryPlanner : IQueryPlanner
             ? new PlannedCriterion
             {
                 Filters = [filter],
-                Warning = hasUnmappedTwoLetterCode
-                    ? Approximate(
-                        "Open Library cannot map one or more two-letter language codes. Results are approximate.",
-                        "Language")
-                    : null,
                 NeedsIndependentSeed = true
             }
             : new PlannedCriterion
             {
                 Filters = [filter],
-                SourceTerms = [Term("language", values)],
-                Warning = hasUnmappedTwoLetterCode
-                    ? Approximate(
-                        "Open Library cannot map one or more two-letter language codes. Results are approximate.",
-                        "Language")
-                    : null
+                SourceTerms = [Term("language", values)]
             };
     }
 
@@ -424,13 +351,13 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (!IsTextOperator(op))
         {
-            return Unsupported("Open Library cannot order or pattern-match provider identity values.", "Provider");
+            return KnownEmpty();
         }
 
         var values = Strings(criterion);
         if (values.Count == 0)
         {
-            return Invalid("Open Library requires a provider identity value.", "Provider");
+            return KnownEmpty();
         }
 
         return identities.Any(identity => MatchesConstant(identity, op, values) ^ negate)
@@ -517,13 +444,13 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (!IsTextOperator(op))
         {
-            return Unsupported("Open Library supports text comparisons only for work descriptions.", "Overview");
+            return KnownEmpty();
         }
 
         var values = Strings(criterion);
         if (values.Count == 0)
         {
-            return Invalid("Open Library requires a nonblank description value.", "Overview");
+            return KnownEmpty();
         }
 
         return new PlannedCriterion
@@ -552,13 +479,13 @@ internal sealed class QueryPlanner : IQueryPlanner
             or CriteriaValueOperator.LessThan
             or CriteriaValueOperator.LessThanOrEqual))
         {
-            return Unsupported("Open Library does not support the requested publication-date operator.", "Date");
+            return KnownEmpty();
         }
 
         var values = TemporalValues(criterion);
         if (values.Count == 0)
         {
-            return Invalid("Open Library requires a publication date value.", "Date");
+            return KnownEmpty();
         }
 
         var filter = new QueryFilter
@@ -668,7 +595,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (filterAlternatives.Count == 0)
         {
-            return Unsupported("Open Library does not support this genre criterion.", "Genre");
+            return KnownEmpty();
         }
 
         if (excluded)
@@ -693,15 +620,9 @@ internal sealed class QueryPlanner : IQueryPlanner
             FilterGroups = [new FilterGroup { Alternatives = filterAlternatives, Negate = excluded }],
             SourceTerms = sourceTerms,
             SourceGroups = sourceGroups,
-            Warning = partial
-                ? Unsupported(
-                    "Open Library failed to represent every genre alternative. Results are approximate.",
-                    "Genre").Warning
-                : relevanceBounded
-                    ? Approximate("Open Library subject text analysis may omit a matching work.", "Genre")
-                    : null,
             NeedsIndependentSeed = needsIndependentSeed,
-            RecallBoundedSource = relevanceBounded
+            RecallBoundedSource = relevanceBounded,
+            CannotFulfill = partial
         };
     }
 
@@ -709,7 +630,6 @@ internal sealed class QueryPlanner : IQueryPlanner
     {
         var buckets = new Dictionary<(QueryField Field, string SourceField), List<string>>();
         var partial = false;
-        var authorIdentifier = false;
         foreach (var alternative in alternatives)
         {
             if (!TryReadExternalId(alternative, out var source, out var identifierValues))
@@ -720,7 +640,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
             foreach (var value in identifierValues)
             {
-                ClassifyIdentifier(source, value, buckets, ref partial, ref authorIdentifier);
+                ClassifyIdentifier(source, value, buckets, ref partial);
             }
         }
 
@@ -731,11 +651,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (buckets.Count == 0)
         {
-            return Invalid(
-                authorIdentifier
-                    ? "Open Library requires an author relationship criterion for an author Open Library identifier."
-                    : "Open Library found no valid identifier values.",
-                "Identifier");
+            return KnownEmpty();
         }
 
         var filterAlternatives = buckets.Select(pair => new FilterAlternative
@@ -760,9 +676,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             FilterGroups = [new FilterGroup { Alternatives = filterAlternatives }],
             SourceTerms = [.. sourceAlternatives.SelectMany(alternative => alternative.Terms)],
             SourceGroups = [new SourceGroup { Alternatives = sourceAlternatives }],
-            Warning = partial
-                ? "Open Library failed to resolve every identifier alternative. Results are approximate."
-                : null
+            CannotFulfill = partial
         };
     }
 
@@ -770,8 +684,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         string? source,
         string value,
         Dictionary<(QueryField Field, string SourceField), List<string>> buckets,
-        ref bool partial,
-        ref bool authorIdentifier)
+        ref bool partial)
     {
         var field = default(QueryField);
         var sourceField = string.Empty;
@@ -805,13 +718,6 @@ internal sealed class QueryPlanner : IQueryPlanner
             field = QueryField.Goodreads;
             sourceField = "id_goodreads";
             normalized = CleanText(value);
-        }
-        else if (string.Equals(source, Constants.ProviderType, StringComparison.OrdinalIgnoreCase) ||
-            value.NormalizeOlid('A') is not null)
-        {
-            authorIdentifier = true;
-            partial = true;
-            return;
         }
         else if (source is null && value.NormalizeOlid('W') is { } inferredWork)
         {
@@ -858,15 +764,14 @@ internal sealed class QueryPlanner : IQueryPlanner
     {
         if (!TryReadExternalId(criterion, out var source, out var values))
         {
-            return Unsupported("Open Library supports identifier exclusions by equality only.", "Identifier");
+            return KnownEmpty();
         }
 
         var buckets = new Dictionary<(QueryField Field, string SourceField), List<string>>();
         var partial = false;
-        var authorIdentifier = false;
         foreach (var value in values)
         {
-            ClassifyIdentifier(source, value, buckets, ref partial, ref authorIdentifier);
+            ClassifyIdentifier(source, value, buckets, ref partial);
         }
 
         foreach (var key in buckets.Keys.ToArray())
@@ -876,10 +781,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (buckets.Count == 0)
         {
-            return Invalid(authorIdentifier
-                ? "Open Library requires an author relationship criterion for an author Open Library identifier."
-                : "Open Library found no valid identifier values.",
-                "Identifier");
+            return KnownEmpty();
         }
 
         var filters = new List<QueryFilter>();
@@ -905,10 +807,8 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             Filters = filters,
             SourceTerms = terms,
-            Warning = partial
-                ? "Open Library failed to resolve every excluded identifier. Results are approximate."
-                : null,
-            NeedsIndependentSeed = true
+            NeedsIndependentSeed = true,
+            CannotFulfill = partial
         };
     }
 
@@ -932,7 +832,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             }
             else
             {
-                planned.Add(Unsupported("Open Library defines only the isbn, language, and pages facts."));
+                planned.Add(KnownEmpty());
             }
         }
     }
@@ -942,7 +842,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         var (op, negate) = InterpretOperator(criterion.Operator, criterion.Negate);
         if (op is not CriteriaValueOperator.Equals and not CriteriaValueOperator.In)
         {
-            return Unsupported("Open Library supports ISBN equality only.", "ISBN");
+            return KnownEmpty();
         }
 
         var values = Strings(criterion);
@@ -953,7 +853,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             .ToList();
         if (isbns.Count == 0)
         {
-            return Invalid("Open Library requires a valid ISBN.", "ISBN");
+            return KnownEmpty();
         }
 
         var partial = isbns.Count < values.Count;
@@ -964,21 +864,18 @@ internal sealed class QueryPlanner : IQueryPlanner
             Values = isbns,
             Negate = negate
         };
-        var warning = partial
-            ? "Open Library failed to apply every ISBN value. Results are approximate."
-            : null;
         return negate
             ? new PlannedCriterion
             {
                 Filters = [filter],
-                Warning = warning,
-                NeedsIndependentSeed = true
+                NeedsIndependentSeed = true,
+                CannotFulfill = partial
             }
             : new PlannedCriterion
             {
                 Filters = [filter],
                 SourceTerms = [Term("isbn", isbns)],
-                Warning = warning
+                CannotFulfill = partial
             };
     }
 
@@ -987,13 +884,13 @@ internal sealed class QueryPlanner : IQueryPlanner
         var (op, negate) = InterpretOperator(criterion.Operator, criterion.Negate);
         if (!IsTextOperator(op))
         {
-            return Unsupported("Open Library supports text comparisons only for the pages fact.", "Pages");
+            return KnownEmpty();
         }
 
         var values = Strings(criterion);
         if (values.Count == 0)
         {
-            return Invalid("Open Library requires a pages value.", "Pages");
+            return KnownEmpty();
         }
 
         return new PlannedCriterion
@@ -1070,19 +967,15 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (filterAlternatives.Count == 0)
         {
-            return Unsupported("Open Library does not support this alternate-text criterion.", "Alternate title");
+            return KnownEmpty();
         }
 
         return new PlannedCriterion
         {
             Filters = [.. filterAlternatives.SelectMany(alternative => alternative.Filters)],
             FilterGroups = [new FilterGroup { Alternatives = filterAlternatives, Negate = excluded }],
-            Warning = partial
-                ? Unsupported(
-                    "Open Library failed to represent every alternate-text alternative. Results are approximate.",
-                    "Alternate title").Warning
-                : null,
-            NeedsIndependentSeed = true
+            NeedsIndependentSeed = true,
+            CannotFulfill = partial
         };
     }
 
@@ -1212,7 +1105,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         };
     }
 
-    private QueryPlan Empty(QueryRequest request, string reason, string? warning = null)
+    private QueryPlan Empty(QueryRequest request, string reason)
     {
         Telemetry.PlansRefused.Add(1, new TagList
         {
@@ -1226,10 +1119,9 @@ internal sealed class QueryPlanner : IQueryPlanner
             {
                 Kind = PlanNodeKind.Fetch,
                 State = PlanNodeState.Empty,
-                Reason = warning ?? "The normalized criteria have an empty result set."
+                Reason = "The normalized criteria have an empty result set."
             },
             Hierarchy = request.Hierarchy,
-            Warnings = warning is null ? [] : [warning],
             Page = Math.Max(1, request.Page),
             MaxResults = request.MaxResults,
             Advanced = request.Intent == QueryIntent.AdvancedSearch
@@ -1333,13 +1225,13 @@ internal sealed class QueryPlanner : IQueryPlanner
             or CriteriaValueOperator.LessThan
             or CriteriaValueOperator.LessThanOrEqual))
         {
-            return Unsupported("Open Library does not support the requested author life-date operator.", "Date");
+            return KnownEmpty();
         }
 
         var values = TemporalValues(criterion);
         if (values.Count == 0)
         {
-            return Invalid("Open Library requires an author life-date value.", "Date");
+            return KnownEmpty();
         }
 
         return new PlannedCriterion
@@ -1382,7 +1274,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         workOlids = [.. workOlids.Distinct(StringComparer.OrdinalIgnoreCase)];
         if (workOlids.Count == 0)
         {
-            return Unsupported(ReferenceWarning, "Reference");
+            return KnownEmpty();
         }
 
         var filter = new QueryFilter
@@ -1398,22 +1290,14 @@ internal sealed class QueryPlanner : IQueryPlanner
             {
                 Filters = [filter],
                 SourceTerms = [sourceTerm with { Negate = true }],
-                Warning = partial
-                    ? Unsupported(
-                        ReferenceWarning,
-                        "Reference").Warning
-                    : null,
-                NeedsIndependentSeed = true
+                NeedsIndependentSeed = true,
+                CannotFulfill = partial
             }
             : new PlannedCriterion
             {
                 Filters = [filter],
                 SourceTerms = [sourceTerm],
-                Warning = partial
-                    ? Unsupported(
-                        ReferenceWarning,
-                        "Reference").Warning
-                    : null
+                CannotFulfill = partial
             };
     }
 
@@ -1622,7 +1506,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                     InterpretOperator(criterion.Operator, criterion.Negate).Operator
                         is not (CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)))
             {
-                return Unsupported(ImageValueWarning, "Image");
+                return KnownEmpty();
             }
 
             var coverPossible = true;
@@ -1644,7 +1528,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 var values = Strings(type);
                 if (!IsTextOperator(op) || values.Count == 0)
                 {
-                    return Unsupported(ImageValueWarning, "Image");
+                    return KnownEmpty();
                 }
 
                 coverPossible &= MatchesConstant("cover", op, values) ^ negate;
@@ -1677,9 +1561,7 @@ internal sealed class QueryPlanner : IQueryPlanner
     {
         if (alternatives.Count == 0)
         {
-            return Unsupported(
-                UnenforceableRoleWarning,
-                "Relationship");
+            return KnownEmpty();
         }
 
         var filterAlternatives = new List<FilterAlternative>();
@@ -1783,9 +1665,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (filterAlternatives.Count == 0)
         {
-            return Unsupported(
-                UnenforceableRoleWarning,
-                "Relationship");
+            return KnownEmpty();
         }
 
         if (sourceAlternatives.Count != filterAlternatives.Count)
@@ -1805,17 +1685,9 @@ internal sealed class QueryPlanner : IQueryPlanner
             FilterGroups = [new FilterGroup { Alternatives = filterAlternatives, Negate = excluded }],
             SourceTerms = sourceTermsFlat,
             SourceGroups = sourceGroups,
-            Warning = partial
-                ? Unsupported(
-                    "Open Library failed to represent every relationship alternative. Results are approximate.",
-                    "Relationship").Warning
-                : approximate
-                    ? Approximate(
-                        "Open Library relationship text analysis may omit a matching work.",
-                        "Relationship")
-                    : null,
             NeedsIndependentSeed = needsIndependentSeed,
-            RecallBoundedSource = approximate
+            RecallBoundedSource = approximate,
+            CannotFulfill = partial
         };
     }
 
@@ -1916,13 +1788,12 @@ internal sealed class QueryPlanner : IQueryPlanner
                 return false;
             }
 
-            var allOlids = values.Select(value => value.NormalizeOlid('A'))
+            var olids = values.Select(value => value.NormalizeOlid('A'))
                 .Where(value => value is not null)
                 .Cast<string>()
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            var olids = allOlids;
-            if (olids.Length == 0)
+            if (olids.Length == 0 || values.Any(value => value.NormalizeOlid('A') is null))
             {
                 partial = true;
                 return false;
@@ -2321,10 +2192,7 @@ internal sealed class QueryPlanner : IQueryPlanner
     {
         if (request.MaxResults <= 0)
         {
-            return Empty(
-                request,
-                RefusalUnbounded,
-                TooBroad("Open Library requires a positive maximum result count."));
+            return Empty(request, RefusalUnbounded);
         }
 
         var dispositions = new List<string>();
@@ -2334,10 +2202,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             PlanHierarchyCriteria(hierarchyCriteria, request.Hierarchy, hierarchyPlanned, dispositions);
             if (hierarchyPlanned.Any(entry => entry.MatchesNothing))
             {
-                return Empty(
-                    request,
-                    RefusalKnownEmpty,
-                    "Open Library does not support the requested content hierarchy criteria.") with
+                return Empty(request, RefusalKnownEmpty) with
                 {
                     CriterionDispositions = dispositions
                 };
@@ -2374,21 +2239,13 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            planned[index] = entry with { SourceTerms = [], SourceGroups = [], Warning = null };
+            planned[index] = entry with { SourceTerms = [], SourceGroups = [] };
         }
 
-        var hasPositiveSeed = planned.Any(entry => entry.SourceTerms.Any(term => !term.Negate));
-        if (!hasPositiveSeed)
+        if (planned.Any(entry => entry.NeedsIndependentSeed) &&
+            !planned.Any(entry => entry.SourceTerms.Any(term => !term.Negate)))
         {
-            planned = [.. planned.Select(entry => entry.NeedsIndependentSeed
-                ? entry with
-                {
-                    Filters = [],
-                    SourceTerms = [],
-                    Residuals = [],
-                    Warning = TooBroad("Open Library requires at least one positive search condition.")
-                }
-                : entry)];
+            return Empty(request, RefusalUnbounded) with { CriterionDispositions = dispositions };
         }
 
         var terms = planned.SelectMany(entry => entry.SourceTerms).ToArray();
@@ -2396,16 +2253,18 @@ internal sealed class QueryPlanner : IQueryPlanner
         var sourceGroups = planned.SelectMany(SourceGroups).ToArray();
         var filterGroups = planned.SelectMany(FilterGroups).ToArray();
         var residuals = planned.SelectMany(entry => entry.Residuals).ToArray();
-        var warnings = planned.Select(entry => entry.Warning)
-            .Where(value => value is not null)
-            .Cast<string>()
-            .Distinct()
-            .ToArray();
+        if (planned.Any(entry => entry.CannotFulfill))
+        {
+            return Empty(request, RefusalKnownEmpty) with
+            {
+                CriterionDispositions = dispositions
+            };
+        }
+
         if (terms.Length == 0)
         {
             return Empty(request, RefusalUnbounded) with
             {
-                Warnings = warnings,
                 CriterionDispositions = dispositions
             };
         }
@@ -2438,7 +2297,6 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             Root = root,
             Hierarchy = request.Hierarchy,
-            Warnings = warnings,
             CandidateLanguagePreferences = CandidateLanguagePreferences(request),
             CriterionDispositions = dispositions,
             Page = 1,
@@ -2457,7 +2315,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         foreach (var criterion in criteria.Source.And)
         {
-            planned.Add(PlanSelfIdentity(criterion, SourceIdentities));
+            planned.Add(PlanSelfIdentity(criterion, ProviderIdentities));
         }
 
         foreach (var criterion in criteria.Title.And)

@@ -7,34 +7,18 @@ namespace Magpie.QueryLanguage;
 
 internal static class FilterQueryTokenizationExtensions
 {
-    private static readonly TextParser<char> EscapeSequence =
-        from backslash in Character.EqualTo('\\')
-        from escaped in Character.AnyChar
-        select escaped switch
-        {
-            'n' => '\n',
-            'r' => '\r',
-            't' => '\t',
-            '"' => '"',
-            '\\' => '\\',
-            _ => escaped,
-        };
-
     private static readonly TextParser<char> StringChar =
-        EscapeSequence.Or(Character.Except(c => c is '"' or '\\', "string character"));
-
-    private static readonly TextParser<string> StringContent = StringChar.Many().Select(chars => new string(chars));
+        Character.EqualTo('\\').IgnoreThen(Character.AnyChar)
+            .Or(Character.Except(c => c is '"' or '\\', "string character"));
 
     private static readonly TextParser<TextSpan> QuotedString =
-        from open in Character.EqualTo('"')
-        from content in StringContent
-        from close in Character.EqualTo('"')
-        select new TextSpan(content);
+        Span.MatchedBy(
+            Character.EqualTo('"')
+                .IgnoreThen(StringChar.Many())
+                .IgnoreThen(Character.EqualTo('"')));
 
     private static readonly TextParser<TextSpan> NegativeNumber =
-        from sign in Character.EqualTo('-')
-        from num in Numerics.Decimal.Or(Numerics.Integer)
-        select num;
+        Span.MatchedBy(Character.EqualTo('-').IgnoreThen(Numerics.Decimal.Or(Numerics.Integer)));
 
     private static readonly TextParser<TextSpan> Number =
         NegativeNumber.Try().Or(Numerics.Decimal).Or(Numerics.Integer);

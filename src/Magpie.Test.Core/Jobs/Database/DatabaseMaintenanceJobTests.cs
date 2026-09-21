@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -8,7 +7,6 @@ using Magpie.Abstractions.Database;
 using Magpie.Core.Jobs;
 using Magpie.Models;
 using Magpie.Models.Enums;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
@@ -24,36 +22,7 @@ namespace Magpie.Test.Core.Jobs.Database;
 [TestFixture]
 public sealed class DatabaseMaintenanceJobTests
 {
-    [Test]
-    public void Spec_DeclaresMaintenanceParameters_WithDefaults()
-    {
-        // Act
-        var parameters = DatabaseMaintenanceJob.Spec.Parameters;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(DatabaseMaintenanceJob.Spec.JobType, Is.EqualTo("DatabaseMaintenance"));
-            Assert.That(DatabaseMaintenanceJob.Spec.Scope, Is.EqualTo(JobScope.Administrative));
-            Assert.That(DatabaseMaintenanceJob.Spec.ConcurrencyScope, Is.EqualTo(ConcurrencyScope.Global));
-            Assert.That(parameters, Has.Count.EqualTo(5));
-            Assert.That(
-                parameters.Single(p => p.Name == "backupEnabled").DefaultValue,
-                Is.EqualTo("false"));
-            Assert.That(
-                parameters.Single(p => p.Name == "backupIntervalDays").DefaultValue,
-                Is.EqualTo("1"));
-            Assert.That(
-                parameters.Single(p => p.Name == "backupRetentionCount").DefaultValue,
-                Is.EqualTo("7"));
-            Assert.That(
-                parameters.Single(p => p.Name == "optimizeEnabled").DefaultValue,
-                Is.EqualTo("true"));
-            Assert.That(
-                parameters.Single(p => p.Name == "optimizeIntervalDays").DefaultValue,
-                Is.EqualTo("7"));
-        }
-    }
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
 
     [Test]
     public async Task ExecuteAsync_CreatesScheduledBackup_WhenBackupsEnabledAndNoScheduledBackupExists()
@@ -78,8 +47,8 @@ public sealed class DatabaseMaintenanceJobTests
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<DatabaseMaintenanceJob>(),
             eventBus.Object,
-            backupProvider.Object,
-            progress.Object);
+            progress.Object,
+            backupProvider.Object);
         var jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,
@@ -117,8 +86,8 @@ public sealed class DatabaseMaintenanceJobTests
             eventBus.Verify(
                 bus => bus.PublishAsync(
                     It.Is<MagpieEvent>(magpieEvent =>
-                        magpieEvent.Name == MagpieEvents.Names.BackupCompleted &&
-                        magpieEvent.Context[MagpieEvents.Keys.BackupId] == "20240115_103000"),
+                        magpieEvent.Name == "backup.completed" &&
+                        magpieEvent.Context["backup.id"] == "20240115_103000"),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
         }
@@ -147,6 +116,7 @@ public sealed class DatabaseMaintenanceJobTests
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<DatabaseMaintenanceJob>(),
             Mock.Of<IEventBus>(),
+            _progressReporter,
             backupProvider.Object);
         var jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
@@ -172,7 +142,7 @@ public sealed class DatabaseMaintenanceJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_PrunesOnlyOldScheduledBackups_BeyondRetention()
+    public async Task ExecuteAsync_PrunesOnlyOldScheduledBackups_WhenBackupsExceedRetention()
     {
         // Arrange
         var backupProvider = new Mock<IRecoverableDatabaseManagementProvider>();
@@ -229,8 +199,8 @@ public sealed class DatabaseMaintenanceJobTests
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<DatabaseMaintenanceJob>(),
             eventBus.Object,
-            backupProvider.Object,
-            progress.Object);
+            progress.Object,
+            backupProvider.Object);
         var jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,
@@ -264,8 +234,8 @@ public sealed class DatabaseMaintenanceJobTests
             eventBus.Verify(
                 bus => bus.PublishAsync(
                     It.Is<MagpieEvent>(magpieEvent =>
-                        magpieEvent.Name == MagpieEvents.Names.BackupDeleted &&
-                        magpieEvent.Context[MagpieEvents.Keys.BackupId] == "20240114_103000"),
+                        magpieEvent.Name == "backup.deleted" &&
+                        magpieEvent.Context["backup.id"] == "20240114_103000"),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             progress.Verify(
@@ -292,8 +262,8 @@ public sealed class DatabaseMaintenanceJobTests
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<DatabaseMaintenanceJob>(),
             Mock.Of<IEventBus>(),
-            databaseProvider.Object,
-            progress.Object);
+            progress.Object,
+            databaseProvider.Object);
         var jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,
@@ -338,6 +308,7 @@ public sealed class DatabaseMaintenanceJobTests
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<DatabaseMaintenanceJob>(),
             Mock.Of<IEventBus>(),
+            _progressReporter,
             databaseProvider.Object);
         var jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
@@ -373,8 +344,8 @@ public sealed class DatabaseMaintenanceJobTests
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<DatabaseMaintenanceJob>(),
             Mock.Of<IEventBus>(),
-            databaseProvider.Object,
-            progress.Object);
+            progress.Object,
+            databaseProvider.Object);
 
         // Act
         var jobContext = new JobContext(

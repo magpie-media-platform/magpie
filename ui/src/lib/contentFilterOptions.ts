@@ -52,8 +52,6 @@ export function buildContentFilterOptions(
         };
         const rootLevels = contentType.levels.filter((level) => level.parentSlug === null);
 
-        // A single root is equivalent to the bare content type, so only offer the
-        // "Type > Root" options when a type declares more than one sibling root.
         const rootLevelOptions =
             rootLevels.length > 1
                 ? rootLevels.map((level): ContentFilterOption => {

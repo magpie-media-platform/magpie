@@ -10,6 +10,7 @@ using Magpie.Models;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core;
 
@@ -18,16 +19,9 @@ internal sealed class MagpieSystem(
     MagpieHostEnvironment hostEnvironment,
     IHostApplicationLifetime lifetime,
     IAuditRecordRepository auditRecordRepository,
-    TimeProvider timeProvider) : IMagpieSystem
+    TimeProvider timeProvider,
+    ILogger<MagpieSystem> logger) : IMagpieSystem
 {
-    private readonly StateManager<LifecycleState> _lifecycle = new(LifecycleState.Running);
-
-    private enum LifecycleState
-    {
-        Running,
-        ShuttingDown,
-    }
-
     public string NodeId => hostEnvironment.NodeId;
 
     public bool IsClustered => hostEnvironment.IsClustered;
@@ -75,41 +69,55 @@ internal sealed class MagpieSystem(
             throw new MagpieShutdownException("The host is not supervised.");
         }
 
-        if (!_lifecycle.TryTransition(LifecycleState.ShuttingDown, LifecycleState.Running))
+        lock (hostStatus)
         {
-            throw new MagpieShutdownException(
-                "A shutdown is already in progress.",
-                hostStatus.ShutdownRequestedByUserId,
-                hostStatus.ShutdownRequestedAtUtc);
+            if (hostStatus.IsShutdownRequested)
+            {
+                throw new MagpieShutdownException(
+                    "A shutdown is already in progress.",
+                    hostStatus.ShutdownRequestedByUserId,
+                    hostStatus.ShutdownRequestedAtUtc);
+            }
+
+            hostStatus.SetShutdownRequest(true, actingUserId, timeProvider.GetUtcNow().UtcDateTime);
         }
 
         try
         {
-            lifetime.StopApplication();
-            hostStatus.IsShutdownRequested = true;
-            hostStatus.ShutdownRequestedByUserId = actingUserId;
-            hostStatus.ShutdownRequestedAtUtc = timeProvider.GetUtcNow().UtcDateTime;
-            if (hostStatus.Mode == HostMode.Sentinel)
+            await auditRecordRepository.CreateAsync(
+                new()
+                {
+                    Category = AuditCategories.System,
+                    Operation = operation,
+                    EntityType = "Host",
+                    Detail = $"Host {operation.ToLowerInvariant()} requested.",
+                    Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                    UserId = actingUserId
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "The {Operation} audit record could not be written.", operation);
+        }
+
+        try
+        {
+            if (hostStatus.Mode is HostMode.Sentinel or HostMode.WindowsService)
             {
                 hostStatus.ShutdownExitCode = exitCode;
             }
+
+            lifetime.StopApplication();
         }
         catch
         {
-            _lifecycle.TryTransition(LifecycleState.Running, LifecycleState.ShuttingDown);
+            lock (hostStatus)
+            {
+                hostStatus.SetShutdownRequest(false, null, null);
+            }
+
             throw;
         }
-
-        await auditRecordRepository.CreateAsync(
-            new()
-            {
-                Category = AuditCategories.System,
-                Operation = operation,
-                EntityType = "Host",
-                Detail = $"Host {operation.ToLowerInvariant()} requested.",
-                Timestamp = timeProvider.GetUtcNow().UtcDateTime,
-                UserId = actingUserId
-            },
-            cancellationToken).ConfigureAwait(false);
     }
 }

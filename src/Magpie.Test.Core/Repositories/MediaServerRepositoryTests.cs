@@ -1,27 +1,37 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
+using Magpie.Core.Security;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class MediaServerRepositoryTests
+public sealed class MediaServerRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private string _dataRoot = null!;
     private IMediaServerRepository _subject = null!;
     private Guid _userId;
 
@@ -53,18 +63,37 @@ public class MediaServerRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+
+        _dataRoot = Path.Combine(Path.GetTempPath(), "magpie-secret-repo-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dataRoot);
+        var hostEnvironment = new MagpieHostEnvironment(
+            NodeId: "test-node",
+            IsClustered: false,
+            IsSupervised: false,
+            SystemRoot: _dataRoot,
+            ExtensionsRoot: _dataRoot,
+            ConfigRoot: _dataRoot,
+            DataRoot: _dataRoot,
+            StartedAt: DateTime.UtcNow);
+        var protector = new DataProtectionService(new DefaultDataProtectionProvider(
+            hostEnvironment,
+            loggerFactory.CreateLogger<DefaultDataProtectionProvider>()));
 
         _subject = new MediaServerRepository(
             _context,
             auditRecordRepository,
             transactionManager,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
-            loggerFactory.CreateLogger<MediaServerRepository>());
+            Mock.Of<IEventBus>(),
+            loggerFactory.CreateLogger<MediaServerRepository>(),
+            protector,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -72,6 +101,7 @@ public class MediaServerRepositoryTests
     {
         _context.Database.CloseConnection();
         _context.Dispose();
+        Directory.Delete(_dataRoot, recursive: true);
     }
 
     [Test]
@@ -741,6 +771,88 @@ public class MediaServerRepositoryTests
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Patch"));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("AddTag"));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("RemoveTag"));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_EncryptsStoredSettings_WhenSettingsContainSecrets()
+    {
+        // Arrange
+        var model = new MediaServer
+        {
+            Name = "Protected",
+            ProviderType = "test-provider",
+            Settings = { ["token"] = "first-secret" }
+        };
+
+        // Act
+        var created = await _subject.CreateAsync(model, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.MediaServers.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(created.Settings["token"], Is.EqualTo("first-secret"));
+            Assert.That(stored.Settings.Keys, Is.EqualTo(["__magpieSecret"]));
+            Assert.That(stored.Settings.Values.Single(), Does.Not.Contain("first-secret"));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_EncryptsStoredSettings_WhenSettingsAreUpdated()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new MediaServer
+        {
+            Name = "Protected",
+            ProviderType = "test-provider",
+            Settings = { ["token"] = "first-secret" }
+        }, _userId).ConfigureAwait(false);
+
+        // Act
+        await _subject.PatchAsync(new()
+        {
+            Id = created.Id,
+            Settings = new() { Update = new Dictionary<string, string?> { ["token"] = "second-secret" } }
+        }, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.MediaServers.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        var patched = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored.Settings.Keys, Is.EqualTo(["__magpieSecret"]));
+            Assert.That(stored.Settings.Values.Single(), Does.Not.Contain("second-secret"));
+            Assert.That(patched!.Settings["token"], Is.EqualTo("second-secret"));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_EncryptsStoredSettings_WhenSettingsAreReplaced()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new MediaServer
+        {
+            Name = "Protected",
+            ProviderType = "test-provider",
+            Settings = { ["token"] = "first-secret" }
+        }, _userId).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        await _subject.UpdateAsync(created with
+        {
+            Settings = new() { ["token"] = "third-secret" }
+        }, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.MediaServers.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        var listed = (await _subject.ListAllAsync().ConfigureAwait(false)).Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored.Settings.Keys, Is.EqualTo(["__magpieSecret"]));
+            Assert.That(stored.Settings.Values.Single(), Does.Not.Contain("third-secret"));
+            Assert.That(listed.Settings["token"], Is.EqualTo("third-secret"));
         }
     }
 }

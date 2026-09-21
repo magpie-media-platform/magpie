@@ -1,7 +1,11 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { Slot } from './Slot';
+
+for (const tagName of ['replacement-widget', 'first-replace', 'replace-widget']) {
+    customElements.define(tagName, class extends HTMLElement {});
+}
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
@@ -22,6 +26,24 @@ describe('Slot', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultContext);
+    });
+
+    it('keeps the default content and marks the slot failed when extensions cannot load', () => {
+        mockUseSlotExtensions.mockReturnValue({
+            extensions: [],
+            isReady: false,
+            isLoading: false,
+            isError: true,
+        });
+
+        render(
+            <Slot slot="dashboard.main">
+                <span>Default content</span>
+            </Slot>,
+        );
+
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(screen.getByText('Default content').closest('[data-slot]')).toHaveAttribute('data-slot-state', 'error');
     });
 
     it('renders children when no extensions are registered', () => {
@@ -169,6 +191,41 @@ describe('Slot', () => {
 
         const slotDiv = container.querySelector('[data-slot]');
         expect(slotDiv?.querySelector('replacement-widget')).toBeInTheDocument();
+    });
+
+    it('keeps default content until the Replace custom element is defined', async () => {
+        mockUseSlotExtensions.mockReturnValue({
+            extensions: [
+                {
+                    id: 'ext-1',
+                    extensionId: 'my-ext',
+                    name: 'Late Replacement',
+                    slot: 'dashboard.main',
+                    modifier: 'Replace',
+                    tagName: 'late-replace',
+                    priority: 100,
+                    attributes: null,
+                },
+            ],
+            isReady: true,
+            isLoading: false,
+        });
+
+        const { container } = render(
+            <Slot slot="dashboard.main">
+                <div data-testid="default-content">Default</div>
+            </Slot>,
+        );
+
+        expect(screen.getByTestId('default-content')).toBeInTheDocument();
+        expect(container.querySelector('late-replace')).not.toBeInTheDocument();
+
+        customElements.define('late-replace', class extends HTMLElement {});
+
+        await waitFor(() => {
+            expect(container.querySelector('late-replace')).toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('default-content')).not.toBeInTheDocument();
     });
 
     it('only first Replace extension wins (by priority) and warns about conflict', () => {

@@ -29,6 +29,16 @@ import {
 
 import './SetupPage.css';
 
+const groupsQueryOptions = {
+    queryKey: settingsQueryKeys.all,
+    queryFn: () => apiGet<ApiSettingsGroup[]>('/settings/groups'),
+    retry: false,
+};
+
+function getStepAvailability(groups: ApiSettingsGroup[]): SetupStepAvailability {
+    return { includeMetadata: groups.some((group) => group.extensionId && (group.schema?.length ?? 0) > 0) };
+}
+
 export function SetupPage(): ReactNode {
     useDocumentTitle('Set Up Magpie');
 
@@ -40,20 +50,8 @@ export function SetupPage(): ReactNode {
     const statusQuery = useSetupStatus();
     const status = statusQuery.data ?? null;
 
-    const groupsQuery = useQuery({
-        queryKey: settingsQueryKeys.all,
-        queryFn: () => apiGet<ApiSettingsGroup[]>('/settings/groups'),
-        enabled: isAuthenticated,
-        retry: false,
-    });
-    const stepAvailability = useMemo<SetupStepAvailability>(
-        () => ({
-            includeMetadata: (groupsQuery.data ?? []).some(
-                (group) => group.extensionId && (group.schema?.length ?? 0) > 0,
-            ),
-        }),
-        [groupsQuery.data],
-    );
+    const groupsQuery = useQuery({ ...groupsQueryOptions, enabled: isAuthenticated });
+    const stepAvailability = useMemo(() => getStepAvailability(groupsQuery.data ?? []), [groupsQuery.data]);
 
     const [stepId, setStepId] = useState<SetupStepId | null>(null);
     const [skippedSteps, setSkippedSteps] = useState<SetupStepId[]>([]);
@@ -76,15 +74,7 @@ export function SetupPage(): ReactNode {
 
             const availability =
                 resolvedStepId === 'admin'
-                    ? {
-                          includeMetadata: (
-                              await queryClient.fetchQuery({
-                                  queryKey: settingsQueryKeys.all,
-                                  queryFn: () => apiGet<ApiSettingsGroup[]>('/settings/groups'),
-                                  retry: false,
-                              })
-                          ).some((group) => group.extensionId && (group.schema?.length ?? 0) > 0),
-                      }
+                    ? getStepAvailability(await queryClient.fetchQuery(groupsQueryOptions))
                     : stepAvailability;
             const next = nextStepAfter(resolvedStepId, availability);
             if (next === null) {
@@ -111,7 +101,7 @@ export function SetupPage(): ReactNode {
         return <Navigate to={isAuthenticated ? '/' : '/login'} replace />;
     }
 
-    const currentStep = resolvedStepId ? SETUP_STEPS[resolvedStepId] : null;
+    const stepSubtitle = resolvedStepId ? SETUP_STEPS[resolvedStepId] : null;
     const currentState = statusQuery.isError ? 'error' : (resolvedStepId ?? 'loading');
 
     return (
@@ -120,9 +110,7 @@ export function SetupPage(): ReactNode {
                 <div className="setup-page__brand">
                     <Logo size={48} variant="solid" />
                     <h1 className="setup-page__title">Welcome to Magpie</h1>
-                    <p className="setup-page__subtitle">
-                        {currentStep?.subtitle ?? 'Configure Magpie for your environment.'}
-                    </p>
+                    <p className="setup-page__subtitle">{stepSubtitle ?? 'Configure Magpie for your environment.'}</p>
                 </div>
 
                 {statusQuery.isError ? (

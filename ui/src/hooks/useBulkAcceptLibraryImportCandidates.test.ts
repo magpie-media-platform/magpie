@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
 import { apiPost } from '@/lib/api';
 import { useBulkAcceptLibraryImportCandidates } from './useBulkAcceptLibraryImportCandidates';
 import { libraryImportCandidateQueryKeys } from './useLibraryImportCandidates';
+import { libraryImportCandidateGroupQueryKeys } from './useLibraryImportCandidateGroups';
 
 function createWrapper() {
     const queryClient = new QueryClient({
@@ -52,11 +53,12 @@ describe('useBulkAcceptLibraryImportCandidates', () => {
               }
             | undefined;
         await act(async () => {
-            response = await result.current.mutateAsync({ ids: ['m-1', 'm-2'] });
+            response = await result.current.mutateAsync({ ids: ['m-1', 'm-2'], monitoringMode: 'Inherit' });
         });
 
         expect(mockApiPost).toHaveBeenCalledWith('/import/candidates/bulk-accept', {
             ids: ['m-1', 'm-2'],
+            monitoringMode: 'Inherit',
         });
         expect(response).toEqual({ queued, skipped: [] });
     });
@@ -69,9 +71,23 @@ describe('useBulkAcceptLibraryImportCandidates', () => {
         const { result } = renderHook(() => useBulkAcceptLibraryImportCandidates(), { wrapper: Wrapper });
 
         await act(async () => {
-            await result.current.mutateAsync({ ids: ['m-1'] });
+            await result.current.mutateAsync({ ids: ['m-1'], monitoringMode: 'Inherit' });
         });
 
         expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: libraryImportCandidateQueryKeys.all });
+    });
+
+    it('invalidates the import/candidate-groups query family on success', async () => {
+        mockApiPost.mockResolvedValue({ queued: [{ candidateId: 'm-1', jobExecutionId: 'job-1' }], skipped: [] });
+        const { Wrapper, queryClient } = createWrapper();
+        const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+        const { result } = renderHook(() => useBulkAcceptLibraryImportCandidates(), { wrapper: Wrapper });
+
+        await act(async () => {
+            await result.current.mutateAsync({ ids: ['m-1'], monitoringMode: 'Inherit' });
+        });
+
+        expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: libraryImportCandidateGroupQueryKeys.all });
     });
 });

@@ -1854,25 +1854,22 @@ public class QueryExecutorTests
         // Assert
         Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["Shared"]));
 
-        using (Assert.EnterMultipleScope())
-        {
-            _client.Verify(
-                client => client.SearchAsync(
-                    It.Is<Request>(request => request.RelativeTarget.Contains(
-                        "artist=50000000-0000-0000-0000-000000000001",
-                        StringComparison.Ordinal)),
-                    It.IsAny<Settings>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-            _client.Verify(
-                client => client.SearchAsync(
-                    It.Is<Request>(request => request.RelativeTarget.Contains(
-                        "artist=50000000-0000-0000-0000-000000000002",
-                        StringComparison.Ordinal)),
-                    It.IsAny<Settings>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-        }
+        _client.Verify(
+            client => client.SearchAsync(
+                It.Is<Request>(request => request.RelativeTarget.Contains(
+                    "artist=50000000-0000-0000-0000-000000000001",
+                    StringComparison.Ordinal)),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _client.Verify(
+            client => client.SearchAsync(
+                It.Is<Request>(request => request.RelativeTarget.Contains(
+                    "artist=50000000-0000-0000-0000-000000000002",
+                    StringComparison.Ordinal)),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -5673,6 +5670,7 @@ public class QueryExecutorTests
                         {
                             Id = "550e8400-e29b-41d4-a716-446655440000",
                             Name = "David Bowie",
+                            Type = "Person",
                             LifeSpan = new LifeSpanDto { Begin = "1947-01-08", End = "2016-01-10", Ended = true }
                         }
                     ]
@@ -5932,5 +5930,840 @@ public class QueryExecutorTests
         Assert.That(
             result.Hits.Select(hit => hit.PrimaryMbid),
             Is.EqualTo(["550e8400-e29b-41d4-a716-446655440000"]));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_StopsBrowsingEveryUnionBranch_WhenThePageBoundIsReached()
+    {
+        // Arrange
+        var firstFetch = new FetchPlanNode
+        {
+            Id = 1,
+            Precondition = NoPrecondition,
+            Contributes = "content linked to one artist",
+            Target = QueryTarget.Track,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.Mbid,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            DirectValue = "aaaaaaaa-0000-4000-8000-000000000001"
+        };
+        var secondFetch = firstFetch with { Id = 2, DirectValue = "bbbbbbbb-0000-4000-8000-000000000001" };
+        var root = new FilterPlanNode
+        {
+            Id = 4,
+            Precondition = NoPrecondition,
+            Contributes = "post-residual survivor rows",
+            Child = new UnionPlanNode
+            {
+                Id = 3,
+                Precondition = NoPrecondition,
+                Contributes = "content linked to any artist alternative",
+                Children = [firstFetch, secondFetch]
+            },
+            Filters = [],
+            Residuals = []
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 2,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-union-bound",
+            Root = root
+        };
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:aaaaaaaa-0000-4000-8000-000000000001" &&
+                    request.Offset == 0),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 10,
+                    Offset = 0,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000001", Title = "A1" },
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000002", Title = "A2" },
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000003", Title = "A3" },
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000004", Title = "A4" },
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000005", Title = "A5" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:aaaaaaaa-0000-4000-8000-000000000001" &&
+                    request.Offset == 5),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 10,
+                    Offset = 5,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000006", Title = "A6" },
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000007", Title = "A7" },
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000008", Title = "A8" },
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-000000000009", Title = "A9" },
+                        new RecordingDto { Id = "a1000000-0000-4000-8000-00000000000a", Title = "A10" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:bbbbbbbb-0000-4000-8000-000000000001" &&
+                    request.Offset == 0),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 10,
+                    Offset = 0,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000001", Title = "B1" },
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000002", Title = "B2" },
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000003", Title = "B3" },
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000004", Title = "B4" },
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000005", Title = "B5" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:bbbbbbbb-0000-4000-8000-000000000001" &&
+                    request.Offset == 5),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 10,
+                    Offset = 5,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000006", Title = "B6" },
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000007", Title = "B7" },
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000008", Title = "B8" },
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-000000000009", Title = "B9" },
+                        new RecordingDto { Id = "b1000000-0000-4000-8000-00000000000a", Title = "B10" }
+                    ]
+                }
+            });
+
+        // Act
+        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["A1", "A2"]));
+            Assert.That(result.PageInfo.HasMore, Is.True);
+        }
+
+        _client.Verify(
+            client => client.SearchAsync(It.IsAny<Request>(), It.IsAny<Settings>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_CountsLocalSurvivorsPerUnionBranch_WhenTheFilterDropsBrowsedRows()
+    {
+        // Arrange
+        var firstFetch = new FetchPlanNode
+        {
+            Id = 1,
+            Precondition = NoPrecondition,
+            Contributes = "content linked to one artist",
+            Target = QueryTarget.Track,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.Mbid,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            DirectValue = "cccccccc-0000-4000-8000-000000000001"
+        };
+        var secondFetch = firstFetch with { Id = 2, DirectValue = "dddddddd-0000-4000-8000-000000000001" };
+        var root = new FilterPlanNode
+        {
+            Id = 4,
+            Precondition = NoPrecondition,
+            Contributes = "post-residual survivor rows",
+            Child = new UnionPlanNode
+            {
+                Id = 3,
+                Precondition = NoPrecondition,
+                Contributes = "content linked to any artist alternative",
+                Children = [firstFetch, secondFetch]
+            },
+            Filters =
+            [
+                new QueryFilter
+                {
+                    Kind = QueryFilterKind.Title,
+                    Operator = CriteriaValueOperator.ContainsString,
+                    Negate = false,
+                    StringValues = ["Keep"],
+                    VerifyLocally = true
+                }
+            ],
+            Residuals = []
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 2,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-union-filtered-bound",
+            Root = root
+        };
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:cccccccc-0000-4000-8000-000000000001" &&
+                    request.Offset == 0),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 10,
+                    Offset = 0,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000001", Title = "Keep C1" },
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000002", Title = "Drop C1" },
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000003", Title = "Keep C2" },
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000004", Title = "Drop C2" },
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000005", Title = "Drop C3" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:cccccccc-0000-4000-8000-000000000001" &&
+                    request.Offset == 5),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 10,
+                    Offset = 5,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000006", Title = "Keep C3" },
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000007", Title = "Drop C4" },
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000008", Title = "Drop C5" },
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-000000000009", Title = "Drop C6" },
+                        new RecordingDto { Id = "c1000000-0000-4000-8000-00000000000a", Title = "Drop C7" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:dddddddd-0000-4000-8000-000000000001" &&
+                    request.Offset == 0),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 10,
+                    Offset = 0,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000001", Title = "Keep D1" },
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000002", Title = "Keep D2" },
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000003", Title = "Keep D3" },
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000004", Title = "Drop D1" },
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000005", Title = "Drop D2" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:dddddddd-0000-4000-8000-000000000001" &&
+                    request.Offset == 5),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 10,
+                    Offset = 5,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000006", Title = "Drop D3" },
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000007", Title = "Drop D4" },
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000008", Title = "Drop D5" },
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-000000000009", Title = "Drop D6" },
+                        new RecordingDto { Id = "d1000000-0000-4000-8000-00000000000a", Title = "Drop D7" }
+                    ]
+                }
+            });
+
+        // Act
+        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["Keep C1", "Keep C2"]));
+            Assert.That(result.PageInfo.HasMore, Is.True);
+        }
+
+        _client.Verify(
+            client => client.SearchAsync(It.IsAny<Request>(), It.IsAny<Settings>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(3));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_BrowsesEveryIntersectBranchToExhaustion_WhenTheBranchesShareLaterRows()
+    {
+        // Arrange
+        var firstFetch = new FetchPlanNode
+        {
+            Id = 1,
+            Precondition = NoPrecondition,
+            Contributes = "content linked to one artist",
+            Target = QueryTarget.Track,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.Mbid,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            DirectValue = "eeeeeeee-0000-4000-8000-000000000001"
+        };
+        var secondFetch = firstFetch with { Id = 2, DirectValue = "ffffffff-0000-4000-8000-000000000001" };
+        var root = new FilterPlanNode
+        {
+            Id = 4,
+            Precondition = NoPrecondition,
+            Contributes = "post-residual survivor rows",
+            Child = new IntersectPlanNode
+            {
+                Id = 3,
+                Precondition = NoPrecondition,
+                Contributes = "content linked to every artist criterion",
+                Children = [firstFetch, secondFetch]
+            },
+            Filters = [],
+            Residuals = []
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 2,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-intersect-full-read",
+            Root = root
+        };
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:eeeeeeee-0000-4000-8000-000000000001" &&
+                    request.Offset == 0),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 7,
+                    Offset = 0,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "e1000000-0000-4000-8000-000000000001", Title = "E1" },
+                        new RecordingDto { Id = "e1000000-0000-4000-8000-000000000002", Title = "E2" },
+                        new RecordingDto { Id = "e1000000-0000-4000-8000-000000000003", Title = "E3" },
+                        new RecordingDto { Id = "e1000000-0000-4000-8000-000000000004", Title = "E4" },
+                        new RecordingDto { Id = "e1000000-0000-4000-8000-000000000005", Title = "E5" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:eeeeeeee-0000-4000-8000-000000000001" &&
+                    request.Offset == 5),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 7,
+                    Offset = 5,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "50000000-0000-4000-8000-000000000001", Title = "Shared 1" },
+                        new RecordingDto { Id = "50000000-0000-4000-8000-000000000002", Title = "Shared 2" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:ffffffff-0000-4000-8000-000000000001" &&
+                    request.Offset == 0),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 7,
+                    Offset = 0,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "f1000000-0000-4000-8000-000000000001", Title = "F1" },
+                        new RecordingDto { Id = "f1000000-0000-4000-8000-000000000002", Title = "F2" },
+                        new RecordingDto { Id = "f1000000-0000-4000-8000-000000000003", Title = "F3" },
+                        new RecordingDto { Id = "f1000000-0000-4000-8000-000000000004", Title = "F4" },
+                        new RecordingDto { Id = "f1000000-0000-4000-8000-000000000005", Title = "F5" }
+                    ]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request =>
+                    request.Fingerprint == "linked-browse:Track:ffffffff-0000-4000-8000-000000000001" &&
+                    request.Offset == 5),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 7,
+                    Offset = 5,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "50000000-0000-4000-8000-000000000001", Title = "Shared 1" },
+                        new RecordingDto { Id = "50000000-0000-4000-8000-000000000002", Title = "Shared 2" }
+                    ]
+                }
+            });
+
+        // Act
+        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["Shared 1", "Shared 2"]));
+            Assert.That(result.PageInfo.HasMore, Is.False);
+        }
+
+        _client.Verify(
+            client => client.SearchAsync(It.IsAny<Request>(), It.IsAny<Settings>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(4));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ExpandsTheWholeComposition_WhenThePageBoundIsSmallerThanTheExpansion()
+    {
+        // Arrange
+        var composition = new ArtistComposition
+        {
+            RelatedEntity = ArtistCompositionEntity.ReleaseGroup,
+            Resolution = ArtistCompositionResolution.KnownMbid,
+            Expansion = ArtistCompositionExpansion.BrowseArtists,
+            Constraint = ArtistCompositionConstraint.Include,
+            FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+            ExternalIdSource = Constants.ProviderType,
+            RelatedMbid = "c0000000-0000-4000-8000-000000000001"
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = NoPrecondition,
+            Contributes = "expanded artist candidates",
+            Target = QueryTarget.Artist,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.ResolvedArtist,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            Resolvers =
+            [
+                new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = NoPrecondition,
+                    Contributes = "resolved artist ids",
+                    Composition = composition
+                }
+            ],
+            BrowseComposition = composition
+        };
+        var root = new FilterPlanNode
+        {
+            Id = 3,
+            Precondition = NoPrecondition,
+            Contributes = "post-residual survivor rows",
+            Child = fetch,
+            Filters = [],
+            Residuals = []
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 2,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-expansion-bound",
+            Root = root
+        };
+        _client.SetupSequence(client => client.BrowseArtistsAsync(
+                It.IsAny<ArtistBrowseCacheKey>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<ArtistBrowseResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ArtistBrowseResponseDto
+                {
+                    ArtistCount = 10,
+                    Artists =
+                    [
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000001", Name = "One" },
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000002", Name = "Two" },
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000003", Name = "Three" },
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000004", Name = "Four" },
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000005", Name = "Five" }
+                    ]
+                }
+            })
+            .ReturnsAsync(new FetchResult<ArtistBrowseResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ArtistBrowseResponseDto
+                {
+                    ArtistCount = 10,
+                    Artists =
+                    [
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000006", Name = "Six" },
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000007", Name = "Seven" },
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000008", Name = "Eight" },
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-000000000009", Name = "Nine" },
+                        new ArtistDto { Id = "c1000000-0000-4000-8000-00000000000a", Name = "Ten" }
+                    ]
+                }
+            });
+
+        // Act
+        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["One", "Two"]));
+            Assert.That(result.PageInfo.HasMore, Is.True);
+        }
+
+        _client.Verify(
+            client => client.BrowseArtistsAsync(
+                It.IsAny<ArtistBrowseCacheKey>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReadsEveryExpansionPage_WhenAResidualRejectsExpandedArtists()
+    {
+        // Arrange
+        var composition = new ArtistComposition
+        {
+            RelatedEntity = ArtistCompositionEntity.ReleaseGroup,
+            Resolution = ArtistCompositionResolution.KnownMbid,
+            Expansion = ArtistCompositionExpansion.BrowseArtists,
+            Constraint = ArtistCompositionConstraint.Include,
+            FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+            ExternalIdSource = Constants.ProviderType,
+            RelatedMbid = "c0000000-0000-4000-8000-000000000002"
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = NoPrecondition,
+            Contributes = "expanded artist candidates",
+            Target = QueryTarget.Artist,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.ResolvedArtist,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            Resolvers =
+            [
+                new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = NoPrecondition,
+                    Contributes = "resolved artist ids",
+                    Composition = composition
+                }
+            ],
+            BrowseComposition = composition
+        };
+        var root = new FilterPlanNode
+        {
+            Id = 3,
+            Precondition = NoPrecondition,
+            Contributes = "post-residual survivor rows",
+            Child = fetch,
+            Filters = [],
+            Residuals =
+            [
+                new ResidualCriterion
+                {
+                    Kind = ResidualKind.Genre,
+                    Need = ResidualNeed.Hit,
+                    Alternatives =
+                    [
+                        new ResidualAlternative
+                        {
+                            Predicates =
+                            [
+                                new ResidualPredicate
+                                {
+                                    Field = ResidualField.GenreName,
+                                    Operator = CriteriaValueOperator.Equals,
+                                    Values = ["rock"]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 2,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-expansion-residual",
+            Root = root
+        };
+        _client.SetupSequence(client => client.BrowseArtistsAsync(
+                It.IsAny<ArtistBrowseCacheKey>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<ArtistBrowseResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ArtistBrowseResponseDto
+                {
+                    ArtistCount = 6,
+                    Artists =
+                    [
+                        new ArtistDto
+                        {
+                            Id = "c2000000-0000-4000-8000-000000000001",
+                            Name = "One",
+                            Genres = [new GenreDto { Name = "jazz", Count = 1 }]
+                        },
+                        new ArtistDto
+                        {
+                            Id = "c2000000-0000-4000-8000-000000000002",
+                            Name = "Two",
+                            Genres = [new GenreDto { Name = "jazz", Count = 1 }]
+                        },
+                        new ArtistDto
+                        {
+                            Id = "c2000000-0000-4000-8000-000000000003",
+                            Name = "Three",
+                            Genres = [new GenreDto { Name = "rock", Count = 1 }]
+                        }
+                    ]
+                }
+            })
+            .ReturnsAsync(new FetchResult<ArtistBrowseResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ArtistBrowseResponseDto
+                {
+                    ArtistCount = 6,
+                    Artists =
+                    [
+                        new ArtistDto
+                        {
+                            Id = "c2000000-0000-4000-8000-000000000004",
+                            Name = "Four",
+                            Genres = [new GenreDto { Name = "rock", Count = 1 }]
+                        },
+                        new ArtistDto
+                        {
+                            Id = "c2000000-0000-4000-8000-000000000005",
+                            Name = "Five",
+                            Genres = [new GenreDto { Name = "rock", Count = 1 }]
+                        },
+                        new ArtistDto
+                        {
+                            Id = "c2000000-0000-4000-8000-000000000006",
+                            Name = "Six",
+                            Genres = [new GenreDto { Name = "rock", Count = 1 }]
+                        }
+                    ]
+                }
+            });
+
+        // Act
+        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["Three", "Four"]));
+            Assert.That(result.PageInfo.HasMore, Is.True);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReadsEveryExpansionPage_WhenAnExclusionRemovesExpandedArtists()
+    {
+        // Arrange
+        var composition = new ArtistComposition
+        {
+            RelatedEntity = ArtistCompositionEntity.ReleaseGroup,
+            Resolution = ArtistCompositionResolution.KnownMbid,
+            Expansion = ArtistCompositionExpansion.BrowseArtists,
+            Constraint = ArtistCompositionConstraint.Include,
+            FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+            ExternalIdSource = Constants.ProviderType,
+            RelatedMbid = "c0000000-0000-4000-8000-000000000003"
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = NoPrecondition,
+            Contributes = "expanded artist candidates",
+            Target = QueryTarget.Artist,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.ResolvedArtist,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            Resolvers =
+            [
+                new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = NoPrecondition,
+                    Contributes = "resolved artist ids",
+                    Composition = composition
+                }
+            ],
+            BrowseComposition = composition
+        };
+        var root = new FilterPlanNode
+        {
+            Id = 3,
+            Precondition = NoPrecondition,
+            Contributes = "post-residual survivor rows",
+            Child = fetch,
+            Filters = [],
+            Residuals = [],
+            Exclusions =
+            [
+                new ResolvePlanNode
+                {
+                    Id = 4,
+                    Precondition = NoPrecondition,
+                    Contributes = "resolved artist ids",
+                    Composition = composition with
+                    {
+                        RelatedEntity = ArtistCompositionEntity.Artist,
+                        Constraint = ArtistCompositionConstraint.Exclude,
+                        RelatedMbid = "c3000000-0000-4000-8000-000000000001"
+                    }
+                },
+                new ResolvePlanNode
+                {
+                    Id = 5,
+                    Precondition = NoPrecondition,
+                    Contributes = "resolved artist ids",
+                    Composition = composition with
+                    {
+                        RelatedEntity = ArtistCompositionEntity.Artist,
+                        Constraint = ArtistCompositionConstraint.Exclude,
+                        RelatedMbid = "c3000000-0000-4000-8000-000000000002"
+                    }
+                }
+            ]
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 2,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-expansion-exclusion",
+            Root = root
+        };
+        _client.SetupSequence(client => client.BrowseArtistsAsync(
+                It.IsAny<ArtistBrowseCacheKey>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<ArtistBrowseResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ArtistBrowseResponseDto
+                {
+                    ArtistCount = 6,
+                    Artists =
+                    [
+                        new ArtistDto { Id = "c3000000-0000-4000-8000-000000000001", Name = "One" },
+                        new ArtistDto { Id = "c3000000-0000-4000-8000-000000000002", Name = "Two" },
+                        new ArtistDto { Id = "c3000000-0000-4000-8000-000000000003", Name = "Three" }
+                    ]
+                }
+            })
+            .ReturnsAsync(new FetchResult<ArtistBrowseResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ArtistBrowseResponseDto
+                {
+                    ArtistCount = 6,
+                    Artists =
+                    [
+                        new ArtistDto { Id = "c3000000-0000-4000-8000-000000000004", Name = "Four" },
+                        new ArtistDto { Id = "c3000000-0000-4000-8000-000000000005", Name = "Five" },
+                        new ArtistDto { Id = "c3000000-0000-4000-8000-000000000006", Name = "Six" }
+                    ]
+                }
+            });
+
+        // Act
+        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["Three", "Four"]));
+            Assert.That(result.PageInfo.HasMore, Is.True);
+        }
     }
 }

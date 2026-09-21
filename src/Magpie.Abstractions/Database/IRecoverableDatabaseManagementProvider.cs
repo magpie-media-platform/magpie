@@ -37,7 +37,7 @@ public interface IRecoverableDatabaseManagementProvider : IDatabaseManagementPro
     Task<bool> ApplyPendingRestoreAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the backups that are available to restore.
+    /// Lists the backups that are available to restore.
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The backups that are available to restore</returns>

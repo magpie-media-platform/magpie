@@ -20,10 +20,7 @@ interface LongPressHandlers {
 interface UseLongPressResult {
     handlers: LongPressHandlers;
 
-    /**
-     * Call from the element's click handler. When a long press just fired, it
-     * suppresses the synthetic click (preventing link navigation) and returns true.
-     */
+    /** Suppresses the synthetic click and returns true when a long press just fired; call it from the click handler. */
     consumeClick: (event: { preventDefault: () => void; stopPropagation: () => void }) => boolean;
 }
 

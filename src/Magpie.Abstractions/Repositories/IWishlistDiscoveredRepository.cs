@@ -15,7 +15,7 @@ namespace Magpie.Abstractions.Repositories;
 public interface IWishlistDiscoveredRepository : IRepository
 {
     /// <summary>
-    /// Gets the candidates that a wishlist discovered.
+    /// Lists the candidates that a wishlist discovered.
     /// </summary>
     /// <param name="wishlistId">The id of the wishlist</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

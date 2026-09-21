@@ -14,12 +14,12 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Content;
 
 [TestFixture]
-public class ContentTypeRegistryTests
+public sealed class ContentTypeRegistryTests
 {
     private readonly ILoggerFactory _loggerFactory = NullLoggerFactory.Instance;
 
     [Test]
-    public void DuplicateSlug_CollapsesToOneEntry_LastWins()
+    public void GetDefinitionFor_ReturnsTheLastDefinition_WhenSlugsAreDuplicated()
     {
         // Arrange
         var firstDefinition = new ContentTypeDefinition
@@ -45,18 +45,29 @@ public class ContentTypeRegistryTests
         {
             Assert.That(registry.Definitions, Has.Count.EqualTo(1));
             Assert.That(registry.GetDefinitionFor("type-a")!.DisplayName, Is.EqualTo("Type A 2"));
+            Assert.That(registry.FindProviderFor("type-a"), Is.SameAs(second));
         }
     }
 
-    [Test]
-    public void GetDefinitionFor_ReturnsOnlyExactMatch_WhenSlugCaseDiffers()
+    [TestCase("Type-A", "level-a")]
+    [TestCase("type-a", "Level-A")]
+    public void Constructor_IgnoresTheDefinition_WhenASlugIsNotLowercase(string typeSlug, string levelSlug)
     {
         // Arrange
         var definition = new ContentTypeDefinition
         {
-            Slug = "Type-A",
+            Slug = typeSlug,
             DisplayName = "Type A",
-            LevelDefinitions = []
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = levelSlug,
+                    ParentSlug = null,
+                    DisplayName = "Level A",
+                    CustomMetadataFields = []
+                }
+            ]
         };
 
         // Act
@@ -67,13 +78,9 @@ public class ContentTypeRegistryTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(registry.GetDefinitionFor("Type-A"), Is.SameAs(definition));
-            Assert.That(registry.Exists("Type-A"), Is.True);
-            Assert.That(registry.GetDefinitionFor("type-a"), Is.Null);
-            Assert.That(registry.GetDefinitionFor("TYPE-A"), Is.Null);
-            Assert.That(registry.Exists("tYpE-a"), Is.False);
-            Assert.That(registry.GetDefinitionFor("type-b"), Is.Null);
-            Assert.That(registry.Exists("type-b"), Is.False);
+            Assert.That(registry.Definitions, Is.Empty);
+            Assert.That(registry.GetDefinitionFor(typeSlug), Is.Null);
+            Assert.That(registry.Exists(typeSlug), Is.False);
         }
     }
 

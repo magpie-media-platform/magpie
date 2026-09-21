@@ -19,22 +19,12 @@ public sealed class SignalBagBuilder
     {
     }
 
-    private static string NormalizeKey(string key)
-    {
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            throw new ArgumentException("A signal key is required.", nameof(key));
-        }
-
-        return key.Trim();
-    }
-
     /// <summary>
     /// Adds a non-empty value to a signal key.
     /// </summary>
     /// <param name="key">The signal key</param>
     /// <param name="value">The signal value</param>
-    /// <returns>The current signal bag builder.</returns>
+    /// <returns>The current signal bag builder</returns>
     public SignalBagBuilder AddValue(string key, string? value)
     {
         var signalKey = NormalizeKey(key);
@@ -58,7 +48,7 @@ public sealed class SignalBagBuilder
     /// </summary>
     /// <param name="key">The signal key</param>
     /// <param name="value">The signal value</param>
-    /// <returns>The current signal bag builder.</returns>
+    /// <returns>The current signal bag builder</returns>
     public SignalBagBuilder AddValue(string key, int? value)
     {
         return value is { } present
@@ -69,7 +59,7 @@ public sealed class SignalBagBuilder
     /// <summary>
     /// Builds an immutable snapshot of the signal values.
     /// </summary>
-    /// <returns>The built signal values.</returns>
+    /// <returns>The built signal values</returns>
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Build()
     {
         var snapshot = new Dictionary<string, IReadOnlyList<string>>(_signals.Count, StringComparer.OrdinalIgnoreCase);
@@ -79,5 +69,15 @@ public sealed class SignalBagBuilder
         }
 
         return new ReadOnlyDictionary<string, IReadOnlyList<string>>(snapshot);
+    }
+
+    private static string NormalizeKey(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new ArgumentException("A signal key is required.", nameof(key));
+        }
+
+        return key.Trim();
     }
 }

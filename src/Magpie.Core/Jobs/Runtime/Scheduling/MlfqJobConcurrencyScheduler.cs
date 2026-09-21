@@ -17,6 +17,54 @@ namespace Magpie.Core.Jobs.Runtime.Scheduling;
 
 internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
 {
+    private enum ReservationState
+    {
+        Active,
+        Released,
+    }
+
+    private readonly record struct Config(
+        int[] Widths,
+        TimeSpan[] Quanta,
+        int General,
+        int FastLane,
+        SemaphoreSlim FastLaneSemaphore);
+
+    private readonly record struct TrackedJob(string JobType, int Level, DateTime AdmittedAt, DateTime LevelEnteredAt);
+
+    private sealed class ReservedSlot(MlfqJobConcurrencyScheduler scheduler, int level) : IDisposable
+    {
+        private readonly StateManager<ReservationState> _state = new(ReservationState.Active);
+
+        public void Dispose()
+        {
+            if (_state.TryTransition(ReservationState.Released, ReservationState.Active))
+            {
+                scheduler.ReleaseReservedSlot(level);
+            }
+        }
+    }
+
+    private sealed class Reservation(SemaphoreSlim? semaphore) : IDisposable
+    {
+        private readonly StateManager<ReservationState> _state = new(ReservationState.Active);
+
+        public static Reservation Noop() => new(null);
+
+        public void Dispose()
+        {
+            if (semaphore is null)
+            {
+                return;
+            }
+
+            if (_state.TryTransition(ReservationState.Released, ReservationState.Active))
+            {
+                semaphore.Release();
+            }
+        }
+    }
+
     private const int LevelCount = 4;
 
     private const int MinimumTotalConcurrency = LevelCount + 1;
@@ -28,11 +76,14 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
 
     private readonly object _lock = new();
     private readonly Dictionary<Guid, TrackedJob> _jobs = [];
+    private readonly Dictionary<string, Queue<JobClaimCandidate>> _pageByType = new(StringComparer.Ordinal);
     private readonly List<string> _typeOrder = [];
     private readonly int[] _occupancy = new int[LevelCount];
     private readonly TimeProvider _time;
     private readonly Config _config;
 
+    private IReadOnlyList<JobClaimCandidate>? _pageSource;
+    private int _pageSourceCount;
     private int _cursor;
 
     public MlfqJobConcurrencyScheduler(
@@ -52,12 +103,6 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
         _ = JobsTelemetry.Meter.CreateObservableGauge(
             "magpie.jobs.fast_lane_in_use",
             ObserveFastLaneInUse);
-    }
-
-    private enum ReservationState
-    {
-        Active,
-        Released,
     }
 
     public int Total => _config.General + _config.FastLane;
@@ -135,40 +180,29 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
                 return false;
             }
 
-            var byType = new Dictionary<string, Queue<JobClaimCandidate>>();
-            var order = new List<string>();
-            foreach (var candidate in candidates)
+            GroupPage(candidates);
+
+            for (var step = 0; step < _typeOrder.Count; step++)
             {
-                if (excluded.Contains(candidate.Id) || _jobs.ContainsKey(candidate.Id))
+                var type = _typeOrder[(_cursor + step) % _typeOrder.Count];
+                if (!_pageByType.TryGetValue(type, out var queue))
                 {
                     continue;
                 }
 
-                if (!byType.TryGetValue(candidate.JobType, out var queue))
+                while (queue.Count > 0 &&
+                    (excluded.Contains(queue.Peek().Id) || _jobs.ContainsKey(queue.Peek().Id)))
                 {
-                    queue = new Queue<JobClaimCandidate>();
-                    byType[candidate.JobType] = queue;
-                    order.Add(candidate.JobType);
+                    queue.Dequeue();
                 }
 
-                queue.Enqueue(candidate);
-            }
-
-            if (order.Count == 0)
-            {
-                return false;
-            }
-
-            SyncTypeOrder(order);
-            for (var step = 0; step < _typeOrder.Count; step++)
-            {
-                var index = (_cursor + step) % _typeOrder.Count;
-                var type = _typeOrder[index];
-                if (byType.TryGetValue(type, out var queue) && queue.Count > 0)
+                if (queue.Count > 0)
                 {
                     selected = queue.Peek();
                     return true;
                 }
+
+                _pageByType.Remove(type);
             }
 
             return false;
@@ -276,15 +310,15 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
 
     private static Config Create(JobRuntimeOptions options, ILogger<MlfqJobConcurrencyScheduler> logger)
     {
-        if (options.MaxConcurrentJobs < MinimumTotalConcurrency)
+        if (options.PoolSize < MinimumTotalConcurrency)
         {
             logger.LogWarning(
                 "Configured max jobs {Configured} is below {Minimum}, raising to fit general and fast-lane pools",
-                options.MaxConcurrentJobs,
+                options.PoolSize,
                 MinimumTotalConcurrency);
         }
 
-        var total = Math.Max(MinimumTotalConcurrency, options.MaxConcurrentJobs);
+        var total = Math.Max(MinimumTotalConcurrency, options.PoolSize);
         var fastLane = Math.Max(1, total / 8);
         var general = total - fastLane;
         var widths = DeriveWidths(general);
@@ -300,12 +334,28 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
         return new Config(widths, quanta, general, fastLane, new SemaphoreSlim(fastLane, fastLane));
     }
 
-    private void SyncTypeOrder(List<string> typesThisPass)
+    private void GroupPage(IReadOnlyList<JobClaimCandidate> candidates)
     {
-        foreach (var type in typesThisPass)
+        if (ReferenceEquals(_pageSource, candidates) && _pageSourceCount == candidates.Count)
         {
-            EnsureType(type);
+            return;
         }
+
+        _pageByType.Clear();
+        foreach (var candidate in candidates)
+        {
+            if (!_pageByType.TryGetValue(candidate.JobType, out var queue))
+            {
+                queue = new Queue<JobClaimCandidate>();
+                _pageByType[candidate.JobType] = queue;
+                EnsureType(candidate.JobType);
+            }
+
+            queue.Enqueue(candidate);
+        }
+
+        _pageSource = candidates;
+        _pageSourceCount = candidates.Count;
     }
 
     private void EnsureType(string type)
@@ -355,47 +405,5 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
     private int ObserveFastLaneInUse()
     {
         return _config.FastLane - _config.FastLaneSemaphore.CurrentCount;
-    }
-
-    private readonly record struct Config(
-        int[] Widths,
-        TimeSpan[] Quanta,
-        int General,
-        int FastLane,
-        SemaphoreSlim FastLaneSemaphore);
-
-    private readonly record struct TrackedJob(string JobType, int Level, DateTime AdmittedAt, DateTime LevelEnteredAt);
-
-    private sealed class ReservedSlot(MlfqJobConcurrencyScheduler scheduler, int level) : IDisposable
-    {
-        private readonly StateManager<ReservationState> _state = new(ReservationState.Active);
-
-        public void Dispose()
-        {
-            if (_state.TryTransition(ReservationState.Released, ReservationState.Active))
-            {
-                scheduler.ReleaseReservedSlot(level);
-            }
-        }
-    }
-
-    private sealed class Reservation(SemaphoreSlim? semaphore) : IDisposable
-    {
-        private readonly StateManager<ReservationState> _state = new(ReservationState.Active);
-
-        public static Reservation Noop() => new(null);
-
-        public void Dispose()
-        {
-            if (semaphore is null)
-            {
-                return;
-            }
-
-            if (_state.TryTransition(ReservationState.Released, ReservationState.Active))
-            {
-                semaphore.Release();
-            }
-        }
     }
 }

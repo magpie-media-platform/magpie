@@ -5,6 +5,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
+import { LiveAnnouncerProvider } from '@/components/ui/LiveAnnouncer';
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AuthProvider, Role } from '@/auth';
@@ -25,7 +26,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     };
 });
 
-import { ApiError, apiGet, apiPatch, apiPost } from '@/lib/api';
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from '@/lib/api';
 import type { ApiQualityTierList } from '@/hooks/useQualityTierLists';
 
 const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -441,14 +442,6 @@ function setupMockApi() {
             if (url === '/subject-types') {
                 return Promise.resolve([]);
             }
-            if (url === '/content-types/quality-attributes') {
-                return Promise.resolve({
-                    universalFields: [
-                        { name: 'Title', label: 'Title', isNumeric: false },
-                        { name: 'Size', label: 'Size', isNumeric: true },
-                    ],
-                });
-            }
             return Promise.reject(new Error('Unknown endpoint'));
         });
         mockApiPatch.mockResolvedValue(undefined);
@@ -470,9 +463,11 @@ function setupMockApi() {
 
 async function renderAndWaitForData(role: Role = Role.Admin, initialPath: string = '/quality-tiers/qtl-1') {
     render(
-        <TestWrapper role={role} initialPath={initialPath}>
-            <TierListDetailPage />
-        </TestWrapper>,
+        <LiveAnnouncerProvider>
+            <TestWrapper role={role} initialPath={initialPath}>
+                <TierListDetailPage />
+            </TestWrapper>
+        </LiveAnnouncerProvider>,
     );
 
     if (initialPath === '/quality-tiers/invalid-id' || initialPath.includes(MISSING_DETAIL_ID)) {
@@ -572,9 +567,11 @@ describe('TierListDetailPage', () => {
 
     it('renders with correct data-page attribute', async () => {
         render(
-            <TestWrapper>
-                <TierListDetailPage />
-            </TestWrapper>,
+            <LiveAnnouncerProvider>
+                <TestWrapper>
+                    <TierListDetailPage />
+                </TestWrapper>
+            </LiveAnnouncerProvider>,
         );
 
         await waitFor(() => {
@@ -770,6 +767,7 @@ describe('TierListDetailPage Add Tier button', () => {
         await user.click(within(form).getByRole('button', { name: /add exclusion/i }));
         const exclusions = within(form).getByText('Exclusions').closest('[data-component="exclusions-editor"]');
         await user.click(within(exclusions as HTMLElement).getByRole('button', { name: 'Add' }));
+        await user.type(within(exclusions as HTMLElement).getByLabelText(/criterion 1 field/i), 'Source');
         await user.type(within(exclusions as HTMLElement).getByLabelText(/criterion 1 value/i), 'CAM');
         await user.click(within(form).getByRole('button', { name: /save/i }));
 
@@ -802,6 +800,10 @@ describe('TierListDetailPage Add Tier button', () => {
         const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
         await user.click(form.querySelector('[data-action="add-criterion"]') as HTMLButtonElement);
         await user.click(form.querySelector('[data-action="add-criterion"]') as HTMLButtonElement);
+
+        const fields = within(form).getAllByLabelText(/criterion \d+ field/i);
+        await user.type(fields[0], 'Title');
+        await user.type(fields[1], 'Title');
 
         const values = within(form).getAllByLabelText(/criterion \d+ value/i);
         await user.type(values[0], 'Bluray');
@@ -967,65 +969,91 @@ describe('TierListDetailPage management actions', () => {
     });
 });
 
-describe('TierListDetailPage drag-and-drop reordering', () => {
-    setupMockApi();
+describe('TierListDetailPage reordering', () => {
+    const { mockApiPatch } = setupMockApi();
 
-    it('tiers are draggable for Manager role', async () => {
+    it('Manager can drag a tier by its handle', async () => {
         await renderAndWaitForData(Role.Manager);
 
-        const tiers = document.querySelectorAll('[data-tier-id]');
-        tiers.forEach((tier) => {
-            expect(tier).toHaveAttribute('draggable', 'true');
+        const handles = screen.queryAllByTestId('tier-list-detail-page__drag-handle');
+        expect(handles.length).toBe(4);
+        handles.forEach((handle) => {
+            expect(handle).toHaveAttribute('draggable', 'true');
         });
     });
 
-    it('tiers are not draggable for Viewer role', async () => {
+    it('Viewer sees no reorder controls', async () => {
         await renderAndWaitForData(Role.Viewer);
 
-        const tiers = document.querySelectorAll('[data-tier-id]');
-        tiers.forEach((tier) => {
-            expect(tier).not.toHaveAttribute('draggable', 'true');
-        });
+        expect(screen.queryAllByTestId('tier-list-detail-page__drag-handle')).toHaveLength(0);
+        expect(screen.queryByRole('button', { name: /move .* up/i })).not.toBeInTheDocument();
     });
 
-    it('tiers are not draggable for Requester role', async () => {
+    it('Requester sees no reorder controls', async () => {
         await renderAndWaitForData(Role.Requester);
 
-        const tiers = document.querySelectorAll('[data-tier-id]');
-        tiers.forEach((tier) => {
-            expect(tier).not.toHaveAttribute('draggable', 'true');
-        });
+        expect(screen.queryAllByTestId('tier-list-detail-page__drag-handle')).toHaveLength(0);
+        expect(screen.queryByRole('button', { name: /move .* up/i })).not.toBeInTheDocument();
     });
 
-    it('Manager sees drag handle icons', async () => {
+    it('shows the reorder hint in the description for Manager role', async () => {
         await renderAndWaitForData(Role.Manager);
 
-        const dragHandles = screen.queryAllByTestId('tier-list-detail-page__drag-handle');
-        expect(dragHandles.length).toBe(4);
+        expect(screen.getByText(/drag tiers or use the move buttons to reorder/i)).toBeInTheDocument();
     });
 
-    it('Viewer does not see drag handle icons', async () => {
+    it('does not show the reorder hint for Viewer role', async () => {
         await renderAndWaitForData(Role.Viewer);
 
-        const dragHandles = screen.queryAllByTestId('tier-list-detail-page__drag-handle');
-        expect(dragHandles.length).toBe(0);
+        expect(screen.queryByText(/use the move buttons to reorder/i)).not.toBeInTheDocument();
     });
 
-    it('shows drag reorder hint in description for Manager role', async () => {
+    it('saves the new ordinals when a tier is moved up with the keyboard', async () => {
+        const user = userEvent.setup();
         await renderAndWaitForData(Role.Manager);
 
-        expect(screen.getByText(/drag tiers to reorder/i)).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Move HDTV-1080p up' }));
+
+        await waitFor(() =>
+            expect(mockApiPatch).toHaveBeenCalledWith('/quality-tier-lists/qtl-1', {
+                qualityTierRanks: {
+                    update: [
+                        { qualityTierId: { value: 't1-2' }, ordinal: { value: 0 } },
+                        { qualityTierId: { value: 't1-1' }, ordinal: { value: 1 } },
+                        { qualityTierId: { value: 't1-3' }, ordinal: { value: 2 } },
+                        { qualityTierId: { value: 't1-4' }, ordinal: { value: 3 } },
+                    ],
+                },
+            }),
+        );
     });
 
-    it('does not show drag reorder hint for Viewer role', async () => {
-        await renderAndWaitForData(Role.Viewer);
+    it('renders the refetched server order once the move is saved', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
 
-        expect(screen.queryByText(/drag tiers to reorder/i)).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Move HDTV-1080p up' }));
+
+        await waitFor(() =>
+            expect(
+                [...document.querySelectorAll('[data-tier-id]')].map((tier) => tier.getAttribute('data-tier-id')),
+            ).toEqual(['t1-1', 't1-2', 't1-3', 't1-4']),
+        );
+    });
+
+    it('announces the move in a live region', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: 'Move HDTV-1080p up' }));
+
+        await waitFor(() => expect(screen.getByText('HDTV-1080p moved to position 1 of 4.')).toBeInTheDocument());
     });
 });
 
 describe('TierListDetailPage delete confirmation', () => {
-    setupMockApi();
+    const { mockApiGet } = setupMockApi();
+    const mockApiDelete = vi.mocked(apiDelete);
 
     it('delete button has correct aria-label', async () => {
         await renderAndWaitForData(Role.Manager);
@@ -1119,10 +1147,80 @@ describe('TierListDetailPage delete confirmation', () => {
         await waitFor(
             () => {
                 expect(screen.getByText('Deleted')).toBeInTheDocument();
-                expect(screen.getByText(/removed tier/i)).toBeInTheDocument();
+                expect(screen.getByText('Removed tier "Bluray-1080p"')).toBeInTheDocument();
             },
             { timeout: 3000 },
         );
+    });
+
+    it('deletes the quality tier row when no other list ranks it', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(document.querySelector('[data-action="delete"]') as HTMLButtonElement);
+        await waitFor(() => expect(screen.getByText('Delete Tier')).toBeInTheDocument());
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLButtonElement);
+
+        await waitFor(() => expect(mockApiDelete).toHaveBeenCalledWith('/quality-tiers/t1-1'));
+    });
+
+    it('keeps the quality tier row when another list still ranks it', async () => {
+        const sharedList: ApiQualityTierList = {
+            ...mockApiTierLists['qtl-3'],
+            qualityTierRanks: mockApiTierLists['qtl-1'].qualityTierRanks,
+        };
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/quality-tier-lists/qtl-1') {
+                return Promise.resolve(mockApiTierLists['qtl-1']);
+            }
+            if (url.startsWith('/quality-tier-lists')) {
+                return Promise.resolve([mockApiTierLists['qtl-1'], sharedList]);
+            }
+            return Promise.resolve([]);
+        });
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(document.querySelector('[data-action="delete"]') as HTMLButtonElement);
+        await waitFor(() => expect(screen.getByText('Delete Tier')).toBeInTheDocument());
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLButtonElement);
+
+        await waitFor(() => expect(screen.getByText('Deleted')).toBeInTheDocument());
+        expect(mockApiDelete).not.toHaveBeenCalled();
+    });
+
+    it('keeps the quality tier row when the tier list collection has not loaded', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/quality-tier-lists/qtl-1') {
+                return Promise.resolve(mockApiTierLists['qtl-1']);
+            }
+            if (url.startsWith('/quality-tier-lists')) {
+                return new Promise<ApiQualityTierList[]>(() => {});
+            }
+            return Promise.resolve([]);
+        });
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(document.querySelector('[data-action="delete"]') as HTMLButtonElement);
+        await waitFor(() => expect(screen.getByText('Delete Tier')).toBeInTheDocument());
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLButtonElement);
+
+        await waitFor(() => expect(screen.getByText('Deleted')).toBeInTheDocument());
+        expect(mockApiDelete).not.toHaveBeenCalled();
+    });
+
+    it('reports that the tier survived when the quality tier row cannot be deleted', async () => {
+        mockApiDelete.mockRejectedValueOnce(new Error('restricted'));
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(document.querySelector('[data-action="delete"]') as HTMLButtonElement);
+        await waitFor(() => expect(screen.getByText('Delete Tier')).toBeInTheDocument());
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLButtonElement);
+
+        await waitFor(() => expect(screen.getByText('Tier kept')).toBeInTheDocument());
+        expect(screen.queryByText('Delete failed')).not.toBeInTheDocument();
     });
 });
 
@@ -1257,9 +1355,11 @@ describe('TierListDetailPage error state', () => {
 
     it('shows error state when API fails', async () => {
         render(
-            <TestWrapper>
-                <TierListDetailPage />
-            </TestWrapper>,
+            <LiveAnnouncerProvider>
+                <TestWrapper>
+                    <TierListDetailPage />
+                </TestWrapper>
+            </LiveAnnouncerProvider>,
         );
 
         await waitFor(() => {
@@ -1269,9 +1369,11 @@ describe('TierListDetailPage error state', () => {
 
     it('shows error message from API', async () => {
         render(
-            <TestWrapper>
-                <TierListDetailPage />
-            </TestWrapper>,
+            <LiveAnnouncerProvider>
+                <TestWrapper>
+                    <TierListDetailPage />
+                </TestWrapper>
+            </LiveAnnouncerProvider>,
         );
 
         await waitFor(() => {
@@ -1281,9 +1383,11 @@ describe('TierListDetailPage error state', () => {
 
     it('shows retry button in error state', async () => {
         render(
-            <TestWrapper>
-                <TierListDetailPage />
-            </TestWrapper>,
+            <LiveAnnouncerProvider>
+                <TestWrapper>
+                    <TierListDetailPage />
+                </TestWrapper>
+            </LiveAnnouncerProvider>,
         );
 
         await waitFor(() => {
@@ -1293,9 +1397,11 @@ describe('TierListDetailPage error state', () => {
 
     it('shows back link in error state', async () => {
         render(
-            <TestWrapper>
-                <TierListDetailPage />
-            </TestWrapper>,
+            <LiveAnnouncerProvider>
+                <TestWrapper>
+                    <TierListDetailPage />
+                </TestWrapper>
+            </LiveAnnouncerProvider>,
         );
 
         await waitFor(() => {
@@ -1305,7 +1411,7 @@ describe('TierListDetailPage error state', () => {
 });
 
 describe('TierListDetailPage list criteria and exclusions', () => {
-    setupMockApi();
+    const { mockApiPatch } = setupMockApi();
 
     async function openListRules(user: ReturnType<typeof userEvent.setup>) {
         await user.click(document.querySelector('[data-action="list-rules"]') as HTMLElement);
@@ -1357,5 +1463,36 @@ describe('TierListDetailPage list criteria and exclusions', () => {
 
         expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
         expect(document.querySelector('[data-component="list-rules-form"]')).toBeInTheDocument();
+    });
+
+    it('refuses to save a list criterion with no field name', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await openListRules(user);
+
+        const sheet = document.querySelector('[data-component="list-rules-form"]') as HTMLElement;
+        await user.click(within(sheet).getByRole('button', { name: 'Add' }));
+        await user.type(within(sheet).getByLabelText(/criterion 1 value/i), 'Bluray');
+        await user.click(within(sheet).getByRole('button', { name: /save criteria and exclusions/i }));
+
+        expect(within(sheet).getByText('Every criterion needs a field name')).toBeInTheDocument();
+        expect(mockApiPatch).not.toHaveBeenCalled();
+    });
+
+    it('refuses to save a list exclusion criterion with no field name', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await openListRules(user);
+
+        const sheet = document.querySelector('[data-component="list-rules-form"]') as HTMLElement;
+        await user.click(within(sheet).getByRole('button', { name: /add exclusion/i }));
+        await user.click(within(sheet).getAllByRole('button', { name: 'Add' })[1]);
+        await user.type(within(sheet).getAllByLabelText(/criterion 1 value/i)[0], 'CAM');
+        await user.click(within(sheet).getByRole('button', { name: /save criteria and exclusions/i }));
+
+        expect(within(sheet).getByText('Every criterion needs a field name')).toBeInTheDocument();
+        expect(mockApiPatch).not.toHaveBeenCalled();
     });
 });

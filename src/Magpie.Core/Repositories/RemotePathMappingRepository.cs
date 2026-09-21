@@ -9,6 +9,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Sdk.Services;
 
@@ -23,9 +24,30 @@ internal sealed class RemotePathMappingRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<RemotePathMappingRepository> logger,
-    TimeProvider? timeProvider = null) : IRemotePathMappingRepository
+    TimeProvider timeProvider) : IRemotePathMappingRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
+
+    private static List<string> ChangedFields(RemotePathMappingPatch patch)
+    {
+        var fields = new List<string>();
+        if (patch.Host is not null)
+        {
+            fields.Add("host");
+        }
+
+        if (patch.RemotePath is not null)
+        {
+            fields.Add("remotePath");
+        }
+
+        if (patch.LocalPath is not null)
+        {
+            fields.Add("localPath");
+        }
+
+        return fields;
+    }
 
     private static List<string> ChangedFields(RemotePathMapping current, RemotePathMapping model)
     {
@@ -200,6 +222,84 @@ internal sealed class RemotePathMappingRepository(
         {
             logger.LogError(ex, "The remote path mapping repository failed to update remote path mapping " +
                 "{RemotePathMappingId}.", model.Id);
+            throw;
+        }
+    }
+
+    public async Task<bool> PatchAsync(
+        RemotePathMappingPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var model = await context.RemotePathMappings
+                        .FirstOrDefaultAsync(r => r.Id == patch.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (model is null)
+                    {
+                        return false;
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    if (patch.Host is not null)
+                    {
+                        model.Host = patch.Host.Value;
+                    }
+
+                    if (patch.RemotePath is not null)
+                    {
+                        model.RemotePath = patch.RemotePath.Value;
+                    }
+
+                    if (patch.LocalPath is not null)
+                    {
+                        model.LocalPath = patch.LocalPath.Value;
+                    }
+
+                    model.ModifiedAt = now;
+                    model.ModifiedByUserId = modifiedByUserId;
+
+                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (updated > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.System,
+                                Operation = "Patch",
+                                EntityId = patch.Id.ToString(),
+                                EntityType = nameof(RemotePathMapping),
+                                Detail =
+                                    $"Updated remote path mapping {model.Host}: {model.RemotePath} -> {model.LocalPath}",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patched)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        DownloadEventBuilder.BuildRemotePathMappingUpdatedEvent(patch.Id, ChangedFields(patch)),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return patched;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The remote path mapping repository failed to patch remote path mapping " +
+                "{RemotePathMappingId}.", patch.Id);
             throw;
         }
     }

@@ -24,15 +24,15 @@ internal sealed class MetadataContainerRepository(
     ISubjectRepository subjectRepository,
     ITransactionManager transactionManager,
     ILogger<MetadataContainerRepository> logger,
-    TimeProvider? timeProvider = null) : IMetadataContainerRepository
+    TimeProvider timeProvider) : IMetadataContainerRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     private const string UserProviderType = "user";
 
-    private static bool IsContributionOrderOnly(MetadataContainerPatch patch)
+    private static bool IsContainerOnly(MetadataContainerPatch patch)
     {
-        return patch with { ContributionIds = null } == new MetadataContainerPatch
+        return patch with { ContributionIds = null, DateLastRefreshed = null } == new MetadataContainerPatch
         {
             ContainerId = patch.ContainerId
         };
@@ -176,15 +176,26 @@ internal sealed class MetadataContainerRepository(
             set.Add(item);
         }
 
-        if (removeIds.Count > 0)
+        var currentById = current.ToDictionary(entityId);
+
+        foreach (var removeId in removeIds)
         {
-            set.RemoveRange(current.Where(e => removeIds.Contains(entityId(e))));
+            if (!currentById.TryGetValue(removeId, out var removed))
+            {
+                throw new MagpieException($"The metadata changes do not contain {entityName} {removeId}.");
+            }
+
+            set.Remove(removed);
         }
 
         foreach (var update in updates)
         {
-            var target = current.FirstOrDefault(e => entityId(e) == patchId(update))
-                ?? throw new MagpieException($"The metadata changes do not contain {entityName} {patchId(update)}.");
+            if (!currentById.TryGetValue(patchId(update), out var target))
+            {
+                throw new MagpieException(
+                    $"The metadata changes do not contain {entityName} {patchId(update)}.");
+            }
+
             applyUpdate(target, update);
         }
     }
@@ -798,23 +809,6 @@ internal sealed class MetadataContainerRepository(
         }
     }
 
-    public async Task UpdateLastRefreshedAsync(Guid id, DateTime dateLastRefreshed, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await context.MetadataContainers
-                .Where(c => c.Id == id)
-                .ExecuteUpdateAsync(s => s.SetProperty(c => c.DateLastRefreshed, dateLastRefreshed), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "The metadata container repository failed to update the last refresh time of " +
-                "container {ContainerId}.", id);
-            throw;
-        }
-    }
-
     public async Task<IReadOnlyList<Guid>> ListOrphanedContainerIdsAsync(CancellationToken cancellationToken)
     {
         try
@@ -1020,15 +1014,15 @@ internal sealed class MetadataContainerRepository(
                         return false;
                     }
 
-                    if (patch.ContributionIds is { } contributionOrder)
+                    if (patch.DateLastRefreshed is not null)
                     {
-                        await ApplyContributionOrderAsync(
-                            patch.ContainerId,
-                            contributionOrder,
-                            modifiedByUserId,
-                            now,
-                            ct).ConfigureAwait(false);
-                        if (IsContributionOrderOnly(patch))
+                        await context.MetadataContainers
+                            .Where(c => c.Id == patch.ContainerId)
+                            .ExecuteUpdateAsync(
+                                s => s.SetProperty(c => c.DateLastRefreshed, patch.DateLastRefreshed.Value),
+                                ct)
+                            .ConfigureAwait(false);
+                        if (patch.ContributionIds is null && IsContainerOnly(patch))
                         {
                             return true;
                         }
@@ -1041,6 +1035,20 @@ internal sealed class MetadataContainerRepository(
                         ct).ConfigureAwait(false))
                     {
                         return false;
+                    }
+
+                    if (patch.ContributionIds is { } contributionOrder)
+                    {
+                        await ApplyContributionOrderAsync(
+                            patch.ContainerId,
+                            contributionOrder,
+                            modifiedByUserId,
+                            now,
+                            ct).ConfigureAwait(false);
+                        if (IsContainerOnly(patch))
+                        {
+                            return true;
+                        }
                     }
 
                     var existing = await context.MetadataContributions
@@ -1644,7 +1652,7 @@ internal sealed class MetadataContainerRepository(
             return created.MetadataContainerId;
         }
 
-        throw new MagpieException("Choose an existing subject, or provide both a subject name and type to create one.");
+        throw new MagpieException("The relationship names neither an existing subject nor a subject name and kind.");
     }
 
     private async Task<bool> IsUserContributionEmptyAsync(

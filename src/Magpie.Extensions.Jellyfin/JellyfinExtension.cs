@@ -40,6 +40,7 @@ public sealed class JellyfinExtension : IExtension
             });
 
         services.AddScoped<IMediaServerIntegration, JellyfinMediaServerIntegration>();
+        services.AddScoped<IJellyfinLibraryService, JellyfinLibraryService>();
 
         services.AddScoped<IDiagnosticCheck, JellyfinLibraryMappingDiagnostic>();
 

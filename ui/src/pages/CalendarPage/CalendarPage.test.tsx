@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
@@ -105,6 +102,34 @@ describe('CalendarPage', () => {
             error: null,
             refetch: mockRefetch,
         });
+    });
+
+    it('disables date navigation for the fixed upcoming list', () => {
+        render(
+            <MemoryRouter initialEntries={['/calendar?view=list']}>
+                <CalendarPage />
+            </MemoryRouter>,
+        );
+
+        expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Today' })).toBeDisabled();
+    });
+
+    it('shows the truncation warning with the loaded calendar', () => {
+        // Arrange
+        mockUseCalendar.mockReturnValue({ events: [], isLoading: false, isTruncated: true, refetch: mockRefetch });
+
+        // Act
+        render(
+            <MemoryRouter>
+                <CalendarPage />
+            </MemoryRouter>,
+        );
+
+        // Assert
+        expect(screen.getByText('Not every calendar event is listed')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Day view' })).toBeInTheDocument();
     });
 
     it('renders with correct data-page attribute', () => {
@@ -542,17 +567,6 @@ describe('CalendarPage month view', () => {
         await user.click(todayCell!);
 
         expect(document.querySelector('[data-component="day-view"]')).toBeInTheDocument();
-    });
-});
-
-describe('CalendarPage day cell layout', () => {
-    it('keeps the day cell top-anchored so the date does not drift with event count', () => {
-        const css = readFileSync(resolve(process.cwd(), 'src/pages/CalendarPage/CalendarPage.css'), 'utf8');
-        const dayCell = css.match(/\.calendar-page__day-cell\s*{(?<declarations>[\s\S]*?)\n {4}}/)?.groups
-            ?.declarations;
-
-        expect(dayCell).toContain('flex-direction: column;');
-        expect(dayCell).toContain('justify-content: flex-start;');
     });
 });
 

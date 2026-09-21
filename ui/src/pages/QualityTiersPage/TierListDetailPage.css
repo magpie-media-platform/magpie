@@ -194,44 +194,6 @@
         }
     }
 
-    .tier-list-detail-page__tier[draggable='true'] {
-        cursor: grab;
-
-        &:active {
-            cursor: grabbing;
-        }
-    }
-
-    .tier-list-detail-page__tier--dragging {
-        opacity: var(--opacity-disabled);
-        cursor: grabbing;
-    }
-
-    .tier-list-detail-page__tier--drop-target {
-        border-color: var(--accent-primary);
-    }
-
-    .tier-list-detail-page__tier--drop-before::before,
-    .tier-list-detail-page__tier--drop-after::after {
-        content: '';
-        position: absolute;
-        left: 0;
-        right: 0;
-        height: 3px;
-        background-color: var(--accent-primary);
-        border-radius: 2px;
-        pointer-events: none;
-        box-shadow: var(--shadow-glow);
-    }
-
-    .tier-list-detail-page__tier--drop-before::before {
-        top: -6px;
-    }
-
-    .tier-list-detail-page__tier--drop-after::after {
-        bottom: -6px;
-    }
-
     .tier-list-detail-page__tier--cutoff {
         border-color: color-mix(in srgb, var(--status-healthy) 30%, transparent);
         background-color: color-mix(in srgb, var(--status-healthy) 5%, var(--bg-secondary));
@@ -240,7 +202,7 @@
             border-color: var(--status-healthy);
         }
 
-        &.tier-list-detail-page__tier--drop-target {
+        &.sortable-list__item--drop-target {
             border-color: var(--accent-primary);
         }
     }
@@ -265,26 +227,6 @@
         &:hover {
             color: var(--text-secondary);
         }
-    }
-
-    .tier-list-detail-page__tier:active .tier-list-detail-page__drag-handle {
-        cursor: grabbing;
-    }
-
-    .tier-list-detail-page__drag-image {
-        position: fixed;
-        top: -9999px;
-        left: -9999px;
-        display: none;
-        padding: var(--space-xs) var(--space-sm);
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--accent-primary);
-        border-radius: var(--radius-sm);
-        color: var(--text-primary);
-        font-size: var(--text-sm);
-        font-weight: var(--weight-medium);
-        white-space: nowrap;
-        pointer-events: none;
     }
 
     .tier-list-detail-page__tier-priority {

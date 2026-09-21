@@ -207,6 +207,7 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
         });
 
         await test.step('refresh the session, sign out, and sign back in', async () => {
+            await page.waitForLoadState('networkidle');
             const initialToken = await page.evaluate(() => window.localStorage.getItem('magpie_auth_token'));
             const refresh = await page.context().request.post(`${integrationEnvironment.baseUrl}/api/auth/refresh`);
             expect(refresh.status()).toBe(200);
@@ -217,8 +218,6 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
                 (accessToken) => window.localStorage.setItem('magpie_auth_token', accessToken),
                 refreshed.accessToken,
             );
-            // the api refresh retires the token the app still holds in memory, so a background
-            // request can 401 and bounce to login; reloading adopts the swapped token deterministically
             await page.reload();
 
             await page.getByRole('button', { name: `User menu for ${ADMIN_USERNAME}` }).click();
@@ -308,9 +307,9 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
                 movieRoot!.id,
                 '--json',
                 JSON.stringify({
-                    isDefault: true,
+                    isDefault: { value: true },
                     defaultMonitoring: { value: true },
-                    defaults: { movie: { qualityTierListId: videoTierListId } },
+                    defaults: { value: { movie: { qualityTierListId: videoTierListId } } },
                 }),
             ]);
 
@@ -415,8 +414,6 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
             ]);
             await mocks.hierarchyPrimary.clearCalls();
 
-            // this mirrors the add-flow's own search request: a fan-out across every
-            // provider for the content type, with no provider chosen ahead of time.
             const query = encodeURIComponent('title contains "Bootstrap Metadata Preview"');
             const result = await api.get<{
                 matches: Array<{ candidate: { providerType: string; title?: string } }>;

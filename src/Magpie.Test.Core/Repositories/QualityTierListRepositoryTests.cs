@@ -3,10 +3,12 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -15,6 +17,7 @@ using Magpie.Sdk.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -23,8 +26,10 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class QualityTierListRepositoryTests
+public sealed class QualityTierListRepositoryTests
 {
+    private Mock<IEventBus> _updateEvents = null!;
+
     private MagpieDbContext _context = null!;
     private IQualityTierListRepository _subject = null!;
     private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
@@ -73,19 +78,23 @@ public class QualityTierListRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
 
+        _updateEvents = new Mock<IEventBus>();
         _subject = new QualityTierListRepository(
             _context,
             auditRecordRepository,
             transactionManager,
             _contentHierarchyItems.Object,
-            Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<QualityTierListRepository>());
+            _updateEvents.Object,
+            loggerFactory.CreateLogger<QualityTierListRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -321,6 +330,34 @@ public class QualityTierListRepositoryTests
         _contentHierarchyItems.Verify(
             items => items.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Test]
+    public async Task UpdateAsync_PublishesUpdatedEventWithChangedFields_WhenExists()
+    {
+        // Arrange
+        var qualityTierList = new QualityTierList
+        {
+            Name = "OriginalList",
+            UpgradeAllowed = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.QualityTierLists.Add(qualityTierList);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        qualityTierList.Name = "UpdatedList";
+        qualityTierList.UpgradeAllowed = false;
+
+        // Act
+        await _subject.UpdateAsync(qualityTierList, _userId).ConfigureAwait(false);
+
+        // Assert
+        _updateEvents.Verify(bus => bus.PublishAsync(
+            It.Is<MagpieEvent>(e =>
+                e.Name == "qualityTierList.updated" &&
+                e.Context.ContainsKey("qualityTierList.changedFields") &&
+                e.Context["qualityTierList.changedFields"] == "name,upgradeAllowed"),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]

@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
 
-using Magpie.Core.Jobs.Downloads;
-using Magpie.Core.Jobs.Fulfillment;
-using Magpie.Core.Jobs.Metadata;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
@@ -29,7 +26,7 @@ public static class DefaultJobTriggerCatalog
             [
                 new()
                 {
-                    JobType = DownloadRefreshJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.DownloadRefresh,
                     Scope = JobScope.Administrative,
                     Name = "Download refresh schedule",
                     Schedule = "*/5 * * * *",
@@ -39,7 +36,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = ReleaseAutoGrabScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ReleaseAutoGrabScan,
                     Scope = JobScope.Content,
                     Name = "Release auto-grab scan schedule",
                     Schedule = "0 */6 * * *",
@@ -49,7 +46,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = ReleaseSearchScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ReleaseSearchScan,
                     Scope = JobScope.Content,
                     Name = "Release search scan schedule",
                     Schedule = "*/30 * * * *",
@@ -59,7 +56,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = RetentionCleanupJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.RetentionCleanup,
                     Scope = JobScope.Administrative,
                     Name = "Retention cleanup schedule",
                     Schedule = "0 3 * * *",
@@ -69,7 +66,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = DatabaseMaintenanceJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.DatabaseMaintenance,
                     Scope = JobScope.Administrative,
                     Name = "Database maintenance schedule",
                     Schedule = "0 1 * * *",
@@ -79,7 +76,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = IndexerFeedSyncScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.IndexerFeedSyncScan,
                     Scope = JobScope.Administrative,
                     Name = "Indexer feed sync scan schedule",
                     Schedule = "0 * * * *",
@@ -89,7 +86,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = IntegrationHealthCheckJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.IntegrationHealthCheck,
                     Scope = JobScope.Administrative,
                     Name = "Integration health check schedule",
                     Schedule = "0 * * * *",
@@ -99,7 +96,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = WishlistRefreshScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.WishlistRefreshScan,
                     Scope = JobScope.Administrative,
                     Name = "Wishlist refresh scan schedule",
                     Schedule = "0 6 * * *",
@@ -109,7 +106,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = DownloadImportScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.DownloadImportScan,
                     Scope = JobScope.Administrative,
                     Name = "Download import scan schedule",
                     Schedule = "0 * * * *",
@@ -119,7 +116,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = DownloadStuckDetectionJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.DownloadStuckDetection,
                     Scope = JobScope.Administrative,
                     Name = "Download stuck detection schedule",
                     Schedule = "*/5 * * * *",
@@ -129,7 +126,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = DownloadCleanupJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.DownloadCleanup,
                     Scope = JobScope.Administrative,
                     Name = "Download cleanup schedule",
                     Schedule = "*/30 * * * *",
@@ -139,7 +136,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = SubjectMetadataRefreshScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.SubjectMetadataRefreshScan,
                     Scope = JobScope.Administrative,
                     Name = "Subject metadata refresh scan schedule",
                     Schedule = "0 4 * * *",
@@ -149,7 +146,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = DiagnosticCheckJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.DiagnosticCheck,
                     Scope = JobScope.System,
                     Name = "Diagnostic check schedule",
                     Schedule = "0 5 * * *",
@@ -159,7 +156,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = ContentMetadataRefreshScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ContentMetadataRefreshScan,
                     Scope = JobScope.Administrative,
                     Name = "Content metadata refresh scan schedule",
                     Schedule = "0 * * * *",
@@ -169,7 +166,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = MediaInfoExtractScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.MediaInfoExtractScan,
                     Scope = JobScope.Administrative,
                     Name = "Media info extract scan schedule",
                     Schedule = "0 2 * * *",
@@ -179,7 +176,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = MetadataContainerCleanupJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.MetadataContainerCleanup,
                     Scope = JobScope.Administrative,
                     Name = "Metadata container cleanup schedule",
                     Schedule = "30 2 * * *",
@@ -189,7 +186,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = PruneOrphanedSubjectsJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.PruneOrphanedSubjects,
                     Scope = JobScope.Administrative,
                     Name = "Orphaned subject pruning schedule",
                     Schedule = "15 2 * * *",
@@ -199,7 +196,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = ContentFulfillmentReconciliationJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ContentFulfillmentReconciliation,
                     Scope = JobScope.Administrative,
                     Name = "Content fulfillment reconciliation schedule",
                     Schedule = "0 * * * *",
@@ -224,7 +221,7 @@ public static class DefaultJobTriggerCatalog
             [
                 new()
                 {
-                    JobType = MediaInfoExtractScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.MediaInfoExtractScan,
                     Scope = JobScope.Content,
                     Name = "Media info extract on import",
                     EventFilter = SingleEventFilter(MagpieEvents.Names.ContentImported),
@@ -233,7 +230,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = MediaServerRefreshJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.MediaServerRefresh,
                     Scope = JobScope.Administrative,
                     Name = "Media server refresh on download import",
                     EventFilter = SingleEventFilter(MagpieEvents.Names.DownloadImported),
@@ -242,7 +239,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = DownloadCleanupJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.DownloadCleanup,
                     Scope = JobScope.Administrative,
                     Name = "Download cleanup on conclusion",
                     EventFilter = ManyEventFilter(
@@ -253,7 +250,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = ContentMetadataRefreshItemJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ContentMetadataRefreshItem,
                     Scope = JobScope.Content,
                     Name = "Content metadata refresh on creation",
                     EventFilter = SingleEventFilter(MagpieEvents.Names.ContentHierarchyItemCreated),
@@ -267,7 +264,21 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = DownloadRefreshJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ReleaseSearchItem,
+                    Scope = JobScope.Content,
+                    Name = "Release search on metadata refresh",
+                    EventFilter = SingleEventFilter(MagpieEvents.Names.MetadataRefreshed),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.ContentHierarchyItemId] =
+                            $"${{event.{MagpieEvents.Keys.ContentHierarchyItemId}}}"
+                    },
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
+                    JobType = MagpieJobs.Types.DownloadRefresh,
                     Scope = JobScope.Administrative,
                     Name = "Download refresh on creation",
                     EventFilter = SingleEventFilter(MagpieEvents.Names.DownloadCreated),
@@ -277,7 +288,7 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = ReleaseAutoGrabScanJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ReleaseAutoGrabScan,
                     Scope = JobScope.Content,
                     Name = "Release auto-grab scan on monitoring change",
                     EventFilter = MonitoringChangedEventFilter(),
@@ -286,13 +297,52 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = ContentFulfillmentReconciliationJob.Spec.JobType,
+                    JobType = MagpieJobs.Types.ContentFulfillmentReconciliation,
                     Scope = JobScope.Administrative,
                     Name = "Content fulfillment reconciliation on quality tier list change",
                     EventFilter = ManyEventFilter(
                         MagpieEvents.Names.QualityTierListCreated,
                         MagpieEvents.Names.QualityTierListUpdated,
                         MagpieEvents.Names.QualityTierListDeleted),
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
+                    JobType = MagpieJobs.Types.DownloadImportItem,
+                    Scope = JobScope.Content,
+                    Name = "Download import on completion",
+                    EventFilter = SingleEventFilter(MagpieEvents.Names.DownloadCompleted),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.DownloadId] = $"${{event.{MagpieEvents.Keys.DownloadId}}}"
+                    },
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
+                    JobType = MagpieJobs.Types.WishlistRefreshItem,
+                    Scope = JobScope.Administrative,
+                    Name = "Wishlist refresh on creation",
+                    EventFilter = SingleEventFilter(MagpieEvents.Names.WishlistCreated),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.WishlistId] = $"${{event.{MagpieEvents.Keys.WishlistId}}}"
+                    },
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
+                    JobType = MagpieJobs.Types.ReleaseAutoGrabItem,
+                    Scope = JobScope.Content,
+                    Name = "Release auto-grab on match",
+                    EventFilter = SingleEventFilter(MagpieEvents.Names.ReleaseMatched),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.ContentItemId] = $"${{event.{MagpieEvents.Keys.ContentItemId}}}"
+                    },
                     Enabled = true,
                     CreatedAt = now,
                 },

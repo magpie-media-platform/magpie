@@ -18,9 +18,11 @@ namespace Magpie.Core.Security;
 
 internal sealed class UserService(
     IUserRepository users,
+    IRefreshTokenRepository refreshTokens,
     IPasswordHasher passwordHasher,
     IPasswordPolicy passwordPolicy,
     IEventBus eventBus,
+    ITransactionManager transactionManager,
     TimeProvider timeProvider) : IUserService
 {
     private const string LocalProviderType = "local";
@@ -90,7 +92,8 @@ internal sealed class UserService(
             return false;
         }
 
-        if (patch.Role is not null || patch.Enabled is not null)
+        var changesSecurityFields = patch.Role is not null || patch.Enabled is not null;
+        if (changesSecurityFields)
         {
             var resultingRole = patch.Role?.Value ?? user.Role;
             var resultingEnabled = patch.Enabled?.Value ?? user.Enabled;
@@ -107,9 +110,20 @@ internal sealed class UserService(
             }
         }
 
-        return await users
-            .PatchAsync(patch with { Id = userId }, callerUserId, cancellationToken)
-            .ConfigureAwait(false);
+        return await transactionManager.ExecuteWithTransactionAsync(
+            async token =>
+            {
+                var patched = await users
+                    .PatchAsync(patch with { Id = userId }, callerUserId, token)
+                    .ConfigureAwait(false);
+                if (patched && changesSecurityFields)
+                {
+                    await refreshTokens.DeleteByUserAsync(userId, token).ConfigureAwait(false);
+                }
+
+                return patched;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> DeleteAsync(Guid userId, Guid callerUserId, CancellationToken cancellationToken = default)

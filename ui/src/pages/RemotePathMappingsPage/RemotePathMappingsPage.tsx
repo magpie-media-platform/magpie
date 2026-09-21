@@ -10,9 +10,14 @@ import {
     WarningCircleIcon,
 } from '@phosphor-icons/react';
 
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { Badge } from '@/components/ui/Badge';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
+import { SelectionCircleToggle } from '@/components/ui/SelectionCircleToggle';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
@@ -27,6 +32,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { RemotePathMappingForm, type RemotePathMappingFormValues } from './RemotePathMappingForm';
 
 import './RemotePathMappingsPage.css';
+import '@/styles/bulk-actions-toolbar.css';
 import '@/styles/card-actions.css';
 import '@/styles/list-toolbar.css';
 
@@ -46,7 +52,10 @@ export function RemotePathMappingsPage() {
     const [deletingMapping, setDeletingMapping] = useState<ApiRemotePathMapping | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const [testingMappingId, setTestingMappingId] = useState<string | null>(null);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
     const { toast } = useToast();
+    const runBulk = useBulkRun();
 
     const {
         mappings,
@@ -99,9 +108,9 @@ export function RemotePathMappingsPage() {
             try {
                 if (values.id) {
                     await updateMapping(values.id, {
-                        host: values.host,
-                        remotePath: values.remotePath,
-                        localPath: values.localPath,
+                        host: { value: values.host },
+                        remotePath: { value: values.remotePath },
+                        localPath: { value: values.localPath },
                     });
                     toast({
                         title: values.host,
@@ -186,6 +195,24 @@ export function RemotePathMappingsPage() {
         setDeletingMapping(null);
     }, []);
 
+    const mappingRowIds = useMemo(() => mappings.map((m) => m.id), [mappings]);
+    const selection = useBulkSelection({ pageRowIds: mappingRowIds, totalCount: mappings.length });
+    const selectedMappings = useMemo(() => mappings.filter((m) => selection.isRowChecked(m.id)), [mappings, selection]);
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedMappings, selection, {
+                action: (mapping) => deleteMapping(mapping.id),
+                verb: 'delete',
+                itemNounPlural: 'remote path mappings',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [deleteMapping, runBulk, selectedMappings, selection]);
+
     const handleTestLocalPath = useCallback(
         async (localPath: string, mappingId?: string) => {
             if (mappingId) {
@@ -233,12 +260,37 @@ export function RemotePathMappingsPage() {
                         />
                     }
                     actions={
-                        <Button variant="primary" size="sm" data-action="add-mapping" onClick={handleAddMapping}>
-                            <PlusIcon weight="bold" aria-hidden="true" />
-                            <span className="remote-path-mappings-page__add-label">Add Mapping</span>
-                        </Button>
+                        <div className="remote-path-mappings-page__header-actions">
+                            <SelectModeToggle
+                                mobileOnly={false}
+                                active={selection.selectionMode}
+                                onToggle={selection.toggleSelectionMode}
+                            />
+                            <Button variant="primary" size="sm" data-action="add-mapping" onClick={handleAddMapping}>
+                                <PlusIcon weight="bold" aria-hidden="true" />
+                                <span className="remote-path-mappings-page__add-label">Add Mapping</span>
+                            </Button>
+                        </div>
                     }
                 />
+
+                <BulkActionsToolbar
+                    className="remote-path-mappings-page__bulk-toolbar"
+                    selection={selection}
+                    label="Remote path mapping selection actions"
+                    itemNounPlural="remote path mappings"
+                >
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected remote path mappings"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                    </Button>
+                </BulkActionsToolbar>
 
                 <div className="remote-path-mappings-page__list" role="list" aria-label="Remote path mappings">
                     {isLoading ? (
@@ -268,6 +320,9 @@ export function RemotePathMappingsPage() {
                                 onDelete={handleDeleteMapping}
                                 onTest={handleTestLocalPath}
                                 isTesting={testingMappingId === mapping.id}
+                                selectionMode={selection.selectionMode}
+                                isSelected={selection.isRowChecked(mapping.id)}
+                                onToggleSelected={(checked) => selection.toggleRow(mapping.id, checked)}
                             />
                         ))
                     )}
@@ -284,6 +339,35 @@ export function RemotePathMappingsPage() {
                 itemType="Remote Path Mapping"
                 isDeleting={isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Remote Path Mappings"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="remote-path-mappings-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="remote path mappings"
+                >
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected remote path mappings"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
 
             <RemotePathMappingForm
                 open={formOpen}
@@ -306,11 +390,31 @@ interface MappingRowProps {
     onDelete: (id: string) => void;
     onTest: (localPath: string, mappingId: string) => void;
     isTesting: boolean;
+    selectionMode: boolean;
+    isSelected: boolean;
+    onToggleSelected: (checked: boolean) => void;
 }
 
-function MappingRow({ mapping, onEdit, onDelete, onTest, isTesting }: MappingRowProps) {
+function MappingRow({
+    mapping,
+    onEdit,
+    onDelete,
+    onTest,
+    isTesting,
+    selectionMode,
+    isSelected,
+    onToggleSelected,
+}: MappingRowProps) {
     return (
         <div className="remote-path-mappings-page__item" role="listitem" data-mapping-id={mapping.id}>
+            {selectionMode && (
+                <SelectionCircleToggle
+                    selected={isSelected}
+                    onToggle={() => onToggleSelected(!isSelected)}
+                    aria-label={`Select mapping for ${mapping.host}`}
+                    data-action="select-row"
+                />
+            )}
             <div className="remote-path-mappings-page__item-main">
                 <div className="remote-path-mappings-page__item-info">
                     <div className="remote-path-mappings-page__item-header">

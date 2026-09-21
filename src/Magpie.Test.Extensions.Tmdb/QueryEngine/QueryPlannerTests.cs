@@ -705,6 +705,189 @@ public class QueryPlannerTests
     }
 
     [Test]
+    public void Plan_KeepsSupportedRoles_WhenAlternativesListTwoRoles()
+    {
+        // Arrange
+        var request = new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = new MetadataCriteria
+            {
+                Relationships = new()
+                {
+                    Some = [[new RelationshipCriteria
+                    {
+                        Kind = new() { And = [new() { Values = ["cast", "crew"] }] },
+                        Subject = new() { And = [new() { Value = "Sigourney Weaver" }] }
+                    }]]
+                }
+            },
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        };
+
+        // Act
+        var plan = _subject.Plan(request);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.IsKnownEmpty(), Is.False);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_KeepsTheMappedRole_WhenARoleAlternativeIsUnknown()
+    {
+        // Arrange
+        var request = new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = new MetadataCriteria
+            {
+                Relationships = new()
+                {
+                    Some = [[new RelationshipCriteria
+                    {
+                        Kind = new() { And = [new() { Values = ["cast", "guest-cast"] }] },
+                        Subject = new() { And = [new() { Value = "Sigourney Weaver" }] }
+                    }]]
+                }
+            },
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        };
+
+        // Act
+        var plan = _subject.Plan(request);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.IsKnownEmpty(), Is.False);
+            Assert.That(plan.Root, Is.TypeOf<FilterPlanNode>());
+            Assert.That(
+                ((FilterPlanNode)plan.Root).SubjectBindings.Single().Filter.Alternatives.Single().Roles.Single(),
+                Is.EqualTo(SubjectRole.Cast));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_KeepsTheSupportedContentId_WhenAnAlternativeSourceIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                Some =
+                [
+                    [
+                        new ExternalIdCriteria
+                        {
+                            Source = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["imdb"] }]
+                            },
+                            Value = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["tt0133093"] }]
+                            }
+                        },
+                        new ExternalIdCriteria
+                        {
+                            Source = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["tvmaze"] }]
+                            },
+                            Value = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["456"] }]
+                            }
+                        }
+                    ]
+                ]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.IsKnownEmpty(), Is.False);
+            Assert.That(
+                ((FilterPlanNode)plan.Root).ContentIdFilters.Single().Alternatives.Select(id => id.Value),
+                Is.EqualTo(["tt0133093"]));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_KeepsTheSupportedContentRating_WhenASiblingAlternativeIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ContentRatings = new CollectionCriteria<ContentRatingCriteria>
+            {
+                Some =
+                [
+                    [
+                        new ContentRatingCriteria
+                        {
+                            Rating = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And =
+                                [
+                                    new PropertyCriterion<string>
+                                    {
+                                        Operator = CriteriaValueOperator.GreaterThan,
+                                        Values = ["PG"]
+                                    }
+                                ]
+                            }
+                        },
+                        new ContentRatingCriteria
+                        {
+                            Rating = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["R"] }]
+                            }
+                        }
+                    ]
+                ]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.IsKnownEmpty(), Is.False);
+            Assert.That(((FilterPlanNode)plan.Root).ElementFilters.Single().Alternatives, Has.Count.EqualTo(1));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
     public void Plan_KeepsDirectorAndWriterRoles_WhenBothAreRequested()
     {
         // Arrange
@@ -1182,7 +1365,7 @@ public class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ReturnsDataQualityWarning_WhenTvDurationFilterIsApplied()
+    public void Plan_AddsNoWarning_WhenTvDurationFilterIsApplied()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1217,7 +1400,7 @@ public class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((FilterPlanNode)plan.Root).DurationFilters, Has.Count.EqualTo(1));
-            Assert.That(plan.Warnings, Is.EqualTo(["TMDb series runtime data can be incomplete."]));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -1280,7 +1463,7 @@ public class QueryPlannerTests
                                 And =
                                 [
                                     new PropertyCriterion<string> { Values = ["cast"] },
-                                    new PropertyCriterion<string> { Values = ["performer"] }
+                                    new PropertyCriterion<string> { Values = ["cast"] }
                                 ]
                             },
                             Subject = new CriteriaSet<PropertyCriterion<string>>
@@ -1587,12 +1770,9 @@ public class QueryPlannerTests
         });
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(
-                ((FilterPlanNode)plan.Root).SubjectBindings.Single().Filter.Alternatives.Single().Roles,
-                Is.EqualTo([SubjectRole.Director]));
-        }
+        Assert.That(
+            ((FilterPlanNode)plan.Root).SubjectBindings.Single().Filter.Alternatives.Single().Roles,
+            Is.EqualTo([SubjectRole.Director]));
     }
 
     [Test]
@@ -2125,6 +2305,17 @@ public class QueryPlannerTests
         });
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
+        var alternatives = (CoalescePlanNode)filter.Child;
+        var expansion = (UnionPlanNode)alternatives.Children[0];
+        var fetch = (FetchPlanNode)expansion.Children.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(filter.TextFilters.Single().Field, Is.EqualTo(TextField.Overview));
+            Assert.That(filter.TextFilters.Single().Values, Is.EqualTo(["biography"]));
+            Assert.That(fetch.DiscoverParameters.Select(parameter => parameter.Name), Does.Contain("with_cast"));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
     }
 
     [Test]
@@ -2159,6 +2350,14 @@ public class QueryPlannerTests
         });
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
+        var exclusion = filter.ContentIdFilters.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exclusion.Excluded, Is.True);
+            Assert.That(exclusion.Alternatives.Select(id => id.Value), Is.EqualTo(["550"]));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
     }
 
     [Test]
@@ -2256,12 +2455,9 @@ public class QueryPlannerTests
         });
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(
-                ((FilterPlanNode)plan.Root).TextFilters.Single().Operator,
-                Is.EqualTo(CriteriaValueOperator.IsNull));
-        }
+        Assert.That(
+            ((FilterPlanNode)plan.Root).TextFilters.Single().Operator,
+            Is.EqualTo(CriteriaValueOperator.IsNull));
     }
 
     [Test]
@@ -2755,7 +2951,7 @@ public class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_PositiveTagCriterion_IsKnownEmpty()
+    public void Plan_IsKnownEmpty_WhenPositiveTagCriterion()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2800,7 +2996,7 @@ public class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ExcludedTagCriterion_IsVacuouslySatisfied()
+    public void Plan_IsVacuouslySatisfied_WhenExcludedTagCriterion()
     {
         // Arrange
         var criteria = new MetadataCriteria

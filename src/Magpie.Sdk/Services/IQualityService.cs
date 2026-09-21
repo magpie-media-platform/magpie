@@ -21,7 +21,7 @@ public interface IQualityService
     Task<IReadOnlyList<QualityTierList>> ListTierListsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a quality tier list by id.
+    /// A quality tier list by id.
     /// </summary>
     /// <param name="id">The id of the tier list to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -61,7 +61,7 @@ public interface IQualityService
     Task<IReadOnlyList<QualityTier>> ListTiersAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a quality tier by id.
+    /// A quality tier by id.
     /// </summary>
     /// <param name="id">The id of the tier to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

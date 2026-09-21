@@ -1,11 +1,12 @@
 import { type KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 
-import { ContentPoster } from '@/components/content/ContentCardPrimitives';
+import { ContentMonitoringIndicator, ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { Checkbox } from '@/components/ui/Checkbox';
+import { ContentGalleryPosterSlot } from '@/components/ui/Slot';
 import { useLongPress } from '@/hooks/ui/useLongPress';
-import { useTypeIconName } from '@/hooks/useLibraryTypes';
+import { getStandardMetadataField, useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { getFulfillmentDotColor } from '@/types/content';
 import type { ContentListItem } from '@/types';
 
@@ -26,17 +27,30 @@ export function LibraryGalleryTile({
 }: LibraryGalleryTileProps) {
     const longPress = useLongPress({ onLongPress: onLongPress ?? (() => {}) });
     const typeIconName = useTypeIconName()(item.contentType);
+    const { contentTypes } = useLibraryTypes();
+    const levelDef = contentTypes
+        .find((type) => type.slug === item.contentType)
+        ?.levels.find((level) => level.slug === item.level);
 
     const inner = (
         <>
             <span className="library-gallery-tile__poster">
-                <ContentPoster
+                <ContentGalleryPosterSlot
+                    contentId={item.id}
+                    level={item.level}
                     posterUrl={item.posterUrl}
-                    title={item.title}
-                    alt=""
-                    className="library-gallery-tile__img"
-                    placeholderClassName="library-gallery-tile__poster--placeholder"
-                />
+                    declaresPreviews={!!getStandardMetadataField(levelDef, 'Previews')}
+                    selectionMode={selectionMode}
+                    preview={item.previews?.[0]}
+                >
+                    <ContentPoster
+                        posterUrl={item.posterUrl}
+                        title={item.title}
+                        alt=""
+                        className="library-gallery-tile__img"
+                        placeholderClassName="library-gallery-tile__poster--placeholder"
+                    />
+                </ContentGalleryPosterSlot>
                 {selectionMode && (
                     <span className="library-gallery-tile__check">
                         <Checkbox checked={selected} size="sm" aria-hidden="true" tabIndex={-1} />
@@ -51,11 +65,19 @@ export function LibraryGalleryTile({
                 />
             </span>
             <span className="library-gallery-tile__title-row">
-                <span
-                    className="library-gallery-tile__status-dot"
-                    style={{ '--dot-color': getFulfillmentDotColor(item.fulfillment) } as React.CSSProperties}
-                    aria-hidden="true"
-                />
+                {item.effectiveMonitoring ? (
+                    <span
+                        className="library-gallery-tile__status-dot"
+                        style={{ '--dot-color': getFulfillmentDotColor(item.fulfillment) } as React.CSSProperties}
+                        aria-hidden="true"
+                    />
+                ) : (
+                    <ContentMonitoringIndicator
+                        monitoring={item.monitoring}
+                        effectiveMonitoring={item.effectiveMonitoring}
+                        className="library-gallery-tile__unmonitored"
+                    />
+                )}
                 <span className="library-gallery-tile__title" title={item.title}>
                     {item.title}
                     {item.year !== undefined && <span className="library-gallery-tile__year"> ({item.year})</span>}

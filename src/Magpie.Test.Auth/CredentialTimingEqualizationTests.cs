@@ -9,7 +9,6 @@ using Magpie.Models.Enums;
 using Magpie.Models.Repositories;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -25,7 +24,6 @@ public class CredentialTimingEqualizationTests
     private Mock<IUserRepository> _userRepository = null!;
     private Mock<IEventBus> _eventBus = null!;
     private LocalCredentialAuthenticationProvider _subject = null!;
-    private ILoggerFactory _loggerFactory = null!;
 
     [SetUp]
     public void SetUp()
@@ -37,7 +35,6 @@ public class CredentialTimingEqualizationTests
             .Setup(s => s.VerifyPasswordAsync(It.IsAny<User>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
-        _loggerFactory = NullLoggerFactory.Instance;
         var options = new AccountLockoutOptions
         {
             Enabled = true,
@@ -51,13 +48,7 @@ public class CredentialTimingEqualizationTests
             options,
             _eventBus.Object,
             TimeProvider.System,
-            _loggerFactory.CreateLogger<LocalCredentialAuthenticationProvider>());
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        _loggerFactory?.Dispose();
+            NullLogger<LocalCredentialAuthenticationProvider>.Instance);
     }
 
     [Test]
@@ -74,8 +65,7 @@ public class CredentialTimingEqualizationTests
         Assert.That(result, Is.Null);
         _userService.Verify(
             s => s.VerifyPasswordAsync(It.IsAny<User>(), "any-password", It.IsAny<CancellationToken>()),
-            Times.Once,
-            "A nonexistent username must still pay the hashing cost so its timing matches a wrong password.");
+            Times.Once);
     }
 
     [Test]
@@ -103,8 +93,7 @@ public class CredentialTimingEqualizationTests
         Assert.That(result, Is.Null);
         _userService.Verify(
             s => s.VerifyPasswordAsync(It.IsAny<User>(), "any-password", It.IsAny<CancellationToken>()),
-            Times.Once,
-            "A disabled (but existing) account must not short-circuit before the hashing cost.");
+            Times.Once);
     }
 
     [Test]
@@ -132,12 +121,11 @@ public class CredentialTimingEqualizationTests
         Assert.That(result, Is.Null);
         _userService.Verify(
             s => s.VerifyPasswordAsync(It.IsAny<User>(), "any-password", It.IsAny<CancellationToken>()),
-            Times.Once,
-            "A foreign-provider username must not short-circuit before the hashing cost.");
+            Times.Once);
     }
 
     [Test]
-    public async Task VerifyCredentials_InvokesVerifierExactlyOnce_ForMissingUserAndWrongPassword()
+    public async Task VerifyCredentials_InvokesVerifierExactlyOnce_WhenMissingUserAndWrongPassword()
     {
         // Arrange
         _userService.Setup(s => s.GetAuthenticationUserAsync("ghost", It.IsAny<CancellationToken>()))
@@ -172,7 +160,6 @@ public class CredentialTimingEqualizationTests
 
         _userService.Verify(
             s => s.VerifyPasswordAsync(It.IsAny<User>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
-            Times.Exactly(2),
-            "The missing-user path and the wrong-password path must each reach the verifier exactly once.");
+            Times.Exactly(2));
     }
 }

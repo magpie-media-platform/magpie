@@ -285,7 +285,7 @@ export function PackageSourceForm({
                         </div>
 
                         <div className="package-source-form__field">
-                            <Label>Discovery filter</Label>
+                            <Label htmlFor="package-source-discovery-filter">Discovery filter</Label>
                             <Select
                                 value={values.searchFilterKind}
                                 onValueChange={(value) =>
@@ -293,7 +293,7 @@ export function PackageSourceForm({
                                 }
                                 disabled={isSubmitting}
                             >
-                                <SelectTrigger data-field="searchFilterKind">
+                                <SelectTrigger id="package-source-discovery-filter" data-field="searchFilterKind">
                                     {filterKindLabels[values.searchFilterKind]}
                                 </SelectTrigger>
                                 <SelectContent>
@@ -329,7 +329,7 @@ export function PackageSourceForm({
                         )}
 
                         <div className="package-source-form__field">
-                            <Label>Credentials</Label>
+                            <Label htmlFor="package-source-credentials">Credentials</Label>
                             <Select
                                 value={values.credentialKind}
                                 onValueChange={(value) =>
@@ -337,7 +337,7 @@ export function PackageSourceForm({
                                 }
                                 disabled={isSubmitting}
                             >
-                                <SelectTrigger data-field="credentialKind">
+                                <SelectTrigger id="package-source-credentials" data-field="credentialKind">
                                     {credentialKindLabels[values.credentialKind]}
                                 </SelectTrigger>
                                 <SelectContent>

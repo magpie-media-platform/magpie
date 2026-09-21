@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -18,24 +18,27 @@ vi.mock('react-router-dom', async () => {
     };
 });
 
-vi.mock('@/lib/api', () => ({
-    apiGet: vi.fn(),
-    apiPost: vi.fn(),
-    isApiError: (value: unknown): boolean => typeof value === 'object' && value !== null && 'status' in value,
-    buildUrl: vi.fn((path: string, params?: Record<string, unknown>) => {
-        if (!params) {
-            return path;
-        }
-        const searchParams = new URLSearchParams();
-        for (const [key, value] of Object.entries(params)) {
-            if (value !== undefined && value !== null) {
-                searchParams.set(key, String(value));
+vi.mock('@/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/api')>();
+    return {
+        ...actual,
+        apiGet: vi.fn(),
+        apiPost: vi.fn(),
+        buildUrl: vi.fn((path: string, params?: Record<string, unknown>) => {
+            if (!params) {
+                return path;
             }
-        }
-        const queryString = searchParams.toString();
-        return queryString ? `${path}?${queryString}` : path;
-    }),
-}));
+            const searchParams = new URLSearchParams();
+            for (const [key, value] of Object.entries(params)) {
+                if (value !== undefined && value !== null) {
+                    searchParams.set(key, String(value));
+                }
+            }
+            const queryString = searchParams.toString();
+            return queryString ? `${path}?${queryString}` : path;
+        }),
+    };
+});
 
 const mockUseLibraryTypes = vi.fn();
 
@@ -64,8 +67,8 @@ vi.mock('@/hooks/useFilters', async (importOriginal) => {
     };
 });
 
-import { apiGet, apiPost } from '@/lib/api';
-import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
+import { apiGet, apiPost, ApiError } from '@/lib/api';
+import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import type { LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { LibraryAddPage } from './LibraryAddPage';
@@ -132,6 +135,7 @@ function renderLive(filterQuery = 'genre has "Action"') {
                     <TooltipProvider>
                         <ToastProvider>
                             <LibraryAddPage />
+                            <ToastList />
                             <ToastViewport />
                         </ToastProvider>
                     </TooltipProvider>
@@ -290,6 +294,55 @@ describe('LibraryAddPage', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
+    });
+
+    it('shows the page empty state when more pages exist', async () => {
+        // Arrange
+        mockCandidateSearchResponse = candidateSearchResult([], { hasMore: true });
+        const user = userEvent.setup();
+        renderLive();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+        // Assert
+        expect(await screen.findByText('No matches on this page')).toBeInTheDocument();
+        expect(screen.getByText('Continue to the next page to see more results.')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /next page/i })).toBeEnabled();
+
+        // Act
+        mockCandidateSearchResponse = candidateSearchResult([], { hasMore: false, requestedPage: 2 });
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+
+        // Assert
+        expect(await screen.findByText('Return to a previous page to see earlier results.')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /previous page/i })).toBeEnabled();
+        expect(screen.getByRole('button', { name: /next page/i })).toBeDisabled();
+    });
+
+    it.each(['table', 'drawer'])('Add_ShowsServerMessage_WhenRejected %s', async (surface) => {
+        // Arrange
+        mockApiGetByPath({
+            rootFolders: [rootFolder('rf-archive', 'Archive', candidateSearchedCandidate.contentType)],
+        });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockRejectedValue(new ApiError(400, 'Choose a writable root folder.'));
+        const user = userEvent.setup();
+        renderLive();
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+        await screen.findByText('The Matrix');
+
+        // Act
+        if (surface === 'drawer') {
+            vi.mocked(apiPost).mockResolvedValueOnce(candidatePreview);
+            await user.click(resultsTable().getByRole('button', { name: 'The Matrix' }));
+            await user.click(await screen.findByRole('button', { name: /^add to library$/i }));
+        } else {
+            await user.click(resultsTable().getByRole('button', { name: /^add$/i }));
+        }
+
+        // Assert
+        expect(await screen.findByText('Choose a writable root folder.')).toBeInTheDocument();
     });
 
     it('renders the page header and the initial empty state', () => {
@@ -576,6 +629,9 @@ describe('LibraryAddPage', () => {
             });
             expect(resultsTable().getByText('1999')).toBeInTheDocument();
             expect(resultsTable().getByText('Mar 31, 1999')).toBeInTheDocument();
+            fireEvent.error(screen.getByTestId('library-add-page__result-image'));
+            expect(screen.queryByTestId('library-add-page__result-image')).not.toBeInTheDocument();
+            expect(document.querySelector('.library-add-page__poster--placeholder')).toBeInTheDocument();
         });
 
         it('renders candidate cards without a DataTable at tablet width', async () => {
@@ -592,6 +648,48 @@ describe('LibraryAddPage', () => {
             expect(within(cards).getByText('The Matrix')).toBeInTheDocument();
             expect(screen.queryByTestId('library-add-page__result-list')).not.toBeInTheDocument();
             expect(document.querySelector('[data-component="data-table"]')).not.toBeInTheDocument();
+        });
+
+        it('renders a Markdown provider summary as readable text in the table', async () => {
+            mockApiGetByPath({});
+            mockCandidateSearchResponse = candidateSearchResult([
+                {
+                    ...candidateSearchedCandidate,
+                    overview:
+                        '**Pride and Prejudice** is a novel by [Jane Austen](https://openlibrary.org/authors/OL21594A). ([source][1])\n\n----------\n\n[1]: https://openlibrary.org/works/OL66554W',
+                },
+            ]);
+            const user = userEvent.setup();
+
+            renderLive();
+
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+            expect(
+                await resultsTable().findByText('Pride and Prejudice is a novel by Jane Austen. (source)'),
+            ).toBeInTheDocument();
+        });
+
+        it('renders a Markdown provider summary as readable text on a card', async () => {
+            installMatchMedia(390);
+            mockApiGetByPath({});
+            mockCandidateSearchResponse = candidateSearchResult([
+                {
+                    ...candidateSearchedCandidate,
+                    overview:
+                        '**Pride and Prejudice** is a novel by [Jane Austen](https://openlibrary.org/authors/OL21594A). ([source][1])\n\n----------\n\n[1]: https://openlibrary.org/works/OL66554W',
+                },
+            ]);
+            const user = userEvent.setup();
+
+            renderLive();
+
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+            const cards = await screen.findByTestId('library-add-page__mobile-list');
+            expect(
+                within(cards).getByText('Pride and Prejudice is a novel by Jane Austen. (source)'),
+            ).toBeInTheDocument();
         });
 
         it('surfaces unapplied-criteria warnings near the results', async () => {
@@ -666,6 +764,37 @@ describe('LibraryAddPage', () => {
             expect(screen.getByText(/unexpected token/i)).toBeInTheDocument();
             expect(mockParseMagpieQl).not.toHaveBeenCalled();
             expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+        });
+
+        it('surfaces a bad-request ProblemDetails detail from provider search', async () => {
+            mockApiGetByPath({});
+            mockCandidateSearchError = new ApiError(
+                400,
+                'The provider could not settle a stable result page after 5 requests.',
+                { detail: 'The provider could not settle a stable result page after 5 requests.' },
+            );
+            const user = userEvent.setup();
+
+            renderLive();
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+            expect(
+                await screen.findByText('The provider could not settle a stable result page after 5 requests.'),
+            ).toBeInTheDocument();
+        });
+
+        it('keeps server-error details hidden', async () => {
+            mockApiGetByPath({});
+            mockCandidateSearchError = new ApiError(500, 'Database connection string exposed.', {
+                detail: 'Database connection string exposed.',
+            });
+            const user = userEvent.setup();
+
+            renderLive();
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+            expect(await screen.findByText('Search failed. Please try again.')).toBeInTheDocument();
+            expect(screen.queryByText('Database connection string exposed.')).not.toBeInTheDocument();
         });
 
         it('shows no-results when provider candidate search returns nothing', async () => {
@@ -895,9 +1024,9 @@ describe('LibraryAddPage', () => {
             const addButton = resultsTable().getByRole('button', { name: /^add$/i }) as HTMLButtonElement;
             expect(addButton.disabled).toBe(true);
             expect(resultsTable().queryByTestId('library-add-page__add-blocked')).not.toBeInTheDocument();
-            const descriptionId = addButton.getAttribute('aria-describedby');
-            expect(descriptionId).toBeTruthy();
-            expect(document.getElementById(descriptionId!)).toHaveTextContent(/configure a root folder/i);
+            const trigger = addButton.parentElement as HTMLElement;
+            expect(trigger.tabIndex).toBe(0);
+            expect(trigger).toHaveAccessibleDescription(/configure a root folder/i);
 
             await user.hover(addButton);
             expect(await screen.findByRole('tooltip')).toHaveTextContent(/configure a root folder/i);
@@ -961,27 +1090,48 @@ describe('LibraryAddPage', () => {
             expect(resultsTable().getByRole('columnheader', { name: /title/i })).not.toHaveAttribute('aria-sort');
         });
 
-        it('sorts by published newest-first on the first Published click, reversing on the second', async () => {
-            mockApiGetByPath({});
-            mockCandidateSearchResponse = candidateSearchResult([alien, matrix, undated]);
+        it.each([640, 1024])('PublishedSort_UsesSameOrder_WhenLayoutChanges %s', async (width) => {
+            // Arrange
+            installMatchMedia(width);
+            mockCandidateSearchResponse = candidateSearchResult([
+                alien,
+                matrix,
+                { ...matrix, externalId: 'same-year', title: 'Another title' },
+                undated,
+            ]);
             const user = userEvent.setup();
-
             renderLive();
-
             await user.click(screen.getByRole('button', { name: /^search$/i }));
-            await waitFor(() => {
-                expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
-            });
+            await screen.findByText('The Matrix');
 
-            await user.click(resultsTable().getByRole('button', { name: /sort by published/i }));
-            await waitFor(() => {
-                expect(renderedTitles()).toEqual(['The Matrix', 'Alien', 'Zodiac']);
-            });
+            // Act
+            if (width === 640) {
+                await user.click(screen.getByRole('combobox', { name: 'Sort by field' }));
+                await user.click(screen.getByRole('option', { name: 'Published' }));
+            } else {
+                await user.click(screen.getByRole('button', { name: /sort by published/i }));
+            }
 
-            await user.click(resultsTable().getByRole('button', { name: /sort by published/i }));
-            await waitFor(() => {
-                expect(renderedTitles()).toEqual(['Alien', 'The Matrix', 'Zodiac']);
-            });
+            // Assert
+            expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+                'The Matrix1999',
+                'Another title1999',
+                'Alien1979',
+                'Zodiac',
+            ]);
+
+            // Act
+            await user.click(
+                screen.getByRole('button', { name: width === 640 ? 'Sort ascending' : 'Sort by Published' }),
+            );
+
+            // Assert
+            expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+                'Alien1979',
+                'The Matrix1999',
+                'Another title1999',
+                'Zodiac',
+            ]);
         });
 
         it('sorts by title only after a click and restores relevance order when cleared', async () => {

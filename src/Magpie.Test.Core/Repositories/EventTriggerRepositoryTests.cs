@@ -1,29 +1,38 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Paging;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class EventTriggerRepositoryTests
+public sealed class EventTriggerRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private Mock<IEventBus> _eventBus = null!;
     private IEventTriggerRepository _subject = null!;
     private Guid _userId;
     private Guid _extensionId;
@@ -82,17 +91,24 @@ public class EventTriggerRepositoryTests
         var loggerFactory = NullLoggerFactory.Instance;
         var auditRepo = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
+        _eventBus = new Mock<IEventBus>();
+        _eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
         _subject = new EventTriggerRepository(
             _context,
             auditRepo,
             transactionManager,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
-            loggerFactory.CreateLogger<EventTriggerRepository>());
+            _eventBus.Object,
+            loggerFactory.CreateLogger<EventTriggerRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -778,9 +794,9 @@ public class EventTriggerRepositoryTests
             Id = entity.Id,
             Parameters = new()
             {
-                Add = new() { ["new"] = "newValue" },
+                Add = new() { ["new"] = "newValue", ["old"] = "re-added" },
                 Remove = ["old"],
-                Update = new() { ["keep"] = "updated" }
+                Update = new() { ["keep"] = "updated", ["old"] = "updated-old", ["absent"] = "ignored" }
             }
         };
 
@@ -921,7 +937,7 @@ public class EventTriggerRepositoryTests
             DelaySeconds = -1
         };
 
-        // Act / Assert
+        // Assert
         Assert.That(
             async () => await _subject.CreateAsync(model, _userId).ConfigureAwait(false),
             Throws.TypeOf<MagpieException>());
@@ -1002,7 +1018,7 @@ public class EventTriggerRepositoryTests
             DelaySeconds = new() { Value = -5 }
         };
 
-        // Act / Assert
+        // Assert
         Assert.That(
             async () => await _subject.PatchAsync(patch, _userId).ConfigureAwait(false),
             Throws.TypeOf<MagpieException>());
@@ -1055,5 +1071,45 @@ public class EventTriggerRepositoryTests
             Assert.That(result, Is.True);
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.DelaySeconds)).EqualTo(45));
         }
+    }
+
+    [Test]
+    public async Task UpdateAsync_PublishesUpdatedEvent_WhenTriggerExists()
+    {
+        // Arrange
+        var entity = new EventTrigger
+        {
+            ExtensionId = _extensionId,
+            JobType = "TestJob",
+            Scope = JobScope.Content,
+            Name = "OriginalName",
+            EventFilter = new EventFilter { EventName = new() { Value = "content.added" } },
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.EventTriggers.Add(entity);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.UpdateAsync(
+            new EventTrigger
+            {
+                Id = entity.Id,
+                ExtensionId = _extensionId,
+                JobType = "TestJob",
+                Scope = JobScope.Content,
+                Name = "OriginalName",
+                EventFilter = new EventFilter { EventName = new() { Value = "content.deleted" } },
+                Enabled = false,
+                CreatedAt = entity.CreatedAt
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        _eventBus.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == "eventTrigger.updated"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

@@ -8,12 +8,14 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
+using Magpie.Core.Config;
 using Magpie.Core.Releases;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
@@ -42,7 +44,7 @@ public sealed class IndexerServiceTests
     {
         _userId = Guid.NewGuid();
 
-        _indexerRepository = new Mock<IIndexerRepository>();
+        _indexerRepository = new Mock<IIndexerRepository> { CallBase = true };
         _indexerRepository
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
@@ -66,13 +68,19 @@ public sealed class IndexerServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         _indexerRepository
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<IndexerPatch>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _indexerRepository
             .Setup(repository => repository.DeleteAsync(
                 It.IsAny<Guid>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        _indexerConnectionRepository = new Mock<IIndexerConnectionRepository>();
+        _indexerConnectionRepository = new Mock<IIndexerConnectionRepository> { CallBase = true };
         _indexerConnectionRepository
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
@@ -102,7 +110,7 @@ public sealed class IndexerServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        _indexerFeedRepository = new Mock<IIndexerFeedRepository>();
+        _indexerFeedRepository = new Mock<IIndexerFeedRepository> { CallBase = true };
         _indexerFeedRepository
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
@@ -164,7 +172,7 @@ public sealed class IndexerServiceTests
             Mock.Of<ISettingsService>(),
             _transactionManager.Object,
             Mock.Of<IEventBus>(),
-            Mock.Of<IServiceProvider>(),
+            Mock.Of<IReleaseSearchQueryExecutor>(),
             TimeProvider.System,
             NullLogger<IndexerService>.Instance);
         _feedSubject = _subject;
@@ -240,7 +248,7 @@ public sealed class IndexerServiceTests
         var exception = Assert.ThrowsAsync<ArgumentException>(async () =>
             await _subject.PatchAsync(
                 indexerId,
-                new IndexerPatch { ProviderType = "missing" },
+                new IndexerPatch { ProviderType = new() { Value = "missing" } },
                 null).ConfigureAwait(false));
 
         // Assert
@@ -267,7 +275,7 @@ public sealed class IndexerServiceTests
         var exception = Assert.ThrowsAsync<ArgumentException>(async () =>
             await _subject.PatchAsync(
                 indexerId,
-                new IndexerPatch { Name = " " },
+                new IndexerPatch { Name = new() { Value = " " } },
                 null).ConfigureAwait(false));
 
         // Assert
@@ -291,7 +299,11 @@ public sealed class IndexerServiceTests
         // Act
         var result = await _subject.PatchAsync(
             indexerId,
-            new IndexerPatch { ProviderType = "torznab", Name = "Renamed indexer" },
+            new IndexerPatch
+            {
+                ProviderType = new() { Value = "torznab" },
+                Name = new() { Value = "Renamed indexer" }
+            },
             _userId).ConfigureAwait(false);
 
         // Assert
@@ -299,11 +311,11 @@ public sealed class IndexerServiceTests
         {
             Assert.That(result, Is.True);
             _indexerRepository.Verify(
-                repository => repository.UpdateAsync(
-                    It.Is<Indexer>(indexer =>
-                        indexer.Id == indexerId &&
-                        indexer.ProviderType == "torznab" &&
-                        indexer.Name == "Renamed indexer"),
+                repository => repository.PatchAsync(
+                    It.Is<IndexerPatch>(applied =>
+                        applied.Id == indexerId &&
+                        applied.ProviderType!.Value == "torznab" &&
+                        applied.Name!.Value == "Renamed indexer"),
                     _userId,
                     It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -338,7 +350,7 @@ public sealed class IndexerServiceTests
         var exception = Assert.ThrowsAsync<ArgumentException>(async () =>
             await _subject.PatchAsync(
                 indexerId,
-                new IndexerPatch { ProviderType = providerType },
+                new IndexerPatch { ProviderType = new() { Value = providerType } },
                 null).ConfigureAwait(false));
 
         // Assert
@@ -364,7 +376,7 @@ public sealed class IndexerServiceTests
         // Act
         var result = await _subject.PatchAsync(
             indexerId,
-            new IndexerPatch { ProviderType = "runtime-provider" },
+            new IndexerPatch { ProviderType = new() { Value = "runtime-provider" } },
             _userId).ConfigureAwait(false);
 
         // Assert
@@ -372,10 +384,10 @@ public sealed class IndexerServiceTests
         {
             Assert.That(result, Is.True);
             _indexerRepository.Verify(
-                repository => repository.UpdateAsync(
-                    It.Is<Indexer>(indexer =>
-                        indexer.Id == indexerId &&
-                        indexer.ProviderType == "runtime-provider"),
+                repository => repository.PatchAsync(
+                    It.Is<IndexerPatch>(applied =>
+                        applied.Id == indexerId &&
+                        applied.ProviderType!.Value == "runtime-provider"),
                     _userId,
                     It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -464,6 +476,43 @@ public sealed class IndexerServiceTests
             _indexerFeedRepository.Verify(
                 repository => repository.DeleteAsync(feedId, _userId, It.IsAny<CancellationToken>()),
                 Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task PatchFeedAsync_ForwardsTheSettingsPatch_WhenThePatchNamesOneKey()
+    {
+        // Arrange
+        var feedId = Guid.NewGuid();
+        IndexerFeedPatch? applied = null;
+        _indexerFeedRepository
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<IndexerFeedPatch>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((IndexerFeedPatch feedPatch, Guid? _, CancellationToken _) => applied = feedPatch)
+            .ReturnsAsync(true);
+        var patch = new IndexerFeedPatch
+        {
+            Settings = new()
+            {
+                Add = new Dictionary<string, string>
+                {
+                    ["url"] = "https://feeds.example/other"
+                }
+            }
+        };
+
+        // Act
+        var patched = await _feedSubject.PatchFeedAsync(feedId, patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(patched, Is.True);
+            Assert.That(applied!.Id, Is.EqualTo(feedId));
+            Assert.That(applied.Settings!.Add!["url"], Is.EqualTo("https://feeds.example/other"));
+            Assert.That(applied.Settings.Remove, Is.Null);
         }
     }
 
@@ -777,7 +826,7 @@ public sealed class IndexerServiceTests
     }
 
     [Test]
-    public async Task SyncFeedIndexersAsync_DeletesRemainingOrphans_WhenSeveralShareOneProviderType()
+    public async Task SyncFeedIndexersAsync_KeepsRemainingOrphans_WhenSeveralShareOneProviderType()
     {
         // Arrange
         var feed = new IndexerFeed
@@ -839,15 +888,47 @@ public sealed class IndexerServiceTests
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             _indexerRepository.Verify(
-                repository => repository.DeleteAsync(secondId, _userId, It.IsAny<CancellationToken>()),
-                Times.Once);
-            _indexerRepository.Verify(
-                repository => repository.DeleteAsync(thirdId, _userId, It.IsAny<CancellationToken>()),
-                Times.Once);
-            _indexerRepository.Verify(
-                repository => repository.DeleteAsync(oldestId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                repository => repository.DeleteAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
                 Times.Never);
         }
+    }
+
+    [Test]
+    public async Task SyncFeedIndexersAsync_DeletesNothing_WhenTheSyncDiscoveredNoIndexers()
+    {
+        // Arrange
+        var feed = new IndexerFeed
+        {
+            Id = Guid.NewGuid(),
+            ProviderType = "cardigann",
+            Name = "Cardigann"
+        };
+        var attached = new Indexer
+        {
+            Id = Guid.NewGuid(),
+            FeedId = feed.Id,
+            ProviderType = "tracker-a",
+            Name = "Tracker A",
+            DefinitionType = "cardigann",
+            CreatedAt = new DateTime(2026, 1, 1)
+        };
+        _indexerRepository
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([attached]);
+
+        // Act
+        await _feedSubject.SyncFeedIndexersAsync(feed, [], _userId).ConfigureAwait(false);
+
+        // Assert
+        _indexerRepository.Verify(
+            repository => repository.DeleteAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Test]
@@ -1002,7 +1083,7 @@ public sealed class IndexerServiceTests
         [SetUp]
         public void SetUp()
         {
-            _indexers = new Mock<IIndexerRepository>();
+            _indexers = new Mock<IIndexerRepository> { CallBase = true };
             _indexers
                 .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(
@@ -1023,7 +1104,7 @@ public sealed class IndexerServiceTests
                     },
                 ]);
 
-            _indexerConnections = new Mock<IIndexerConnectionRepository>();
+            _indexerConnections = new Mock<IIndexerConnectionRepository> { CallBase = true };
             _indexerConnections
                 .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(
@@ -1054,7 +1135,7 @@ public sealed class IndexerServiceTests
                     },
                 ]);
 
-            _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
+            _contentHierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
             _contentHierarchyItems
                 .Setup(repository => repository.GetByIdAsync(ContentHierarchyItemId, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ContentHierarchyItem
@@ -1066,7 +1147,7 @@ public sealed class IndexerServiceTests
                     Name = "The Salt Roads",
                 });
 
-            _releases = new Mock<IReleaseRepository>();
+            _releases = new Mock<IReleaseRepository> { CallBase = true };
             _releases
                 .Setup(repository => repository.UpdateAsync(
                     It.IsAny<Release>(),
@@ -1080,7 +1161,7 @@ public sealed class IndexerServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync((Release release, Guid? _, CancellationToken _) => release);
 
-            _releaseScopes = new Mock<IReleaseScopeRepository>();
+            _releaseScopes = new Mock<IReleaseScopeRepository> { CallBase = true };
             _releaseScopes
                 .Setup(repository => repository.QueryAsync(
                     It.IsAny<ReleaseScopeQuery>(),
@@ -1117,16 +1198,6 @@ public sealed class IndexerServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
 
-            var indexerService = new Mock<IIndexerService>();
-            indexerService
-                .Setup(service => service.PatchConnectionAsync(
-                    It.IsAny<Guid>(),
-                    It.IsAny<Guid>(),
-                    It.IsAny<IndexerConnectionPatch>(),
-                    It.IsAny<Guid?>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(true);
-
             var transactions = new Mock<ITransactionManager>();
             transactions
                 .Setup(manager => manager.ExecuteWithTransactionAsync(
@@ -1137,16 +1208,15 @@ public sealed class IndexerServiceTests
             var executor = new ReleaseSearchQueryExecutor(
                 _indexers.Object,
                 _indexerConnections.Object,
-                indexerService.Object,
+                Mock.Of<IEventBus>(),
                 [_integrationA.Object, _integrationB.Object],
                 [],
                 TimeProvider.System,
-                NullLogger<ReleaseSearchQueryExecutor>.Instance);
-
-            var serviceProvider = new Mock<IServiceProvider>();
-            serviceProvider
-                .Setup(provider => provider.GetService(typeof(IReleaseSearchQueryExecutor)))
-                .Returns(executor);
+                NullLogger<ReleaseSearchQueryExecutor>.Instance,
+            releaseEvaluationService: Mock.Of<IReleaseEvaluationService>(),
+            cacheFactory: Mock.Of<ICacheFactory>(),
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
 
             _subject = new IndexerService(
                 _indexers.Object,
@@ -1161,7 +1231,7 @@ public sealed class IndexerServiceTests
                 Mock.Of<ISettingsService>(),
                 transactions.Object,
                 Mock.Of<IEventBus>(),
-                serviceProvider.Object,
+                executor,
                 TimeProvider.System,
                 NullLogger<IndexerService>.Instance);
         }
@@ -1169,9 +1239,6 @@ public sealed class IndexerServiceTests
         [Test]
         public async Task ListCapabilitiesAsync_ReturnsAdvertisedFacets_WhenIntegrationIsRegistered()
         {
-            // Arrange
-            // The fixture registers one integration for each indexer.
-
             // Act
             var capabilities = await _subject.ListCapabilitiesAsync().ConfigureAwait(false);
 
@@ -1209,7 +1276,7 @@ public sealed class IndexerServiceTests
         }
 
         [Test]
-        public async Task SearchAsync_ReturnsNull_WhenSelectedIndexersDoNotSupportTheQuery()
+        public async Task SearchAsync_ReturnsNoCandidates_WhenSelectedIndexersDoNotSupportTheQuery()
         {
             // Arrange
             _integrationA.SetupGet(integration => integration.SupportsKeywordSearch).Returns(false);
@@ -1224,7 +1291,12 @@ public sealed class IndexerServiceTests
             var response = await _subject.SearchAsync(request).ConfigureAwait(false);
 
             // Assert
-            Assert.That(response, Is.Null);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(response!.Candidates, Is.Empty);
+                Assert.That(response.ConnectionsAttempted, Is.EqualTo(0));
+                Assert.That(response.ConnectionsSkipped, Is.EqualTo(2));
+            }
         }
 
         [Test]
@@ -1309,12 +1381,12 @@ public sealed class IndexerServiceTests
                 Assert.That(response.Candidates[0].Release.Title, Is.EqualTo("Release B"));
                 Assert.That(response.ConnectionsAttempted, Is.EqualTo(1));
                 Assert.That(response.ConnectionsSkipped, Is.EqualTo(0));
-                Assert.That(failed.Warning, Is.EqualTo("Invalid definition."));
+                Assert.That(failed.Warning, Is.EqualTo("provider-error:InvalidOperationException"));
             }
         }
 
         [Test]
-        public async Task SearchAsync_ReturnsNull_WhenTheQueryIsEmpty()
+        public async Task SearchAsync_ReturnsNoCandidates_WhenTheQueryIsEmpty()
         {
             // Arrange
             var request = new IndexerSearchRequest
@@ -1327,7 +1399,12 @@ public sealed class IndexerServiceTests
             var response = await _subject.SearchAsync(request).ConfigureAwait(false);
 
             // Assert
-            Assert.That(response, Is.Null);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(response!.Candidates, Is.Empty);
+                Assert.That(response.ConnectionsAttempted, Is.EqualTo(0));
+                Assert.That(response.ConnectionsSkipped, Is.EqualTo(1));
+            }
         }
 
         [Test]
@@ -1439,7 +1516,7 @@ public sealed class IndexerServiceTests
             {
                 Assert.That(response.Candidates, Has.Count.EqualTo(1));
                 Assert.That(response.Candidates[0].Release.Title, Is.EqualTo("Release A"));
-                Assert.That(failed.Warning, Is.EqualTo("The indexer refused the query."));
+                Assert.That(failed.Warning, Is.EqualTo("provider-error:InvalidOperationException"));
             }
         }
 
@@ -1652,7 +1729,7 @@ public sealed class IndexerServiceTests
         public async Task MatchAsync_DoesNotCreateTheRelease_WhenTheReleaseAlreadyExists()
         {
             // Arrange
-            var existingReleaseId = Guid.Parse("77777777-7777-7777-7777-777777777777");
+            var existingReleaseId = Guid.NewGuid();
             _releases
                 .Setup(repository => repository.UpdateAsync(
                     It.IsAny<Release>(),

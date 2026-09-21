@@ -6,9 +6,9 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models.Data;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -66,7 +66,8 @@ internal sealed class MimeMappingRepository(
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
             await transactionManager.OnCommittedAsync(
-                token => eventBus.PublishAsync(MimeMappingCreated(model.Extension), token),
+                token => eventBus.PublishAsync(
+                    MimeMappingEventBuilder.BuildMimeMappingCreatedEvent(model.Extension), token),
                 cancellationToken).ConfigureAwait(false);
 
             return model;
@@ -98,7 +99,8 @@ internal sealed class MimeMappingRepository(
             if (updated > 0)
             {
                 await transactionManager.OnCommittedAsync(
-                    token => eventBus.PublishAsync(MimeMappingUpdated(model.Extension, ["mimeType"]), token),
+                    token => eventBus.PublishAsync(
+                        MimeMappingEventBuilder.BuildMimeMappingUpdatedEvent(model.Extension, ["mimeType"]), token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -124,7 +126,7 @@ internal sealed class MimeMappingRepository(
             if (deleted > 0)
             {
                 await transactionManager.OnCommittedAsync(
-                    token => eventBus.PublishAsync(MimeMappingDeleted(id), token),
+                    token => eventBus.PublishAsync(MimeMappingEventBuilder.BuildMimeMappingDeletedEvent(id), token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -135,36 +137,5 @@ internal sealed class MimeMappingRepository(
             logger.LogError(ex, "The MIME mapping repository failed to delete MIME mapping {Extension}.", id);
             throw;
         }
-    }
-
-    private static Models.MagpieEvent MimeMappingCreated(string extension)
-    {
-        var context = new Dictionary<string, string>
-        {
-            [MagpieEvents.Keys.MimeMappingExtension] = extension ?? string.Empty,
-        };
-
-        return new(Guid.Empty, MagpieEvents.Names.MimeMappingCreated, context, default, default, null);
-    }
-
-    private static Models.MagpieEvent MimeMappingDeleted(string extension)
-    {
-        var context = new Dictionary<string, string>
-        {
-            [MagpieEvents.Keys.MimeMappingExtension] = extension ?? string.Empty,
-        };
-
-        return new(Guid.Empty, MagpieEvents.Names.MimeMappingDeleted, context, default, default, null);
-    }
-
-    private static Models.MagpieEvent MimeMappingUpdated(string extension, IReadOnlyCollection<string> changedFields)
-    {
-        var context = new Dictionary<string, string>
-        {
-            [MagpieEvents.Keys.MimeMappingExtension] = extension ?? string.Empty,
-            [MagpieEvents.Keys.MimeMappingChangedFields] = string.Join(",", changedFields ?? []),
-        };
-
-        return new(Guid.Empty, MagpieEvents.Names.MimeMappingUpdated, context, default, default, null);
     }
 }

@@ -5,7 +5,11 @@ export function isActivePath(pathname: string, path: string): boolean {
     if (path === '/' || path === '/admin') {
         return pathname === path;
     }
-    return pathname.startsWith(path);
+    return pathname === path || pathname.startsWith(`${path}/`);
+}
+
+export function isAdminRoute(pathname: string): boolean {
+    return pathname === '/admin' || pathname.startsWith('/admin/');
 }
 
 export function useIsActive(): (path: string) => boolean {

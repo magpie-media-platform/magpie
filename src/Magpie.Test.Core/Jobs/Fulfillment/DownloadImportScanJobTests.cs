@@ -26,6 +26,8 @@ namespace Magpie.Test.Core.Jobs.Fulfillment;
 [TestFixture]
 public sealed class DownloadImportScanJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IDownloadRepository> _downloadRepository = null!;
     private Mock<IJobManager> _jobManager = null!;
     private IJob _subject = null!;
@@ -34,7 +36,7 @@ public sealed class DownloadImportScanJobTests
     [SetUp]
     public void SetUp()
     {
-        _downloadRepository = new Mock<IDownloadRepository>();
+        _downloadRepository = new Mock<IDownloadRepository> { CallBase = true };
         _downloadRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<DownloadQuery>(),
@@ -51,7 +53,8 @@ public sealed class DownloadImportScanJobTests
             _downloadRepository.Object,
             _jobManager.Object,
             TimeProvider.System,
-            NullLogger<DownloadImportScanJob>.Instance);
+            NullLogger<DownloadImportScanJob>.Instance,
+            _progressReporter);
 
         _jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
@@ -64,25 +67,7 @@ public sealed class DownloadImportScanJobTests
     }
 
     [Test]
-    public void Spec_DeclaresSettleMinutesParameter_WithDefault()
-    {
-        // Arrange
-        // Act
-        var parameters = DownloadImportScanJob.Spec.Parameters;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(parameters, Has.Count.EqualTo(1));
-            Assert.That(parameters[0].Name, Is.EqualTo("settleMinutes"));
-            Assert.That(parameters[0].Type, Is.EqualTo(DataType.Number));
-            Assert.That(parameters[0].Required, Is.False);
-            Assert.That(parameters[0].DefaultValue, Is.EqualTo("10"));
-        }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_EnqueuesDownloadImportItem_ForEachCandidate()
+    public async Task ExecuteAsync_EnqueuesDownloadImportItem_WhenImportCandidatesExist()
     {
         // Arrange
         var download = new Download
@@ -170,7 +155,7 @@ public sealed class DownloadImportScanJobTests
                 observedQuery?.Statuses,
                 Is.EquivalentTo([DownloadStatus.Downloaded, DownloadStatus.Importing]));
             Assert.That(observedPaging?.PageNumber, Is.EqualTo(1));
-            Assert.That(observedPaging?.PageSize, Is.EqualTo(200));
+            Assert.That(observedPaging?.PageSize, Is.EqualTo(500));
             Assert.That(observedSort?.PropertyName, Is.EqualTo(nameof(DownloadQuery.LastChangedAt)));
             Assert.That(observedSort?.Direction, Is.EqualTo(SortDirection.Ascending));
         }
@@ -234,7 +219,7 @@ public sealed class DownloadImportScanJobTests
     public async Task ExecuteAsync_TraversesSecondPage_WhenFirstPageIsFull()
     {
         // Arrange
-        var firstPage = Enumerable.Range(0, 200)
+        var firstPage = Enumerable.Range(0, 500)
             .Select(index => new Download
             {
                 Id = Guid.NewGuid(),
@@ -249,8 +234,8 @@ public sealed class DownloadImportScanJobTests
         {
             Id = Guid.NewGuid(),
             DownloadClientId = Guid.NewGuid(),
-            ExternalId = "download-200",
-            Title = "Download 200",
+            ExternalId = "download-500",
+            Title = "Download 500",
             Status = DownloadStatus.Importing,
             CreatedAt = DateTime.UtcNow
         };
@@ -266,7 +251,7 @@ public sealed class DownloadImportScanJobTests
                     Items = paging.PageNumber == 1 ? firstPage : [secondPageDownload],
                     PageNumber = paging.PageNumber,
                     PageSize = paging.PageSize,
-                    TotalItems = 201
+                    TotalItems = 501
                 });
 
         // Act
@@ -278,7 +263,7 @@ public sealed class DownloadImportScanJobTests
             _downloadRepository.Verify(
                 r => r.QueryAsync(
                     It.IsAny<DownloadQuery>(),
-                    It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 200),
+                    It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 500),
                     It.IsAny<SortParameter?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Once);

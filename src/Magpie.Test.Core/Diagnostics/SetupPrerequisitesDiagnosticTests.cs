@@ -49,7 +49,6 @@ public sealed class SetupPrerequisitesDiagnosticTests
     [Test]
     public async Task RunAsync_ProducesAFindingPerPrerequisite_WhenNothingIsConfigured()
     {
-        // Arrange
         // Act
         var findings = await _subject.RunAsync(new() { DownloadClients = _downloadClients, }).ConfigureAwait(false);
 
@@ -57,9 +56,13 @@ public sealed class SetupPrerequisitesDiagnosticTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(findings, Has.Count.EqualTo(3));
-            Assert.That(findings.All(f => f.RepairId is null), Is.True);
-            Assert.That(findings.Count(f => f.Severity == DiagnosticFindingSeverity.Error), Is.EqualTo(2));
-            Assert.That(findings.Count(f => f.Severity == DiagnosticFindingSeverity.Warning), Is.EqualTo(1));
+            Assert.That(findings, Has.All.Matches<DiagnosticFinding>(f => f.RepairId is null));
+            Assert.That(
+                findings,
+                Has.Exactly(2).Matches<DiagnosticFinding>(f => f.Severity == DiagnosticFindingSeverity.Error));
+            Assert.That(
+                findings,
+                Has.Exactly(1).Matches<DiagnosticFinding>(f => f.Severity == DiagnosticFindingSeverity.Warning));
         }
     }
 
@@ -160,7 +163,7 @@ public sealed class SetupPrerequisitesDiagnosticTests
     }
 
     [Test]
-    public async Task RunAsync_StaysAtConfigAltitude_AndIgnoresHealthOfAnEnabledIndexer()
+    public async Task RunAsync_IgnoresHealth_WhenAnIndexerIsEnabled()
     {
         // Arrange
         _rootFolders

@@ -133,9 +133,6 @@ internal sealed class CardigannIndexerIntegration(
             case "movieid":
                 vars[".Query.MovieID"] = value;
                 break;
-            case "javid":
-                vars[".Query.JAVID"] = value;
-                break;
         }
     }
 
@@ -168,83 +165,118 @@ internal sealed class CardigannIndexerIntegration(
             if (definition.Login.Captcha is not null)
             {
                 logger.LogDebug(
-                    "Cardigann does not support the captcha login of tracker {Tracker}. " +
-                    "The search will return no results",
+                    "Cardigann skipped the search for tracker {Tracker} because its captcha login is not " +
+                    "supported.",
                     definition.Id);
                 return [];
             }
 
-            var loginOutcome = await EnsureLoginAsync(baseUri, settings, forceRefresh: false, cancellationToken)
+            await EnsureLoginAsync(baseUri, settings, forceRefresh: false, throwOnFailure: true, cancellationToken)
                 .ConfigureAwait(false);
-            if (loginOutcome is { Success: false })
-            {
-                logger.LogWarning(
-                    "Cardigann login failed for tracker {Tracker}. The search will return no results. {Reason}",
-                    definition.Id,
-                    loginOutcome.Message);
-                return [];
-            }
         }
 
         var variables = BuildVariables(request, settings);
 
-        var path = definition.Search.Paths[0];
-        var method = ResolveSearchMethod(path.Method);
-        var requestUri = method == HttpMethod.Post
-            ? new Uri(baseUri, path.Path.RenderCardigannTemplate(variables))
-            : BuildRequestUri(baseUri, path, variables);
-        var requestBody = method == HttpMethod.Post ? BuildRequestParameters(path, variables) : null;
-        if (Activity.Current?.OperationName == "magpie.release-query.request")
+        var results = new List<Release>();
+        var tracedActivity = Activity.Current?.OperationName == "magpie.release-query.request"
+            ? Activity.Current
+            : null;
+        var tracedMethods = new List<string>();
+        var tracedTargets = new List<string>();
+        var tracedBodies = new List<string>();
+        for (var pathIndex = 0; pathIndex < definition.Search.Paths.Count; pathIndex++)
         {
-            var redactedVariables = RedactSecretVariables(variables, definition.Settings);
-            Activity.Current.SetTag("magpie.request.method", method.Method);
-            Activity.Current.SetTag(
-                "magpie.request.target",
-                (method == HttpMethod.Post
-                    ? new Uri(baseUri, path.Path.RenderCardigannTemplate(redactedVariables))
-                    : BuildRequestUri(baseUri, path, redactedVariables)).PathAndQuery);
-            Activity.Current.SetTag(
-                "magpie.request.body",
-                method == HttpMethod.Post ? BuildRequestParameters(path, redactedVariables) : null);
-        }
+            if (results.Count >= request.MaximumResults)
+            {
+                break;
+            }
 
-        var body = await FetchBodyAsync(method, requestUri, requestBody, settings, baseUri, cancellationToken)
-            .ConfigureAwait(false);
+            var path = definition.Search.Paths[pathIndex];
 
-        var isJson = string.Equals(path.Response?.Type, "json", StringComparison.OrdinalIgnoreCase);
-        var releases = isJson
-            ? parser.ParseJson(body, definition, baseUri, variables)
-            : parser.Parse(body, definition, baseUri, variables);
-        releases = releases.Take(request.MaximumResults).ToArray();
-        var resolved = isJson || definition.Download is null
-            ? releases
-            : await ResolveDownloadsAsync(releases, definition.Download, baseUri, settings, cancellationToken)
+            var method = ResolveSearchMethod(path.Method, variables);
+            var requestUri = method == HttpMethod.Post
+                ? BuildRequestUri(baseUri, path, variables, includeParameters: false)
+                : BuildRequestUri(baseUri, path, variables);
+            if (Uri.Compare(baseUri, requestUri, UriComponents.SchemeAndServer, UriFormat.Unescaped,
+                    StringComparison.OrdinalIgnoreCase) != 0 || requestUri.UserInfo.Length > 0)
+            {
+                logger.LogWarning(
+                    "Cardigann {Tracker} skipped search path {PathIndex} with disallowed target authority {Target}",
+                    definition.Id,
+                    pathIndex,
+                    requestUri.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped));
+                continue;
+            }
+
+            var requestBody = method == HttpMethod.Post ? BuildRequestParameters(path, variables) : null;
+            if (tracedActivity is not null)
+            {
+                var redactedVariables = RedactSecretVariables(variables);
+                tracedMethods.Add(method.Method);
+                tracedTargets.Add(
+                    (method == HttpMethod.Post
+                        ? BuildRequestUri(baseUri, path, redactedVariables, includeParameters: false)
+                        : BuildRequestUri(baseUri, path, redactedVariables)).PathAndQuery);
+                if (method == HttpMethod.Post)
+                {
+                    tracedBodies.Add(BuildRequestParameters(path, redactedVariables));
+                }
+            }
+
+            var body = await FetchBodyAsync(method, requestUri, requestBody, settings, baseUri, cancellationToken)
                 .ConfigureAwait(false);
 
-        return resolved;
+            var isJson = string.Equals(path.Response?.Type, "json", StringComparison.OrdinalIgnoreCase);
+            var releases = isJson
+                ? parser.ParseJson(body, definition, baseUri, variables)
+                : parser.Parse(body, definition, baseUri, variables);
+            releases = releases.Take(Math.Max(0, request.MaximumResults - results.Count)).ToArray();
+            var resolved = isJson || definition.Download is null
+                ? releases
+                : await ResolveDownloadsAsync(
+                        releases,
+                        definition.Download,
+                        baseUri,
+                        settings,
+                        variables,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            results.AddRange(resolved);
+        }
+
+        if (tracedActivity is not null && tracedTargets.Count > 0)
+        {
+            tracedActivity.SetTag("magpie.request.method", string.Join(" ", tracedMethods));
+            tracedActivity.SetTag("magpie.request.target", string.Join(" ", tracedTargets));
+            tracedActivity.SetTag(
+                "magpie.request.body",
+                tracedBodies.Count == 0 ? null : string.Join(" ", tracedBodies));
+        }
+
+        return results;
     }
 
     private static IReadOnlyDictionary<string, object?> RedactSecretVariables(
-        IReadOnlyDictionary<string, object?> variables,
-        IReadOnlyList<CardigannSettingDefinition> settings)
+        IReadOnlyDictionary<string, object?> variables)
     {
         var redacted = new Dictionary<string, object?>(variables);
-        foreach (var setting in settings.Where(setting =>
-                     setting.Type is "password" or "cookie" && !string.IsNullOrEmpty(setting.Name)))
+        foreach (var key in variables.Keys.Where(key => key.StartsWith(".Config.", StringComparison.Ordinal)))
         {
-            redacted[$".Config.{setting.Name}"] = "[REDACTED]";
+            redacted[key] = "[REDACTED]";
         }
 
         return redacted;
     }
 
-    private static HttpMethod ResolveSearchMethod(string? method)
+    private static HttpMethod ResolveSearchMethod(string? method, IReadOnlyDictionary<string, object?> variables)
     {
-        return method?.ToLowerInvariant() switch
+        var resolved = method?.RenderCardigannTemplate(variables).Trim();
+        return resolved?.ToLowerInvariant() switch
         {
             null or "" or "get" => HttpMethod.Get,
             "post" => HttpMethod.Post,
-            _ => throw new InvalidOperationException($"Cardigann search method '{method}' is not supported.")
+            _ => throw new InvalidOperationException($"Cardigann search method '{resolved}' is not supported.")
         };
     }
 
@@ -326,13 +358,9 @@ internal sealed class CardigannIndexerIntegration(
         DownloadBlock download,
         Uri baseUri,
         IReadOnlyDictionary<string, string> settings,
+        IReadOnlyDictionary<string, object?> variables,
         CancellationToken cancellationToken)
     {
-        if (releases.Count == 0)
-        {
-            return releases;
-        }
-
         var resolved = new Release?[releases.Count];
         await Parallel.ForEachAsync(
             Enumerable.Range(0, releases.Count),
@@ -342,7 +370,13 @@ internal sealed class CardigannIndexerIntegration(
                 CancellationToken = cancellationToken,
             },
             async (index, token) =>
-                resolved[index] = await ResolveOneAsync(releases[index], download, baseUri, settings, token)
+                resolved[index] = await ResolveOneAsync(
+                        releases[index],
+                        download,
+                        baseUri,
+                        settings,
+                        variables,
+                        token)
                     .ConfigureAwait(false))
             .ConfigureAwait(false);
 
@@ -354,6 +388,7 @@ internal sealed class CardigannIndexerIntegration(
         DownloadBlock download,
         Uri baseUri,
         IReadOnlyDictionary<string, string> settings,
+        IReadOnlyDictionary<string, object?> variables,
         CancellationToken cancellationToken)
     {
         if (release.InfoUrl is not null &&
@@ -365,7 +400,7 @@ internal sealed class CardigannIndexerIntegration(
         if (release.InfoUrl is null)
         {
             logger.LogWarning(
-                "Cardigann detail fetch skipped {Tracker} row {Title}. The row has no detail URL",
+                "Cardigann detail fetch skipped {Tracker} row {Title} with no detail URL.",
                 definition.Id,
                 release.Title);
             return null;
@@ -390,20 +425,20 @@ internal sealed class CardigannIndexerIntegration(
         {
             logger.LogWarning(
                 ex,
-                "Cardigann detail fetch skipped {Tracker} row {Title} at {Uri}. The request returned an HTTP error",
+                "Cardigann detail fetch skipped {Tracker} row {Title} at {Uri} after an HTTP error.",
                 definition.Id,
                 release.Title,
                 targetUri);
             return null;
         }
 
-        var extracted = parser.ExtractDownloadTarget(body, download);
+        var extracted = parser.ExtractDownloadTarget(body, download, variables);
         if (string.IsNullOrEmpty(extracted))
         {
             logger.LogWarning(
                 "Cardigann detail fetch skipped a {Tracker} row: selector {Selector} missed row {Title} at {Uri}",
                 definition.Id,
-                download.Selector,
+                download.Selector ?? string.Join(", ", download.Selectors.Select(entry => entry.Selector)),
                 release.Title,
                 targetUri);
             return null;
@@ -508,7 +543,7 @@ internal sealed class CardigannIndexerIntegration(
         {
             if (login is not null)
             {
-                await EnsureLoginAsync(baseUri, settings, forceRefresh: false, cancellationToken)
+                await EnsureLoginAsync(baseUri, settings, forceRefresh: false, throwOnFailure: true, cancellationToken)
                     .ConfigureAwait(false);
             }
 
@@ -565,6 +600,7 @@ internal sealed class CardigannIndexerIntegration(
         Uri baseUri,
         IReadOnlyDictionary<string, string> settings,
         bool forceRefresh,
+        bool throwOnFailure,
         CancellationToken cancellationToken)
     {
         var login = definition.Login;
@@ -594,6 +630,11 @@ internal sealed class CardigannIndexerIntegration(
             new KeyValuePair<string, object?>("indexer_id", indexerId.ToString()),
             new KeyValuePair<string, object?>("outcome", outcome.Success ? "success" : "failure"));
 
+        if (throwOnFailure && !outcome.Success)
+        {
+            throw new CardigannAuthenticationException("Cardigann tracker login failed.");
+        }
+
         return outcome;
     }
 
@@ -609,7 +650,7 @@ internal sealed class CardigannIndexerIntegration(
                 new KeyValuePair<string, object?>("indexer_id", indexerId.ToString()),
                 new KeyValuePair<string, object?>("outcome", "failure"));
             logger.LogWarning(
-                "The Cardigann login test failed for tracker {Tracker}. Cardigann does not support a captcha login.",
+                "The Cardigann login test failed for tracker {Tracker} because captcha login is not supported.",
                 definition.Id);
             return new ConfigurationTestResult
             {
@@ -619,7 +660,8 @@ internal sealed class CardigannIndexerIntegration(
             };
         }
 
-        var outcome = await EnsureLoginAsync(baseUri, settings, forceRefresh: true, cancellationToken)
+        var outcome = await EnsureLoginAsync(
+                baseUri, settings, forceRefresh: true, throwOnFailure: false, cancellationToken)
             .ConfigureAwait(false);
         if (outcome is null || outcome.Success)
         {
@@ -773,18 +815,16 @@ internal sealed class CardigannIndexerIntegration(
         return supported;
     }
 
-    private Uri BuildRequestUri(Uri baseUri, SearchPath path, IReadOnlyDictionary<string, object?> variables)
+    private Uri BuildRequestUri(
+        Uri baseUri,
+        SearchPath path,
+        IReadOnlyDictionary<string, object?> variables,
+        bool includeParameters = true)
     {
-        var renderedPath = path.Path.RenderCardigannTemplate(variables);
-
-        var parameters = BuildRequestParameters(path, variables);
-        if (parameters.Length == 0)
-        {
-            return new Uri(baseUri, renderedPath);
-        }
-
+        var renderedPath = path.Path.RenderCardigannTemplate(variables, Uri.EscapeDataString);
+        var parameters = includeParameters ? BuildRequestParameters(path, variables) : string.Empty;
         var separator = renderedPath.Contains('?', StringComparison.Ordinal) ? "&" : "?";
-        return new Uri(baseUri, renderedPath + separator + parameters);
+        return new Uri(baseUri, parameters.Length == 0 ? renderedPath : renderedPath + separator + parameters);
     }
 
     private string BuildRequestParameters(
@@ -808,8 +848,9 @@ internal sealed class CardigannIndexerIntegration(
         var query = new List<string>();
         foreach (var (key, template) in inputs)
         {
-            var value = template.RenderCardigannTemplate(variables);
-            if (string.Equals(key, "$raw", StringComparison.Ordinal))
+            var raw = string.Equals(key, "$raw", StringComparison.Ordinal);
+            var value = template.RenderCardigannTemplate(variables, raw ? Uri.EscapeDataString : null);
+            if (raw)
             {
                 if (!string.IsNullOrEmpty(value))
                 {

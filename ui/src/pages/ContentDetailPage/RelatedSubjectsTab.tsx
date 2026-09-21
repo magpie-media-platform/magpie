@@ -1,7 +1,10 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { ImageBrokenIcon } from '@phosphor-icons/react';
+import { ImageBrokenIcon, UsersThreeIcon } from '@phosphor-icons/react';
 
+import { Avatar } from '@/components/ui/Avatar';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { useContentRelationships } from '@/hooks/useContent';
 import type { ContentRelationship } from '@/types';
 
@@ -34,7 +37,7 @@ export function RelatedSubjectsTab({ contentId }: RelatedSubjectsTabProps) {
     if (isLoading) {
         return (
             <div className="related-subjects-tab" data-component="related-subjects-tab" data-loading="true">
-                <p>Loading related subjects...</p>
+                <Skeleton height={96} />
             </div>
         );
     }
@@ -42,9 +45,11 @@ export function RelatedSubjectsTab({ contentId }: RelatedSubjectsTabProps) {
     if (grouped.length === 0) {
         return (
             <div className="related-subjects-tab" data-component="related-subjects-tab">
-                <p className="related-subjects-tab__empty" data-empty="true">
-                    No related information.
-                </p>
+                <EmptyState
+                    icon={<UsersThreeIcon weight="duotone" />}
+                    title="No related information"
+                    description="This item has no related subjects."
+                />
             </div>
         );
     }
@@ -68,7 +73,19 @@ export function RelatedSubjectsTab({ contentId }: RelatedSubjectsTabProps) {
 }
 
 function RelatedSubjectEntry({ row }: { row: ContentRelationship }) {
-    const avatar = <Avatar imageUrl={row.imageUrl} name={row.name} />;
+    // Avatar keeps its image-error state, so a new URL needs a fresh instance.
+    const avatar = (
+        <Avatar
+            key={row.imageUrl}
+            src={row.imageUrl ?? undefined}
+            alt={row.name}
+            loading="lazy"
+            className="related-subjects-tab__avatar"
+            fallback={
+                <ImageBrokenIcon weight="thin" aria-hidden="true" data-testid="related-subject-avatar-placeholder" />
+            }
+        />
+    );
     const roleLabel = row.qualifier ? row.qualifier : null;
 
     const body = (
@@ -99,21 +116,6 @@ function RelatedSubjectEntry({ row }: { row: ContentRelationship }) {
             {body}
         </div>
     );
-}
-
-function Avatar({ imageUrl, name }: { imageUrl?: string | null; name: string }) {
-    if (!imageUrl) {
-        return (
-            <div
-                className="related-subjects-tab__avatar related-subjects-tab__avatar--placeholder"
-                data-testid="related-subject-avatar-placeholder"
-            >
-                <ImageBrokenIcon weight="thin" aria-hidden="true" />
-            </div>
-        );
-    }
-
-    return <img src={imageUrl} alt={name} className="related-subjects-tab__avatar" loading="lazy" />;
 }
 
 RelatedSubjectsTab.displayName = 'RelatedSubjectsTab';

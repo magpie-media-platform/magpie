@@ -1,14 +1,10 @@
 import { useCallback } from 'react';
 
-import { EyeIcon, EyeSlashIcon, TreeViewIcon } from '@phosphor-icons/react';
-
-import { Tooltip } from '@/components/ui/Tooltip';
+import { MonitoringToggle } from '@/components/ui/MonitoringToggle';
 import { useToast } from '@/components/ui/Toast';
 import { useUpdateContent } from '@/hooks/useContent';
 
-import { ContentPolicyRow } from './ContentPolicySettings';
-
-import './MonitoringToggle.css';
+import { DetailInfoRow } from '@/components/ui/DetailInfoGrid';
 
 interface MonitoringControlProps {
     contentId: string | undefined;
@@ -16,30 +12,6 @@ interface MonitoringControlProps {
     effectiveMonitoring: boolean;
     canEdit?: boolean;
 }
-
-const OPTIONS: { value: boolean | null; key: string; label: string; icon: typeof EyeIcon; tooltip: string }[] = [
-    {
-        value: true,
-        key: 'true',
-        label: 'Monitor',
-        icon: EyeIcon,
-        tooltip: 'Monitor this item. The system searches and grabs for it',
-    },
-    {
-        value: false,
-        key: 'false',
-        label: 'Do not monitor',
-        icon: EyeSlashIcon,
-        tooltip: 'Ignore this item. Background jobs will not pick it up',
-    },
-    {
-        value: null,
-        key: 'inherit',
-        label: 'Inherit',
-        icon: TreeViewIcon,
-        tooltip: 'Inherit monitoring from a parent (no explicit decision)',
-    },
-];
 
 export function MonitoringControl({
     contentId,
@@ -92,43 +64,18 @@ export function MonitoringControl({
     );
 
     return (
-        <ContentPolicyRow
+        <DetailInfoRow
             label="Monitoring"
-            testId="monitoring-control"
-            effectiveValue={effectiveValue}
+            data-testid="monitoring-control"
+            value={effectiveValue}
             control={
                 canEdit ? (
-                    <div
-                        className="monitoring-toggle__segments"
-                        role="radiogroup"
-                        aria-label="Monitoring override"
-                        data-monitoring={monitoring === null ? 'inherit' : monitoring}
-                        data-component="monitoring-toggle"
-                        data-testid="monitoring-control__toggle"
-                    >
-                        {OPTIONS.map(({ value, key, label, icon: Icon, tooltip }) => {
-                            const isActive = monitoring === value;
-                            return (
-                                <Tooltip key={key} content={tooltip}>
-                                    <button
-                                        type="button"
-                                        role="radio"
-                                        aria-checked={isActive}
-                                        aria-label={`${label}: ${tooltip}`}
-                                        className="monitoring-toggle__option"
-                                        data-state={isActive ? 'active' : 'inactive'}
-                                        data-value={key}
-                                        data-testid={`monitoring-control__option-${key}`}
-                                        onClick={() => handleChange(value)}
-                                        disabled={updateMutation.isPending}
-                                    >
-                                        <Icon weight="bold" aria-hidden="true" />
-                                        <span>{label}</span>
-                                    </button>
-                                </Tooltip>
-                            );
-                        })}
-                    </div>
+                    <MonitoringToggle
+                        value={monitoring}
+                        onChange={handleChange}
+                        disabled={updateMutation.isPending}
+                        testIdPrefix="monitoring-control"
+                    />
                 ) : undefined
             }
         />

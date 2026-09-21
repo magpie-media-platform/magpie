@@ -19,24 +19,7 @@ public interface IJobExecutionRepository :
     IBulkDeleteRepository<JobExecution, JobExecutionQuery>
 {
     /// <summary>
-    /// Creates a new job execution record.
-    /// </summary>
-    /// <param name="model">The execution to create</param>
-    /// <param name="createdByUserId">
-    /// The id of the user that creates the record, or <c>null</c> when no user started it.
-    /// </param>
-    /// <param name="clearDeferralOnCoalesce">
-    /// Whether a pending execution loses its deferral time when this execution coalesces into it.
-    /// </param>
-    /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<JobExecution> CreateAsync(
-        JobExecution model,
-        Guid? createdByUserId,
-        bool clearDeferralOnCoalesce,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Gets a page of executions that a node can claim.
+    /// Gets a page of executions that a node can claim, oldest first, with an equal share for each job type.
     /// </summary>
     /// <param name="paging">The paging parameters</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -88,7 +71,7 @@ public interface IJobExecutionRepository :
     Task TouchHeartbeatAsync(Guid executionId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Sets the timeout deadline of a running execution that a node owns.
+    /// Sets the timeout deadline of a running execution, only while the given node owns it.
     /// </summary>
     /// <param name="executionId">The id of the job execution</param>
     /// <param name="nodeId">The id of the node that owns the running execution</param>
@@ -129,10 +112,12 @@ public interface IJobExecutionRepository :
     /// </summary>
     /// <param name="executionId">The id of the job execution</param>
     /// <param name="pageSize">The number of executions to read at a time</param>
+    /// <param name="maxNodes">The maximum number of executions to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<IReadOnlyList<JobExecution>> GetLineageAsync(
         Guid executionId,
         int pageSize,
+        int maxNodes = 500,
         CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -103,8 +105,28 @@ const mockUsers: UserItem[] = [
     },
 ];
 
+const mockUsersPage2: UserItem[] = [
+    {
+        id: 'user-6',
+        username: 'page2user',
+        email: null,
+        extensionId: null,
+        providerType: 'local',
+        externalId: null,
+        settings: null,
+        enabled: true,
+        role: Role.Viewer,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: null,
+        createdAt: '2024-01-01T00:00:00Z',
+        createdByUserId: null,
+        modifiedAt: null,
+        modifiedByUserId: null,
+    },
+];
+
 const mockCreateUser = vi.fn();
-const mockCreateExternalUser = vi.fn();
 const mockUpdateUser = vi.fn();
 const mockToggleUserEnabled = vi.fn();
 const mockDeleteUser = vi.fn();
@@ -112,14 +134,12 @@ const mockUnlockUser = vi.fn();
 let mockIsUnlocking = false;
 
 vi.mock('@/hooks/useUsers', () => ({
-    useUsers: () => ({
-        users: mockUsers,
+    useUsers: (params?: { pageNumber?: number }) => ({
+        users: params?.pageNumber === 2 ? mockUsersPage2 : mockUsers,
         isLoading: false,
         isCreating: false,
-        isCreatingExternal: false,
         isUpdating: false,
         createUser: mockCreateUser,
-        createExternalUser: mockCreateExternalUser,
         updateUser: mockUpdateUser,
         toggleUserEnabled: mockToggleUserEnabled,
         deleteUser: mockDeleteUser,
@@ -147,7 +167,7 @@ vi.mock('@/components/ui/Toast', () => ({
 function renderUserManagement() {
     return render(
         <MemoryRouter>
-            <ProviderTypesWrapper seed={{ externalUsers: ['ldap'] }}>
+            <ProviderTypesWrapper>
                 <TooltipProvider>
                     <UserManagement />
                 </TooltipProvider>
@@ -283,5 +303,138 @@ describe('UserManagement', () => {
                 variant: 'error',
             }),
         );
+    });
+});
+
+describe('UserManagement selection', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockIsUnlocking = false;
+    });
+
+    it('renders no selection overlay outside select mode', () => {
+        renderUserManagement();
+
+        expect(screen.queryByLabelText('Select viewer')).not.toBeInTheDocument();
+        expect(document.querySelectorAll('[data-action="select-row"]').length).toBe(0);
+        expect(screen.getByRole('button', { name: 'Select' })).toBeInTheDocument();
+    });
+
+    it('shows an overlay circle per row in select mode, disabled for the current user and the system account', async () => {
+        const user = userEvent.setup();
+        renderUserManagement();
+
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+
+        expect(screen.getByLabelText('Select admin')).toBeDisabled();
+        expect(screen.getByLabelText('Select system')).toBeDisabled();
+        expect(screen.getByLabelText('Select viewer')).not.toBeDisabled();
+        expect(screen.getByLabelText('Select jdoe')).not.toBeDisabled();
+    });
+
+    it('clears selection when leaving select mode', async () => {
+        const user = userEvent.setup();
+        renderUserManagement();
+
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByLabelText('Select viewer'));
+        expect(screen.getByLabelText('Select viewer')).toHaveAttribute('aria-pressed', 'true');
+
+        await user.click(screen.getByRole('button', { name: 'Stop selecting' }));
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        expect(screen.getByLabelText('Select viewer')).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('bulk-deletes every selected user', async () => {
+        mockDeleteUser.mockResolvedValue(undefined);
+        const user = userEvent.setup();
+        renderUserManagement();
+
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByLabelText('Select viewer'));
+        await user.click(screen.getByLabelText('Select jdoe'));
+        await user.click(
+            within(screen.getByRole('region', { name: 'User selection actions' })).getByRole('button', {
+                name: 'Delete selected users',
+            }),
+        );
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(mockDeleteUser).toHaveBeenCalledWith('user-2');
+            expect(mockDeleteUser).toHaveBeenCalledWith('user-3');
+        });
+    });
+
+    it('bulk-enables every selected user', async () => {
+        mockToggleUserEnabled.mockResolvedValue(undefined);
+        const user = userEvent.setup();
+        renderUserManagement();
+
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByLabelText('Select viewer'));
+        await user.click(
+            within(screen.getByRole('region', { name: 'User selection actions' })).getByRole('button', {
+                name: 'Enable selected users',
+            }),
+        );
+
+        await waitFor(() => {
+            expect(mockToggleUserEnabled).toHaveBeenCalledWith('user-2', true);
+        });
+    });
+
+    it('acts on the current page selection only when the selection spans a page change', async () => {
+        mockDeleteUser.mockResolvedValue(undefined);
+        const user = userEvent.setup();
+        function PagedUserManagement() {
+            const [page, setPage] = useState(1);
+            return (
+                <UserManagement
+                    queryParams={{ pageNumber: page, pageSize: 25 }}
+                    page={page}
+                    pageCount={2}
+                    onPageChange={setPage}
+                />
+            );
+        }
+        render(
+            <MemoryRouter>
+                <ProviderTypesWrapper>
+                    <TooltipProvider>
+                        <PagedUserManagement />
+                    </TooltipProvider>
+                </ProviderTypesWrapper>
+            </MemoryRouter>,
+        );
+
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByLabelText('Select viewer'));
+        expect(
+            within(screen.getByRole('region', { name: 'User selection actions' })).getByText('1 selected'),
+        ).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Go to next page' }));
+        await screen.findByText('page2user');
+
+        expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+
+        await user.click(screen.getByLabelText('Select page2user'));
+        expect(
+            within(screen.getByRole('region', { name: 'User selection actions' })).getByText('1 selected'),
+        ).toBeInTheDocument();
+
+        await user.click(
+            within(screen.getByRole('region', { name: 'User selection actions' })).getByRole('button', {
+                name: 'Delete selected users',
+            }),
+        );
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(mockDeleteUser).toHaveBeenCalledWith('user-6');
+        });
+        expect(mockDeleteUser).not.toHaveBeenCalledWith('user-2');
+        expect(mockDeleteUser).toHaveBeenCalledTimes(1);
     });
 });

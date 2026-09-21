@@ -18,7 +18,7 @@ namespace Magpie.Extensions.Tmdb;
 public sealed class TmdbExtension : IExtension
 {
     /// <inheritdoc />
-    public Guid Id => new("FE120126-EFD7-4DB1-A3A1-8B8A881E013A");
+    public Guid Id => Constants.ExtensionId;
 
     /// <inheritdoc />
     public Version Version => new(1, 0, 0);
@@ -46,11 +46,7 @@ public sealed class TmdbExtension : IExtension
         services.AddSingleton<ITmdbClient, TmdbClient>();
         services.AddScoped<ISettingsResolver, SettingsResolver>();
 
-        services.AddSingleton<IQueryCoordinator>(provider =>
-        {
-            using var scope = provider.CreateScope();
-            return ActivatorUtilities.CreateInstance<QueryCoordinator>(scope.ServiceProvider);
-        });
+        services.AddSingleton<IQueryCoordinator, QueryCoordinator>();
         services.AddScoped<IQueryPlanner, QueryPlanner>();
         services.AddScoped<IQueryExecutor, QueryExecutor>();
         services.AddScoped<IQueryEngine, QueryEngine.QueryEngine>();
@@ -61,9 +57,11 @@ public sealed class TmdbExtension : IExtension
 
         services.AddScoped<ISubjectMetadataProvider, SubjectMetadataProvider>();
 
-        services.AddSingleton<IUIExtensionProvider, AdminUiProvider>();
-        services.AddSingleton<IAssetProvider, AdminUiProvider>();
-        services.AddSingleton<IExtensionSettingsSchemaProvider, AdminUiProvider>();
+        services.AddSingleton<AdminUiProvider>();
+        services.AddSingleton<IUIExtensionProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IAssetProvider>(provider => provider.GetRequiredService<AdminUiProvider>());
+        services.AddSingleton<IExtensionSettingsSchemaProvider>(
+            provider => provider.GetRequiredService<AdminUiProvider>());
 
         services.AddScoped<IDiagnosticCheck, ApiKeyMissingDiagnostic>();
     }

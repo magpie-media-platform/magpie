@@ -1,14 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Core.Caching;
 using Magpie.Extensions.MusicBrainz;
 using Magpie.Extensions.MusicBrainz.Mapping;
 using Magpie.Extensions.MusicBrainz.QueryEngine;
 using Magpie.Sdk.Caching;
 
 using Microsoft.Extensions.DependencyInjection;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -17,31 +19,57 @@ namespace Magpie.Test.Extensions.MusicBrainz;
 [TestFixture]
 public class MusicBrainzQueryCoordinatorTests
 {
-    [Test]
-    public void RegisterServices_ResolvesQueryCoordinator_WhenCacheFactoryIsScoped()
+    private IServiceScopeFactory _scopeFactory = null!;
+
+    [SetUp]
+    public void SetUp()
     {
-        // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        var services = new ServiceCollection();
-        services.AddSingleton(cacheStore);
-        services.AddScoped<ICacheFactory, MemoryCacheFactory>();
-        new MusicBrainzExtension().RegisterServices(services);
-        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        var cacheFactory = new Mock<ICacheFactory>();
+        var caches = new Dictionary<string, ICache>(StringComparer.Ordinal);
+        cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns<string, Func<CachePolicy>?>((name, _) =>
+            {
+                if (caches.TryGetValue(name, out var existing))
+                {
+                    return existing;
+                }
 
-        // Act
-        var coordinator = provider.GetRequiredService<IQueryCoordinator>();
-
-        // Assert
-        Assert.That(coordinator, Is.TypeOf<QueryCoordinator>());
+                var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+                var cache = new Mock<ICache>();
+                cache.Setup(value => value.Set(It.IsAny<string>(), It.IsAny<It.IsAnyType>()))
+                    .Callback(new InvocationAction(invocation =>
+                        values[(string)invocation.Arguments[0]] = invocation.Arguments[1]));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<It.IsAnyType?>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value;
+                        return found;
+                    }));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<bool>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value ?? false;
+                        return found;
+                    }));
+                cache.Setup(value => value.Remove(It.IsAny<string>())).Returns<string>(values.Remove);
+                return caches[name] = cache.Object;
+            });
+        var provider = new Mock<IServiceProvider>();
+        provider.Setup(value => value.GetService(typeof(ICacheFactory))).Returns(cacheFactory.Object);
+        var scope = new Mock<IServiceScope>();
+        scope.Setup(value => value.ServiceProvider).Returns(provider.Object);
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(value => value.CreateScope()).Returns(scope.Object);
+        _scopeFactory = scopeFactory.Object;
     }
 
     [Test]
     public async Task GetSearchPageAsync_SharedValue_WhenConcurrentMissesUseSameKey()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var key = new SearchCacheKey
         {
             Target = QueryTarget.Artist,
@@ -93,9 +121,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetSearchPageAsync_Retry_WhenLoaderFails()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var key = new SearchCacheKey
         {
             Target = QueryTarget.Artist,
@@ -143,9 +169,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetSearchPageAsync_SharedLoad_WhenOneWaiterIsCanceled()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var key = new SearchCacheKey
         {
             Target = QueryTarget.Track,
@@ -192,9 +216,7 @@ public class MusicBrainzQueryCoordinatorTests
     {
         // Arrange
         const string mbid = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var calls = 0;
         var hydrationKey = new EntityCacheKey
         {
@@ -239,9 +261,7 @@ public class MusicBrainzQueryCoordinatorTests
     {
         // Arrange
         const string mbid = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var calls = 0;
         var hydrationKey = new EntityCacheKey
         {
@@ -292,9 +312,7 @@ public class MusicBrainzQueryCoordinatorTests
     {
         // Arrange
         const string mbid = "44444444-4444-4444-8444-444444444444";
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var calls = 0;
         var hydrationKey = new EntityCacheKey
         {
@@ -344,9 +362,7 @@ public class MusicBrainzQueryCoordinatorTests
     {
         // Arrange
         const string mbid = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var calls = 0;
         var richKey = new EntityCacheKey
         {
@@ -387,9 +403,7 @@ public class MusicBrainzQueryCoordinatorTests
     {
         // Arrange
         const string mbid = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var calls = 0;
         var richKey = new EntityCacheKey
         {
@@ -440,9 +454,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetEntityAsync_Result_WhenConcurrentRichRequestsMatch()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var key = new EntityCacheKey
         {
             Kind = EntityKind.Recording,
@@ -490,9 +502,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetEntityAsync_Result_WhenConcurrentRichRequestSatisfiesLeanWaiter()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var richKey = new EntityCacheKey
         {
             Kind = EntityKind.Artist,
@@ -540,9 +550,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetEntityAsync_Result_WhenIdentityWasNotFound()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var key = new EntityCacheKey
         {
             Kind = EntityKind.ReleaseGroup,
@@ -586,9 +594,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetIsrcAsync_ReturnsCachedNotFound_WhenLookupRepeats()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var calls = 0;
 
         // Act
@@ -622,9 +628,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetCoverAsync_Result_WhenMissingCoverLookupRepeats()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var key = new CoverCacheKey
         {
             ReleaseGroupMbid = "550e8400-e29b-41d4-a716-446655440000",
@@ -663,9 +667,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetArtistBrowsePageAsync_Result_WhenConcurrentRequestsMatch()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var key = new ArtistBrowseCacheKey
         {
             RelatedEntity = ArtistCompositionEntity.Work,
@@ -732,9 +734,7 @@ public class MusicBrainzQueryCoordinatorTests
     public async Task GetArtistResolutionAsync_Result_WhenFailureThenSuccess()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory);
+        var cache = new QueryCoordinator(_scopeFactory);
         var key = new ArtistResolutionCacheKey
         {
             Entity = ArtistCompositionEntity.ReleaseGroup,
@@ -797,6 +797,65 @@ public class MusicBrainzQueryCoordinatorTests
             Assert.That(identified.Outcome, Is.EqualTo(FetchOutcome.Success));
             Assert.That(identifiedWarm.Outcome, Is.EqualTo(FetchOutcome.Success));
             Assert.That(calls, Is.EqualTo(3));
+        }
+    }
+
+    [Test]
+    public async Task GetEntityAsync_ServesTheSearchProfile_WhenHydrationReplacedTheSearchEntry()
+    {
+        // Arrange
+        const string mbid = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
+        var cache = new QueryCoordinator(_scopeFactory);
+        var calls = 0;
+        var hydrationKey = new EntityCacheKey
+        {
+            Kind = EntityKind.Artist,
+            Mbid = mbid,
+            Profile = LookupProfile.Hydration
+        };
+        var searchKey = hydrationKey with { Profile = LookupProfile.Search };
+
+        // Act
+        await cache.GetEntityAsync(
+            searchKey,
+            _ =>
+            {
+                calls++;
+                return Task.FromResult(new FetchResult<EntityResponseDto>
+                {
+                    Outcome = FetchOutcome.Success,
+                    Value = new EntityResponseDto
+                    {
+                        Artist = new ArtistDto { Id = mbid, Name = "Queen" }
+                    }
+                });
+            },
+            default).ConfigureAwait(false);
+        await cache.GetEntityAsync(
+            hydrationKey,
+            _ =>
+            {
+                calls++;
+                return Task.FromResult(new FetchResult<EntityResponseDto>
+                {
+                    Outcome = FetchOutcome.Success,
+                    Value = new EntityResponseDto
+                    {
+                        Artist = new ArtistDto { Id = mbid, Name = "Queen" }
+                    }
+                });
+            },
+            default).ConfigureAwait(false);
+        var warm = await cache.GetEntityAsync(
+            searchKey,
+            _ => throw new AssertionException("hydration entry did not satisfy the search request"),
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(warm.Value!.Artist!.Name, Is.EqualTo("Queen"));
         }
     }
 }

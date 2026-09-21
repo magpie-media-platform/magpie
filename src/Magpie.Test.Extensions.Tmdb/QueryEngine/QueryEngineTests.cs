@@ -46,18 +46,62 @@ public class QueryEngineTests
     }
 
     [Test]
+    public async Task SearchAsync_ReturnsEmptyWithoutWarning_WhenRelationshipIsUnsupported()
+    {
+        // Arrange
+        var request = new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = new MetadataCriteria
+            {
+                Title = new() { And = [new() { Value = "Dune" }] },
+                Relationships = new()
+                {
+                    Some = [[new RelationshipCriteria
+                    {
+                        Kind = new() { And = [new() { Value = "author" }] },
+                        Subject = new() { And = [new() { Value = "Frank Herbert" }] }
+                    }]]
+                }
+            },
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        };
+        _planner.Setup(planner => planner.Plan(request)).Returns(new QueryPlanner().Plan(request));
+
+        // Act
+        var result = await _subject.SearchAsync(request, default).ConfigureAwait(false);
+        var hits = await result.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        _executor.VerifyNoOtherCalls();
+        _settingsResolver.VerifyNoOtherCalls();
+    }
+
+    [Test]
     public async Task SearchAsync_ReturnsWarningWithoutExecuting_WhenProviderIsUnconfigured()
     {
         // Arrange
         _planner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
             .Returns(new QueryPlan
             {
-                Root = new UnionPlanNode
+                Root = new FetchPlanNode
                 {
                     Id = 1,
                     Precondition = PlanPrecondition.None,
                     Contributes = "movie search",
-                    Children = []
+                    Route = ContentRoute.Movie,
+                    AnchorKind = QueryAnchorKind.Search,
+                    SubjectBindings = [],
+                    PushedFilters = [],
+                    RequestedPage = 1,
+                    Fingerprint = "plan"
                 },
                 Warnings = [],
                 RequestedPage = 1,
@@ -102,12 +146,17 @@ public class QueryEngineTests
         // Arrange
         var plan = new QueryPlan
         {
-            Root = new UnionPlanNode
+            Root = new FetchPlanNode
             {
                 Id = 1,
                 Precondition = PlanPrecondition.None,
                 Contributes = "movie search",
-                Children = []
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Search,
+                SubjectBindings = [],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "plan"
             },
             Warnings = [],
             RequestedPage = 1,
@@ -154,23 +203,21 @@ public class QueryEngineTests
         var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(hits.Single().Id, Is.EqualTo(1726));
-            _planner.Verify(planner => planner.Plan(request), Times.Once);
-            _executor.Verify(
-                executor => executor.ExecuteAsync(
-                    plan,
-                    It.Is<RequestContext>(actual =>
-                        actual.ApiKey == "key" &&
-                        actual.Language == "en-US" &&
-                        actual.Telemetry != null &&
-                        actual.Telemetry.Activity != null &&
-                        actual.Telemetry.Activity.OperationName == "tmdb.query.execute" &&
-                        "plan".Equals(actual.Telemetry.Activity.GetTagItem("magpie.query.fingerprint"))),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-        }
+        Assert.That(hits.Single().Id, Is.EqualTo(1726));
+
+        _planner.Verify(planner => planner.Plan(request), Times.Once);
+        _executor.Verify(
+            executor => executor.ExecuteAsync(
+                plan,
+                It.Is<RequestContext>(actual =>
+                    actual.ApiKey == "key" &&
+                    actual.Language == "en-US" &&
+                    actual.Telemetry != null &&
+                    actual.Telemetry.Activity != null &&
+                    actual.Telemetry.Activity.OperationName == "tmdb.query.execute" &&
+                    "plan".Equals(actual.Telemetry.Activity.GetTagItem("magpie.query.fingerprint"))),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -186,12 +233,17 @@ public class QueryEngineTests
         _planner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
             .Returns(new QueryPlan
             {
-                Root = new UnionPlanNode
+                Root = new FetchPlanNode
                 {
                     Id = 1,
                     Precondition = PlanPrecondition.None,
                     Contributes = "movie search",
-                    Children = []
+                    Route = ContentRoute.Movie,
+                    AnchorKind = QueryAnchorKind.Search,
+                    SubjectBindings = [],
+                    PushedFilters = [],
+                    RequestedPage = 1,
+                    Fingerprint = "plan"
                 },
                 Warnings = [],
                 RequestedPage = 1,
@@ -268,12 +320,17 @@ public class QueryEngineTests
         _planner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
             .Returns(new QueryPlan
             {
-                Root = new UnionPlanNode
+                Root = new FetchPlanNode
                 {
                     Id = 1,
                     Precondition = PlanPrecondition.None,
                     Contributes = "movie search",
-                    Children = []
+                    Route = ContentRoute.Movie,
+                    AnchorKind = QueryAnchorKind.Search,
+                    SubjectBindings = [],
+                    PushedFilters = [],
+                    RequestedPage = 1,
+                    Fingerprint = "plan"
                 },
                 Warnings = [],
                 RequestedPage = 1,
@@ -340,12 +397,17 @@ public class QueryEngineTests
         _planner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
             .Returns(new QueryPlan
             {
-                Root = new UnionPlanNode
+                Root = new FetchPlanNode
                 {
                     Id = 1,
                     Precondition = PlanPrecondition.None,
                     Contributes = "movie search",
-                    Children = []
+                    Route = ContentRoute.Movie,
+                    AnchorKind = QueryAnchorKind.Search,
+                    SubjectBindings = [],
+                    PushedFilters = [],
+                    RequestedPage = 1,
+                    Fingerprint = "plan"
                 },
                 Warnings = [],
                 RequestedPage = 1,
@@ -409,12 +471,17 @@ public class QueryEngineTests
         _planner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
             .Returns(new QueryPlan
             {
-                Root = new UnionPlanNode
+                Root = new FetchPlanNode
                 {
                     Id = 1,
                     Precondition = PlanPrecondition.None,
                     Contributes = "movie search",
-                    Children = []
+                    Route = ContentRoute.Movie,
+                    AnchorKind = QueryAnchorKind.Search,
+                    SubjectBindings = [],
+                    PushedFilters = [],
+                    RequestedPage = 1,
+                    Fingerprint = "plan"
                 },
                 Warnings = [],
                 RequestedPage = 1,
@@ -472,12 +539,17 @@ public class QueryEngineTests
         _planner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
             .Returns(new QueryPlan
             {
-                Root = new UnionPlanNode
+                Root = new FetchPlanNode
                 {
                     Id = 1,
                     Precondition = PlanPrecondition.None,
                     Contributes = "movie search",
-                    Children = []
+                    Route = ContentRoute.Movie,
+                    AnchorKind = QueryAnchorKind.Search,
+                    SubjectBindings = [],
+                    PushedFilters = [],
+                    RequestedPage = 1,
+                    Fingerprint = "plan"
                 },
                 Warnings = [],
                 RequestedPage = 1,

@@ -42,7 +42,7 @@ internal sealed class PathResolutionDiagnostic(
                     Severity = DiagnosticFindingSeverity.Warning,
                     Title = $"Root folder {folder.Name} is not reachable",
                     Detail = $"The root folder path {folder.Path} cannot be read: {result.Message}",
-                    AffectedEntity = $"RootFolder:{folder.Id}",
+                    AffectedEntity = $"{JobDiagnosticAffectedEntityPrefixes.RootFolder}{folder.Id}",
                 });
             }
         }

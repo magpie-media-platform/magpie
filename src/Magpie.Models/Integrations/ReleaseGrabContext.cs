@@ -8,5 +8,5 @@ public sealed record ReleaseGrabContext
     /// <summary>
     /// The content type slug.
     /// </summary>
-    public string? ContentType { get; init; }
+    public string? ContentType { get; set; }
 }

@@ -8,6 +8,9 @@ import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { getFulfillmentBadge } from '@/types/content';
 import type { FulfillmentStatus } from '@/types';
 
+import { StatusRow as SharedStatusRow } from '../StatusRow';
+import { Skeleton } from '../Skeleton';
+
 import './ContentStatsWidget.css';
 
 export type { FulfillmentStatus };
@@ -65,41 +68,8 @@ interface StatusRowProps {
 }
 
 const StatusRow = ({ status, count, url }: StatusRowProps) => {
-    const { variant, label } = getFulfillmentBadge(status);
-    const isClickable = url !== undefined && count > 0;
-
-    const content = (
-        <>
-            <span className="content-stats-widget__indicator" aria-hidden="true" />
-            <span className="content-stats-widget__label">{label}</span>
-            <span className="content-stats-widget__count">{count}</span>
-        </>
-    );
-
-    if (isClickable && url) {
-        return (
-            <Link
-                to={url}
-                className={`content-stats-widget__row content-stats-widget__row--${variant} content-stats-widget__row--clickable`}
-                aria-label={`View ${count} ${label.toLowerCase()} items`}
-                data-status={status}
-                data-variant={variant}
-                data-clickable
-            >
-                {content}
-            </Link>
-        );
-    }
-
-    return (
-        <div
-            className={`content-stats-widget__row content-stats-widget__row--${variant}`}
-            data-status={status}
-            data-variant={variant}
-        >
-            {content}
-        </div>
-    );
+    const { label } = getFulfillmentBadge(status);
+    return <SharedStatusRow status={status} label={label} count={count} url={url} />;
 };
 
 interface ContentItemProps {
@@ -165,25 +135,6 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
     );
 };
 
-const SkeletonRow = () => (
-    <div className="content-stats-widget__row content-stats-widget__row--skeleton">
-        <span className="content-stats-widget__indicator content-stats-widget__indicator--skeleton" />
-        <span className="content-stats-widget__label content-stats-widget__label--skeleton" />
-        <span className="content-stats-widget__count content-stats-widget__count--skeleton" />
-    </div>
-);
-
-const SkeletonItem = () => (
-    <div className="content-stats-widget__item content-stats-widget__item--skeleton">
-        <span className="content-stats-widget__item-indicator content-stats-widget__item-indicator--skeleton" />
-        <span className="content-stats-widget__item-title content-stats-widget__item-title--skeleton" />
-        <span className="content-stats-widget__item-meta">
-            <span className="content-stats-widget__item-status content-stats-widget__item-status--skeleton" />
-            <span className="content-stats-widget__item-timestamp content-stats-widget__item-timestamp--skeleton" />
-        </span>
-    </div>
-);
-
 const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProps>(
     (
         {
@@ -225,11 +176,11 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
                 <div className="content-stats-widget__summary">
                     {loading ? (
                         <>
-                            <SkeletonRow />
-                            <SkeletonRow />
-                            <SkeletonRow />
-                            <SkeletonRow />
-                            <SkeletonRow />
+                            <SharedStatusRow loading />
+                            <SharedStatusRow loading />
+                            <SharedStatusRow loading />
+                            <SharedStatusRow loading />
+                            <SharedStatusRow loading />
                         </>
                     ) : error ? (
                         <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
@@ -265,8 +216,8 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
                         <div className="content-stats-widget__items">
                             {loading ? (
                                 <>
-                                    <SkeletonItem />
-                                    <SkeletonItem />
+                                    <Skeleton className="content-stats-widget__item" height={48} />
+                                    <Skeleton className="content-stats-widget__item" height={48} />
                                 </>
                             ) : (
                                 displayedItems.map((item) => (

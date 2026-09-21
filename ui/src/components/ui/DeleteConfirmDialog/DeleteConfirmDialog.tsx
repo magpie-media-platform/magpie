@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { TrashIcon } from '@phosphor-icons/react';
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../Dialog';
@@ -58,6 +58,7 @@ export function DeleteConfirmDialog({
     confirmBusyLabel = 'Deleting...',
     confirmIcon,
 }: DeleteConfirmDialogProps) {
+    const toggleId = useId();
     return (
         <Dialog
             open={open}
@@ -76,11 +77,11 @@ export function DeleteConfirmDialog({
                 </DialogHeader>
                 {extraToggle && (
                     <div className="delete-confirm-dialog__toggle" data-component="delete-confirm-toggle">
-                        <label className="delete-confirm-dialog__toggle-label" htmlFor="delete-confirm-extra-toggle">
+                        <label className="delete-confirm-dialog__toggle-label" htmlFor={toggleId}>
                             {extraToggle.label}
                         </label>
                         <Switch
-                            id="delete-confirm-extra-toggle"
+                            id={toggleId}
                             checked={extraToggle.checked}
                             onCheckedChange={(value) => extraToggle.onChange(value === true)}
                             disabled={isDeleting}

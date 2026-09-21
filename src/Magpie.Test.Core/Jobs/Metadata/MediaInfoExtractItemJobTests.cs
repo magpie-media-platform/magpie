@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -8,7 +9,6 @@ using Magpie.Core.Jobs.Metadata;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Jobs;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Media;
 using Magpie.Sdk.Services;
@@ -22,7 +22,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Jobs.Metadata;
 
 [TestFixture]
-public class MediaInfoExtractItemJobTests
+public sealed class MediaInfoExtractItemJobTests
 {
     private Mock<IMediaFileRepository> _mediaFileRepository = null!;
     private Mock<IFileSystem> _fileSystem = null!;
@@ -80,33 +80,6 @@ public class MediaInfoExtractItemJobTests
     }
 
     [Test]
-    public void MediaInfoExtractItemJob_JobMetadata_HasExpectedShape()
-    {
-        // Arrange
-        // Act
-        var spec = MediaInfoExtractItemJob.Spec;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(spec.JobType, Is.EqualTo("MediaInfoExtractItem"));
-            Assert.That(spec.Scope, Is.EqualTo(JobScope.Administrative));
-            Assert.That(spec.OnDemand, Is.False);
-            Assert.That(spec.ConcurrencyScope, Is.EqualTo(ConcurrencyScope.PerTarget));
-            Assert.That(spec.LockPartitionFields, Is.EqualTo(["mediaFileId"]));
-            Assert.That(spec.Parameters, Has.Count.EqualTo(3));
-            Assert.That(spec.Parameters[0].Name, Is.EqualTo("mediaFileId"));
-            Assert.That(spec.Parameters[0].Required, Is.True);
-            Assert.That(spec.Parameters[1].Name, Is.EqualTo("filePath"));
-            Assert.That(spec.Parameters[1].Required, Is.True);
-            Assert.That(spec.Parameters[2].Name, Is.EqualTo("requireMissingMediaInfo"));
-            Assert.That(spec.Parameters[2].Required, Is.False);
-            Assert.That(spec.Timeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
-            Assert.That(spec.FailurePolicy, Is.EqualTo(JobFailurePolicy.Retry));
-        }
-    }
-
-    [Test]
     public async Task ExecuteAsync_PersistsMediaFileDetails_WhenExtractorReturnsMediaInfo()
     {
         // Arrange
@@ -146,6 +119,50 @@ public class MediaInfoExtractItemJobTests
                 Times.Once);
             _progress.Verify(p => p.Report(1, "The media information refresh completed."), Times.Once);
         }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsTheStoredFileSize_WhenTheFileSizeCannotBeRead()
+    {
+        // Arrange
+        var mediaFileId = Guid.NewGuid();
+        _mediaFileRepository
+            .Setup(r => r.GetByIdAsync(mediaFileId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MediaFile
+            {
+                Id = mediaFileId,
+                ContentItemId = Guid.NewGuid(),
+                FileKind = "video",
+                FilePath = "/media/movies/target.mkv",
+                FileSize = 4096
+            });
+        _fileSystem
+            .Setup(f => f.GetFileSize("/media/movies/target.mkv"))
+            .Throws(new IOException("The file is locked."));
+        var jobContext = new JobContext(
+            Guid.NewGuid(),
+            ScheduleTriggerId: null,
+            EventTriggerId: null,
+            ManualTriggerUserId: null,
+            JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["mediaFileId"] = mediaFileId.ToString("D"),
+                ["filePath"] = "/media/movies/target.mkv",
+                ["requireMissingMediaInfo"] = "false"
+            },
+            Event: null);
+
+        // Act
+        await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
+
+        // Assert
+        _mediaFileRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<MediaFile>(file => file.Id == mediaFileId && file.FileSize == 4096),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]

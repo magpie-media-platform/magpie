@@ -31,6 +31,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 
 export type ApiKeyScope = 'mine' | 'all';
 
+const UNKNOWN_OWNER_LABEL = 'Unknown owner';
+
 function isExpired(dateStr: string | null): boolean {
     if (!dateStr) {
         return false;
@@ -47,7 +49,7 @@ export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps
     const { user: authUser, hasRole } = useAuth();
     const authUserId = authUser?.id;
     const canViewAll = hasRole(Role.Admin);
-    const { users } = useUsers();
+    const { users, isLoading: isLoadingUsers, error: usersError } = useUsers();
     const [deletingApiKey, setDeletingApiKey] = useState<ApiKeyItem | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const { toast } = useToast();
@@ -61,7 +63,6 @@ export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps
         createApiKey,
         isCreating: isCreatingKey,
         deleteApiKey: deleteMyApiKey,
-        isDeleting: isDeletingMyKey,
         toggleEnabled: toggleMyKeyEnabled,
     } = useApiKeys();
 
@@ -69,7 +70,6 @@ export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps
         apiKeys: allApiKeys,
         isLoading: isLoadingAllKeys,
         deleteApiKey: deleteAnyApiKey,
-        isDeleting: isDeletingAnyKey,
     } = useAllApiKeys(canViewAll && !isViewingOwnKeys);
 
     const apiKeys: ApiKeyItem[] = isViewingOwnKeys ? myApiKeys : allApiKeys;
@@ -82,6 +82,8 @@ export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps
         }
         return map;
     }, [users]);
+
+    const missingOwnerName = isLoadingUsers || usersError ? null : UNKNOWN_OWNER_LABEL;
 
     const handleToggleApiKeyEnabled = useCallback(
         async (id: string, enabled: boolean) => {
@@ -213,8 +215,8 @@ export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps
                         <ApiKeyRow
                             key={key.id}
                             apiKey={key}
-                            ownerName={isViewingOwnKeys ? null : (usernamesById.get(key.userId) ?? null)}
-                            isDeleting={isViewingOwnKeys ? isDeletingMyKey : isDeletingAnyKey}
+                            ownerName={isViewingOwnKeys ? null : (usernamesById.get(key.userId) ?? missingOwnerName)}
+                            isDeleting={isDeleting && deletingApiKey?.id === key.id}
                             isViewingOwnKeys={isViewingOwnKeys || key.userId === authUserId}
                             onToggleEnabled={handleToggleApiKeyEnabled}
                             onDelete={handleDeleteApiKey}

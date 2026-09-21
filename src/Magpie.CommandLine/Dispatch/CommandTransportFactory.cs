@@ -13,8 +13,6 @@ internal sealed class CommandTransportFactory(Func<CancellationToken, Task<WebAp
         bool allowsAnonymousRemote,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(options);
-
         var target = Resolve(options, allowsAnonymousRemote);
         return target.Kind switch
         {
@@ -28,8 +26,6 @@ internal sealed class CommandTransportFactory(Func<CancellationToken, Task<WebAp
 
     private static CommandTarget Resolve(CommandTransportOptions options, bool allowAnonymousRemote = false)
     {
-        ArgumentNullException.ThrowIfNull(options);
-
         if (options.IsUrlExplicit && string.IsNullOrWhiteSpace(options.Url))
         {
             throw new CommandTargetResolutionException("Remote URL from --url must not be blank.");

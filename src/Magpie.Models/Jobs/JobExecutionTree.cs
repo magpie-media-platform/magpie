@@ -14,4 +14,9 @@ public sealed record JobExecutionTree
     /// The number of job executions in the tree.
     /// </summary>
     public int TotalCount { get; init; }
+
+    /// <summary>
+    /// Whether the tree reached the node limit and can omit job executions.
+    /// </summary>
+    public bool Truncated { get; init; }
 }

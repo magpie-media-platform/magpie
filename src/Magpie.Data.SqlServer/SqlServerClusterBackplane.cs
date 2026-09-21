@@ -117,7 +117,8 @@ internal sealed class SqlServerClusterBackplane(
 
         private async Task PollAsync(CancellationToken cancellationToken)
         {
-            long? cursor = null;
+            long? committed = null;
+            var cursor = 0L;
             var lastCleanup = _timeProvider.GetUtcNow().UtcDateTime;
             var delay = PollInterval;
             while (!cancellationToken.IsCancellationRequested)
@@ -128,9 +129,19 @@ internal sealed class SqlServerClusterBackplane(
                     await using var connectionHandle = connection.ConfigureAwait(false);
                     await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-                    cursor ??= await ReadLatestSequenceAsync(connection, cancellationToken).ConfigureAwait(false);
-                    cursor = await ReadNewEventsAsync(connection, cursor.Value, cancellationToken)
-                        .ConfigureAwait(false);
+                    var latest = await ReadLatestSequenceAsync(connection, cancellationToken).ConfigureAwait(false);
+                    if (committed == null)
+                    {
+                        cursor = latest;
+                    }
+                    else if (committed.Value > cursor)
+                    {
+                        await ReadNewEventsAsync(connection, cursor, committed.Value, cancellationToken)
+                            .ConfigureAwait(false);
+                        cursor = committed.Value;
+                    }
+
+                    committed = latest;
 
                     if (_timeProvider.GetUtcNow().UtcDateTime - lastCleanup >= CleanupInterval)
                     {
@@ -147,8 +158,8 @@ internal sealed class SqlServerClusterBackplane(
                 catch (Exception ex)
                 {
                     delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, MaxRetryDelay.Ticks));
-                    _logger.LogWarning(ex, "The SQL Server cluster backplane poll failed. " +
-                        "The listener will retry in {Delay}.", delay);
+                    _logger.LogWarning(ex, "The SQL Server cluster backplane poll failed, so the " +
+                        "listener retries in {Delay}.", delay);
                 }
 
                 try
@@ -164,22 +175,25 @@ internal sealed class SqlServerClusterBackplane(
             _channel.Writer.TryComplete();
         }
 
-        private async Task<long> ReadNewEventsAsync(
+        private async Task ReadNewEventsAsync(
             SqlConnection connection,
             long cursor,
+            long committed,
             CancellationToken cancellationToken)
         {
             var command = new SqlCommand(
-                "SELECT Seq, Payload FROM " + TableName + " WHERE Seq > @cursor ORDER BY Seq",
+                "SELECT Seq, Payload FROM " + TableName + " WHERE Seq > @cursor AND Seq <= @committed ORDER BY Seq",
                 connection);
             await using var commandHandle = command.ConfigureAwait(false);
             command.Parameters.Add("@cursor", SqlDbType.BigInt).Value = cursor;
+            command.Parameters.Add("@committed", SqlDbType.BigInt).Value = committed;
 
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await using var readerHandle = reader.ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                cursor = reader.GetInt64(0);
+                var sequence = reader.GetInt64(0);
+
                 try
                 {
                     var magpieEvent = JsonSerializer.Deserialize<MagpieEvent>(reader.GetString(1), SerializerOptions);
@@ -193,11 +207,9 @@ internal sealed class SqlServerClusterBackplane(
                     _logger.LogWarning(
                         ex,
                         "The listener discarded an unreadable cluster backplane relay payload at sequence {Sequence}.",
-                        cursor);
+                        sequence);
                 }
             }
-
-            return cursor;
         }
     }
 }

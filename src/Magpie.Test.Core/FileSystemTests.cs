@@ -1,6 +1,10 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -20,13 +24,29 @@ using NUnit.Framework;
 namespace Magpie.Test.Core;
 
 [TestFixture]
-public class FileSystemTests
+public sealed class FileSystemTests
 {
     private MemoryCacheFactory _cacheFactory = null!;
     private MemoryCacheStore _cacheStore = null!;
     private Mock<IBlockedFileTypeRepository> _blockedFileTypes = null!;
     private Mock<IMimeMappingRepository> _mimeMappings = null!;
     private IFileSystem _subject = null!;
+    private string _testRoot = null!;
+
+    [SetUp]
+    public void CreateTestRoot()
+    {
+        _testRoot = Path.Combine(Path.GetTempPath(), "magpie-file-system-tests", Guid.NewGuid().ToString("N"));
+    }
+
+    [TearDown]
+    public void DeleteTestRoot()
+    {
+        if (Directory.Exists(_testRoot))
+        {
+            Directory.Delete(_testRoot, recursive: true);
+        }
+    }
 
     [OneTimeSetUp]
     public void SetUp()
@@ -55,10 +75,8 @@ public class FileSystemTests
     [TestCase("application/x-subrip", FileKind.Subtitle)]
     [TestCase("text/vtt", FileKind.Subtitle)]
     [TestCase("application/pdf", FileKind.Unknown)]
-    public void ResolveFileKind_Result_WhenMimeTypeProvided(string? mimeType, FileKind expected)
+    public void ResolveFileKind_ReturnsMatchingKind_WhenMimeTypeProvided(string? mimeType, FileKind expected)
     {
-        // Arrange
-
         // Act
         var result = _subject.ResolveFileKind(mimeType);
 
@@ -67,7 +85,7 @@ public class FileSystemTests
     }
 
     [Test]
-    public void IsPathWithin_Result_WhenPathIsEqualWithinOrOutsideRoot()
+    public void IsPathWithin_RecognizesRootAndDescendants_WhenPathIsEqualWithinOrOutsideRoot()
     {
         // Arrange
         var root = Path.Combine(Path.GetTempPath(), "magpie-file-system-root");
@@ -86,75 +104,103 @@ public class FileSystemTests
     }
 
     [Test]
-    public void PathContainsLink_Result_WhenFileIsSymbolicLink()
+    public void PathContainsLink_ReturnsTrue_WhenPathTraversesLink()
     {
         // Arrange
-        var testRoot = Path.Combine(Path.GetTempPath(), "magpie-file-system-tests", Guid.NewGuid().ToString("N"));
-        var outsidePath = Path.Combine(Path.GetTempPath(), "magpie-file-system-tests", Guid.NewGuid().ToString("N"));
-        var linkPath = Path.Combine(testRoot, "linked.txt");
-        Directory.CreateDirectory(testRoot);
+        var searchRoot = Path.Combine(_testRoot, "root");
+        var outsidePath = Path.Combine(_testRoot, "outside");
+        var linkPath = Path.Combine(searchRoot, "linked");
+        var plainPath = Path.Combine(searchRoot, "plain");
+        Directory.CreateDirectory(searchRoot);
         Directory.CreateDirectory(outsidePath);
+        Directory.CreateDirectory(plainPath);
         File.WriteAllText(Path.Combine(outsidePath, "target.txt"), "target");
+        File.WriteAllText(Path.Combine(plainPath, "target.txt"), "target");
 
-        try
+        using var mklink = Process.Start(new ProcessStartInfo("cmd.exe",
+            $"/c mklink /J \"{linkPath}\" \"{outsidePath}\"")
+        { CreateNoWindow = true, UseShellExecute = false })!;
+        mklink.WaitForExit();
+        Assert.That(File.GetAttributes(linkPath).HasFlag(FileAttributes.ReparsePoint), Is.True);
+
+        // Act
+        var throughLink = _subject.PathContainsLink(searchRoot, Path.Combine(linkPath, "target.txt"));
+        var throughPlainFolder = _subject.PathContainsLink(searchRoot, Path.Combine(plainPath, "target.txt"));
+        var theRootItself = _subject.PathContainsLink(searchRoot, searchRoot);
+        Directory.Delete(linkPath);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
         {
-            try
-            {
-                File.CreateSymbolicLink(linkPath, Path.Combine(outsidePath, "target.txt"));
-            }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or
-                PlatformNotSupportedException)
-            {
-                Assert.Ignore("The platform does not permit symbolic link creation.");
-            }
-
-            // Act
-            var result = _subject.PathContainsLink(testRoot, linkPath);
-
-            // Assert
-            Assert.That(result, Is.True);
-        }
-        finally
-        {
-            Directory.Delete(testRoot, recursive: true);
-            Directory.Delete(outsidePath, recursive: true);
+            Assert.That(throughLink, Is.True);
+            Assert.That(throughPlainFolder, Is.False);
+            Assert.That(theRootItself, Is.False);
         }
     }
 
     [Test]
-    public async Task BrowseAsync_Result_WhenDirectoryContainsFoldersAndFiles()
+    [SupportedOSPlatform("windows")]
+    public void EnumerateFiles_ReturnsOnlyAccessibleFiles_WhenSubfolderIsInaccessible()
     {
         // Arrange
-        var root = Path.Combine(Path.GetTempPath(), "magpie-file-system-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(root, "b"));
-        Directory.CreateDirectory(Path.Combine(root, "a"));
-        await File.WriteAllTextAsync(Path.Combine(root, "d.txt"), "d").ConfigureAwait(false);
-        await File.WriteAllTextAsync(Path.Combine(root, "c.txt"), "c").ConfigureAwait(false);
+        var blocked = Path.Combine(_testRoot, "blocked");
+        Directory.CreateDirectory(blocked);
+        var visiblePath = Path.Combine(_testRoot, "visible.txt");
+        File.WriteAllText(visiblePath, "visible");
+        File.WriteAllText(Path.Combine(blocked, "hidden.txt"), "hidden");
 
+        var blockedInfo = new DirectoryInfo(blocked);
+        var security = blockedInfo.GetAccessControl();
+        var denyRule = new FileSystemAccessRule(
+            WindowsIdentity.GetCurrent().User!,
+            FileSystemRights.ListDirectory | FileSystemRights.Read,
+            AccessControlType.Deny);
+        security.AddAccessRule(denyRule);
+        blockedInfo.SetAccessControl(security);
+        Assert.Throws<UnauthorizedAccessException>(() => Directory.GetFiles(blocked));
+
+        // Act
+        string[] result;
         try
         {
-            // Act
-            var result = await _subject.BrowseAsync(root).ConfigureAwait(false);
-
-            // Assert
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(result.Select(entry => entry.Name), Is.EqualTo(["a", "b", "c.txt", "d.txt"]));
-                Assert.That(result.Select(entry => entry.Type), Is.EqualTo(["folder", "folder", "file", "file"]));
-                Assert.That(result.Take(2).Select(entry => entry.Size), Is.All.Null);
-            }
+            result = _subject.EnumerateFiles(_testRoot).ToArray();
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            security.RemoveAccessRule(denyRule);
+            blockedInfo.SetAccessControl(security);
+        }
+
+        // Assert
+        Assert.That(result, Is.EqualTo([visiblePath]));
+    }
+
+    [Test]
+    public async Task BrowseAsync_ReturnsFoldersBeforeFiles_WhenDirectoryContainsFoldersAndFiles()
+    {
+        // Arrange
+        Directory.CreateDirectory(Path.Combine(_testRoot, "b"));
+        Directory.CreateDirectory(Path.Combine(_testRoot, "a"));
+        await File.WriteAllTextAsync(Path.Combine(_testRoot, "d.txt"), "d").ConfigureAwait(false);
+        await File.WriteAllTextAsync(Path.Combine(_testRoot, "c.txt"), "c").ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.BrowseAsync(_testRoot).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Select(entry => entry.Name), Is.EqualTo(["a", "b", "c.txt", "d.txt"]));
+            Assert.That(result.Select(entry => entry.Type), Is.EqualTo(["folder", "folder", "file", "file"]));
+            Assert.That(result.Take(2).Select(entry => entry.Size), Is.All.Null);
         }
     }
 
     [Test]
-    public async Task CreateExclusionAsync_Result_WhenActorProvided()
+    public async Task CreateExclusionAsync_PersistsThePatternAndActor_WhenActorProvided()
     {
         // Arrange
-        var userId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var userId = Guid.NewGuid();
         _blockedFileTypes.Setup(repository => repository.CreateAsync(
                 It.IsAny<BlockedFileType>(), userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync((BlockedFileType model, Guid? _, CancellationToken _) => model);
@@ -171,7 +217,7 @@ public class FileSystemTests
     }
 
     [Test]
-    public async Task LookupMimeTypeAsync_Result_WhenMappingIsCached()
+    public async Task LookupMimeTypeAsync_ReusesTheCachedMapping_WhenMappingIsCached()
     {
         // Arrange
         _mimeMappings.Setup(repository => repository.GetByIdAsync(".fs01", It.IsAny<CancellationToken>()))
@@ -194,10 +240,10 @@ public class FileSystemTests
     }
 
     [Test]
-    public async Task UpsertMimeMappingAsync_Result_WhenMappingIsCached()
+    public async Task UpsertMimeMappingAsync_RefreshesTheCachedMapping_WhenMappingIsCached()
     {
         // Arrange
-        var userId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var userId = Guid.NewGuid();
         var mapping = new MimeMapping { Extension = ".upsertfs01", MimeType = "video/old" };
         _mimeMappings.Setup(repository => repository.GetByIdAsync(".upsertfs01", It.IsAny<CancellationToken>()))
             .ReturnsAsync(mapping);
@@ -221,10 +267,10 @@ public class FileSystemTests
     }
 
     [Test]
-    public async Task DeleteMimeMappingAsync_Result_WhenMappingIsCached()
+    public async Task DeleteMimeMappingAsync_InvalidatesTheCachedMapping_WhenMappingIsCached()
     {
         // Arrange
-        var userId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var userId = Guid.NewGuid();
         var exists = true;
         _mimeMappings.Setup(repository => repository.GetByIdAsync(".deletefs01", It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => exists
@@ -251,9 +297,8 @@ public class FileSystemTests
     }
 
     [Test]
-    public void MatchesAnyFileType_Result_WhenExtensionOrMimeMatches()
+    public void MatchesAnyFileType_RecognizesExtensionAndMimePatterns_WhenExtensionOrMimeMatches()
     {
-        // Arrange
         // Act
         // Assert
         using (Assert.EnterMultipleScope())
@@ -265,39 +310,31 @@ public class FileSystemTests
     }
 
     [Test]
-    public void PhysicalOperations_Result_WhenFilesAreCopiedMovedAndDeleted()
+    public void PhysicalOperations_CopiesMovesAndDeletesFiles_WhenFilesAreCopiedMovedAndDeleted()
     {
         // Arrange
-        var root = Path.Combine(Path.GetTempPath(), "magpie-physical-file-system-tests", Guid.NewGuid().ToString("N"));
-        var source = Path.Combine(root, "source.txt");
-        var copy = Path.Combine(root, "copy.txt");
-        var moved = Path.Combine(root, "moved.txt");
-        _subject.CreateDirectory(root);
+        var source = Path.Combine(_testRoot, "source.txt");
+        var copy = Path.Combine(_testRoot, "copy.txt");
+        var moved = Path.Combine(_testRoot, "moved.txt");
+        _subject.CreateDirectory(_testRoot);
         File.WriteAllText(source, "test");
 
-        try
-        {
-            // Act
-            _subject.Copy(source, copy);
-            _subject.Move(copy, moved);
+        // Act
+        _subject.Copy(source, copy);
+        _subject.Move(copy, moved);
 
-            // Assert
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(_subject.DirectoryExists(root), Is.True);
-                Assert.That(_subject.FileExists(source), Is.True);
-                Assert.That(_subject.FileExists(copy), Is.False);
-                Assert.That(_subject.FileExists(moved), Is.True);
-                Assert.That(_subject.GetFileSize(moved), Is.EqualTo(4));
-                Assert.That(_subject.EnumerateFiles(root), Has.Exactly(2).Items);
-            }
-
-            _subject.DeleteFile(moved);
-            Assert.That(_subject.FileExists(moved), Is.False);
-        }
-        finally
+        // Assert
+        using (Assert.EnterMultipleScope())
         {
-            Directory.Delete(root, recursive: true);
+            Assert.That(_subject.DirectoryExists(_testRoot), Is.True);
+            Assert.That(_subject.FileExists(source), Is.True);
+            Assert.That(_subject.FileExists(copy), Is.False);
+            Assert.That(_subject.FileExists(moved), Is.True);
+            Assert.That(_subject.GetFileSize(moved), Is.EqualTo(4));
+            Assert.That(_subject.EnumerateFiles(_testRoot), Has.Exactly(2).Items);
         }
+
+        _subject.DeleteFile(moved);
+        Assert.That(_subject.FileExists(moved), Is.False);
     }
 }

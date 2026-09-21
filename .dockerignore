@@ -28,6 +28,11 @@ tests/integration/media-fixtures/
 tests/integration/checkpoints/
 tests/integration/.playwright/
 
+tests/integration/specs/
+tests/integration/helpers/
+tests/integration/playwright.config.ts
+tests/integration/tsconfig.json
+
 # .NET build output
 bin/
 obj/

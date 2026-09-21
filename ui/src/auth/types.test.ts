@@ -51,6 +51,12 @@ describe('roleFromApi', () => {
         expect(roleFromApi(null)).toBe(Role.Viewer);
         expect(roleFromApi('Nope')).toBe(Role.Viewer);
     });
+
+    it('falls back to Viewer for ordinals outside the role map', () => {
+        expect(roleFromApi(9)).toBe(Role.Viewer);
+        expect(roleFromApi('9')).toBe(Role.Viewer);
+        expect(roleFromApi(-1)).toBe(Role.Viewer);
+    });
 });
 
 describe('meetsRoleRequirement', () => {

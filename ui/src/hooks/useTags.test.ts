@@ -20,7 +20,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiGet } from '@/lib/api';
-import { useTags, useTagsByPrefix, useTagsByEntity, type ApiTag } from './useTags';
+import { useTags, useTagsByEntity, type ApiTag } from './useTags';
 
 const mockApiTags: ApiTag[] = [{ name: '4k' }, { name: 'anime' }, { name: 'movies' }];
 
@@ -65,6 +65,15 @@ describe('useTags', () => {
         expect(mockApiGet).toHaveBeenCalledWith('/tags');
     });
 
+    it('fetches tags with a prefix parameter', async () => {
+        mockApiGet.mockResolvedValue([{ name: 'archive' }]);
+        const { result } = renderHook(() => useTags({ prefix: 'arc' }), { wrapper: createWrapper() });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+        expect(mockApiGet).toHaveBeenCalledWith('/tags?prefix=arc');
+        expect(result.current.tags).toEqual([{ name: 'archive' }]);
+    });
+
     it('should transform API tags to UI format', async () => {
         mockApiGet.mockResolvedValue(mockApiTags);
 
@@ -106,6 +115,22 @@ describe('useTags', () => {
         expect(result.current.error).toBeInstanceOf(Error);
     });
 
+    it('keeps one array identity across renders when the query has no data', async () => {
+        mockApiGet.mockRejectedValue(new Error('Network error'));
+
+        const { result, rerender } = renderHook(() => useTags(), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(result.current.isLoading).toBe(false);
+        });
+        const first = result.current.tags;
+        rerender();
+
+        expect(result.current.tags).toBe(first);
+    });
+
     it('should return empty array when API returns nothing', async () => {
         mockApiGet.mockResolvedValue([]);
 
@@ -119,51 +144,6 @@ describe('useTags', () => {
 
         expect(result.current.tags).toHaveLength(0);
         expect(result.current.error).toBeNull();
-    });
-});
-
-describe('useTagsByPrefix', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
-
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
-
-    it('should fetch tags with prefix parameter', async () => {
-        mockApiGet.mockResolvedValue([{ name: 'anime' }]);
-
-        const { result } = renderHook(() => useTagsByPrefix('ani'), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        expect(mockApiGet).toHaveBeenCalledWith('/tags?prefix=ani');
-        expect(result.current.tags).toHaveLength(1);
-    });
-
-    it('should not fetch when prefix is empty', async () => {
-        const { result } = renderHook(() => useTagsByPrefix(''), {
-            wrapper: createWrapper(),
-        });
-
-        expect(result.current.isLoading).toBe(false);
-        expect(mockApiGet).not.toHaveBeenCalled();
-    });
-
-    it('should not fetch when disabled', async () => {
-        const { result } = renderHook(() => useTagsByPrefix('ani', false), {
-            wrapper: createWrapper(),
-        });
-
-        expect(result.current.isLoading).toBe(false);
-        expect(mockApiGet).not.toHaveBeenCalled();
     });
 });
 

@@ -11,6 +11,8 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Config;
+using Magpie.Core.Events;
 using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -29,16 +31,19 @@ namespace Magpie.Core.Releases;
 internal sealed class ReleaseSearchQueryExecutor(
     IIndexerRepository indexerRepository,
     IIndexerConnectionRepository indexerConnectionRepository,
-    IIndexerService indexerService,
+    IEventBus eventBus,
     IEnumerable<IIndexerIntegration> indexerIntegrations,
     IEnumerable<IRuntimeIndexerIntegrationFactory> runtimeIndexerIntegrationFactories,
     TimeProvider timeProvider,
     ILogger<ReleaseSearchQueryExecutor> logger,
-    IReleaseEvaluationService? releaseEvaluationService = null,
-    ICacheFactory? cacheFactory = null,
-    IEnumerable<IReleaseComparer>? releaseComparers = null) : IReleaseSearchQueryExecutor
+    IReleaseEvaluationService releaseEvaluationService,
+    ICacheFactory cacheFactory,
+    IEnumerable<IReleaseComparer> releaseComparers,
+    SearchOptions searchOptions) : IReleaseSearchQueryExecutor
 {
-    internal const string RequestNotSupportedReason = "request-not-supported";
+    private const string RequestNotSupportedReason = "request-not-supported";
+
+    private static readonly TimeSpan ConnectionPhaseDeadline = TimeSpan.FromSeconds(120);
 
     private enum ContributionKind
     {
@@ -47,13 +52,81 @@ internal sealed class ReleaseSearchQueryExecutor(
         Unchanged,
     }
 
-    internal bool CanExecutePlan => releaseEvaluationService is not null;
-
     private static HashSet<(string Authority, string Value)> GetNormalizedIdentityKeys(Release release) =>
         release.IdentityKeys
             .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
             .Select(key => (key.Authority.Trim().ToLowerInvariant(), key.Value.Trim().ToLowerInvariant()))
             .ToHashSet();
+
+    private static string StableKey(Release release)
+    {
+        var identity = release.IdentityKeys
+            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
+            .OrderBy(key => key.Authority, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(key => key.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(key => $"{key.Authority!.Trim().ToUpperInvariant()}:{key.Value!.Trim().ToUpperInvariant()}")
+            .FirstOrDefault();
+        return identity ?? $"{release.IndexerId:D}:{release.ExternalId}:{release.Title}";
+    }
+
+    private static bool RefersToSameRelease(Release left, Release right)
+    {
+        var leftKeys = GetNormalizedIdentityKeys(left);
+        var rightKeys = GetNormalizedIdentityKeys(right);
+        var leftImmutableKeys = ImmutableIdentityKeys(leftKeys);
+        var rightImmutableKeys = ImmutableIdentityKeys(rightKeys);
+        if (leftImmutableKeys.Count > 0 && rightImmutableKeys.Count > 0)
+        {
+            return leftImmutableKeys.Overlaps(rightImmutableKeys);
+        }
+
+        return leftKeys.Overlaps(rightKeys) || SourceIdentities(left).Overlaps(SourceIdentities(right));
+    }
+
+    private static bool HasConflictingImmutableIdentity(Release left, Release right)
+    {
+        var leftKeys = ImmutableIdentityKeys(GetNormalizedIdentityKeys(left));
+        var rightKeys = ImmutableIdentityKeys(GetNormalizedIdentityKeys(right));
+        return leftKeys.Count > 0 && rightKeys.Count > 0 && !leftKeys.Overlaps(rightKeys);
+    }
+
+    private static HashSet<(string Authority, string Value)> ImmutableIdentityKeys(
+        HashSet<(string Authority, string Value)> keys) =>
+        keys.Where(key => key.Authority != "fallback" &&
+            !key.Authority.StartsWith("indexer:", StringComparison.Ordinal)).ToHashSet();
+
+    private static HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> SourceIdentities(Release release)
+    {
+        var identities = new HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)>();
+        foreach (var source in release.Sources)
+        {
+            AddSourceIdentity(identities, source.IndexerId, source.ExternalId, source.InfoUrl);
+        }
+
+        AddSourceIdentity(identities, release.IndexerId, release.ExternalId, release.InfoUrl);
+        return identities;
+    }
+
+    private static void AddSourceIdentity(
+        HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> identities,
+        Guid? indexerId,
+        string? externalId,
+        Uri? infoUrl)
+    {
+        if (indexerId is not { } value)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(externalId))
+        {
+            identities.Add((value, externalId, null));
+        }
+        else if (infoUrl is not null)
+        {
+            identities.Add((value, null, infoUrl));
+        }
+    }
 
     private static string BuildCandidateKey(Release release)
     {
@@ -65,6 +138,29 @@ internal sealed class ReleaseSearchQueryExecutor(
             ? new[] { "source", release.IndexerId?.ToString("D"), release.ExternalId }
             : ["identity", identity.Authority, identity.Value];
         return JsonSerializer.Serialize(parts);
+    }
+
+    private IIndexerIntegration? ResolveIntegration(Indexer? indexer)
+    {
+        if (indexer is null)
+        {
+            return null;
+        }
+
+        var native = indexerIntegrations.LastOrDefault(integration =>
+            string.Equals(integration.ProviderType, indexer.ProviderType, StringComparison.Ordinal));
+        if (native is not null)
+        {
+            return native;
+        }
+
+        if (string.IsNullOrWhiteSpace(indexer.DefinitionType) || string.IsNullOrWhiteSpace(indexer.SchemaData))
+        {
+            return null;
+        }
+
+        return runtimeIndexerIntegrationFactories.LastOrDefault(factory =>
+            string.Equals(factory.DefinitionType, indexer.DefinitionType, StringComparison.Ordinal))?.Create(indexer);
     }
 
     public async Task<IReadOnlyList<ReleaseSearchPhase>> ExecuteAsync(
@@ -100,7 +196,10 @@ internal sealed class ReleaseSearchQueryExecutor(
             using var phaseActivity = ReleaseTelemetry.Source.StartActivity("SearchPhase");
             phaseActivity?.SetTag("phase_index", phaseIndex);
 
-            var results = await Task.WhenAll(connections.Select((connection, index) => RunPhaseConnectionAsync(
+            var phaseConnections = connections
+                .Where(connection => !failuresByConnection.ContainsKey(connection.Id))
+                .ToArray();
+            var results = await Task.WhenAll(phaseConnections.Select((connection, index) => RunPhaseConnectionAsync(
                 connection,
                 index,
                 phaseIndex,
@@ -152,17 +251,8 @@ internal sealed class ReleaseSearchQueryExecutor(
 
                 if (result.Failure is { } failure)
                 {
-                    failuresByConnection[failure.ConnectionId] = failure.Error;
+                    failuresByConnection[failure.ConnectionId] = result.Warning ?? failure.Error;
                 }
-
-                outcomes.Add(new ReleaseSearchConnectionOutcome
-                {
-                    ConnectionId = result.ConnectionId,
-                    ConnectionName = result.ConnectionName,
-                    Attempted = result.Attempted,
-                    SkippedReason = result.SkippedReason,
-                    Error = result.Warning ?? result.Failure?.Error,
-                });
 
                 releases.AddRange(result.Releases);
                 foreach (var release in result.Releases)
@@ -170,6 +260,28 @@ internal sealed class ReleaseSearchQueryExecutor(
                     foundReleases.Add(release);
                     foundOrigins.Add((phaseIndex, result.ConnectionId));
                 }
+            }
+
+            var resultsByConnection = results.ToDictionary(result => result.ConnectionId);
+            foreach (var connection in connections)
+            {
+                outcomes.Add(resultsByConnection.TryGetValue(connection.Id, out var result)
+                    ? new ReleaseSearchConnectionOutcome
+                    {
+                        ConnectionId = result.ConnectionId,
+                        ConnectionName = result.ConnectionName,
+                        Attempted = result.Attempted,
+                        SkippedReason = result.SkippedReason,
+                        Error = result.Warning ?? result.Failure?.Error,
+                    }
+                    : new ReleaseSearchConnectionOutcome
+                    {
+                        ConnectionId = connection.Id,
+                        ConnectionName = connection.Name,
+                        Attempted = false,
+                        SkippedReason = "failed-earlier-phase",
+                        Error = failuresByConnection[connection.Id],
+                    });
             }
 
             executedPhases.Add(phase with
@@ -234,16 +346,14 @@ internal sealed class ReleaseSearchQueryExecutor(
         bool automatic,
         int maximumResults,
         Action<int, string>? onConnectionStarted = null,
-        CancellationToken cancellationToken = default,
-        bool useCache = true)
+        bool useCache = true,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(routes);
         ArgumentNullException.ThrowIfNull(categories);
         ArgumentNullException.ThrowIfNull(applicableIndexerIds);
         ArgumentNullException.ThrowIfNull(evaluationContext);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumResults);
-        var evaluator = releaseEvaluationService ??
-            throw new InvalidOperationException("The release query engine requires a release evaluation service.");
 
         var indexers = (await indexerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
             .ToDictionary(indexer => indexer.Id);
@@ -254,7 +364,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         var planned = connections.Select((connection, connectionIndex) =>
         {
             indexers.TryGetValue(connection.IndexerId, out var indexer);
-            var integration = indexer is null ? null : ResolveIndexerIntegration(indexer);
+            var integration = ResolveIntegration(indexer);
             var plannedRoutes = routes.Select((route, routeIndex) =>
             {
                 var resolved = integration is null
@@ -349,7 +459,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 indexers,
                 categories,
                 applicableIndexerIds,
-                evaluator,
+                releaseEvaluationService,
                 evaluationContext,
                 automatic,
                 maximumResults,
@@ -489,7 +599,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 foreach (var observation in routeObservations)
                 {
                     var existingIndex = results.FindIndex(existing =>
-                        existing.Release.RefersToSameRelease(observation.Release));
+                        RefersToSameRelease(existing.Release, observation.Release));
                     if (existingIndex >= 0)
                     {
                         var existing = results[existingIndex];
@@ -599,7 +709,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                     foreach (var observation in observations)
                     {
                         var existingIndex = results.FindIndex(existing =>
-                            existing.Release.RefersToSameRelease(observation.Release));
+                            RefersToSameRelease(existing.Release, observation.Release));
                         if (existingIndex >= 0)
                         {
                             var existing = results[existingIndex];
@@ -689,13 +799,13 @@ internal sealed class ReleaseSearchQueryExecutor(
                 "magpie.query.request_json",
                 JsonSerializer.Serialize(route.ResolvedRequest, JsonSerializerOptions.Web));
             requestActivity?.SetTag("indexer.connection.id", planned.Connection.Id.ToString());
-            var cache = useCache ? cacheFactory?.GetOrCreate(
+            var cache = useCache ? cacheFactory.GetOrCreate(
                 "release-query",
                 () => new CachePolicy
                 {
                     MaximumLevel = CacheLevel.Memory,
-                    Freshness = TimeSpan.FromMinutes(15),
-                    Retention = TimeSpan.FromMinutes(15),
+                    Freshness = searchOptions.CoalescingWindow,
+                    Retention = searchOptions.CoalescingWindow,
                     MaximumEntries = 1000,
                     ConcurrencyMode = CacheConcurrencyMode.Pessimistic,
                 }) : null;
@@ -752,7 +862,7 @@ internal sealed class ReleaseSearchQueryExecutor(
             }
             catch (RouteCachePopulationException ex)
             {
-                routeResult = new CachedRouteResult([], ex.Attempted, ex.Failure, 0, null);
+                routeResult = new CachedRouteResult([], ex.Attempted, ex.Failure, 0);
             }
 
             var cacheOutcome = cache is null
@@ -828,8 +938,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                     result.Releases,
                     result.Attempted,
                     null,
-                    maximumResults,
-                    null);
+                    maximumResults);
             }
         }
 
@@ -891,7 +1000,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         {
             var matchingIndexes = result
                 .Select((existing, index) => (existing, index))
-                .Where(pair => pair.existing.RefersToSameRelease(candidate))
+                .Where(pair => RefersToSameRelease(pair.existing, candidate))
                 .Select(pair => pair.index)
                 .ToList();
             if (matchingIndexes.Count == 0)
@@ -908,7 +1017,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 matchingIndexes = result
                     .Select((existing, index) => (existing, index))
                     .Where(pair => pair.index != primaryIndex &&
-                        primary.RefersToSameRelease(pair.existing))
+                        RefersToSameRelease(primary, pair.existing))
                     .Select(pair => pair.index)
                     .ToList();
                 if (matchingIndexes.Count == 0)
@@ -938,7 +1047,7 @@ internal sealed class ReleaseSearchQueryExecutor(
     {
         var matchingIndexes = observations
             .Select((existing, index) => (existing, index))
-            .Where(pair => pair.existing.Release.RefersToSameRelease(release))
+            .Where(pair => RefersToSameRelease(pair.existing.Release, release))
             .Select(pair => pair.index)
             .ToList();
         if (matchingIndexes.Count == 0)
@@ -961,7 +1070,7 @@ internal sealed class ReleaseSearchQueryExecutor(
             matchingIndexes = observations
                 .Select((existing, index) => (existing, index))
                 .Where(pair => pair.index != primaryIndex &&
-                    primary.Release.RefersToSameRelease(pair.existing.Release))
+                    RefersToSameRelease(primary.Release, pair.existing.Release))
                 .Select(pair => pair.index)
                 .ToList();
             if (matchingIndexes.Count == 0)
@@ -995,7 +1104,7 @@ internal sealed class ReleaseSearchQueryExecutor(
     {
         var matchingIndexes = target
             .Select((existing, index) => (existing, index))
-            .Where(pair => pair.existing.Release.RefersToSameRelease(candidate.Release))
+            .Where(pair => RefersToSameRelease(pair.existing.Release, candidate.Release))
             .Select(pair => pair.index)
             .ToList();
         if (matchingIndexes.Count == 0)
@@ -1027,7 +1136,7 @@ internal sealed class ReleaseSearchQueryExecutor(
             matchingIndexes = target
                 .Select((existing, index) => (existing, index))
                 .Where(pair => pair.index != primaryIndex &&
-                    primary.Release.RefersToSameRelease(pair.existing.Release))
+                    RefersToSameRelease(primary.Release, pair.existing.Release))
                 .Select(pair => pair.index)
                 .ToList();
             if (matchingIndexes.Count == 0)
@@ -1095,14 +1204,14 @@ internal sealed class ReleaseSearchQueryExecutor(
             return candidate.Assessment.MatchResult > current.Assessment.MatchResult;
         }
 
-        var candidateRank = EffectiveQualityRank(candidate.Assessment, evaluationContext);
-        var currentRank = EffectiveQualityRank(current.Assessment, evaluationContext);
+        var candidateRank = releaseEvaluationService.EffectiveQualityRank(candidate.Assessment, evaluationContext);
+        var currentRank = releaseEvaluationService.EffectiveQualityRank(current.Assessment, evaluationContext);
         if (candidateRank != currentRank)
         {
             return candidateRank < currentRank;
         }
 
-        foreach (var comparer in releaseComparers ?? [])
+        foreach (var comparer in releaseComparers)
         {
             if (!comparer.CanCompare(candidate.Release) || !comparer.CanCompare(current.Release))
             {
@@ -1313,10 +1422,10 @@ internal sealed class ReleaseSearchQueryExecutor(
         List<EvaluatedRelease> results,
         ReleaseEvaluationContext context)
     {
-        var comparers = releaseComparers?.ToArray() ?? [];
+        var comparers = releaseComparers.ToArray();
         var candidates = results.Select((result, inputOrder) => (
             Result: result,
-            EffectiveQualityRank: EffectiveQualityRank(result.Assessment, context),
+            EffectiveQualityRank: releaseEvaluationService.EffectiveQualityRank(result.Assessment, context),
             InputOrder: inputOrder));
         var ranked = new List<(EvaluatedRelease Result, int EffectiveQualityRank, int InputOrder)>(results.Count);
         var primaryGroups = candidates
@@ -1374,8 +1483,8 @@ internal sealed class ReleaseSearchQueryExecutor(
                     }
 
                     comparison = string.CompareOrdinal(
-                        StableReleaseKey(left.Result.Release),
-                        StableReleaseKey(right.Result.Release));
+                        StableKey(left.Result.Release),
+                        StableKey(right.Result.Release));
                     return comparison != 0 ? comparison : left.InputOrder.CompareTo(right.InputOrder);
                 });
                 ranked.AddRange(tieGroup);
@@ -1383,35 +1492,6 @@ internal sealed class ReleaseSearchQueryExecutor(
         }
 
         return [.. ranked.Select(candidate => candidate.Result)];
-    }
-
-    private int EffectiveQualityRank(ReleaseAssessment assessment, ReleaseEvaluationContext context)
-    {
-        var actual = assessment.MatchedRankOrdinal ?? int.MaxValue;
-        var cutoffs = context.QualityTierList?.QualityTierRanks
-            .Where(rank => rank.IsCutoff)
-            .Select(rank => rank.Ordinal)
-            .ToArray() ?? [];
-        if (cutoffs.Length == 0)
-        {
-            return actual;
-        }
-
-        var ceiling = context.CurrentFileQualityRank is { } current
-            ? cutoffs.Where(cutoff => cutoff < current).DefaultIfEmpty(cutoffs.Min()).Max()
-            : cutoffs.Max();
-        return Math.Max(actual, ceiling);
-    }
-
-    private string StableReleaseKey(Release release)
-    {
-        var identity = release.IdentityKeys
-            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
-            .OrderBy(key => key.Authority, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(key => key.Value, StringComparer.OrdinalIgnoreCase)
-            .Select(key => $"{key.Authority!.Trim().ToUpperInvariant()}:{key.Value!.Trim().ToUpperInvariant()}")
-            .FirstOrDefault();
-        return identity ?? $"{release.IndexerId:D}:{release.ExternalId}:{release.Title}";
     }
 
     private ReleaseSearchRequest ResolveAdvertisedSpellings(
@@ -1462,7 +1542,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         {
             var release = releases[releaseIndex];
             var matchingGroupIndexes = Enumerable.Range(0, groups.Count)
-                .Where(index => release.RefersToSameRelease(releases[groups[index][0]]))
+                .Where(index => RefersToSameRelease(release, releases[groups[index][0]]))
                 .ToArray();
             if (matchingGroupIndexes.Length == 0)
             {
@@ -1569,7 +1649,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 throw new InvalidOperationException($"Indexer {connection.IndexerId} does not exist.");
             }
 
-            var integration = ResolveIndexerIntegration(indexer);
+            var integration = ResolveIntegration(indexer);
             if (integration is null)
             {
                 throw new InvalidOperationException(
@@ -1615,8 +1695,10 @@ internal sealed class ReleaseSearchQueryExecutor(
             var query = resolved with { Categories = categories };
             activity?.SetTag("magpie.request.role", query.IdSearchParameter is null ? "keyword" : "external-id");
             activity?.SetTag("magpie.request.target", JsonSerializer.Serialize(query, JsonSerializerOptions.Web));
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(ConnectionPhaseDeadline);
             var found = await integration
-                .SearchAsync(query, connection.Settings, cancellationToken)
+                .SearchAsync(query, connection.Settings, deadline.Token)
                 .ConfigureAwait(false);
 
             var releases = new List<Release>();
@@ -1649,7 +1731,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 if (!string.IsNullOrWhiteSpace(release.ExternalId) &&
                     releasesByExternalId.TryGetValue(release.ExternalId, out var existing))
                 {
-                    if (existing.HasConflictingImmutableIdentity(release))
+                    if (HasConflictingImmutableIdentity(existing, release))
                     {
                         releases.Add(release);
                         releasesByExternalId.Remove(release.ExternalId);
@@ -1695,8 +1777,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 indexerIdTag,
                 new KeyValuePair<string, object?>("kind", "exception"));
             logger.LogWarning(
-                "The indexer search failed for connection {ConnectionName} ({ConnectionId}). " +
-                "The query executor stopped this connection branch. Failure type: {FailureType}",
+                "The indexer search failed for connection {ConnectionName} ({ConnectionId}) with {FailureType}",
                 connection.Name,
                 connection.Id,
                 ex.GetType().Name);
@@ -1709,7 +1790,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 null,
                 [],
                 stopwatch.ElapsedMilliseconds,
-                ex.Message,
+                ClassifyProviderFailure(ex),
                 (connection.Id, ClassifyProviderFailure(ex)));
         }
     }
@@ -1795,12 +1876,11 @@ internal sealed class ReleaseSearchQueryExecutor(
 
             try
             {
-                await indexerService
-                    .PatchConnectionAsync(
-                        connection.IndexerId,
-                        connectionId,
+                var patched = await indexerConnectionRepository
+                    .PatchAsync(
                         new IndexerConnectionPatch
                         {
+                            Id = connectionId,
                             Status = new() { Value = IntegrationHealthStatus.Degraded },
                             LastChecked = new() { Value = failedAt },
                             LastError = new() { Value = error },
@@ -1808,6 +1888,17 @@ internal sealed class ReleaseSearchQueryExecutor(
                         null,
                         cancellationToken)
                     .ConfigureAwait(false);
+
+                if (patched && connection.Status != IntegrationHealthStatus.Degraded)
+                {
+                    await eventBus.PublishAsync(
+                        IntegrationEventBuilder.BuildIntegrationHealthChangedEvent(
+                            connection.IndexerId,
+                            "indexer",
+                            connection.Status.ToString(),
+                            IntegrationHealthStatus.Degraded.ToString()),
+                        cancellationToken).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -1816,30 +1907,11 @@ internal sealed class ReleaseSearchQueryExecutor(
             catch (Exception ex)
             {
                 logger.LogWarning(
-                    "The query executor failed to write the search error on indexer connection {ConnectionId}. " +
-                    "Failure type: {FailureType}",
-                    connectionId,
-                    ex.GetType().Name);
+                    ex,
+                    "The query executor failed to write the search error on indexer connection {ConnectionId}",
+                    connectionId);
             }
         }
-    }
-
-    private IIndexerIntegration? ResolveIndexerIntegration(Indexer indexer)
-    {
-        var native = indexerIntegrations.LastOrDefault(integration =>
-            string.Equals(integration.ProviderType, indexer.ProviderType, StringComparison.Ordinal));
-        if (native is not null)
-        {
-            return native;
-        }
-
-        if (string.IsNullOrWhiteSpace(indexer.DefinitionType) || string.IsNullOrWhiteSpace(indexer.SchemaData))
-        {
-            return null;
-        }
-
-        return runtimeIndexerIntegrationFactories.LastOrDefault(factory =>
-            string.Equals(factory.DefinitionType, indexer.DefinitionType, StringComparison.Ordinal))?.Create(indexer);
     }
 
     private void AttachServedIdentifier(Release release, ReleaseSearchRequest request)
@@ -2122,10 +2194,9 @@ internal sealed class ReleaseSearchQueryExecutor(
         IReadOnlyList<Release> Releases,
         bool Attempted,
         string? Failure,
-        int Coverage,
-        bool? Exhausted)
+        int Coverage)
     {
-        internal bool Satisfies(int maximumResults) => Exhausted == true || Coverage >= maximumResults;
+        internal bool Satisfies(int maximumResults) => Coverage >= maximumResults;
     }
 
     private sealed class CachedRouteState(CachedRouteResult result)

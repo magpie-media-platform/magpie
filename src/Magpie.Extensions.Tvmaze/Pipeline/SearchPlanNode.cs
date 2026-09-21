@@ -11,16 +11,14 @@ internal abstract record SearchPlanNode
         IReadOnlyList<LocalFilter> AkaFilters,
         IReadOnlyList<RelationshipCriteriaResidual> RelationshipResiduals,
         IReadOnlyList<ImageCriteriaResidual> ImageResiduals,
-        IReadOnlyList<string> Warnings,
         IReadOnlyList<CriterionDisposition> Dispositions) : SearchPlanNode;
 
     internal sealed record KnownEmpty(IReadOnlyList<CriterionDisposition> Dispositions) : SearchPlanNode;
 
-    internal sealed record Unbounded(
+    internal sealed record Browse(
         IReadOnlyList<LocalFilter> HitFilters,
         IReadOnlyList<LocalFilter> AkaFilters,
         IReadOnlyList<RelationshipCriteriaResidual> RelationshipResiduals,
         IReadOnlyList<ImageCriteriaResidual> ImageResiduals,
-        IReadOnlyList<string> Warnings,
         IReadOnlyList<CriterionDisposition> Dispositions) : SearchPlanNode;
 }

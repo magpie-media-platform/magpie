@@ -1,3 +1,4 @@
+using System;
 using System.CommandLine;
 
 namespace Magpie.CommandLine.Dispatch;
@@ -11,7 +12,7 @@ internal sealed class CommandTransportOptionSet
 
     private readonly Option<string> _apiKeyOption = new("--api-key")
     {
-        Description = "API key for remote commands."
+        Description = "API key for remote commands. Defaults to MAGPIE_API_KEY."
     };
 
     private static bool WasExplicit(ParseResult parseResult, Option option)
@@ -29,9 +30,16 @@ internal sealed class CommandTransportOptionSet
 
     public CommandTransportOptions Bind(ParseResult parseResult)
     {
+        var url = parseResult.GetValue(_urlOption);
+        var apiKey = parseResult.GetValue(_apiKeyOption);
+        if (apiKey is null && !string.IsNullOrWhiteSpace(url))
+        {
+            apiKey = Environment.GetEnvironmentVariable("MAGPIE_API_KEY");
+        }
+
         return new CommandTransportOptions(
-            Url: parseResult.GetValue(_urlOption),
-            ApiKey: parseResult.GetValue(_apiKeyOption),
+            Url: url,
+            ApiKey: apiKey,
             IsUrlExplicit: WasExplicit(parseResult, _urlOption),
             IsApiKeyExplicit: WasExplicit(parseResult, _apiKeyOption));
     }

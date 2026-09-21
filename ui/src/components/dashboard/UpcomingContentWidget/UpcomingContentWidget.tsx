@@ -234,12 +234,7 @@ const UpcomingContentWidgetBase = forwardRef<HTMLDivElement, UpcomingContentWidg
                     )}
                     <HeadingTag className="upcoming-content-widget__title">{heading}</HeadingTag>
                     {todayCount > 0 && !loading && (
-                        <span
-                            className="upcoming-content-widget__today-badge"
-                            aria-label={`${todayCount} airing today`}
-                        >
-                            {todayCount} today
-                        </span>
+                        <span className="upcoming-content-widget__today-badge">{todayCount} today</span>
                     )}
                 </div>
 

@@ -34,9 +34,56 @@ internal sealed class ReleaseEvaluationService(
     TimeProvider timeProvider,
     ILogger<ReleaseEvaluationService> logger) : IReleaseEvaluationService
 {
+    private readonly Dictionary<Guid, Guid?> _qualityTierListIdsByContentHierarchyItem = [];
+
+    private readonly Dictionary<Guid, QualityTierList?> _qualityTierListsById = [];
+
     private const int QueryPageSize = 200;
 
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
+
+    public bool IsAcceptableUpgradeOverCurrentFile(
+        ReleaseAssessment assessment,
+        Release release,
+        ReleaseEvaluationContext context)
+    {
+        if (context.CurrentFileQualityRank is not { } floor)
+        {
+            return true;
+        }
+
+        var isHigherTier = assessment.MatchedRankOrdinal is { } ordinal && ordinal < floor;
+        var parsedTitle = new ParsedReleaseTitle(release.Title);
+        var isSameTierProperUpgrade = assessment.MatchedRankOrdinal == floor &&
+            context.CurrentFileRevision is { } importedRevision &&
+            parsedTitle.Revision.Version > importedRevision.Version &&
+            IsSameGroup(parsedTitle.Group, context.CurrentFileGroup);
+
+        return isHigherTier || isSameTierProperUpgrade;
+    }
+
+    private static bool IsSameGroup(string? left, string? right) =>
+        !string.IsNullOrWhiteSpace(left) &&
+        !string.IsNullOrWhiteSpace(right) &&
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    public int EffectiveQualityRank(ReleaseAssessment assessment, ReleaseEvaluationContext context)
+    {
+        var actual = assessment.MatchedRankOrdinal ?? int.MaxValue;
+        var cutoffs = context.QualityTierList?.QualityTierRanks
+            .Where(rank => rank.IsCutoff)
+            .Select(rank => rank.Ordinal)
+            .ToArray() ?? [];
+        if (cutoffs.Length == 0)
+        {
+            return actual;
+        }
+
+        var ceiling = context.CurrentFileQualityRank is { } current
+            ? cutoffs.Where(cutoff => cutoff < current).DefaultIfEmpty(cutoffs.Min()).Max()
+            : cutoffs.Max();
+        return Math.Max(actual, ceiling);
+    }
 
     private static QualityTierRule? FirstMatchingRule(
         IEnumerable<QualityTierRule> rules,
@@ -193,31 +240,6 @@ internal sealed class ReleaseEvaluationService(
         return actualValue.CompareTo(expectedValue);
     }
 
-    private static bool IsSameGroup(string? left, string? right) =>
-        !string.IsNullOrWhiteSpace(left) &&
-        !string.IsNullOrWhiteSpace(right) &&
-        string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsAcceptableUpgradeOverCurrentFile(
-        Release release,
-        ReleaseAssessment score,
-        ReleaseEvaluationContext context)
-    {
-        if (context.CurrentFileQualityRank is not { } floor)
-        {
-            return true;
-        }
-
-        var isHigherTier = score.MatchedRankOrdinal is { } ordinal && ordinal < floor;
-        var parsedTitle = new ParsedReleaseTitle(release.Title);
-        var isSameTierProperUpgrade = score.MatchedRankOrdinal == floor &&
-            context.CurrentFileRevision is { } importedRevision &&
-            parsedTitle.Revision.Version > importedRevision.Version &&
-            IsSameGroup(parsedTitle.Group, context.CurrentFileGroup);
-
-        return isHigherTier || isSameTierProperUpgrade;
-    }
-
     private static ReleaseAssessment QualityResult(
         Guid? matchedQualityTierId,
         int? matchedRankOrdinal,
@@ -264,7 +286,7 @@ internal sealed class ReleaseEvaluationService(
         }
 
         var qualityTierList = qualityTierListId is { } tierListId
-            ? await qualityTierListRepository.GetByIdAsync(tierListId, cancellationToken).ConfigureAwait(false)
+            ? await GetQualityTierListAsync(tierListId, cancellationToken).ConfigureAwait(false)
             : null;
 
         int? currentFileQualityRank = null;
@@ -272,25 +294,9 @@ internal sealed class ReleaseEvaluationService(
         ReleaseRevision? currentFileRevision = null;
         if (qualityTierList is not null)
         {
-            const int pageSize = 500;
-            var contentDownloads = new List<Download>();
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await downloadRepository.QueryAsync(
-                    new DownloadQuery { ContentItemId = contentHierarchyItemId },
-                    new() { PageNumber = pageNumber, PageSize = pageSize },
-                    sort: null,
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                contentDownloads.AddRange(pageItems);
-                if (pageItems.Count < pageSize)
-                {
-                    break;
-                }
-
-                pageNumber++;
-            }
+            var contentDownloads = await downloadRepository.QueryAllAsync(
+                new DownloadQuery { ContentItemId = contentHierarchyItemId },
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             var importedReleaseId = (
                 from download in contentDownloads
@@ -386,7 +392,7 @@ internal sealed class ReleaseEvaluationService(
         }
         catch (Exception ex)
         {
-            logger.LogInformation(
+            logger.LogWarning(
                 ex,
                 "Failed to score release {ReleaseTitle}, it is evaluated without a quality score",
                 release.Title);
@@ -425,7 +431,7 @@ internal sealed class ReleaseEvaluationService(
         var context = await CreateEvaluationContextAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
         var assessment = AssessMatch(release, releaseFacts, context);
-        return assessment.IsAcceptable == true && !IsAcceptableUpgradeOverCurrentFile(release, assessment, context)
+        return assessment.IsAcceptable == true && !IsAcceptableUpgradeOverCurrentFile(assessment, release, context)
             ? assessment with { IsAcceptable = false }
             : assessment;
     }
@@ -629,48 +635,34 @@ internal sealed class ReleaseEvaluationService(
         string level,
         CancellationToken cancellationToken)
     {
-        var items = new List<ContentHierarchyItem>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new ContentHierarchyItemCriteria
-                {
-                    ParentId = new CriteriaSet<PropertyCriterion<Guid>>
-                    {
-                        And =
-                        [
-                            new PropertyCriterion<Guid>
-                            {
-                                Operator = CriteriaValueOperator.Equals,
-                                Value = parentId,
-                            },
-                        ],
-                    },
-                    Level = new CriteriaSet<PropertyCriterion<string>>
-                    {
-                        And =
-                        [
-                            new PropertyCriterion<string>
-                            {
-                                Operator = CriteriaValueOperator.Equals,
-                                Value = level,
-                            },
-                        ],
-                    },
-                },
-                new() { PageNumber = pageNumber, PageSize = QueryPageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            items.AddRange(pageItems);
-            if (pageItems.Count < QueryPageSize)
+        var items = await contentHierarchyItemRepository.QueryAllAsync(
+            new ContentHierarchyItemCriteria
             {
-                break;
-            }
-
-            pageNumber++;
-        }
+                ParentId = new CriteriaSet<PropertyCriterion<Guid>>
+                {
+                    And =
+                    [
+                        new PropertyCriterion<Guid>
+                        {
+                            Operator = CriteriaValueOperator.Equals,
+                            Value = parentId,
+                        },
+                    ],
+                },
+                Level = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And =
+                    [
+                        new PropertyCriterion<string>
+                        {
+                            Operator = CriteriaValueOperator.Equals,
+                            Value = level,
+                        },
+                    ],
+                },
+            },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         return items;
     }
@@ -719,7 +711,7 @@ internal sealed class ReleaseEvaluationService(
             return null;
         }
 
-        var list = await qualityTierListRepository.GetByIdAsync(qualityTierListId.Value, cancellationToken)
+        var list = await GetQualityTierListAsync(qualityTierListId.Value, cancellationToken)
             .ConfigureAwait(false);
         if (list is null)
         {
@@ -842,12 +834,20 @@ internal sealed class ReleaseEvaluationService(
         }
 
         var containerIds = lineage.Select(item => item.MetadataContainerId).Distinct().ToArray();
-        var materialized = await materializedMetadataRepository.QueryAsync(
-            new() { ContainerIds = containerIds },
-            new() { PageNumber = 1, PageSize = containerIds.Length },
-            null,
-            cancellationToken).ConfigureAwait(false);
-        var materializedByContainerId = materialized.Items.ToDictionary(metadata => metadata.ContainerId);
+        var materializedByContainerId = new Dictionary<Guid, MaterializedMetadata>();
+        foreach (var batch in containerIds.Chunk(500))
+        {
+            var materialized = await materializedMetadataRepository.QueryAsync(
+                new() { ContainerIds = batch },
+                new() { PageNumber = 1, PageSize = batch.Length },
+                null,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var metadataItem in materialized.Items)
+            {
+                materializedByContainerId.Add(metadataItem.ContainerId, metadataItem);
+            }
+        }
+
         var metadata = lineage
             .Where(item => materializedByContainerId.ContainsKey(item.MetadataContainerId))
             .ToDictionary(item => item.Id, item => materializedByContainerId[item.MetadataContainerId]);
@@ -947,12 +947,33 @@ internal sealed class ReleaseEvaluationService(
         Guid contentHierarchyItemId,
         CancellationToken cancellationToken)
     {
+        if (_qualityTierListIdsByContentHierarchyItem.TryGetValue(contentHierarchyItemId, out var resolved))
+        {
+            return resolved;
+        }
+
         var item = await contentHierarchyItemRepository
             .GetByIdAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
-        return item?.EffectiveQualityTierListId is { } tierListId
-            ? tierListId
-            : null;
+        var tierListId = item?.EffectiveQualityTierListId;
+        _qualityTierListIdsByContentHierarchyItem[contentHierarchyItemId] = tierListId;
+        return tierListId;
+    }
+
+    private async Task<QualityTierList?> GetQualityTierListAsync(
+        Guid qualityTierListId,
+        CancellationToken cancellationToken)
+    {
+        if (_qualityTierListsById.TryGetValue(qualityTierListId, out var cached))
+        {
+            return cached;
+        }
+
+        var list = await qualityTierListRepository
+            .GetByIdAsync(qualityTierListId, cancellationToken)
+            .ConfigureAwait(false);
+        _qualityTierListsById[qualityTierListId] = list;
+        return list;
     }
 
     private ReleaseAssessment Score(Release release, QualityTierList list, int? currentQualityOrdinal)
@@ -1054,8 +1075,6 @@ internal sealed class ReleaseEvaluationService(
 
     private Dictionary<string, string> BuildPropertyBag(Release release)
     {
-        ArgumentNullException.ThrowIfNull(release);
-
         const string titleField = "Title";
         const string protocolField = "Protocol";
         const string sizeField = "Size";

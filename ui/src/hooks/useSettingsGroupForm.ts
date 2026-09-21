@@ -26,6 +26,7 @@ interface SettingsGroupForm<T extends Record<string, string>> {
     handleChange: (key: keyof T, value: string) => void;
     isLoading: boolean;
     loadError: unknown;
+    refetch: () => Promise<unknown>;
     isUncreated: boolean;
     isUpdating: boolean;
     conflictState: 'stale' | null;
@@ -37,7 +38,7 @@ export function useSettingsGroupForm<T extends Record<string, string>>(
 ): SettingsGroupForm<T> {
     const { settingsGroup, defaultValues, fromRecord, onLoaded } = options;
 
-    const { group, isLoading, error: loadError, dataUpdatedAt } = useSystemSettingsGroup(settingsGroup);
+    const { group, isLoading, error: loadError, dataUpdatedAt, refetch } = useSystemSettingsGroup(settingsGroup);
     const isUncreated = !isLoading && !loadError && group === null;
     const { updateSettings, isUpdating } = useUpdateSystemSettingsGroup(settingsGroup);
     const { toast } = useToast();
@@ -161,6 +162,7 @@ export function useSettingsGroupForm<T extends Record<string, string>>(
         handleChange,
         isLoading,
         loadError,
+        refetch,
         isUncreated,
         isUpdating,
         conflictState,

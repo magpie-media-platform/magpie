@@ -22,11 +22,11 @@ internal sealed class IntegrationHealthCheckJob(
     IMediaServerService mediaServerService,
     TimeProvider timeProvider,
     ILogger<IntegrationHealthCheckJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "IntegrationHealthCheck",
+        JobType = MagpieJobs.Types.IntegrationHealthCheck,
         DisplayName = "Integration health check",
         Description = "Checks indexers, download clients, and media servers whose health status may be stale.",
         Category = "Integrations",
@@ -87,7 +87,7 @@ internal sealed class IntegrationHealthCheckJob(
             MagpieJobs.Parameters.TimeoutSeconds,
             DefaultTimeoutSeconds));
 
-        progressReporter?.Report(0, "The health check will examine the integrations.");
+        progressReporter.Report(0, "The health check will examine the integrations.");
 
         var staleCutoff = timeProvider.GetUtcNow().UtcDateTime - staleAfter;
         var checkedCount = 0;
@@ -146,11 +146,12 @@ internal sealed class IntegrationHealthCheckJob(
         }
 
         logger.LogInformation(
-            "Checked {CheckedCount} integrations. {FailureCount} failed. Skipped {SkippedFreshCount} current integrations",
+            "The health check checked {CheckedCount} integration(s), found {FailureCount} failure(s), and " +
+            "skipped {SkippedFreshCount} current integration(s)",
             checkedCount,
             failures,
             skippedFresh);
 
-        progressReporter?.Report(1, "The integration health check completed.");
+        progressReporter.Report(1, "The integration health check completed.");
     }
 }

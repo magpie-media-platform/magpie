@@ -241,6 +241,28 @@ describe('RestartHostPanel', () => {
         });
     });
 
+    it('reports a failed start instead of reconnecting forever', async () => {
+        wireApi({
+            capability: { canRestart: true },
+            health: () => ({ status: 'StartupFailed' }),
+        });
+
+        const user = userEvent.setup();
+        render(<RestartHostPanel />, { wrapper: createWrapper().wrapper });
+
+        const button = await screen.findByRole('button', { name: /restart service/i });
+        await waitFor(() => expect(button).toBeEnabled());
+        await user.click(button);
+        await user.click(await screen.findByRole('button', { name: /^restart$/i }));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('restart-error')).toHaveTextContent(
+                'Magpie could not start. Check the host log for the cause.',
+            );
+        });
+        expect(screen.queryByText(/reconnecting/i)).not.toBeInTheDocument();
+    });
+
     it('surfaces the server reason when the restart request fails', async () => {
         wireApi({ capability: { canRestart: true } });
         mockApiPost.mockRejectedValue(new Error('A restart is already in progress.'));

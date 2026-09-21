@@ -17,13 +17,3 @@ export function SystemStatusSlot({ children, className }: SystemSlotProps) {
 }
 
 SystemStatusSlot.displayName = 'SystemStatusSlot';
-
-export function SystemLogsSlot({ children, className }: SystemSlotProps) {
-    return (
-        <Slot slot="system.logs" className={className}>
-            {children}
-        </Slot>
-    );
-}
-
-SystemLogsSlot.displayName = 'SystemLogsSlot';

@@ -38,7 +38,7 @@ public record Award
     public string? Category { get; set; }
 
     /// <summary>
-    /// The status of the award, for example a win or a nomination.
+    /// The status of the award.
     /// </summary>
     public string? Status { get; set; }
 

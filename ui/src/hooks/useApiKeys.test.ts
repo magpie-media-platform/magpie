@@ -11,7 +11,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
-import { useAllApiKeys, useApiKeys, useUserApiKeys } from './useApiKeys';
+import { useAllApiKeys, useApiKeys } from './useApiKeys';
 import type { ApiKeyItem, ApiKeyCreatedItem } from '@/types';
 
 const mockApiKeys: ApiKeyItem[] = [
@@ -179,27 +179,6 @@ describe('useApiKeys', () => {
         expect(mockApiDelete).toHaveBeenCalledWith('/api-keys/key-1');
     });
 
-    it('should rotate an API key via POST /api-keys/my/{id}/rotate', async () => {
-        mockApiGet.mockResolvedValue(mockApiKeys);
-        mockApiPost.mockResolvedValue(mockCreatedKey);
-
-        const { result } = renderHook(() => useApiKeys(), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        let rotated: ApiKeyCreatedItem | undefined;
-        await act(async () => {
-            rotated = await result.current.rotateApiKey('key-1');
-        });
-
-        expect(mockApiPost).toHaveBeenCalledWith('/api-keys/my/key-1/rotate');
-        expect(rotated).toEqual(mockCreatedKey);
-    });
-
     it('should enable an API key via PATCH /api-keys/{id}', async () => {
         mockApiGet.mockResolvedValue(mockApiKeys);
         mockApiPatch.mockResolvedValue(undefined);
@@ -261,63 +240,6 @@ describe('useApiKeys', () => {
     });
 });
 
-describe('useUserApiKeys', () => {
-    const mockApiGet = vi.mocked(apiGet);
-    const mockApiDelete = vi.mocked(apiDelete);
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
-
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
-
-    it('should fetch API keys for a specific user', async () => {
-        mockApiGet.mockResolvedValue(mockApiKeys);
-
-        const { result } = renderHook(() => useUserApiKeys('user-2'), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        expect(mockApiGet).toHaveBeenCalledWith('/users/user-2/api-keys');
-        expect(result.current.apiKeys).toEqual(mockApiKeys);
-    });
-
-    it('should not fetch when userId is null', async () => {
-        const { result } = renderHook(() => useUserApiKeys(null), {
-            wrapper: createWrapper(),
-        });
-
-        expect(result.current.isLoading).toBe(false);
-        expect(result.current.apiKeys).toEqual([]);
-        expect(mockApiGet).not.toHaveBeenCalled();
-    });
-
-    it('should delete another user API key via DELETE /api-keys/{id}', async () => {
-        mockApiGet.mockResolvedValue(mockApiKeys);
-        mockApiDelete.mockResolvedValue(undefined);
-
-        const { result } = renderHook(() => useUserApiKeys('user-2'), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        await act(async () => {
-            await result.current.deleteApiKey({ userId: 'user-2', id: 'key-1' });
-        });
-
-        expect(mockApiDelete).toHaveBeenCalledWith('/api-keys/key-1');
-    });
-});
-
 describe('useAllApiKeys', () => {
     const mockApiGet = vi.mocked(apiGet);
 
@@ -327,6 +249,19 @@ describe('useAllApiKeys', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('deletes another user API key via DELETE /api-keys/{id}', async () => {
+        mockApiGet.mockResolvedValue(mockApiKeys);
+        vi.mocked(apiDelete).mockResolvedValue(undefined);
+        const { result } = renderHook(() => useAllApiKeys(), { wrapper: createWrapper() });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+        await act(async () => {
+            await result.current.deleteApiKey({ userId: 'user-2', id: 'key-1' });
+        });
+
+        expect(apiDelete).toHaveBeenCalledWith('/api-keys/key-1');
     });
 
     it('should fetch all API keys from the root route', async () => {

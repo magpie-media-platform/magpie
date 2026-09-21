@@ -13,15 +13,15 @@ public enum IndexerAvailability
     /// <summary>
     /// The indexer is open to the public.
     /// </summary>
-    Public,
+    Public = 1,
 
     /// <summary>
     /// The indexer needs a registration or an invite.
     /// </summary>
-    Private,
+    Private = 2,
 
     /// <summary>
     /// The indexer is partly open, with some restrictions.
     /// </summary>
-    SemiPrivate
+    SemiPrivate = 3
 }

@@ -349,7 +349,6 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
                 expect(stuckDownload).toMatchObject({ status: 'Stalled', progress: 41 });
                 expect(stuckDownload.lastProgressAt).toBeTruthy();
 
-                // The job accepts positive whole minutes, so one minute is the configurable floor.
                 const progressSnapshot = await api.get<Download>(`/api/downloads/${stuckDownload.id}`);
                 expect(progressSnapshot.lastProgressAt).toBeTruthy();
                 const thresholdAt = new Date(progressSnapshot.lastProgressAt!).getTime() + 60_250;
@@ -495,7 +494,6 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
                 const activeFixtures = [forceStarted, ...bulkDownloads];
                 const activeIds = [forceDownload.id, ...active.map((download) => download.id)];
                 const activeExternalIds = activeFixtures.map((fixture) => fixture.downloadExternalId).sort();
-                // Step 1 adds content with monitoring=false, so retry-triggered auto-grabs cannot change these counts.
 
                 await page.goto('/downloads');
                 const panel = page.locator('[role="tabpanel"][data-state="active"]');
@@ -546,7 +544,6 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
                     ),
                 ).toEqual(activeIds.map(() => 'Downloading'));
 
-                // EVE-108 tracks missing bulk retry, cancel, and delete controls.
                 const knownAutoGrabIds = new Set(
                     (await api.get<Paged<JobExecution>>('/api/jobs?jobType=ReleaseAutoGrabItem&pageSize=250')).items.map(
                         (execution) => execution.id,
@@ -683,16 +680,25 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
             await test.step('the queue and history tabs filter and page independently', async () => {
                 const movieId = content.get('movie')!.id;
                 await mocks.indexer.useScenario(indexerScenario);
-                const candidates = await api.post<InteractiveCandidate[]>(`/api/interactive-search/${movieId}`);
-                const byExternalId = new Map(candidates.map((candidate) => [candidate.release.externalId, candidate]));
                 const pagingFixtures = [...pagingQueue, ...pagingHistory];
-                await Promise.all(
-                    pagingFixtures.map(async (fixture) => {
-                        const candidate = byExternalId.get(fixture.releaseExternalId);
-                        expect(candidate).toBeDefined();
-                        await api.post(`/api/interactive-search/${movieId}/grab`, candidate!.release);
-                    }),
-                );
+                for (const batch of [pagingQueue, pagingHistory]) {
+                    const releases = batch.map(releaseFor);
+                    await mocks.indexer.armSearch('Queue Journey Movie', releases);
+                    await mocks.indexer.armSearchFallback(releases);
+                    const candidates = await api.post<InteractiveCandidate[]>(
+                        `/api/interactive-search/${movieId}`,
+                    );
+                    const byExternalId = new Map(
+                        candidates.map((candidate) => [candidate.release.externalId, candidate]),
+                    );
+                    await Promise.all(
+                        batch.map(async (fixture) => {
+                            const candidate = byExternalId.get(fixture.releaseExternalId);
+                            expect(candidate).toBeDefined();
+                            await api.post(`/api/interactive-search/${movieId}/grab`, candidate!.release);
+                        }),
+                    );
+                }
 
                 await until(
                     'all paging downloads to be persisted',

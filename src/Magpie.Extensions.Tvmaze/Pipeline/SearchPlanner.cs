@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
@@ -19,7 +19,31 @@ namespace Magpie.Extensions.Tvmaze.Pipeline;
 
 internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlanner
 {
+    private enum EligibilityOutcome
+    {
+        Included,
+        Excluded,
+        Unknown
+    }
+
+    private sealed record PersonSeedCandidate(
+        int GroupIndex,
+        SearchSeed.PersonChain Seed,
+        bool IsSettled,
+        int RequestCost);
+
+    private sealed record ImageResidualCompilation(
+        IReadOnlyList<ImageCriteriaResidual> Residuals,
+        bool KnownEmpty,
+        IReadOnlyList<CriterionDisposition> Dispositions);
+
+    private sealed record EligibilityEvaluation(
+        EligibilityOutcome Outcome,
+        IReadOnlyList<CriterionDisposition> Dispositions);
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
     private const string TvContentType = "tv";
+
     private const string ShowLevel = "show";
 
     private static readonly string[] KnownExternalIdSources =
@@ -40,13 +64,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         WriteIndented = true
     };
 
-    private enum EligibilityOutcome
-    {
-        Included,
-        Excluded,
-        Unknown
-    }
-
     public QueryPlan Plan(ContentHierarchyItemCriteria query, int maxResults)
     {
         var metadata = query.MergeMetadata();
@@ -54,13 +71,8 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         var contentTypeEligibility = EvaluateEligibility(
             query.ContentType.And,
             TvContentType,
-            "ContentType",
-            "the content type filter");
-        var levelEligibility = EvaluateEligibility(query.Level.And, ShowLevel, "Level", "the level filter");
-        var eligibilityWarnings = contentTypeEligibility.Warnings
-            .Concat(levelEligibility.Warnings)
-            .Distinct()
-            .ToArray();
+            "ContentType");
+        var levelEligibility = EvaluateEligibility(query.Level.And, ShowLevel, "Level");
         var eligibilityDispositions = contentTypeEligibility.Dispositions
             .Concat(levelEligibility.Dispositions)
             .ToArray();
@@ -73,7 +85,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 Metadata = metadata,
                 MaximumResults = maximumResults,
                 Root = new UnionPlanNode { Id = 1, Contributes = "known-empty show candidates", Children = [] },
-                Warnings = eligibilityWarnings,
                 Dispositions = eligibilityDispositions
             };
             TracePlan(emptyPlan);
@@ -84,7 +95,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         var plan = BuildQueryPlan(query, metadata, maximumResults, compiled);
         var completed = plan with
         {
-            Warnings = [.. plan.Warnings.Concat(eligibilityWarnings).Distinct()],
             Dispositions = [.. eligibilityDispositions.Concat(plan.Dispositions)]
         };
         TracePlan(completed);
@@ -101,7 +111,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
     internal SearchPlanNode Compile(MetadataCriteria criteria)
     {
-        var warnings = new List<PlannedWarning>();
+        var residualDispositions = new List<CriterionDisposition>();
         var filters = new List<LocalFilter>();
         var idSeedCandidates = new List<IReadOnlyList<SearchSeed.Lookup>>();
         var dispositions = new List<CriterionDisposition>();
@@ -111,14 +121,14 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         foreach (var criterion in criteria.ProviderType.And)
         {
-            var warningCount = warnings.Count;
-            var excludes = ExcludesProviderType(criterion, warnings);
+            var residualCount = residualDispositions.Count;
+            var excludes = ExcludesProviderType(criterion, residualDispositions);
             knownEmpty |= excludes;
             if (excludes)
             {
                 dispositions.Add(new CriterionDisposition("ProviderType", criterion, "known-empty"));
             }
-            else if (warnings.Count == warningCount)
+            else if (residualDispositions.Count == residualCount)
             {
                 dispositions.Add(new CriterionDisposition("ProviderType", criterion, "provider-constant-match"));
             }
@@ -127,14 +137,14 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         foreach (var criterion in criteria.Source.And)
         {
             var filterCount = filters.Count;
-            var warningCount = warnings.Count;
-            var excludes = CompileSource(criterion, filters, warnings);
+            var residualCount = residualDispositions.Count;
+            var excludes = CompileSource(criterion, filters, residualDispositions);
             knownEmpty |= excludes;
             if (excludes)
             {
                 dispositions.Add(new CriterionDisposition("Source", criterion, "known-empty"));
             }
-            else if (filters.Count == filterCount && warnings.Count == warningCount)
+            else if (filters.Count == filterCount && residualDispositions.Count == residualCount)
             {
                 dispositions.Add(new CriterionDisposition("Source", criterion, "provider-constant-match"));
             }
@@ -148,7 +158,8 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         foreach (var criterion in criteria.Title.And)
         {
-            var compiledTerm = CompileText(LocalFilterKind.Title, MetadataField.Title, criterion, filters, warnings);
+            var compiledTerm = CompileText(
+                LocalFilterKind.Title, MetadataField.Title, criterion, filters, residualDispositions);
             if (compiledTerm.Count > 0)
             {
                 titleTermCandidates.Add(compiledTerm);
@@ -162,7 +173,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 MetadataField.OriginalTitle,
                 criterion,
                 filters,
-                warnings);
+                residualDispositions);
             if (compiledTerm.Count > 0)
             {
                 akaTermCandidates.Add(compiledTerm);
@@ -171,37 +182,42 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         foreach (var criterion in criteria.Language.And)
         {
-            CompileText(LocalFilterKind.Language, MetadataField.Language, criterion, filters, warnings);
+            CompileText(LocalFilterKind.Language, MetadataField.Language, criterion, filters, residualDispositions);
         }
 
         foreach (var criterion in criteria.Overview.And)
         {
-            CompileText(LocalFilterKind.Overview, MetadataField.Overview, criterion, filters, warnings);
+            CompileText(LocalFilterKind.Overview, MetadataField.Overview, criterion, filters, residualDispositions);
         }
 
         foreach (var criterion in criteria.ProductionStatus.And)
         {
-            CompileText(LocalFilterKind.ProductionStatus, MetadataField.ProductionStatus, criterion, filters, warnings);
+            CompileText(
+                LocalFilterKind.ProductionStatus, MetadataField.ProductionStatus, criterion, filters,
+                residualDispositions);
         }
 
         foreach (var criterion in criteria.PublishDate.And)
         {
-            CompileTemporal(LocalFilterKind.PublishDate, MetadataField.PublishDate, criterion, filters, warnings);
+            CompileTemporal(
+                LocalFilterKind.PublishDate, MetadataField.PublishDate, criterion, filters, residualDispositions);
         }
 
         foreach (var criterion in criteria.Established.And)
         {
-            CompileTemporal(LocalFilterKind.Established, MetadataField.Established, criterion, filters, warnings);
+            CompileTemporal(
+                LocalFilterKind.Established, MetadataField.Established, criterion, filters, residualDispositions);
         }
 
         foreach (var criterion in criteria.Dissolved.And)
         {
-            CompileTemporal(LocalFilterKind.Dissolved, MetadataField.Dissolved, criterion, filters, warnings);
+            CompileTemporal(
+                LocalFilterKind.Dissolved, MetadataField.Dissolved, criterion, filters, residualDispositions);
         }
 
         foreach (var criterion in criteria.Duration.And)
         {
-            CompileDuration(criterion, filters, warnings);
+            CompileDuration(criterion, filters, residualDispositions);
         }
 
         foreach (var criterion in criteria.BirthDate.And)
@@ -329,17 +345,17 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         foreach (var group in criteria.Genres.Some)
         {
-            CompileGenreGroup(group, negate: false, filters, warnings);
+            CompileGenreGroup(group, negate: false, filters, residualDispositions);
         }
 
         foreach (var excluded in criteria.Genres.None)
         {
-            CompileGenreGroup([excluded], negate: true, filters, warnings);
+            CompileGenreGroup([excluded], negate: true, filters, residualDispositions);
         }
 
         foreach (var group in criteria.ExternalIds.Some)
         {
-            var excludes = CompileExternalIdGroup(group, negate: false, filters, warnings);
+            var excludes = CompileExternalIdGroup(group, negate: false, filters, residualDispositions);
             knownEmpty |= excludes;
             if (excludes)
             {
@@ -355,12 +371,12 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         foreach (var excluded in criteria.ExternalIds.None)
         {
-            CompileExternalIdGroup([excluded], negate: true, filters, warnings);
+            CompileExternalIdGroup([excluded], negate: true, filters, residualDispositions);
         }
 
         foreach (var group in criteria.AlternateTexts.Some)
         {
-            var compiledTerm = CompileAlternateTextGroup(group, negate: false, filters, warnings);
+            var compiledTerm = CompileAlternateTextGroup(group, negate: false, filters, residualDispositions);
             if (compiledTerm.Count > 0)
             {
                 akaTermCandidates.Add(compiledTerm);
@@ -369,20 +385,20 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         foreach (var excluded in criteria.AlternateTexts.None)
         {
-            CompileAlternateTextGroup([excluded], negate: true, filters, warnings);
+            CompileAlternateTextGroup([excluded], negate: true, filters, residualDispositions);
         }
 
         foreach (var group in criteria.References.Some)
         {
-            CompileReferenceGroup(group, negate: false, filters, warnings);
+            CompileReferenceGroup(group, negate: false, filters, residualDispositions);
         }
 
         foreach (var excluded in criteria.References.None)
         {
-            CompileReferenceGroup([excluded], negate: true, filters, warnings);
+            CompileReferenceGroup([excluded], negate: true, filters, residualDispositions);
         }
 
-        var imageCompilation = CompileImageResiduals(criteria.Images, warnings);
+        var imageCompilation = CompileImageResiduals(criteria.Images, residualDispositions);
         knownEmpty |= imageCompilation.KnownEmpty;
         dispositions.AddRange(imageCompilation.Dispositions);
         for (var groupIndex = 0; groupIndex < criteria.Relationships.Some.Count; groupIndex++)
@@ -417,13 +433,8 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         if (knownEmpty)
         {
-            foreach (var warning in warnings)
-            {
-                dispositions.Add(new CriterionDisposition(
-                    warning.Source,
-                    warning.Detail,
-                    "not-planned-known-empty"));
-            }
+            dispositions.AddRange(residualDispositions.Select(disposition =>
+                disposition with { Disposition = "not-planned-known-empty" }));
 
             AddFilterDispositions(dispositions, hitFilters, "not-executed-known-empty");
             AddFilterDispositions(dispositions, akaFilters, "not-executed-known-empty");
@@ -490,7 +501,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         }
         else if (personSeed is not null)
         {
-            AddPersonAnchorWarnings(personSeeds, warnings);
             seed = personSeed.Seed;
             seedReason = "person relationship chain outranks fuzzy title search";
             settledRelationshipGroups = SettledRelationshipGroups(personSeeds);
@@ -503,7 +513,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         }
         else if (akaTermCandidates.Count > 0)
         {
-            warnings.Add(new PlannedWarning("seed:alternate-title", SearchWarnings.AkaSearchApproximate));
             var akaTerms = akaTermCandidates.OrderBy(candidate => candidate.Count).First();
             seed = new SearchSeed.FuzzyShow(akaTerms, IsAka: true);
             seedReason = "alternate-title fuzzy search is cheaper than a person chain and no cheaper seed exists";
@@ -516,7 +525,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         var relationshipResiduals = CompileRelationshipResiduals(
             criteria.Relationships,
             settledRelationshipGroups,
-            warnings);
+            residualDispositions);
         for (var groupIndex = 0; groupIndex < criteria.Relationships.Some.Count; groupIndex++)
         {
             var group = criteria.Relationships.Some[groupIndex];
@@ -529,40 +538,26 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             }
         }
 
-        if (seed is null)
-        {
-            warnings.Add(new PlannedWarning("boundedness", SearchWarnings.Unbounded));
-        }
-
-        var distinctWarnings = Distinct(warnings);
         AddFilterDispositions(
             dispositions,
             hitFilters,
-            seed is null ? "hit-filter-not-executed-unbounded" : "hit-filter");
+            "hit-filter");
         AddFilterDispositions(
             dispositions,
             akaFilters,
-            seed is null ? "aka-verification-not-executed-unbounded" : "aka-verification");
-        AddRelationshipResidualDispositions(dispositions, relationshipResiduals, seed is null);
-        AddImageResidualDispositions(dispositions, imageCompilation.Residuals, seed is null);
-        foreach (var warning in warnings)
-        {
-            dispositions.Add(new CriterionDisposition(warning.Source, warning.Detail, "warning"));
-        }
+            "aka-verification");
+        AddRelationshipResidualDispositions(dispositions, relationshipResiduals);
+        AddImageResidualDispositions(dispositions, imageCompilation.Residuals);
+        dispositions.AddRange(residualDispositions);
 
         SearchPlanNode terminalPlan;
         if (seed is null)
         {
-            dispositions.Add(new CriterionDisposition(
-                "Boundedness",
-                "no identifier, title, alternate-title, or person-relationship seed was usable",
-                "unbounded-refusal"));
-            terminalPlan = new SearchPlanNode.Unbounded(
+            terminalPlan = new SearchPlanNode.Browse(
                 hitFilters,
                 akaFilters,
                 relationshipResiduals,
                 imageCompilation.Residuals,
-                distinctWarnings,
                 [.. dispositions]);
         }
         else
@@ -574,7 +569,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 akaFilters,
                 relationshipResiduals,
                 imageCompilation.Residuals,
-                distinctWarnings,
                 [.. dispositions]);
         }
 
@@ -601,12 +595,11 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                     Contributes = "known-empty show candidates",
                     Children = []
                 },
-                Warnings = [],
                 Dispositions = knownEmpty.Dispositions
             };
         }
 
-        var (seed, hitFilters, akaFilters, relationshipResiduals, imageResiduals, warnings, dispositions) =
+        var (seed, hitFilters, akaFilters, relationshipResiduals, imageResiduals, dispositions) =
             compiled switch
             {
                 SearchPlanNode.Seeded seeded =>
@@ -616,34 +609,18 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                         seeded.AkaFilters,
                         seeded.RelationshipResiduals,
                         seeded.ImageResiduals,
-                        seeded.Warnings,
                         seeded.Dispositions),
-                SearchPlanNode.Unbounded unbounded =>
+                SearchPlanNode.Browse browse =>
                     (
                         new SearchSeed.Browse(),
-                        unbounded.HitFilters,
-                        unbounded.AkaFilters,
-                        unbounded.RelationshipResiduals,
-                        unbounded.ImageResiduals,
-                        RemoveUnboundedWarning(unbounded.Warnings),
-                        ActivateBrowseDispositions(unbounded.Dispositions)),
+                        browse.HitFilters,
+                        browse.AkaFilters,
+                        browse.RelationshipResiduals,
+                        browse.ImageResiduals,
+                        browse.Dispositions),
                 _ => throw new InvalidOperationException("Unknown TVMaze search plan.")
             };
-        var planWarnings = warnings.ToList();
         var planDispositions = dispositions.ToList();
-        if (seed is SearchSeed.FuzzyShow fuzzy)
-        {
-            var warning = SearchWarnings.TitleSearchApproximate;
-            if (!planWarnings.Contains(warning))
-            {
-                planWarnings.Add(warning);
-                planDispositions.Add(new CriterionDisposition(
-                    fuzzy.IsAka ? "seed:alternate-title" : "seed:title",
-                    warning,
-                    "warning"));
-            }
-        }
-
         if (seed is SearchSeed.Browse)
         {
             planDispositions.Add(new CriterionDisposition("Anchor", "shows?page", "browse-anchor"));
@@ -666,7 +643,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             Metadata = metadata,
             MaximumResults = maximumResults,
             Root = root,
-            Warnings = planWarnings,
             Dispositions = planDispositions
         };
     }
@@ -815,39 +791,12 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             };
     }
 
-    private IReadOnlyList<string> RemoveUnboundedWarning(
-        IReadOnlyList<string> warnings)
-    {
-        return [.. warnings.Where(warning => warning != SearchWarnings.Unbounded)];
-    }
-
-    private IReadOnlyList<CriterionDisposition> ActivateBrowseDispositions(
-        IReadOnlyList<CriterionDisposition> dispositions)
-    {
-        var unboundedWarning = SearchWarnings.Unbounded;
-        return
-        [
-            .. from disposition in dispositions
-            where disposition.Disposition != "unbounded-refusal"
-            where disposition.Disposition != "warning" || !Equals(disposition.OperatorsAndValues, unboundedWarning)
-            let activeDisposition = disposition.Disposition switch
-            {
-                "hit-filter-not-executed-unbounded" => "hit-filter",
-                "aka-verification-not-executed-unbounded" => "aka-verification",
-                _ => disposition.Disposition.Replace("-not-executed-unbounded", string.Empty, StringComparison.Ordinal)
-            }
-            select disposition with { Disposition = activeDisposition }
-        ];
-    }
-
     private EligibilityEvaluation EvaluateEligibility(
         IEnumerable<PropertyCriterion<string>> criteria,
         string constant,
-        string source,
-        string filterDescription)
+        string source)
     {
         var outcome = EligibilityOutcome.Included;
-        var warnings = new List<string>();
         var dispositions = new List<CriterionDisposition>();
         foreach (var criterion in criteria)
         {
@@ -857,7 +806,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 outcome = outcome == EligibilityOutcome.Excluded
                     ? outcome
                     : EligibilityOutcome.Unknown;
-                warnings.Add(filterDescription.UnsupportedOperatorWarning());
+
                 dispositions.Add(new CriterionDisposition(source, criterion, "safe-superset", criterion.Negate));
                 continue;
             }
@@ -868,7 +817,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 outcome = outcome == EligibilityOutcome.Excluded
                     ? outcome
                     : EligibilityOutcome.Unknown;
-                warnings.Add(filterDescription.EmptyCriterionWarning());
+
                 dispositions.Add(new CriterionDisposition(source, criterion, "safe-superset", criterion.Negate));
                 continue;
             }
@@ -890,12 +839,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             }
         }
 
-        return new EligibilityEvaluation(outcome, warnings, dispositions);
-    }
-
-    private IReadOnlyList<string> Distinct(List<PlannedWarning> warnings)
-    {
-        return [.. warnings.Select(warning => warning.Detail).Distinct()];
+        return new EligibilityEvaluation(outcome, dispositions);
     }
 
     private void AddFilterDispositions(
@@ -930,8 +874,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
     private void AddRelationshipResidualDispositions(
         List<CriterionDisposition> dispositions,
-        IReadOnlyList<RelationshipCriteriaResidual> residuals,
-        bool notExecuted)
+        IReadOnlyList<RelationshipCriteriaResidual> residuals)
     {
         foreach (var residual in residuals)
         {
@@ -942,19 +885,13 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                         ? "hit-or-credits-residual"
                         : "credits-residual"
                     : "hit-residual";
-            if (notExecuted)
-            {
-                disposition += "-not-executed-unbounded";
-            }
-
             dispositions.Add(new CriterionDisposition("relationship", residual, disposition, residual.Negate));
         }
     }
 
     private void AddImageResidualDispositions(
         List<CriterionDisposition> dispositions,
-        IReadOnlyList<ImageCriteriaResidual> residuals,
-        bool notExecuted)
+        IReadOnlyList<ImageCriteriaResidual> residuals)
     {
         foreach (var residual in residuals)
         {
@@ -965,11 +902,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                     alternative.Kind == ImageCriteriaResidual.EvaluationKind.Presence)
                     ? "hit-or-images-residual"
                     : "images-residual";
-            if (notExecuted)
-            {
-                disposition += "-not-executed-unbounded";
-            }
-
             dispositions.Add(new CriterionDisposition("image", residual, disposition, residual.Negate));
         }
     }
@@ -985,17 +917,12 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         }
     }
 
-    private string Describe(MetadataField field)
-    {
-        return field.GetDefinition()?.FilterDescription ?? $"the {field} filter";
-    }
-
     private IReadOnlyList<string> CompileText(
         LocalFilterKind kind,
         MetadataField field,
         PropertyCriterion<string> criterion,
         List<LocalFilter> filters,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         var (op, negate) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
         if (op is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
@@ -1006,14 +933,14 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         if (!CriterionGrammar.IsTextOperator(op))
         {
-            warnings.Add(new PlannedWarning(field.ToString(), Describe(field).UnsupportedOperatorWarning()));
+            residualDispositions.Add(new CriterionDisposition(field.ToString(), criterion, "pass-through-residual"));
             return [];
         }
 
         var values = CriterionGrammar.TextValues(criterion);
         if (values.Length == 0)
         {
-            warnings.Add(new PlannedWarning(field.ToString(), Describe(field).EmptyCriterionWarning()));
+            residualDispositions.Add(new CriterionDisposition(field.ToString(), criterion, "pass-through-residual"));
             return [];
         }
 
@@ -1026,7 +953,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         MetadataField field,
         PropertyCriterion<TemporalValue> criterion,
         List<LocalFilter> filters,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         var (op, negate) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
         if (op is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
@@ -1037,14 +964,14 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         if (!CriterionGrammar.IsOrderedOperator(op))
         {
-            warnings.Add(new PlannedWarning(field.ToString(), Describe(field).UnsupportedOperatorWarning()));
+            residualDispositions.Add(new CriterionDisposition(field.ToString(), criterion, "pass-through-residual"));
             return;
         }
 
         var values = CriterionGrammar.TemporalValues(criterion);
         if (values.Length == 0)
         {
-            warnings.Add(new PlannedWarning(field.ToString(), Describe(field).EmptyCriterionWarning()));
+            residualDispositions.Add(new CriterionDisposition(field.ToString(), criterion, "pass-through-residual"));
             return;
         }
 
@@ -1054,7 +981,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
     private void CompileDuration(
         PropertyCriterion<TimeSpan> criterion,
         List<LocalFilter> filters,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         var (op, negate) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
         if (op is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
@@ -1065,18 +992,16 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         if (!CriterionGrammar.IsOrderedOperator(op))
         {
-            warnings.Add(new PlannedWarning(
-                MetadataField.Duration.ToString(),
-                Describe(MetadataField.Duration).UnsupportedOperatorWarning()));
+            residualDispositions.Add(new CriterionDisposition(
+                MetadataField.Duration.ToString(), criterion, "pass-through-residual"));
             return;
         }
 
         var values = CriterionGrammar.DurationValues(criterion);
         if (values.Count == 0)
         {
-            warnings.Add(new PlannedWarning(
-                MetadataField.Duration.ToString(),
-                Describe(MetadataField.Duration).EmptyCriterionWarning()));
+            residualDispositions.Add(new CriterionDisposition(
+                MetadataField.Duration.ToString(), criterion, "pass-through-residual"));
             return;
         }
 
@@ -1105,7 +1030,9 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         return !negate;
     }
 
-    private bool ExcludesProviderType(PropertyCriterion<string> criterion, List<PlannedWarning> warnings)
+    private bool ExcludesProviderType(
+        PropertyCriterion<string> criterion,
+        List<CriterionDisposition> residualDispositions)
     {
         var (op, negate) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
         if (op == CriteriaValueOperator.IsNull)
@@ -1120,14 +1047,14 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         if (!CriterionGrammar.IsTextOperator(op))
         {
-            warnings.Add(new PlannedWarning("ProviderType", "the ProviderType filter".UnsupportedOperatorWarning()));
+            residualDispositions.Add(new CriterionDisposition("ProviderType", criterion, "pass-through-residual"));
             return false;
         }
 
         var values = CriterionGrammar.TextValues(criterion);
         if (values.Length == 0)
         {
-            warnings.Add(new PlannedWarning("ProviderType", "the ProviderType filter".EmptyCriterionWarning()));
+            residualDispositions.Add(new CriterionDisposition("ProviderType", criterion, "pass-through-residual"));
             return false;
         }
 
@@ -1138,7 +1065,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
     private bool CompileSource(
         PropertyCriterion<string> criterion,
         List<LocalFilter> filters,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         var (op, negate) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
         if (op == CriteriaValueOperator.IsNull)
@@ -1153,14 +1080,14 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         if (!CriterionGrammar.IsTextOperator(op))
         {
-            warnings.Add(new PlannedWarning("Source", "the Source filter".UnsupportedOperatorWarning()));
+            residualDispositions.Add(new CriterionDisposition("Source", criterion, "pass-through-residual"));
             return false;
         }
 
         var values = CriterionGrammar.TextValues(criterion);
         if (values.Length == 0)
         {
-            warnings.Add(new PlannedWarning("Source", "the Source filter".EmptyCriterionWarning()));
+            residualDispositions.Add(new CriterionDisposition("Source", criterion, "pass-through-residual"));
             return false;
         }
 
@@ -1312,11 +1239,11 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         IReadOnlyList<GenreCriteria> alternatives,
         bool negate,
         List<LocalFilter> filters,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         foreach (var alternative in alternatives)
         {
-            if (!ValidateItemCriteria(alternative.Name.And, MetadataField.Genres, warnings))
+            if (!ValidateItemCriteria(alternative.Name.And, MetadataField.Genres, residualDispositions))
             {
                 return;
             }
@@ -1334,12 +1261,12 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         IReadOnlyList<ExternalIdCriteria> alternatives,
         bool negate,
         List<LocalFilter> filters,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         foreach (var alternative in alternatives)
         {
-            if (!ValidateItemCriteria(alternative.Source.And, MetadataField.ExternalIds, warnings) ||
-                !ValidateItemCriteria(alternative.Value.And, MetadataField.ExternalIds, warnings))
+            if (!ValidateItemCriteria(alternative.Source.And, MetadataField.ExternalIds, residualDispositions) ||
+                !ValidateItemCriteria(alternative.Value.And, MetadataField.ExternalIds, residualDispositions))
             {
                 return false;
             }
@@ -1480,13 +1407,13 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         IReadOnlyList<AlternateTextCriteria> alternatives,
         bool negate,
         List<LocalFilter> filters,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         foreach (var alternative in alternatives)
         {
-            if (!ValidateItemCriteria(alternative.Kind.And, MetadataField.AlternateTexts, warnings) ||
-                !ValidateItemCriteria(alternative.Language.And, MetadataField.AlternateTexts, warnings) ||
-                !ValidateItemCriteria(alternative.Text.And, MetadataField.AlternateTexts, warnings))
+            if (!ValidateItemCriteria(alternative.Kind.And, MetadataField.AlternateTexts, residualDispositions) ||
+                !ValidateItemCriteria(alternative.Language.And, MetadataField.AlternateTexts, residualDispositions) ||
+                !ValidateItemCriteria(alternative.Text.And, MetadataField.AlternateTexts, residualDispositions))
             {
                 return [];
             }
@@ -1531,13 +1458,13 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         IReadOnlyList<ReferenceMetadataCriteria> alternatives,
         bool negate,
         List<LocalFilter> filters,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         foreach (var alternative in alternatives)
         {
-            if (!ValidateItemCriteria(alternative.Kind.And, MetadataField.References, warnings) ||
-                !ValidateItemCriteria(alternative.DisplayName.And, MetadataField.References, warnings) ||
-                !ValidateItemCriteria(alternative.Language.And, MetadataField.References, warnings))
+            if (!ValidateItemCriteria(alternative.Kind.And, MetadataField.References, residualDispositions) ||
+                !ValidateItemCriteria(alternative.DisplayName.And, MetadataField.References, residualDispositions) ||
+                !ValidateItemCriteria(alternative.Language.And, MetadataField.References, residualDispositions))
             {
                 return;
             }
@@ -1547,9 +1474,8 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 var (op, _) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
                 if (!CriterionGrammar.IsTextOperator(op))
                 {
-                    warnings.Add(new PlannedWarning(
-                        MetadataField.References.ToString(),
-                        Describe(MetadataField.References).UnsupportedOperatorWarning()));
+                    residualDispositions.Add(new CriterionDisposition(
+                        MetadataField.References.ToString(), criterion, "pass-through-residual"));
                     return;
                 }
             }
@@ -1559,9 +1485,8 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 var (op, _) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
                 if (!CriterionGrammar.IsOrderedOperator(op))
                 {
-                    warnings.Add(new PlannedWarning(
-                        MetadataField.References.ToString(),
-                        Describe(MetadataField.References).UnsupportedOperatorWarning()));
+                    residualDispositions.Add(new CriterionDisposition(
+                        MetadataField.References.ToString(), criterion, "pass-through-residual"));
                     return;
                 }
             }
@@ -1577,7 +1502,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
     private ImageResidualCompilation CompileImageResiduals(
         CollectionCriteria<ImageCriteria> criteria,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         var residuals = new List<ImageCriteriaResidual>();
         var dispositions = new List<CriterionDisposition>();
@@ -1596,9 +1521,9 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             for (var alternativeIndex = 0; alternativeIndex < group.Count; alternativeIndex++)
             {
                 var image = group[alternativeIndex];
-                if (!TryCompileImageAlternative(image, out var alternative, out var impossible, out var detail))
+                if (!TryCompileImageAlternative(image, out var alternative, out var impossible))
                 {
-                    warnings.Add(new PlannedWarning(source, (groupIndex + 1).ImagePositivePassThroughWarning(detail)));
+                    residualDispositions.Add(new CriterionDisposition(source, image, "pass-through-residual"));
                     alternatives.Add(new ImageCriteriaResidual.Alternative(
                         image,
                         ImageCriteriaResidual.EvaluationKind.PassThrough));
@@ -1634,11 +1559,11 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         for (var exclusionIndex = 0; exclusionIndex < criteria.None.Count; exclusionIndex++)
         {
             var image = criteria.None[exclusionIndex];
-            if (!TryCompileImageAlternative(image, out var alternative, out var impossible, out var detail))
+            if (!TryCompileImageAlternative(image, out var alternative, out var impossible))
             {
-                warnings.Add(new PlannedWarning(
+                residualDispositions.Add(new CriterionDisposition(
                     string.Concat("Images.None[", (exclusionIndex + 1).ToString(CultureInfo.InvariantCulture), "]"),
-                    (exclusionIndex + 1).ImageExclusionNotAppliedWarning(detail)));
+                    image, "pass-through-residual"));
                 continue;
             }
 
@@ -1661,8 +1586,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
     private bool TryCompileImageAlternative(
         ImageCriteria criteria,
         out ImageCriteriaResidual.Alternative? alternative,
-        out bool impossible,
-        out string detail)
+        out bool impossible)
     {
         alternative = null;
         var requiredFieldCriteria = criteria.Type.And
@@ -1674,37 +1598,33 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 CriteriaValueOperator.IsNull);
         if (impossible)
         {
-            detail = string.Empty;
             return true;
         }
 
-        var typeValid = TryValidateImageText(criteria.Type.And, "the image type", out var typeDetail);
-        var sourceValid = TryValidateImageText(criteria.Source.And, "the image source", out var sourceDetail);
+        var typeValid = ValidateImageText(criteria.Type.And);
+        var sourceValid = ValidateImageText(criteria.Source.And);
         if ((typeValid && !FiniteDomainCanMatch(criteria.Type.And, Constants.ShowImageTypes)) ||
             (sourceValid && !FiniteDomainCanMatch(criteria.Source.And, [Constants.ProviderType])))
         {
             impossible = true;
-            detail = string.Empty;
             return true;
         }
 
         if (!typeValid)
         {
-            detail = typeDetail;
             return false;
         }
 
         if (!sourceValid)
         {
-            detail = sourceDetail;
             return false;
         }
 
-        if (!TryValidateImageText(criteria.MimeType.And, "the image MIME type", out detail) ||
-            !TryValidateImageText(criteria.Language.And, "the image language", out detail) ||
-            !TryValidateImageText(criteria.Url.And, "the image URL", out detail) ||
-            !TryValidateImageNumber(criteria.Width.And, "the image width", out detail) ||
-            !TryValidateImageNumber(criteria.Height.And, "the image height", out detail))
+        if (!ValidateImageText(criteria.MimeType.And) ||
+            !ValidateImageText(criteria.Language.And) ||
+            !ValidateImageText(criteria.Url.And) ||
+            !ValidateImageNumber(criteria.Width.And) ||
+            !ValidateImageNumber(criteria.Height.And))
         {
             return false;
         }
@@ -1721,7 +1641,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             presenceOnly
                 ? ImageCriteriaResidual.EvaluationKind.Presence
                 : ImageCriteriaResidual.EvaluationKind.Gallery);
-        detail = string.Empty;
+
         return true;
     }
 
@@ -1731,49 +1651,44 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         return domain.Any(candidate => constraints.All(criterion => CriterionGrammar.Matches(criterion, candidate)));
     }
 
-    private bool TryValidateImageText(IEnumerable<PropertyCriterion<string>> criteria, string facet, out string detail)
+    private bool ValidateImageText(IEnumerable<PropertyCriterion<string>> criteria)
     {
         foreach (var criterion in criteria)
         {
             var (op, _) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
             if (!CriterionGrammar.IsTextOperator(op))
             {
-                detail = facet + " operator";
                 return false;
             }
 
             if (op is not (CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull) &&
                 CriterionGrammar.TextValues(criterion).Length == 0)
             {
-                detail = facet + " value";
                 return false;
             }
         }
 
-        detail = string.Empty;
         return true;
     }
 
-    private bool TryValidateImageNumber(IEnumerable<PropertyCriterion<int>> criteria, string facet, out string detail)
+    private bool ValidateImageNumber(IEnumerable<PropertyCriterion<int>> criteria)
     {
         foreach (var criterion in criteria)
         {
             var (op, _) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
             if (!CriterionGrammar.IsOrderedOperator(op))
             {
-                detail = facet + " operator";
                 return false;
             }
         }
 
-        detail = string.Empty;
         return true;
     }
 
     private IReadOnlyList<RelationshipCriteriaResidual> CompileRelationshipResiduals(
         CollectionCriteria<RelationshipCriteria> criteria,
         IReadOnlyCollection<int> settledGroupIndexes,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         var residuals = new List<RelationshipCriteriaResidual>();
         for (var groupIndex = 0; groupIndex < criteria.Some.Count; groupIndex++)
@@ -1788,6 +1703,11 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             {
                 if (!HasProviderRelationshipFacets(relationship))
                 {
+                    residualDispositions.Add(new CriterionDisposition(
+                        string.Concat(
+                            "Relationships.Some[",
+                            (groupIndex + 1).ToString(CultureInfo.InvariantCulture),
+                            "]"), relationship, "pass-through-residual"));
                     alternatives.Add(new RelationshipCriteriaResidual.Alternative(
                         relationship,
                         MatchesNetwork: false,
@@ -1796,14 +1716,13 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                     continue;
                 }
 
-                if (!TryValidateRelationship(relationship, out var detail))
+                if (!ValidateRelationship(relationship))
                 {
-                    warnings.Add(new PlannedWarning(
+                    residualDispositions.Add(new CriterionDisposition(
                         string.Concat(
                             "Relationships.Some[",
                             (groupIndex + 1).ToString(CultureInfo.InvariantCulture),
-                            "]"),
-                        (groupIndex + 1).RelationshipPositivePassThroughWarning(detail)));
+                            "]"), relationship, "pass-through-residual"));
                     alternatives.Add(new RelationshipCriteriaResidual.Alternative(
                         relationship,
                         MatchesNetwork: false,
@@ -1815,13 +1734,11 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 var compiled = CompileRelationshipAlternative(relationship);
                 if (!compiled.MatchesNetwork && !compiled.MatchesPerson)
                 {
-                    warnings.Add(new PlannedWarning(
+                    residualDispositions.Add(new CriterionDisposition(
                         string.Concat(
                             "Relationships.Some[",
                             (groupIndex + 1).ToString(CultureInfo.InvariantCulture),
-                            "]"),
-                        (groupIndex + 1).RelationshipPositivePassThroughWarning(
-                            "a relationship kind, type, or external-id source outside TVMaze relationship data")));
+                            "]"), relationship, "pass-through-residual"));
                     compiled = compiled with { PassThrough = true };
                 }
 
@@ -1841,36 +1758,32 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
             if (!HasProviderRelationshipFacets(relationship))
             {
-                warnings.Add(new PlannedWarning(
+                residualDispositions.Add(new CriterionDisposition(
                     string.Concat(
                         "Relationships.None[",
                         (exclusionIndex + 1).ToString(CultureInfo.InvariantCulture),
-                        "]"),
-                    (exclusionIndex + 1).RelationshipExclusionNotAppliedWarning("an unconstrained relationship")));
+                        "]"), relationship, "pass-through-residual"));
                 continue;
             }
 
-            if (!TryValidateRelationship(relationship, out var detail))
+            if (!ValidateRelationship(relationship))
             {
-                warnings.Add(new PlannedWarning(
+                residualDispositions.Add(new CriterionDisposition(
                     string.Concat(
                         "Relationships.None[",
                         (exclusionIndex + 1).ToString(CultureInfo.InvariantCulture),
-                        "]"),
-                    (exclusionIndex + 1).RelationshipExclusionNotAppliedWarning(detail)));
+                        "]"), relationship, "pass-through-residual"));
                 continue;
             }
 
             var compiled = CompileRelationshipAlternative(relationship);
             if (!compiled.MatchesNetwork && !compiled.MatchesPerson)
             {
-                warnings.Add(new PlannedWarning(
+                residualDispositions.Add(new CriterionDisposition(
                     string.Concat(
                         "Relationships.None[",
                         (exclusionIndex + 1).ToString(CultureInfo.InvariantCulture),
-                        "]"),
-                    (exclusionIndex + 1).RelationshipExclusionNotAppliedWarning(
-                        "a relationship kind, type, or external-id source outside TVMaze relationship data")));
+                        "]"), relationship, "pass-through-residual"));
                 continue;
             }
 
@@ -1928,12 +1841,12 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             relationship.ExternalIds.None.Count > 0;
     }
 
-    private bool TryValidateRelationship(RelationshipCriteria relationship, out string detail)
+    private bool ValidateRelationship(RelationshipCriteria relationship)
     {
-        if (!TryValidateRelationshipText(relationship.Kind.And, "the relationship kind", out detail) ||
-            !TryValidateRelationshipText(relationship.Type.And, "the relationship type", out detail) ||
-            !TryValidateRelationshipText(relationship.Qualifier.And, "the relationship qualifier", out detail) ||
-            !TryValidateRelationshipText(relationship.Subject.And, "the relationship subject", out detail))
+        if (!ValidateRelationshipText(relationship.Kind.And) ||
+            !ValidateRelationshipText(relationship.Type.And) ||
+            !ValidateRelationshipText(relationship.Qualifier.And) ||
+            !ValidateRelationshipText(relationship.Subject.And))
         {
             return false;
         }
@@ -1942,14 +1855,13 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         {
             foreach (var alternative in group)
             {
-                if (!TryValidateExternalId(alternative, out detail))
+                if (!ValidateExternalId(alternative))
                 {
                     return false;
                 }
 
                 if (!ExternalIdCanTargetKnownRelationship(alternative))
                 {
-                    detail = "the relationship subject external-id source";
                     return false;
                 }
             }
@@ -1957,28 +1869,23 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
         foreach (var excluded in relationship.ExternalIds.None)
         {
-            if (!TryValidateExternalId(excluded, out detail))
+            if (!ValidateExternalId(excluded))
             {
                 return false;
             }
 
             if (!ExternalIdCanTargetKnownRelationship(excluded))
             {
-                detail = "the relationship subject external-id exclusion source";
                 return false;
             }
         }
 
-        detail = string.Empty;
         return true;
     }
 
-    private bool TryValidateExternalId(ExternalIdCriteria criteria, out string detail)
+    private bool ValidateExternalId(ExternalIdCriteria criteria)
     {
-        const string sourceFacet = "the relationship subject external-id source";
-        const string valueFacet = "the relationship subject external-id value";
-        return TryValidateRelationshipText(criteria.Source.And, sourceFacet, out detail) &&
-            TryValidateRelationshipText(criteria.Value.And, valueFacet, out detail);
+        return ValidateRelationshipText(criteria.Source.And) && ValidateRelationshipText(criteria.Value.And);
     }
 
     private bool ExternalIdCanTargetKnownRelationship(ExternalIdCriteria criteria)
@@ -1986,29 +1893,23 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         return MatchesSetAny(criteria.Source, Constants.ProviderType);
     }
 
-    private bool TryValidateRelationshipText(
-        IEnumerable<PropertyCriterion<string>> criteria,
-        string facet,
-        out string detail)
+    private bool ValidateRelationshipText(IEnumerable<PropertyCriterion<string>> criteria)
     {
         foreach (var criterion in criteria)
         {
             var (op, _) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
             if (!CriterionGrammar.IsTextOperator(op))
             {
-                detail = facet + " operator";
                 return false;
             }
 
             if (op is not (CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull) &&
                 CriterionGrammar.TextValues(criterion).Length == 0)
             {
-                detail = facet + " value";
                 return false;
             }
         }
 
-        detail = string.Empty;
         return true;
     }
 
@@ -2046,16 +1947,6 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         }
 
         return candidates;
-    }
-
-    private void AddPersonAnchorWarnings(IReadOnlyList<PersonSeedCandidate> candidates, List<PlannedWarning> warnings)
-    {
-        if (candidates
-            .SelectMany(candidate => candidate.Seed.Alternatives)
-            .Any(alternative => alternative.Names.Count > 0))
-        {
-            warnings.Add(new PlannedWarning("seed:person-relationship", SearchWarnings.PersonSearchApproximate));
-        }
     }
 
     private IReadOnlyCollection<int> SettledRelationshipGroups(IReadOnlyList<PersonSeedCandidate> candidates)
@@ -2273,14 +2164,15 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
     private bool ValidateItemCriteria(
         IEnumerable<PropertyCriterion<string>> criteria,
         MetadataField field,
-        List<PlannedWarning> warnings)
+        List<CriterionDisposition> residualDispositions)
     {
         foreach (var criterion in criteria)
         {
             var (op, _) = CriterionGrammar.InterpretOperator(criterion.Operator, criterion.Negate);
             if (!CriterionGrammar.IsTextOperator(op))
             {
-                warnings.Add(new PlannedWarning(field.ToString(), Describe(field).UnsupportedOperatorWarning()));
+                residualDispositions.Add(new CriterionDisposition(
+                    field.ToString(), criterion, "pass-through-residual"));
                 return false;
             }
         }
@@ -2292,22 +2184,4 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
     {
         return filter.Kind is LocalFilterKind.OriginalTitle or LocalFilterKind.AlternateText;
     }
-
-    private sealed record PersonSeedCandidate(
-        int GroupIndex,
-        SearchSeed.PersonChain Seed,
-        bool IsSettled,
-        int RequestCost);
-
-    private sealed record ImageResidualCompilation(
-        IReadOnlyList<ImageCriteriaResidual> Residuals,
-        bool KnownEmpty,
-        IReadOnlyList<CriterionDisposition> Dispositions);
-
-    private sealed record PlannedWarning(string Source, string Detail);
-
-    private sealed record EligibilityEvaluation(
-        EligibilityOutcome Outcome,
-        IReadOnlyList<string> Warnings,
-        IReadOnlyList<CriterionDisposition> Dispositions);
 }

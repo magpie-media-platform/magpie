@@ -1,4 +1,6 @@
-using System.Collections.Generic;
+using System;
+
+using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
@@ -8,27 +10,32 @@ namespace Magpie.Models.Arguments;
 public sealed record IndexerFeedPatch
 {
     /// <summary>
+    /// The id of the indexer feed to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
     /// The patch for the provider type of the feed.
     /// </summary>
-    public string? ProviderType { get; init; }
+    public ScalarPatch<string>? ProviderType { get; init; }
 
     /// <summary>
     /// The patch for the display name of the feed.
     /// </summary>
-    public string? Name { get; init; }
+    public ScalarPatch<string>? Name { get; init; }
 
     /// <summary>
     /// The patch for the description of the feed.
     /// </summary>
-    public string? Description { get; init; }
+    public ScalarPatch<string?>? Description { get; init; }
 
     /// <summary>
     /// The patch for the feed settings.
     /// </summary>
-    public Dictionary<string, string>? Settings { get; init; }
+    public DictionaryPatch<string, string, string>? Settings { get; init; }
 
     /// <summary>
     /// The patch for whether the feed is enabled.
     /// </summary>
-    public bool? Enabled { get; init; }
+    public ScalarPatch<bool>? Enabled { get; init; }
 }

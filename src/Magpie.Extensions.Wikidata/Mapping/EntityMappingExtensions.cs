@@ -13,7 +13,44 @@ namespace Magpie.Extensions.Wikidata.Mapping;
 
 internal static class EntityMappingExtensions
 {
-    private const string GregorianCalendarQid = "Q1985727";
+    internal const string GregorianCalendarQid = "Q1985727";
+
+    internal static bool TryNormalizeQid(this string? value, out string? qid)
+    {
+        qid = value.ToQid();
+        return qid is not null;
+    }
+
+    internal static string? ToQid(this string? value)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return null;
+        }
+
+        var slash = normalized!.LastIndexOf('/');
+        normalized = normalized.Substring(slash + 1);
+        if (normalized.Length < 2 ||
+            normalized[0] is not ('Q' or 'q') ||
+            normalized[1] == '0' ||
+            normalized.Skip(1).Any(character => character is < '0' or > '9'))
+        {
+            return null;
+        }
+
+        return "Q" + normalized.Substring(1);
+    }
+
+    internal static string? ToPrimaryLanguage(this string value)
+    {
+        var trimmed = value.Trim();
+        var separator = trimmed.IndexOf('-');
+        var primary = separator > 0 ? trimmed.Substring(0, separator) : trimmed;
+        return primary.Length is >= 2 and <= 12 && primary.All(char.IsLetter)
+            ? primary.ToLowerInvariant()
+            : null;
+    }
 
     public static bool MatchesKind(this EntityDto entity, EntityKind kind)
     {
@@ -59,7 +96,7 @@ internal static class EntityMappingExtensions
         result.AddRange(EntityIds(entity, Constants.GenrePropertyId).Take(30));
         foreach (var statement in entity.TruthyStatements(Constants.AwardReceivedPropertyId).Take(30))
         {
-            var awardQid = EntityId(statement.Mainsnak);
+            var awardQid = statement.Mainsnak.EntityId();
             if (awardQid is not null)
             {
                 result.Add(awardQid);
@@ -111,7 +148,7 @@ internal static class EntityMappingExtensions
         DateTime utcNow,
         string? parentQid = null)
     {
-        if (!entity.MatchesKind(kind) || !TryNormalizeQid(entity.Id, out var qid))
+        if (!entity.MatchesKind(kind) || !entity.Id.TryNormalizeQid(out var qid))
         {
             return null;
         }
@@ -428,7 +465,7 @@ internal static class EntityMappingExtensions
             .Take(30)
             .Select((statement, index) => (statement, index)))
         {
-            var awardQid = EntityId(statement.Mainsnak);
+            var awardQid = statement.Mainsnak.EntityId();
             if (awardQid is not null)
             {
                 result.Add(new AwardCandidate(
@@ -541,7 +578,7 @@ internal static class EntityMappingExtensions
 
         var qids =
             from qualifier in qualifiers
-            let value = EntityId(qualifier)
+            let value = qualifier.EntityId()
             where value is not null
             select value!;
         return [.. qids.Distinct(StringComparer.OrdinalIgnoreCase)];
@@ -609,7 +646,7 @@ internal static class EntityMappingExtensions
     private static void AddOfficialWebsiteReferences(MetadataContribution contribution, EntityDto entity)
     {
         foreach (var website in entity.TruthyStatements(Constants.OfficialWebsitePropertyId)
-            .Select(statement => StringValue(statement.Mainsnak)))
+            .Select(statement => statement.Mainsnak.StringValue()))
         {
             if (!Uri.TryCreate(website, UriKind.Absolute, out var uri) ||
                 uri.Scheme is not ("http" or "https") ||
@@ -631,7 +668,7 @@ internal static class EntityMappingExtensions
     private static void AddTrailerPreviews(MetadataContribution contribution, EntityDto entity)
     {
         foreach (var videoId in entity.TruthyStatements(Constants.TrailerPropertyId)
-            .Select(statement => StringValue(statement.Mainsnak)))
+            .Select(statement => statement.Mainsnak.StringValue()))
         {
             var uri = YouTubeUri(videoId);
             if (uri is null || contribution.Previews.Any(preview => preview.Url == uri))
@@ -768,7 +805,7 @@ internal static class EntityMappingExtensions
     {
         foreach (var statement in entity.TruthyStatements(propertyId))
         {
-            var target = EntityId(statement.Mainsnak);
+            var target = statement.Mainsnak.EntityId();
             if (parentQid is not null && !string.Equals(target, parentQid, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -781,7 +818,7 @@ internal static class EntityMappingExtensions
             }
 
             var values = (from qualifier in qualifiers
-                          let value = StringValue(qualifier)
+                          let value = qualifier.StringValue()
                           let parsed = int.TryParse(
                               value,
                               NumberStyles.None,
@@ -821,7 +858,7 @@ internal static class EntityMappingExtensions
                 continue;
             }
 
-            var unitQid = ExtractEntityId(unitElement.GetString());
+            var unitQid = unitElement.GetString().ToQid();
             var multiplier = unitQid switch
             {
                 Constants.SecondUnitQid => 1m,
@@ -875,7 +912,7 @@ internal static class EntityMappingExtensions
             !IsZero(time, "before") ||
             !IsZero(time, "after") ||
             !time.TryGetProperty("calendarmodel", out var calendar) ||
-            ExtractEntityId(calendar.GetString()) != GregorianCalendarQid)
+            calendar.GetString().ToQid() != GregorianCalendarQid)
         {
             return null;
         }
@@ -987,67 +1024,34 @@ internal static class EntityMappingExtensions
     {
         return
             from statement in entity.TruthyStatements(propertyId)
-            let value = EntityId(statement.Mainsnak)
+            let value = statement.Mainsnak.EntityId()
             where value is not null
             select value!;
     }
 
-    private static string? EntityId(SnakDto? snak)
+    internal static string? EntityId(this SnakDto? snak)
     {
         var value = snak is { SnakType: null or "value" } ? snak.DataValue?.Value : null;
         return value is { ValueKind: JsonValueKind.Object } element &&
-            element.TryGetProperty("id", out var id)
-            ? NormalizeQid(id.GetString())
+            element.TryGetProperty("id", out var id) &&
+            id.ValueKind == JsonValueKind.String
+            ? id.GetString().ToQid()
             : null;
     }
 
     private static string? FirstString(EntityDto entity, string propertyId)
     {
         return entity.TruthyStatements(propertyId)
-            .Select(statement => StringValue(statement.Mainsnak))
+            .Select(statement => statement.Mainsnak.StringValue())
             .FirstOrDefault(value => value is not null);
     }
 
-    private static string? StringValue(SnakDto? snak)
+    internal static string? StringValue(this SnakDto? snak)
     {
         var value = snak is { SnakType: null or "value" } ? snak.DataValue?.Value : null;
         return value is { ValueKind: JsonValueKind.String } element && !string.IsNullOrWhiteSpace(element.GetString())
             ? element.GetString()!.Trim()
             : null;
-    }
-
-    private static string? NormalizeQid(string? value) => TryNormalizeQid(value, out var qid) ? qid : null;
-
-    private static bool TryNormalizeQid(string? value, out string? qid)
-    {
-        qid = null;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var normalized = ExtractEntityId(value) ?? value!.Trim();
-        if (normalized.Length < 2 ||
-            char.ToUpperInvariant(normalized[0]) != 'Q' ||
-            normalized[1] == '0' ||
-            !normalized.Substring(1).All(char.IsDigit))
-        {
-            return false;
-        }
-
-        qid = "Q" + normalized.Substring(1);
-        return true;
-    }
-
-    private static string? ExtractEntityId(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        var slash = value!.LastIndexOf('/');
-        return slash >= 0 && slash < value.Length - 1 ? value.Substring(slash + 1) : value;
     }
 
     private static bool IsLanguageCode(string? value)

@@ -25,6 +25,7 @@ interface Wishlist {
     ownerUserId: string | null;
     name: string;
     enabled: boolean;
+    monitoring: boolean | null;
     createdAt: string;
     lastSyncedAt?: string | null;
     rootFolderId?: string | null;
@@ -211,7 +212,11 @@ test.describe.serial('Journey 15: a standing order', () => {
                 );
                 await page.goto(`/wishlists/${wishlist.id}`);
                 await expect(page.getByRole('heading', { name: 'Journey standing order', exact: true })).toBeVisible();
-                await expect(page.getByText('Monitored', { exact: true })).toBeVisible();
+                await expect(page.getByText('Inherit', { exact: true })).toBeVisible();
+                expect(await api.get<Wishlist>(`/api/wishlists/${wishlist.id}`)).toMatchObject({
+                    enabled: true,
+                    monitoring: null,
+                });
             });
 
             await test.step('refresh from the UI and read the queued job through the CLI', async () => {
@@ -303,7 +308,7 @@ test.describe.serial('Journey 15: a standing order', () => {
                 expect(hydrated).toMatchObject({
                     rootFolderId: movieRoot.id,
                     effectiveRootFolderId: movieRoot.id,
-                    monitoring: true,
+                    monitoring: null,
                     effectiveMonitoring: true,
                 });
             });
@@ -624,7 +629,7 @@ test.describe.serial('Journey 15: a standing order', () => {
                     name: 'Standing Order Feature',
                     rootFolderId: movieRoot.id,
                     effectiveRootFolderId: movieRoot.id,
-                    monitoring: true,
+                    monitoring: null,
                     effectiveMonitoring: true,
                     contentItem: { fulfillment: 'Upgradable' },
                 });

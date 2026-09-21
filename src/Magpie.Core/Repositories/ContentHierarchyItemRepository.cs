@@ -17,9 +17,11 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
+using Magpie.Models.Patch;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.Extensions.Logging;
 
@@ -35,13 +37,25 @@ internal sealed class ContentHierarchyItemRepository(
     IContentTypeRegistry contentTypeRegistry,
     IEventBus eventBus,
     ILogger<ContentHierarchyItemRepository> logger,
-    TimeProvider? timeProvider = null) : IContentHierarchyItemRepository
+    TimeProvider timeProvider) : IContentHierarchyItemRepository
 {
+    private const string ExternalIdKeySeparator = "\u001f";
+
     private static readonly StringComparer MediaFilePathComparer = StringComparer.Create(
         CultureInfo.InvariantCulture,
         CompareOptions.IgnoreCase | CompareOptions.NumericOrdering);
 
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private const int AncestryBatchSize = 1_000;
+
+    private static readonly string[] MetadataSortProperties =
+    [
+        nameof(MaterializedMetadata.PublishDate),
+        nameof(MaterializedMetadata.Duration),
+        nameof(MaterializedMetadata.SequenceNumber),
+        nameof(MaterializedMetadata.SortTitle),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
 
     private enum EffectiveValueTriggerKind
     {
@@ -53,11 +67,54 @@ internal sealed class ContentHierarchyItemRepository(
         GlobalMonitoring
     }
 
-    private static string? ResolveSortProperty<TEntity>(string? propertyName)
+    private static void ApplyPatch(
+        IDictionary<string, string> values,
+        DictionaryPatch<string, string, string> patch)
     {
-        return typeof(TEntity).GetProperties()
-            .Select(property => property.Name)
-            .FirstOrDefault(name => string.Equals(name, propertyName, StringComparison.OrdinalIgnoreCase));
+        if (patch.Add is not null)
+        {
+            foreach (var (key, value) in patch.Add)
+            {
+                values[key] = value ?? string.Empty;
+            }
+        }
+
+        if (patch.Update is not null)
+        {
+            foreach (var (key, value) in patch.Update)
+            {
+                if (values.ContainsKey(key))
+                {
+                    values[key] = value ?? string.Empty;
+                }
+            }
+        }
+
+        if (patch.Remove is not null)
+        {
+            foreach (var key in patch.Remove)
+            {
+                values.Remove(key);
+            }
+        }
+    }
+
+    private static IQueryable<EffectiveNode> ToEffectiveNodes(IQueryable<ContentHierarchyItem> items)
+    {
+        return
+            from item in items
+            select new EffectiveNode(
+                item.Id,
+                item.ParentId,
+                item.ContentType,
+                item.Level,
+                item.MetadataContainerId,
+                item.Monitoring,
+                item.RootFolderId,
+                item.QualityTierListId,
+                item.EffectiveMonitoring,
+                item.EffectiveRootFolderId,
+                item.EffectiveQualityTierListId);
     }
 
     private static IQueryable<ContentHierarchyItem> IncludeReadModel(IQueryable<ContentHierarchyItem> query)
@@ -118,25 +175,36 @@ internal sealed class ContentHierarchyItemRepository(
     {
         try
         {
-            var chain = new List<ContentHierarchyItem>();
+            var chainIds = new List<Guid>();
             var visited = new HashSet<Guid>();
             var currentId = (Guid?)contentHierarchyItemId;
 
             while (currentId is { } id && visited.Add(id))
             {
-                var node = await IncludeReadModel(context.ContentHierarchyItems.AsNoTracking())
-                    .FirstOrDefaultAsync(i => i.Id == id, cancellationToken)
+                var row = await context.ContentHierarchyItems
+                    .AsNoTracking()
+                    .Where(i => i.Id == id)
+                    .Select(i => new { i.ParentId })
+                    .FirstOrDefaultAsync(cancellationToken)
                     .ConfigureAwait(false);
-                if (node is null)
+                if (row is null)
                 {
                     break;
                 }
 
-                OrderMediaFiles([node]);
-                chain.Add(node);
-                currentId = node.ParentId;
+                chainIds.Add(id);
+                currentId = row.ParentId;
             }
 
+            var nodesById = await IncludeReadModel(context.ContentHierarchyItems.AsNoTracking())
+                .Where(i => chainIds.Contains(i.Id))
+                .ToDictionaryAsync(i => i.Id, cancellationToken)
+                .ConfigureAwait(false);
+            var chain = chainIds
+                .Select(id => nodesById.GetValueOrDefault(id))
+                .OfType<ContentHierarchyItem>()
+                .ToList();
+            OrderMediaFiles(chain);
             return chain;
         }
         catch (Exception ex)
@@ -145,6 +213,52 @@ internal sealed class ContentHierarchyItemRepository(
                 ex,
                 "The hierarchy item repository failed to read the lineage of item {ContentHierarchyItemId}.",
                 contentHierarchyItemId);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, ContentHierarchyItemAncestry>> GetAncestryAsync(
+        IReadOnlyCollection<Guid> contentHierarchyItemIds,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>();
+            var level = contentHierarchyItemIds.Distinct().ToList();
+            while (level.Count > 0)
+            {
+                var rows = new List<ContentHierarchyItemAncestry>();
+                foreach (var batch in level.Chunk(AncestryBatchSize))
+                {
+                    rows.AddRange(await context.ContentHierarchyItems
+                        .AsNoTracking()
+                        .Where(item => batch.Contains(item.Id))
+                        .Select(item => new ContentHierarchyItemAncestry
+                        {
+                            Id = item.Id,
+                            ParentId = item.ParentId,
+                            EffectiveMonitoring = item.EffectiveMonitoring
+                        })
+                        .ToListAsync(cancellationToken)
+                        .ConfigureAwait(false));
+                }
+
+                foreach (var row in rows)
+                {
+                    ancestry[row.Id] = row;
+                }
+
+                level = [.. rows
+                    .Where(row => row.ParentId is { } parentId && !ancestry.ContainsKey(parentId))
+                    .Select(row => row.ParentId!.Value)
+                    .Distinct()];
+            }
+
+            return ancestry;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The hierarchy item repository failed to read the ancestry of the items.");
             throw;
         }
     }
@@ -298,7 +412,7 @@ internal sealed class ContentHierarchyItemRepository(
         EffectiveValueTrigger trigger,
         CancellationToken cancellationToken)
     {
-        var nodes = await ListEffectiveNodesAsync(cancellationToken).ConfigureAwait(false);
+        var nodes = await ListEffectiveNodesAsync(trigger, cancellationToken).ConfigureAwait(false);
         if (nodes.Count == 0)
         {
             return new(new Dictionary<Guid, IReadOnlyCollection<string>>(), new Dictionary<Guid, EffectiveNode>());
@@ -395,41 +509,9 @@ internal sealed class ContentHierarchyItemRepository(
         Guid? createdByUserId,
         CancellationToken cancellationToken = default)
     {
-        var itemSaved = false;
         try
         {
-            var nodes = new Dictionary<Guid, EffectiveNode>();
-            await transactionManager.ExecuteWithTransactionAsync(
-                async _ =>
-                {
-                    var now = _time.GetUtcNow().UtcDateTime;
-                    model.CreatedAt = now;
-                    model.CreatedByUserId = createdByUserId;
-                    nodes = await PrepareEffectiveValuesForCreateAsync(model, cancellationToken).ConfigureAwait(false);
-                    context.ContentHierarchyItems.Add(model);
-                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                    itemSaved = true;
-                    await auditRecordRepository.CreateAsync(
-                        new()
-                        {
-                            Category = AuditCategories.Content,
-                            Operation = "Create",
-                            EntityId = model.Id.ToString(),
-                            EntityType = nameof(ContentHierarchyItem),
-                            Detail = $"Created content item {model.Name}.",
-                            Timestamp = now,
-                            UserId = createdByUserId
-                        },
-                        cancellationToken).ConfigureAwait(false);
-                },
-                cancellationToken).ConfigureAwait(false);
-
-            var impact = ImpactOf(model.Id, nodes);
-            await transactionManager.OnCommittedAsync(
-                token => eventBus.PublishAsync(
-                    ContentEventBuilder.BuildContentHierarchyItemCreatedEvent(impact),
-                    token),
-                cancellationToken).ConfigureAwait(false);
+            await CreateCoreAsync(model, createdByUserId, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (DbUpdateException ex)
@@ -440,19 +522,11 @@ internal sealed class ContentHierarchyItemRepository(
                 context.Entry(model.MetadataContainer).State = EntityState.Detached;
             }
 
-            if (itemSaved)
-            {
-                logger.LogError(
-                    ex,
-                    "The hierarchy item repository failed to create item {ContentHierarchyItemId}",
-                    model.Id);
-                throw;
-            }
-
             var winnerExists = await context.ContentHierarchyItems
                 .AsNoTracking()
                 .AnyAsync(
-                    item => item.ContentType == model.ContentType &&
+                    item => item.Id != model.Id &&
+                        item.ContentType == model.ContentType &&
                         item.ParentId == model.ParentId &&
                         item.Level == model.Level &&
                         item.Slug == model.Slug,
@@ -562,18 +636,30 @@ internal sealed class ContentHierarchyItemRepository(
     {
         try
         {
-            var items = IncludeReadModel(context.ContentHierarchyItems.AsNoTracking());
+            var items = context.ContentHierarchyItems.AsNoTracking();
 
             items = ApplyCriteria(items, query);
             items = await ApplyAncestorFilterAsync(items, query, cancellationToken).ConfigureAwait(false);
 
             var totalCount = await items.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            items = ApplySort(items, sort);
+            items = ApplySort(context.Model, items, sort);
 
-            items = items.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
+            var pageIds = await items
+                .Skip((paging.PageNumber - 1) * paging.PageSize)
+                .Take(paging.PageSize)
+                .Select(item => item.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
 
-            var result = await items.ToListAsync(cancellationToken).ConfigureAwait(false);
+            var hydratedItems = await IncludeReadModel(context.ContentHierarchyItems.AsNoTracking())
+                .Where(item => pageIds.Contains(item.Id))
+                .ToDictionaryAsync(item => item.Id, cancellationToken)
+                .ConfigureAwait(false);
+            var result = pageIds
+                .Select(id => hydratedItems.GetValueOrDefault(id))
+                .OfType<ContentHierarchyItem>()
+                .ToList();
             OrderMediaFiles(result);
 
             return new()
@@ -591,6 +677,35 @@ internal sealed class ContentHierarchyItemRepository(
         catch (Exception ex)
         {
             logger.LogError(ex, "The hierarchy item repository failed to query the items.");
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<Guid>> QueryIdsAsync(
+        ContentHierarchyItemCriteria query,
+        PagingParameter paging,
+        SortParameter? sort,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var items = ApplyCriteria(context.ContentHierarchyItems.AsNoTracking(), query);
+            items = await ApplyAncestorFilterAsync(items, query, cancellationToken).ConfigureAwait(false);
+
+            return await ApplySort(context.Model, items, sort)
+                .Skip((paging.PageNumber - 1) * paging.PageSize)
+                .Take(paging.PageSize)
+                .Select(item => item.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The hierarchy item repository failed to query the item ids.");
             throw;
         }
     }
@@ -617,43 +732,8 @@ internal sealed class ContentHierarchyItemRepository(
     {
         try
         {
-            var nodes = new Dictionary<Guid, EffectiveNode>();
-            var created = await transactionManager.ExecuteWithTransactionAsync(
-                async _ =>
-                {
-                    var now = _time.GetUtcNow().UtcDateTime;
-                    model.CreatedAt = now;
-                    model.CreatedByUserId = createdByUserId;
-
-                    nodes = await PrepareEffectiveValuesForCreateAsync(model, cancellationToken).ConfigureAwait(false);
-                    context.ContentHierarchyItems.Add(model);
-                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                    await auditRecordRepository.CreateAsync(
-                        new()
-                        {
-                            Category = AuditCategories.Content,
-                            Operation = "Create",
-                            EntityId = model.Id.ToString(),
-                            EntityType = nameof(ContentHierarchyItem),
-                            Detail = $"Created content item {model.Name}.",
-                            Timestamp = now,
-                            UserId = createdByUserId
-                        },
-                        cancellationToken).ConfigureAwait(false);
-
-                    return model;
-                },
-                cancellationToken).ConfigureAwait(false);
-
-            var impact = ImpactOf(created.Id, nodes);
-            await transactionManager.OnCommittedAsync(
-                token => eventBus.PublishAsync(
-                    ContentEventBuilder.BuildContentHierarchyItemCreatedEvent(impact),
-                    token),
-                cancellationToken).ConfigureAwait(false);
-
-            return created;
+            await CreateCoreAsync(model, createdByUserId, cancellationToken).ConfigureAwait(false);
+            return model;
         }
         catch (Exception ex)
         {
@@ -661,6 +741,45 @@ internal sealed class ContentHierarchyItemRepository(
                 "{ContentHierarchyItemName}.", model.Name);
             throw;
         }
+    }
+
+    private async Task CreateCoreAsync(
+        ContentHierarchyItem model,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken)
+    {
+        var nodes = new Dictionary<Guid, EffectiveNode>();
+        await transactionManager.ExecuteWithTransactionAsync(
+            async ct =>
+            {
+                var now = _time.GetUtcNow().UtcDateTime;
+                model.CreatedAt = now;
+                model.CreatedByUserId = createdByUserId;
+
+                nodes = await PrepareEffectiveValuesForCreateAsync(model, ct).ConfigureAwait(false);
+                context.ContentHierarchyItems.Add(model);
+                await context.SaveChangesAsync(ct).ConfigureAwait(false);
+
+                await auditRecordRepository.CreateAsync(
+                    new()
+                    {
+                        Category = AuditCategories.Content,
+                        Operation = "Create",
+                        EntityId = model.Id.ToString(),
+                        EntityType = nameof(ContentHierarchyItem),
+                        Detail = $"Created content item {model.Name}.",
+                        Timestamp = now,
+                        UserId = createdByUserId
+                    },
+                    ct).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        await transactionManager.OnCommittedAsync(
+            token => eventBus.PublishAsync(
+                ContentEventBuilder.BuildContentHierarchyItemCreatedEvent(ImpactOf(model.Id, nodes)),
+                token),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> UpdateAsync(
@@ -773,6 +892,15 @@ internal sealed class ContentHierarchyItemRepository(
 
     public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken = default)
     {
+        var deletedIds = await DeleteSubtreeAsync(id, deletedByUserId, cancellationToken).ConfigureAwait(false);
+        return deletedIds.Count > 0;
+    }
+
+    public async Task<IReadOnlyList<Guid>> DeleteSubtreeAsync(
+        Guid id,
+        Guid? deletedByUserId,
+        CancellationToken cancellationToken = default)
+    {
         try
         {
             var impact = new ContentEventImpact { HierarchyItemId = id };
@@ -799,10 +927,10 @@ internal sealed class ContentHierarchyItemRepository(
 
                     if (model is null)
                     {
-                        return false;
+                        return [];
                     }
 
-                    var (deleted, subtreeIds) = await DeleteSubtreeAsync(id, cancellationToken).ConfigureAwait(false);
+                    var subtreeIds = await RemoveSubtreeAsync(id, cancellationToken).ConfigureAwait(false);
                     impact = new()
                     {
                         HierarchyItemId = id,
@@ -817,7 +945,7 @@ internal sealed class ContentHierarchyItemRepository(
                         SubtreeIds = subtreeIds
                     };
 
-                    if (deleted)
+                    if (subtreeIds.Count > 0)
                     {
                         await auditRecordRepository.CreateAsync(
                             new()
@@ -833,11 +961,11 @@ internal sealed class ContentHierarchyItemRepository(
                             cancellationToken).ConfigureAwait(false);
                     }
 
-                    return deleted;
+                    return subtreeIds;
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            if (removed)
+            if (removed.Count > 0)
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
@@ -867,9 +995,7 @@ internal sealed class ContentHierarchyItemRepository(
                 continue;
             }
 
-            var groupContainerIds = group
-                .Select(matchingContainerIds)
-                .Aggregate((IQueryable<Guid>?)null, (acc, ids) => acc is null ? ids : acc.Concat(ids));
+            var groupContainerIds = ConcatBalanced(group.Select(matchingContainerIds).ToList());
 
             if (groupContainerIds is not null)
             {
@@ -884,6 +1010,52 @@ internal sealed class ContentHierarchyItemRepository(
         }
 
         return query;
+    }
+
+    private static List<string>? ExactExternalIdKeys(IReadOnlyList<ExternalIdCriteria> group)
+    {
+        var keys = new List<string>(group.Count);
+        foreach (var alternative in group)
+        {
+            var source = ExactValue(alternative.Source.And);
+            var value = ExactValue(alternative.Value.And);
+            if (source is null || value is null)
+            {
+                return null;
+            }
+
+            keys.Add((source + ExternalIdKeySeparator + value).ToLowerInvariant());
+        }
+
+        return keys.Count == 0 ? null : keys;
+    }
+
+    private static string? ExactValue(IEnumerable<PropertyCriterion<string>> criteria)
+    {
+        var list = criteria.ToList();
+        return list is [{ } criterion] &&
+            !criterion.Negate &&
+            criterion.Operator == CriteriaValueOperator.Equals &&
+            !string.IsNullOrEmpty(criterion.Value) &&
+            (criterion.Values is null || !criterion.Values.Any())
+                ? criterion.Value
+                : null;
+    }
+
+    private static IQueryable<Guid>? ConcatBalanced(IReadOnlyList<IQueryable<Guid>> parts)
+    {
+        return parts.Count == 0 ? null : ConcatParts(parts);
+    }
+
+    private static IQueryable<Guid> ConcatParts(IReadOnlyList<IQueryable<Guid>> parts)
+    {
+        if (parts.Count == 1)
+        {
+            return parts[0];
+        }
+
+        var middle = parts.Count / 2;
+        return ConcatParts([.. parts.Take(middle)]).Concat(ConcatParts([.. parts.Skip(middle)]));
     }
 
     private async Task<IReadOnlyList<Guid>> ResolveMatchingIdsAsync(
@@ -933,7 +1105,7 @@ internal sealed class ContentHierarchyItemRepository(
         return descendantIds;
     }
 
-    public async Task<BulkResult> BulkDeleteAsync(
+    public async Task<(BulkResult Result, IReadOnlyList<Guid> DeletedIds)> BulkDeleteAsync(
         BulkAction<ContentHierarchyItemCriteria> action,
         Guid? deletedByUserId,
         CancellationToken cancellationToken = default)
@@ -944,7 +1116,7 @@ internal sealed class ContentHierarchyItemRepository(
                 .ConfigureAwait(false);
             if (targetIds.Count == 0)
             {
-                return new BulkResult { Count = 0 };
+                return (new BulkResult { Count = 0 }, []);
             }
 
             return await transactionManager.ExecuteWithTransactionAsync(
@@ -960,10 +1132,12 @@ internal sealed class ContentHierarchyItemRepository(
                         .ConfigureAwait(false);
 
                     var deletedCount = 0;
+                    var deletedIds = new List<Guid>();
                     foreach (var id in existingIds)
                     {
-                        var (removed, _) = await DeleteSubtreeAsync(id, cancellationToken).ConfigureAwait(false);
-                        deletedCount += removed ? 1 : 0;
+                        var removed = await RemoveSubtreeAsync(id, cancellationToken).ConfigureAwait(false);
+                        deletedIds.AddRange(removed);
+                        deletedCount += removed.Count > 0 ? 1 : 0;
                     }
 
                     if (deletedCount > 0)
@@ -984,7 +1158,7 @@ internal sealed class ContentHierarchyItemRepository(
                             cancellationToken).ConfigureAwait(false);
                     }
 
-                    return new BulkResult { Count = deletedCount };
+                    return (new BulkResult { Count = deletedCount }, (IReadOnlyList<Guid>)deletedIds);
                 },
                 cancellationToken).ConfigureAwait(false);
         }
@@ -1093,10 +1267,19 @@ internal sealed class ContentHierarchyItemRepository(
         return [.. targetIds];
     }
 
-    private async Task<(bool Deleted, IReadOnlyList<Guid> SubtreeIds)> DeleteSubtreeAsync(
+    private async Task<IReadOnlyList<Guid>> RemoveSubtreeAsync(
         Guid id,
         CancellationToken cancellationToken)
     {
+        var rootExists = await context.ContentHierarchyItems
+            .AsNoTracking()
+            .AnyAsync(i => i.Id == id, cancellationToken)
+            .ConfigureAwait(false);
+        if (!rootExists)
+        {
+            return [];
+        }
+
         var currentLevel = new List<Guid> { id };
         var levels = new List<List<Guid>> { currentLevel };
         while (currentLevel.Count > 0)
@@ -1150,11 +1333,10 @@ internal sealed class ContentHierarchyItemRepository(
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var deleted = 0;
         for (var depth = levels.Count - 1; depth >= 0; depth--)
         {
             var levelIds = levels[depth];
-            deleted += await context.ContentHierarchyItems
+            await context.ContentHierarchyItems
                 .Where(i => levelIds.Contains(i.Id))
                 .ExecuteDeleteAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -1162,7 +1344,7 @@ internal sealed class ContentHierarchyItemRepository(
 
         await metadataContainerRepository.RemoveContainersAsync(containerIds, cancellationToken).ConfigureAwait(false);
 
-        return (deleted > 0, subtreeIds);
+        return subtreeIds;
     }
 
     public async Task<bool> PatchAsync(
@@ -1425,44 +1607,6 @@ internal sealed class ContentHierarchyItemRepository(
         return Expression.Lambda<Func<ContentHierarchyItem, bool>>(replaced, selector.Parameters);
     }
 
-    private static bool IsNegativeSubjectOperator(CriteriaValueOperator op) =>
-        op is CriteriaValueOperator.NotContainsString or CriteriaValueOperator.NotEquals;
-
-    private static PropertyCriterion<string> ToInnerPositive(PropertyCriterion<string> criterion) =>
-        criterion.Operator switch
-        {
-            CriteriaValueOperator.NotContainsString =>
-                criterion with { Operator = CriteriaValueOperator.ContainsString },
-            CriteriaValueOperator.NotEquals => criterion with { Operator = CriteriaValueOperator.Equals },
-            _ => criterion,
-        };
-
-    private static IQueryable<Relationship> ApplyStringRelationshipPredicate(
-        IQueryable<Relationship> query,
-        PropertyCriterion<string> criterion,
-        Expression<Func<Relationship, string?>> selector)
-    {
-        var value = criterion.Value?.ToLower();
-        return criterion.Operator switch
-        {
-            CriteriaValueOperator.Equals => query.Where(
-                BuildComparison(selector, v => v != null && v.ToLower() == value)),
-            CriteriaValueOperator.NotEquals => query.Where(
-                BuildComparison(selector, v => v == null || v.ToLower() != value)),
-            CriteriaValueOperator.ContainsString => query.Where(
-                BuildComparison(selector, v => value != null && v != null && v.ToLower().Contains(value))),
-            CriteriaValueOperator.NotContainsString => query.Where(
-                BuildComparison(selector, v => value == null || v == null || !v.ToLower().Contains(value))),
-            CriteriaValueOperator.StartsWithString => query.Where(
-                BuildComparison(selector, v => value != null && v != null && v.ToLower().StartsWith(value))),
-            CriteriaValueOperator.EndsWithString => query.Where(
-                BuildComparison(selector, v => value != null && v != null && v.ToLower().EndsWith(value))),
-            CriteriaValueOperator.IsNull => query.Where(BuildComparison(selector, v => v == null)),
-            CriteriaValueOperator.IsNotNull => query.Where(BuildComparison(selector, v => v != null)),
-            var op => throw new NotSupportedException($"Operator {op} is not supported for relationship fields")
-        };
-    }
-
     private static IQueryable<Relationship> ApplyRelatedContainerIdPredicate(
         IQueryable<Relationship> query,
         PropertyCriterion<Guid> criterion)
@@ -1476,147 +1620,6 @@ internal sealed class ContentHierarchyItemRepository(
             CriteriaValueOperator.IsNull => query.Where(r => r.RelatedMetadataContainerId == null),
             CriteriaValueOperator.IsNotNull => query.Where(r => r.RelatedMetadataContainerId != null),
             var op => throw new NotSupportedException($"Operator {op} is not supported for relationship fields")
-        };
-    }
-
-    private static Expression<Func<T, bool>> ApplyTypePredicate<T>(
-        PropertyCriterion<string> criterion,
-        Expression<Func<T, string?>> selector)
-    {
-        var value = criterion.Value?.ToLower();
-        Expression<Func<string?, bool>> test = criterion.Operator switch
-        {
-            CriteriaValueOperator.Equals => v => v != null && v.ToLower() == value,
-            CriteriaValueOperator.NotEquals => v => v == null || v.ToLower() != value,
-            CriteriaValueOperator.ContainsString => v => value != null && v != null && v.ToLower().Contains(value),
-            CriteriaValueOperator.NotContainsString => v => value == null || v == null || !v.ToLower().Contains(value),
-            CriteriaValueOperator.StartsWithString => v => value != null && v != null && v.ToLower().StartsWith(value),
-            CriteriaValueOperator.EndsWithString => v => value != null && v != null && v.ToLower().EndsWith(value),
-            var op => throw new NotSupportedException($"Operator {op} is not supported for relationship type")
-        };
-
-        var parameter = selector.Parameters[0];
-        var body = ReplacingExpressionVisitor.Replace(test.Parameters[0], selector.Body, test.Body);
-        return Expression.Lambda<Func<T, bool>>(body, parameter);
-    }
-
-    private static IQueryable<MetadataContribution> ApplyStringContributionTitlePredicate(
-        IQueryable<MetadataContribution> query,
-        PropertyCriterion<string> criterion)
-    {
-        var value = criterion.Value?.ToLower();
-        return criterion.Operator switch
-        {
-            CriteriaValueOperator.Equals => query.Where(c => c.Title != null && c.Title.ToLower() == value),
-            CriteriaValueOperator.NotEquals => query.Where(c => c.Title == null || c.Title.ToLower() != value),
-            CriteriaValueOperator.ContainsString => query.Where(
-                c => value != null && c.Title != null && c.Title.ToLower().Contains(value)),
-            CriteriaValueOperator.NotContainsString => query.Where(
-                c => value == null || c.Title == null || !c.Title.ToLower().Contains(value)),
-            CriteriaValueOperator.StartsWithString => query.Where(
-                c => value != null && c.Title != null && c.Title.ToLower().StartsWith(value)),
-            CriteriaValueOperator.EndsWithString => query.Where(
-                c => value != null && c.Title != null && c.Title.ToLower().EndsWith(value)),
-            var op => throw new NotSupportedException($"Operator {op} is not supported for relationship subject")
-        };
-    }
-
-    private static IQueryable<T> ApplyStringPredicate<T>(
-        IQueryable<T> query,
-        PropertyCriterion<string> criterion,
-        Expression<Func<T, string?>> selector)
-    {
-        var value = criterion.Value?.ToLower();
-        Expression<Func<string?, bool>> test = criterion.Operator switch
-        {
-            CriteriaValueOperator.Equals => v => v != null && v.ToLower() == value,
-            CriteriaValueOperator.NotEquals => v => v == null || v.ToLower() != value,
-            CriteriaValueOperator.ContainsString => v => value != null && v != null && v.ToLower().Contains(value),
-            CriteriaValueOperator.NotContainsString => v => value == null || v == null || !v.ToLower().Contains(value),
-            CriteriaValueOperator.StartsWithString => v => value != null && v != null && v.ToLower().StartsWith(value),
-            CriteriaValueOperator.EndsWithString => v => value != null && v != null && v.ToLower().EndsWith(value),
-            var op => throw new NotSupportedException($"Operator {op} is not supported for relationship subject")
-        };
-
-        var parameter = selector.Parameters[0];
-        var body = ReplacingExpressionVisitor.Replace(test.Parameters[0], selector.Body, test.Body);
-        return query.Where(Expression.Lambda<Func<T, bool>>(body, parameter));
-    }
-
-    private static Expression<Func<Relationship, bool>> BuildComparison(
-        Expression<Func<Relationship, string?>> selector,
-        Expression<Func<string?, bool>> test)
-    {
-        var parameter = selector.Parameters[0];
-        var body = ReplacingExpressionVisitor.Replace(test.Parameters[0], selector.Body, test.Body);
-        return Expression.Lambda<Func<Relationship, bool>>(body, parameter);
-    }
-
-    private static IQueryable<ContentHierarchyItem> ApplyMetadataTitleCriteria(
-        IQueryable<ContentHierarchyItem> query,
-        CriteriaSet<PropertyCriterion<string>> criteria,
-        bool isOriginalTitle)
-    {
-        if (criteria.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var criterion in criteria.And)
-        {
-            query = query.Where(BuildMetadataTitlePredicate(criterion, isOriginalTitle));
-        }
-
-        return query;
-    }
-
-    private static Expression<Func<ContentHierarchyItem, bool>> BuildMetadataTitlePredicate(
-        PropertyCriterion<string> criterion,
-        bool isOriginalTitle)
-    {
-        var value = criterion.Value?.ToLower();
-        return criterion.Operator switch
-        {
-            CriteriaValueOperator.ContainsString => i =>
-                value != null &&
-                i.MetadataContainer != null &&
-                i.MetadataContainer.Contributions.Any(c =>
-                    (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
-                    (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower().Contains(value)),
-            CriteriaValueOperator.NotContainsString => i =>
-                value == null ||
-                i.MetadataContainer == null ||
-                !i.MetadataContainer.Contributions.Any(c =>
-                    (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
-                    (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower().Contains(value)),
-            CriteriaValueOperator.StartsWithString => i =>
-                value != null &&
-                i.MetadataContainer != null &&
-                i.MetadataContainer.Contributions.Any(c =>
-                    (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
-                    (isOriginalTitle ? c.OriginalTitle! : c.Title!).StartsWith(
-                        value,
-                        StringComparison.CurrentCultureIgnoreCase)),
-            CriteriaValueOperator.EndsWithString => i =>
-                value != null &&
-                i.MetadataContainer != null &&
-                i.MetadataContainer.Contributions.Any(c =>
-                    (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
-                    (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower()
-                        .EndsWith(value, StringComparison.OrdinalIgnoreCase)),
-            CriteriaValueOperator.Equals => i =>
-                value != null &&
-                i.MetadataContainer != null &&
-                i.MetadataContainer.Contributions.Any(c =>
-                    (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
-                    (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower() == value),
-            CriteriaValueOperator.NotEquals => i =>
-                value == null ||
-                i.MetadataContainer == null ||
-                !i.MetadataContainer.Contributions.Any(c =>
-                    (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
-                    (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower() == value),
-            var op => throw new NotSupportedException($"Operator {op} is not supported for metadata Title")
         };
     }
 
@@ -1734,6 +1737,7 @@ internal sealed class ContentHierarchyItemRepository(
     }
 
     private static IQueryable<ContentHierarchyItem> ApplySort(
+        IModel model,
         IQueryable<ContentHierarchyItem> query,
         SortParameter? sort)
     {
@@ -1742,27 +1746,38 @@ internal sealed class ContentHierarchyItemRepository(
             return query.OrderBy(i => i.Name).ThenBy(i => i.Id);
         }
 
-        var sortProperty = ResolveSortProperty<ContentHierarchyItem>(sort.PropertyName);
+        var sortProperty = ResolveSortProperty<ContentHierarchyItem>(model, sort.PropertyName);
         if (sortProperty is not null)
         {
             return sort.Direction == SortDirection.Ascending
-                ? query.OrderBy(i => EF.Property<ContentHierarchyItem>(i, sortProperty)).ThenBy(i => i.Id)
-                : query.OrderByDescending(i => EF.Property<ContentHierarchyItem>(i, sortProperty)).ThenBy(i => i.Id);
+                ? query.OrderBy(i => EF.Property<object>(i, sortProperty)).ThenBy(i => i.Id)
+                : query.OrderByDescending(i => EF.Property<object>(i, sortProperty)).ThenBy(i => i.Id);
         }
 
-        var contentItemProperty = ResolveSortProperty<ContentItem>(sort.PropertyName);
+        var contentItemProperty = ResolveSortProperty<ContentItem>(model, sort.PropertyName);
         if (contentItemProperty is not null)
         {
             return ApplyContentItemSort(query, contentItemProperty, sort.Direction);
         }
 
-        var metadataProperty = ResolveSortProperty<MaterializedMetadata>(sort.PropertyName);
+        var metadataProperty = MetadataSortProperties
+            .FirstOrDefault(name => string.Equals(name, sort.PropertyName, StringComparison.OrdinalIgnoreCase));
         if (metadataProperty is not null)
         {
             return ApplyMetadataSort(query, metadataProperty, sort.Direction);
         }
 
         return query.OrderBy(i => i.Name).ThenBy(i => i.Id);
+    }
+
+    private static string? ResolveSortProperty<TEntity>(IModel model, string? propertyName)
+    {
+        return model.FindEntityType(typeof(TEntity))!.GetProperties()
+            .Where(property => !property.IsShadowProperty() &&
+                (property.ClrType.IsValueType || property.ClrType == typeof(string) ||
+                    property.ClrType == typeof(Uri)))
+            .Select(property => property.Name)
+            .FirstOrDefault(name => string.Equals(name, propertyName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static IQueryable<ContentHierarchyItem> ApplyContentItemSort(
@@ -1773,6 +1788,10 @@ internal sealed class ContentHierarchyItemRepository(
         return contentItemProperty switch
         {
             nameof(ContentItem.DateLastSearched) => OrderByDateLastSearched(query, direction),
+            nameof(ContentItem.FulfilledAt) => Order(
+                query.OrderBy(i => i.ContentItem == null || i.ContentItem.FulfilledAt == null),
+                i => i.ContentItem == null ? null : i.ContentItem.FulfilledAt,
+                direction),
             _ => query.OrderBy(i => i.Name).ThenBy(i => i.Id),
         };
     }
@@ -1844,6 +1863,16 @@ internal sealed class ContentHierarchyItemRepository(
         return direction == SortDirection.Ascending
             ? query.OrderBy(keySelector).ThenBy(i => i.Id)
             : query.OrderByDescending(keySelector).ThenBy(i => i.Id);
+    }
+
+    private static IQueryable<ContentHierarchyItem> Order<TKey>(
+        IOrderedQueryable<ContentHierarchyItem> query,
+        Expression<Func<ContentHierarchyItem, TKey>> keySelector,
+        SortDirection direction)
+    {
+        return direction == SortDirection.Ascending
+            ? query.ThenBy(keySelector).ThenBy(i => i.Id)
+            : query.ThenByDescending(keySelector).ThenBy(i => i.Id);
     }
 
     private static IQueryable<ContentHierarchyItem> OrderBySequenceNumber(
@@ -2030,6 +2059,26 @@ internal sealed class ContentHierarchyItemRepository(
             fields.Add("Tags");
         }
 
+        if (patch.Name is not null)
+        {
+            fields.Add(nameof(ContentHierarchyItem.Name));
+        }
+
+        if (patch.Slug is not null)
+        {
+            fields.Add(nameof(ContentHierarchyItem.Slug));
+        }
+
+        if (patch.Settings is not null)
+        {
+            fields.Add(nameof(ContentHierarchyItem.Settings));
+        }
+
+        if (patch.DateLastRefreshed is not null)
+        {
+            fields.Add(nameof(ContentHierarchyItem.DateLastRefreshed));
+        }
+
         return fields;
     }
 
@@ -2181,32 +2230,125 @@ internal sealed class ContentHierarchyItemRepository(
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        if (raw is null or "1")
+        {
+            return true;
+        }
+
+        if (raw == "0")
+        {
+            return false;
+        }
+
         if (bool.TryParse(raw, out var parsed))
         {
             return parsed;
         }
 
-        return raw != "0";
+        logger.LogWarning(
+            "The hierarchy item repository cannot read the global monitoring default {MonitoringDefault} and " +
+            "monitors the library by default.",
+            raw);
+        return true;
     }
 
-    private async Task<IReadOnlyList<EffectiveNode>> ListEffectiveNodesAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<EffectiveNode>> ListEffectiveNodesAsync(
+        EffectiveValueTrigger trigger,
+        CancellationToken cancellationToken)
     {
-        return await (
-            from item in context.ContentHierarchyItems.AsNoTracking()
-            select new EffectiveNode(
-                item.Id,
-                item.ParentId,
-                item.ContentType,
-                item.Level,
-                item.MetadataContainerId,
-                item.Monitoring,
-                item.RootFolderId,
-                item.QualityTierListId,
-                item.EffectiveMonitoring,
-                item.EffectiveRootFolderId,
-                item.EffectiveQualityTierListId))
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
+        Guid?[] subtreeRoots = trigger.Kind switch
+        {
+            EffectiveValueTriggerKind.ItemSubtree => [trigger.ItemId],
+            EffectiveValueTriggerKind.Reparent => [trigger.ItemId, trigger.OldParentId, trigger.NewParentId],
+            _ => []
+        };
+
+        if (subtreeRoots.Length == 0)
+        {
+            return await ToEffectiveNodes(context.ContentHierarchyItems.AsNoTracking())
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var nodesById = new Dictionary<Guid, EffectiveNode>();
+        var rows = await ListNodesByIdAsync(
+            [.. subtreeRoots.OfType<Guid>().Distinct()],
+            cancellationToken).ConfigureAwait(false);
+        while (rows.Count > 0)
+        {
+            var added = new List<Guid>();
+            foreach (var row in rows)
+            {
+                if (nodesById.TryAdd(row.Id, row))
+                {
+                    added.Add(row.Id);
+                }
+            }
+
+            rows = await ListChildNodesAsync(added, cancellationToken).ConfigureAwait(false);
+        }
+
+        await AddAncestorNodesAsync(nodesById, cancellationToken).ConfigureAwait(false);
+        return [.. nodesById.Values];
+    }
+
+    private async Task<List<EffectiveNode>> ListNodesByIdAsync(
+        IReadOnlyList<Guid> ids,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<EffectiveNode>();
+        foreach (var batch in ids.Chunk(AncestryBatchSize))
+        {
+            rows.AddRange(await ToEffectiveNodes(
+                context.ContentHierarchyItems.AsNoTracking().Where(item => batch.Contains(item.Id)))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false));
+        }
+
+        return rows;
+    }
+
+    private async Task<List<EffectiveNode>> ListChildNodesAsync(
+        IReadOnlyList<Guid> parentIds,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<EffectiveNode>();
+        foreach (var batch in parentIds.Chunk(AncestryBatchSize))
+        {
+            rows.AddRange(await ToEffectiveNodes(
+                context.ContentHierarchyItems.AsNoTracking()
+                    .Where(item => item.ParentId != null && batch.Contains(item.ParentId.Value)))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false));
+        }
+
+        return rows;
+    }
+
+    private async Task AddAncestorNodesAsync(
+        Dictionary<Guid, EffectiveNode> nodesById,
+        CancellationToken cancellationToken)
+    {
+        List<Guid> MissingParentIds(IEnumerable<EffectiveNode> nodes) =>
+        [
+            .. nodes
+                .Select(node => node.ParentId)
+                .OfType<Guid>()
+                .Where(id => !nodesById.ContainsKey(id))
+                .Distinct()
+        ];
+
+        var pending = MissingParentIds(nodesById.Values);
+        while (pending.Count > 0)
+        {
+            var rows = await ListNodesByIdAsync(pending, cancellationToken).ConfigureAwait(false);
+            foreach (var row in rows)
+            {
+                nodesById.TryAdd(row.Id, row);
+            }
+
+            pending = MissingParentIds(rows);
+        }
     }
 
     private async Task<Dictionary<Guid, EffectiveNode>> PrepareEffectiveValuesForCreateAsync(
@@ -2223,7 +2365,7 @@ internal sealed class ContentHierarchyItemRepository(
             throw new MagpieException($"Defaults could not be determined for content type {model.ContentType}.");
         }
 
-        var nodes = await ListEffectiveNodesAsync(cancellationToken).ConfigureAwait(false);
+        var nodesById = new Dictionary<Guid, EffectiveNode>();
         var ownNode = new EffectiveNode(
             model.Id,
             model.ParentId,
@@ -2236,8 +2378,8 @@ internal sealed class ContentHierarchyItemRepository(
             model.EffectiveMonitoring,
             model.EffectiveRootFolderId,
             model.EffectiveQualityTierListId);
-        var nodesById = nodes.ToDictionary(node => node.Id);
         nodesById[ownNode.Id] = ownNode;
+        await AddAncestorNodesAsync(nodesById, cancellationToken).ConfigureAwait(false);
         var globalMonitoring = await ResolveGlobalMonitoringAsync(cancellationToken).ConfigureAwait(false);
         var values = ResolveEffectiveValues(
             ownNode,
@@ -2307,8 +2449,18 @@ internal sealed class ContentHierarchyItemRepository(
             .FirstOrDefaultAsync(i => i.Id == id, cancellationToken)
             .ConfigureAwait(false);
 
-        if (model is null || model.MetadataContainer is null)
+        if (model is null)
         {
+            return new(false, null, null);
+        }
+
+        if (model.MetadataContainer is null)
+        {
+            logger.LogError(
+                "The hierarchy item repository cannot patch item {ContentHierarchyItemId} because its metadata " +
+                "container {MetadataContainerId} is missing.",
+                id,
+                model.MetadataContainerId);
             return new(false, null, null);
         }
 
@@ -2389,6 +2541,27 @@ internal sealed class ContentHierarchyItemRepository(
         if (patch.PendingMetadataRefresh is not null)
         {
             model.PendingMetadataRefresh = patch.PendingMetadataRefresh.Value;
+        }
+
+        if (patch.Name is not null)
+        {
+            model.Name = patch.Name.Value;
+        }
+
+        if (patch.Slug is not null)
+        {
+            model.Slug = patch.Slug.Value;
+        }
+
+        if (patch.DateLastRefreshed is not null)
+        {
+            model.DateLastRefreshed = patch.DateLastRefreshed.Value;
+        }
+
+        if (patch.Settings is not null)
+        {
+            ApplyPatch(model.Settings, patch.Settings);
+            context.Entry(model).Property(i => i.Settings).IsModified = true;
         }
 
         var tagsAdded = new List<string>();
@@ -2537,9 +2710,9 @@ internal sealed class ContentHierarchyItemRepository(
             query = query.Where(i => i.ContentItem != null && i.ContentItem.Id == contentItemId);
         }
 
-        query = query.ApplyCriteriaSet(criteria.ContentType, nameof(ContentHierarchyItem.ContentType));
-        query = query.ApplyCriteriaSet(criteria.Level, nameof(ContentHierarchyItem.Level));
-        query = query.ApplyCriteriaSet(criteria.Slug, nameof(ContentHierarchyItem.Slug));
+        query = query.ApplyNormalizedCriteriaSet(criteria.ContentType, nameof(ContentHierarchyItem.ContentType));
+        query = query.ApplyNormalizedCriteriaSet(criteria.Level, nameof(ContentHierarchyItem.Level));
+        query = query.ApplyNormalizedCriteriaSet(criteria.Slug, nameof(ContentHierarchyItem.Slug));
         query = query.ApplyCriteriaSet(criteria.Name, nameof(ContentHierarchyItem.Name));
         query = query.ApplyCriteriaSet(criteria.Monitoring, nameof(ContentHierarchyItem.EffectiveMonitoring));
         if (criteria.EffectiveMonitoring is { } effectiveMonitoring)
@@ -2568,6 +2741,12 @@ internal sealed class ContentHierarchyItemRepository(
             query = query.Where(i => i.PendingMetadataRefresh == pendingMetadataRefresh);
         }
 
+        if (criteria.LastRefreshedBefore is { } lastRefreshedBefore)
+        {
+            query = query.Where(i =>
+                i.DateLastRefreshed == null || i.DateLastRefreshed < lastRefreshedBefore);
+        }
+
         if (criteria.HasMetadataExternalIds is { } hasMetadataExternalIds)
         {
             query = hasMetadataExternalIds
@@ -2588,7 +2767,7 @@ internal sealed class ContentHierarchyItemRepository(
                         .Any(c => c.MetadataContainerId == i.MetadataContainerId && c.Title != null && c.Title != ""));
         }
 
-        query = query.ApplyCriteriaSet(criteria.Path, nameof(ContentHierarchyItem.Path));
+        query = query.ApplyExactCriteriaSet(criteria.Path, nameof(ContentHierarchyItem.Path));
         query = ApplyTagsCriteria(query, criteria.Tags);
         query = ApplyMetadataCriteria(query, criteria.Metadata);
 
@@ -2651,7 +2830,25 @@ internal sealed class ContentHierarchyItemRepository(
         IQueryable<ContentHierarchyItem> query,
         CollectionCriteria<ExternalIdCriteria> criteria)
     {
-        return ApplyCollectionCriteria(query, criteria, MatchingContainerIdsByExternalId);
+        var generic = new CollectionCriteria<ExternalIdCriteria> { None = criteria.None };
+        foreach (var group in criteria.Some)
+        {
+            var keys = ExactExternalIdKeys(group);
+            if (keys is null)
+            {
+                generic.Some.Add(group);
+                continue;
+            }
+
+            var containerIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                join e in DeduplicatedExternalIds() on c.Id equals e.MetadataContributionId
+                where keys.Contains(((e.Source ?? string.Empty) + ExternalIdKeySeparator + e.Value).ToLower())
+                select c.MetadataContainerId).Distinct();
+            query = query.Where(i => containerIds.Contains(i.MetadataContainerId));
+        }
+
+        return ApplyCollectionCriteria(query, generic, MatchingContainerIdsByExternalId);
     }
 
     private IQueryable<ContentHierarchyItem> ApplyContentRatingCriteria(
@@ -2748,9 +2945,7 @@ internal sealed class ContentHierarchyItemRepository(
                 continue;
             }
 
-            var groupContainerIds = group
-                .Select(MatchingContainerIdsForRelationship)
-                .Aggregate((IQueryable<Guid>?)null, (acc, ids) => acc is null ? ids : acc.Concat(ids));
+            var groupContainerIds = ConcatBalanced(group.Select(MatchingContainerIdsForRelationship).ToList());
 
             if (groupContainerIds is not null)
             {
@@ -2778,12 +2973,12 @@ internal sealed class ContentHierarchyItemRepository(
 
         foreach (var kind in criterion.Kind.And)
         {
-            relationships = ApplyStringRelationshipPredicate(relationships, kind, r => r.Kind);
+            relationships = relationships.ApplyStringPredicate(kind, r => r.Kind);
         }
 
         foreach (var qualifier in criterion.Qualifier.And)
         {
-            relationships = ApplyStringRelationshipPredicate(relationships, qualifier, r => r.Qualifier);
+            relationships = relationships.ApplyStringPredicate(qualifier, r => r.Qualifier);
         }
 
         foreach (var type in criterion.Type.And)
@@ -2810,7 +3005,9 @@ internal sealed class ContentHierarchyItemRepository(
         foreach (var subject in criterion.Subject.And)
         {
             var subjectContainerIds = MatchingSubjectContainerIds(subject);
-            relationships = IsNegativeSubjectOperator(subject.Operator)
+            var negated = subject.Operator is CriteriaValueOperator.NotContainsString
+                or CriteriaValueOperator.NotEquals;
+            relationships = negated
                 ? relationships.Where(r =>
                     r.RelatedMetadataContainerId == null ||
                     !subjectContainerIds.Contains(r.RelatedMetadataContainerId.Value))
@@ -2844,17 +3041,40 @@ internal sealed class ContentHierarchyItemRepository(
             .Distinct();
     }
 
+    private IQueryable<Guid> AllTypedContainerIds()
+    {
+        var subjectIds = context.Subjects.AsNoTracking().Select(s => s.MetadataContainerId);
+        var contentIds = context.ContentHierarchyItems.AsNoTracking().Select(i => i.MetadataContainerId);
+        return subjectIds.Concat(contentIds).Distinct();
+    }
+
+    private IQueryable<Guid> MatchingContainerIdsByType(PropertyCriterion<string> criterion)
+    {
+        var subjectIds = context.Subjects.AsNoTracking()
+            .ApplyStringPredicate(criterion, s => s.Kind)
+            .Select(s => s.MetadataContainerId);
+
+        var levelIds = context.ContentHierarchyItems.AsNoTracking()
+            .ApplyStringPredicate(criterion, i => i.Level)
+            .Select(i => i.MetadataContainerId);
+
+        var contentTypeIds = context.ContentHierarchyItems.AsNoTracking()
+            .ApplyStringPredicate(criterion, i => i.ContentType)
+            .Select(i => i.MetadataContainerId);
+
+        return subjectIds.Concat(levelIds).Concat(contentTypeIds).Distinct();
+    }
+
     private IQueryable<Guid> MatchingSubjectContainerIds(PropertyCriterion<string> criterion)
     {
-        var positive = ToInnerPositive(criterion);
+        var positive = criterion.ToInnerPositive();
 
-        var byTitle = ApplyStringContributionTitlePredicate(context.MetadataContributions.AsNoTracking(), positive)
+        var byTitle = context.MetadataContributions.AsNoTracking()
+            .ApplyStringPredicate(positive, c => c.Title)
             .Select(c => c.MetadataContainerId);
 
-        var byAlias = ApplyStringPredicate(
-            context.AlternateTexts.AsNoTracking().Where(a => a.Kind.ToLower() == "name"),
-            positive,
-            a => a.Text)
+        var byAlias = context.AlternateTexts.AsNoTracking().Where(a => a.Kind.ToLower() == "name")
+            .ApplyStringPredicate(positive, a => a.Text)
             .Join(
                 context.MetadataContributions.AsNoTracking(),
                 a => a.MetadataContributionId,
@@ -2862,6 +3082,37 @@ internal sealed class ContentHierarchyItemRepository(
                 (_, c) => c.MetadataContainerId);
 
         return byTitle.Concat(byAlias).Distinct();
+    }
+
+    private IQueryable<ContentHierarchyItem> ApplyMetadataTitleCriteria(
+        IQueryable<ContentHierarchyItem> query,
+        CriteriaSet<PropertyCriterion<string>> criteria,
+        bool isOriginalTitle)
+    {
+        if (criteria.And is null || !criteria.And.Any())
+        {
+            return query;
+        }
+
+        foreach (var criterion in criteria.And)
+        {
+            var negate = criterion.Operator switch
+            {
+                CriteriaValueOperator.Equals or CriteriaValueOperator.ContainsString or
+                    CriteriaValueOperator.StartsWithString or CriteriaValueOperator.EndsWithString => false,
+                CriteriaValueOperator.NotEquals or CriteriaValueOperator.NotContainsString => true,
+                var op => throw new NotSupportedException($"Operator {op} is not supported for metadata Title")
+            };
+            var containerIds = context.MetadataContributions.AsNoTracking().ApplyStringPredicate(
+                    criterion.ToInnerPositive(),
+                    contribution => isOriginalTitle ? contribution.OriginalTitle : contribution.Title)
+                .Select(contribution => contribution.MetadataContainerId);
+            query = negate
+                ? query.Where(i => !containerIds.Contains(i.MetadataContainerId))
+                : query.Where(i => containerIds.Contains(i.MetadataContainerId));
+        }
+
+        return query;
     }
 
     private IQueryable<ExternalId> DeduplicatedExternalIds()
@@ -2875,8 +3126,8 @@ internal sealed class ContentHierarchyItemRepository(
                 where c2.MetadataContainerId == c.MetadataContainerId
                 where e.Source != null
                     ? e2.Source != null && e2.Source.ToLower() == e.Source.ToLower()
-                    : e2.Value.ToLower() == e.Value.ToLower()
-                orderby c2.Ordinal
+                    : e2.Source == null && e2.Value.ToLower() == e.Value.ToLower()
+                orderby c2.Ordinal, c2.Id
                 select c2.Id).FirstOrDefault()
             orderby c.Ordinal, e.Ordinal
             select e;
@@ -2892,30 +3143,6 @@ internal sealed class ContentHierarchyItemRepository(
             from c in context.MetadataContributions.AsNoTracking()
             join e in externalIds on c.Id equals e.MetadataContributionId
             select c.MetadataContainerId).Distinct();
-    }
-
-    private IQueryable<Guid> MatchingContainerIdsByType(PropertyCriterion<string> criterion)
-    {
-        var subjectIds = context.Subjects.AsNoTracking()
-            .Where(ApplyTypePredicate<Subject>(criterion, s => s.Kind))
-            .Select(s => s.MetadataContainerId);
-
-        var levelIds = context.ContentHierarchyItems.AsNoTracking()
-            .Where(ApplyTypePredicate<ContentHierarchyItem>(criterion, i => i.Level))
-            .Select(i => i.MetadataContainerId);
-
-        var contentTypeIds = context.ContentHierarchyItems.AsNoTracking()
-            .Where(ApplyTypePredicate<ContentHierarchyItem>(criterion, i => i.ContentType))
-            .Select(i => i.MetadataContainerId);
-
-        return subjectIds.Concat(levelIds).Concat(contentTypeIds).Distinct();
-    }
-
-    private IQueryable<Guid> AllTypedContainerIds()
-    {
-        var subjectIds = context.Subjects.AsNoTracking().Select(s => s.MetadataContainerId);
-        var contentIds = context.ContentHierarchyItems.AsNoTracking().Select(i => i.MetadataContainerId);
-        return subjectIds.Concat(contentIds).Distinct();
     }
 
     private IQueryable<ContentHierarchyItem> ApplyTagsCriteria(

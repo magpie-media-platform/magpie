@@ -4,6 +4,7 @@ import { ClockCountdownIcon, ClockCounterClockwiseIcon, CalendarBlankIcon, Light
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { Button } from '@/components/ui/Button';
+import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { Switch } from '@/components/ui/Switch';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -29,6 +30,8 @@ import {
     type JobExecutionQueryParams,
 } from '@/hooks/useJobs';
 import { canRunJobOnDemand, statusFilterOptions, type TemplateOption } from '@/lib/jobExecution';
+
+import { CORRELATION_ID_PARAM, JOB_PARAM, ROOTS_ONLY_PARAM } from './jobsSearchParams';
 import './JobsPage.css';
 
 const SCHEDULE_TRIGGER_MODE = 'Schedule';
@@ -41,10 +44,11 @@ type JobTab = (typeof JOB_TABS)[number];
 
 type JobsFilters = JobExecutionFilterState & {
     rootsOnly: string;
+    correlationId: string;
     [key: string]: string;
 };
 
-const DEFAULT_FILTERS: JobsFilters = { template: '', status: '', rootsOnly: '1' };
+const DEFAULT_FILTERS: JobsFilters = { template: '', status: '', rootsOnly: '1', correlationId: '' };
 
 function isJobTab(tab: string): tab is JobTab {
     return JOB_TABS.includes(tab as JobTab);
@@ -52,8 +56,8 @@ function isJobTab(tab: string): tab is JobTab {
 
 export function JobsPage() {
     useDocumentTitle('System Jobs');
-    const [searchParams] = useSearchParams();
-    const linkedJobId = searchParams.get('job');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const linkedJobId = searchParams.get(JOB_PARAM);
 
     const { filters, page, setFilters, setPage } = useUrlTableState<JobsFilters>({
         defaultSort: [],
@@ -63,6 +67,7 @@ export function JobsPage() {
 
     const [activeTab, setUrlActiveTab] = useUrlTabState({ defaultTab: 'executions', allowedTabs: JOB_TABS });
     const rootsOnly = filters.rootsOnly !== '0';
+    const correlationId = filters.correlationId || undefined;
     const executionFilters: JobExecutionFilterState = useMemo(
         () => ({ template: filters.template, status: filters.status }),
         [filters.template, filters.status],
@@ -79,7 +84,8 @@ export function JobsPage() {
                     if (activeTab === 'executions' && nextTab !== 'executions') {
                         params.delete('template');
                         params.delete('status');
-                        params.delete('rootsOnly');
+                        params.delete(ROOTS_ONLY_PARAM);
+                        params.delete(CORRELATION_ID_PARAM);
                         params.delete('page');
                     }
                 },
@@ -102,6 +108,10 @@ export function JobsPage() {
         [setFilters],
     );
 
+    const clearCorrelationFilter = useCallback(() => {
+        setFilters({ correlationId: '' });
+    }, [setFilters]);
+
     const { hasRole, user } = useAuth();
     const canRunJobs = hasRole(Role.Manager);
     const canManageTriggers = hasRole(Role.Admin);
@@ -123,13 +133,16 @@ export function JobsPage() {
         if (wireStatuses && wireStatuses.length > 0) {
             params.status = wireStatuses;
         }
+        if (correlationId) {
+            params.correlationId = correlationId;
+        }
         return params;
-    }, [rootsOnly, page, executionFilters.template, executionFilters.status]);
+    }, [rootsOnly, correlationId, page, executionFilters.template, executionFilters.status]);
 
     const { jobs, pagination, isLoading: isLoadingJobs, runJob, refetch: refetchJobs } = useJobs(executionQueryParams);
-    const linkedJobIsListed = linkedJobId !== null && jobs.some((execution) => execution.id === linkedJobId);
-    const { job: linkedJob } = useJobExecution(linkedJobId ?? '', linkedJobId !== null && !linkedJobIsListed);
-    const displayedJobs = linkedJob && !linkedJobIsListed ? [linkedJob, ...jobs] : jobs;
+    const isSingleJob = linkedJobId !== null;
+    const { job: linkedJob, isLoading: isLoadingLinkedJob } = useJobExecution(linkedJobId ?? '', isSingleJob);
+    const displayedJobs = isSingleJob ? (linkedJob ? [linkedJob] : []) : jobs;
 
     const schedCrud = useScheduleTriggerCrud({ runJob, refetchJobs });
     const eventCrud = useEventTriggerCrud();
@@ -274,7 +287,8 @@ export function JobsPage() {
 
     const totalExecutions = pagination?.totalItems ?? 0;
     const totalPages = Math.max(1, Math.ceil(totalExecutions / EXECUTIONS_PAGE_SIZE));
-    const hasActiveFilters = executionFilters.template !== '' || executionFilters.status !== '';
+    const hasActiveFilters =
+        executionFilters.template !== '' || executionFilters.status !== '' || Boolean(correlationId);
 
     const { refetch: refetchSched } = schedCrud;
     const { refetch: refetchEvent } = eventCrud;
@@ -288,6 +302,14 @@ export function JobsPage() {
         : !hasRunnableJobs
           ? 'No on-demand jobs are available to run'
           : undefined;
+
+    const loadingState = (
+        <div className="jobs-page__loading" data-testid="jobs-page__loading">
+            <Skeleton className="jobs-page__skeleton" />
+            <Skeleton className="jobs-page__skeleton" />
+            <Skeleton className="jobs-page__skeleton" />
+        </div>
+    );
 
     return (
         <div className="jobs-page" data-page="jobs">
@@ -316,21 +338,6 @@ export function JobsPage() {
                     </TabsList>
 
                     <TabsContent value="executions">
-                        <div className="jobs-page__section-header">
-                            <DisabledTooltip minRole={Role.Manager} message={runButtonMessage}>
-                                <Button
-                                    variant="primary"
-                                    size="sm"
-                                    onClick={() => setRunDialogOpen(true)}
-                                    disabled={runButtonDisabled}
-                                    data-action="run-job"
-                                >
-                                    <LightningIcon weight="bold" aria-hidden="true" />
-                                    <span>Run a job</span>
-                                </Button>
-                            </DisabledTooltip>
-                        </div>
-
                         <div className="jobs-page__executions-toolbar">
                             <JobExecutionFilters
                                 filters={executionFilters}
@@ -338,6 +345,19 @@ export function JobsPage() {
                                 statusOptions={statusFilterOptions}
                                 onChange={setExecutionFilters}
                             />
+                            {correlationId && (
+                                <div className="jobs-page__chain-filter" data-control="chain-filter">
+                                    <span className="jobs-page__chain-filter-label" title={correlationId}>
+                                        Chain:{' '}
+                                        {correlationId.length > 12 ? `${correlationId.slice(0, 8)}…` : correlationId}
+                                    </span>
+                                    <ClearFiltersButton
+                                        label="Clear chain filter"
+                                        onClick={clearCorrelationFilter}
+                                        data-action="clear-chain-filter"
+                                    />
+                                </div>
+                            )}
                             <label
                                 htmlFor="jobs-page-roots-only"
                                 className="jobs-page__roots-toggle"
@@ -353,37 +373,60 @@ export function JobsPage() {
                                 />
                                 <span>Show top level only</span>
                             </label>
+                            <DisabledTooltip minRole={Role.Manager} message={runButtonMessage}>
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => setRunDialogOpen(true)}
+                                    disabled={runButtonDisabled}
+                                    data-action="run-job"
+                                >
+                                    <LightningIcon weight="bold" aria-hidden="true" />
+                                    <span>Run a job</span>
+                                </Button>
+                            </DisabledTooltip>
                         </div>
 
-                        <div className="jobs-page__list" role="list" aria-label="Job history">
-                            {isLoadingJobs ? (
-                                <div className="jobs-page__loading" data-testid="jobs-page__loading">
-                                    <Skeleton className="jobs-page__skeleton" />
-                                    <Skeleton className="jobs-page__skeleton" />
-                                    <Skeleton className="jobs-page__skeleton" />
-                                </div>
-                            ) : displayedJobs.length === 0 ? (
-                                <EmptyState
-                                    icon={<ClockCounterClockwiseIcon weight="duotone" />}
-                                    title="No job history found"
-                                    description={
-                                        hasActiveFilters
-                                            ? 'Try adjusting your filters'
-                                            : 'History will appear here when jobs are run'
-                                    }
-                                />
-                            ) : (
-                                displayedJobs.map((execution) => (
+                        {isSingleJob && (
+                            <div className="jobs-page__single-bar">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        const next = new URLSearchParams(searchParams);
+                                        next.delete(JOB_PARAM);
+                                        setSearchParams(next, { replace: true });
+                                    }}
+                                >
+                                    Back to jobs
+                                </Button>
+                            </div>
+                        )}
+                        {(isSingleJob ? isLoadingLinkedJob : isLoadingJobs) ? (
+                            loadingState
+                        ) : displayedJobs.length === 0 ? (
+                            <EmptyState
+                                icon={<ClockCounterClockwiseIcon weight="duotone" />}
+                                title="No job history found"
+                                description={
+                                    hasActiveFilters
+                                        ? 'Try adjusting your filters'
+                                        : 'History will appear here when jobs are run'
+                                }
+                            />
+                        ) : (
+                            <div className="jobs-page__list" role="list" aria-label="Job history">
+                                {displayedJobs.map((execution) => (
                                     <ExecutionRow
                                         key={execution.id}
                                         execution={execution}
                                         autoExpand={execution.id === linkedJobId}
                                     />
-                                ))
-                            )}
-                        </div>
+                                ))}
+                            </div>
+                        )}
 
-                        {totalExecutions > EXECUTIONS_PAGE_SIZE && (
+                        {!isSingleJob && totalExecutions > EXECUTIONS_PAGE_SIZE && (
                             <Pager
                                 className="jobs-page__pager"
                                 data-component="executions-pager"
@@ -412,18 +455,19 @@ export function JobsPage() {
                             </div>
                         )}
 
+                        {schedCrud.isLoading && loadingState}
+                        {!schedCrud.isLoading && totalSchedules === 0 && (
+                            <EmptyState
+                                icon={<CalendarBlankIcon weight="duotone" />}
+                                title="No schedule triggers"
+                                description={
+                                    canManageTriggers
+                                        ? 'Create a schedule to run a job automatically.'
+                                        : 'Schedule triggers will appear here when configured.'
+                                }
+                            />
+                        )}
                         <div className="jobs-page__list" role="list" aria-label="Schedule triggers">
-                            {totalSchedules === 0 && (
-                                <EmptyState
-                                    icon={<CalendarBlankIcon weight="duotone" />}
-                                    title="No schedule triggers"
-                                    description={
-                                        canManageTriggers
-                                            ? 'Create a schedule to run a job automatically.'
-                                            : 'Schedule triggers will appear here when configured.'
-                                    }
-                                />
-                            )}
                             <ScheduleTriggersTab
                                 crud={schedCrud}
                                 templates={scheduleTemplateOptions}
@@ -449,18 +493,19 @@ export function JobsPage() {
                             </div>
                         )}
 
+                        {eventCrud.isLoading && loadingState}
+                        {!eventCrud.isLoading && totalEvents === 0 && (
+                            <EmptyState
+                                icon={<LightningIcon weight="duotone" />}
+                                title="No event triggers"
+                                description={
+                                    canManageTriggers
+                                        ? 'Create an event trigger to run a job when events occur.'
+                                        : 'Event triggers will appear here when configured.'
+                                }
+                            />
+                        )}
                         <div className="jobs-page__list" role="list" aria-label="Event triggers">
-                            {totalEvents === 0 && (
-                                <EmptyState
-                                    icon={<LightningIcon weight="duotone" />}
-                                    title="No event triggers"
-                                    description={
-                                        canManageTriggers
-                                            ? 'Create an event trigger to run a job when events occur.'
-                                            : 'Event triggers will appear here when configured.'
-                                    }
-                                />
-                            )}
                             <EventTriggersTab
                                 crud={eventCrud}
                                 templates={eventTemplateOptions}

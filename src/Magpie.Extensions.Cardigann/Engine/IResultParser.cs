@@ -21,7 +21,10 @@ internal interface IResultParser
         Uri baseUri,
         IReadOnlyDictionary<string, object?> variables);
 
-    string? ExtractDownloadTarget(string html, DownloadBlock download);
+    string? ExtractDownloadTarget(
+        string html,
+        DownloadBlock download,
+        IReadOnlyDictionary<string, object?>? variables = null);
 
     string? ExtractField(IElement? root, FieldDefinition field, string context);
 

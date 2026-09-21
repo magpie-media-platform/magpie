@@ -7,7 +7,7 @@ import { type ApiClient } from '../helpers/api';
 import { restoreCheckpoint } from '../helpers/checkpoints';
 import { cli } from '../helpers/cli';
 import { integrationEnvironment } from '../helpers/environment';
-import { waitForJob } from '../helpers/jobs';
+import { drainLibraryImportMatchResolution, waitForJob } from '../helpers/jobs';
 import { mocks } from '../helpers/mocks';
 import { loginUi } from '../helpers/ui';
 import { until } from '../helpers/wait';
@@ -86,6 +86,7 @@ test.describe.serial('Journey 19: discover and adopt existing main files', () =>
                 JSON.stringify({ jobType: 'RootFolderContentDiscovery', parameters: { rootFolderId: movieRoot.id } }),
             ]);
             const execution = await waitForJob(api, executionId, 120_000);
+            await drainLibraryImportMatchResolution(api);
             expect(execution).toMatchObject({ status: 'Completed', progress: 100 });
             expect(execution.parentExecutionId).toBeNull();
 
@@ -136,6 +137,7 @@ test.describe.serial('Journey 19: discover and adopt existing main files', () =>
         const firstContent = await test.step('import the reviewed candidate and prove its file semantics and location', async () => {
             const submission = await api.post<ImportSubmission>('/api/import/candidates/bulk-accept', {
                 ids: [ambiguous.id],
+                monitoringMode: 'Inherit',
             });
             expect(submission.skipped).toHaveLength(0);
             expect(submission.queued).toHaveLength(1);
@@ -180,6 +182,7 @@ test.describe.serial('Journey 19: discover and adopt existing main files', () =>
                 JSON.stringify({ jobType: 'RootFolderContentDiscovery', parameters: { rootFolderId: movieRoot.id } }),
             ]);
             expect((await waitForJob(api, executionId, 120_000)).status).toBe('Completed');
+            await drainLibraryImportMatchResolution(api);
 
             const candidates = await api.get<Paged<Candidate>>(
                 `/api/import/candidates?rootFolderId=${movieRoot.id}&pageSize=100`,
@@ -191,6 +194,7 @@ test.describe.serial('Journey 19: discover and adopt existing main files', () =>
 
             const submission = await api.post<ImportSubmission>('/api/import/candidates/bulk-accept', {
                 ids: [certain!.id],
+                monitoringMode: 'Inherit',
             });
             expect(submission.queued).toHaveLength(1);
             expect((await waitForJob(api, submission.queued[0]!.jobExecutionId, 120_000)).status).toBe('Completed');

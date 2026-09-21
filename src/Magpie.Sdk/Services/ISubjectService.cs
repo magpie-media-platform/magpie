@@ -27,7 +27,7 @@ public interface ISubjectService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a subject by id.
+    /// A subject by id.
     /// </summary>
     /// <param name="subjectId">The id of the subject to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

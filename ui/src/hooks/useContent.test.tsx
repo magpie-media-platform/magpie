@@ -7,11 +7,11 @@ import {
     useContentList,
     useContentDetail,
     useContentHierarchy,
+    usePendingRefresh,
     useContentTags,
     useRefreshContent,
     useSearchContentReleases,
     useUpdateContent,
-    useDeleteContent,
     useBulkDeleteContent,
     useBulkPatchContent,
     useContentRelationships,
@@ -151,6 +151,7 @@ describe('useContent hooks', () => {
                         dateAdded: '2024-01-01T00:00:00Z',
                         lastSearched: undefined,
                         acquisitionStatus: undefined,
+                        previews: [],
                     },
                 ],
                 pageNumber: 1,
@@ -428,6 +429,35 @@ describe('useContent hooks', () => {
 
             expect(result.current.data?.fulfillment).toBe('missing');
         });
+
+        it('reads the pending-refresh flag from the content detail payload', async () => {
+            // Arrange
+            vi.mocked(api.apiGet).mockResolvedValue({ ...mockContentItem, pendingMetadataRefresh: true });
+
+            // Act
+            const { result } = renderHook(() => usePendingRefresh('11111111-1111-1111-1111-111111111111'), {
+                wrapper: createWrapper(queryClient),
+            });
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            // Assert
+            expect(api.apiGet).toHaveBeenCalledWith('/content/11111111-1111-1111-1111-111111111111');
+            expect(result.current.data).toBe(true);
+        });
+
+        it('reports no pending refresh when the payload clears the flag', async () => {
+            // Arrange
+            vi.mocked(api.apiGet).mockResolvedValue({ ...mockContentItem, pendingMetadataRefresh: false });
+
+            // Act
+            const { result } = renderHook(() => usePendingRefresh('11111111-1111-1111-1111-111111111111'), {
+                wrapper: createWrapper(queryClient),
+            });
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            // Assert
+            expect(result.current.data).toBe(false);
+        });
     });
 
     describe('useContentTags', () => {
@@ -579,7 +609,6 @@ describe('useContent hooks', () => {
                 expect.arrayContaining([
                     contentQueryKeys.detail('11111111-1111-1111-1111-111111111111'),
                     contentQueryKeys.list(),
-                    contentQueryKeys.acquisitionStatus('11111111-1111-1111-1111-111111111111'),
                     contentReleaseQueryKeys.forContent('11111111-1111-1111-1111-111111111111'),
                 ]),
             );
@@ -672,37 +701,6 @@ describe('useContent hooks', () => {
             expect(result.current.error).toBe(error);
         });
     });
-
-    describe('useDeleteContent', () => {
-        it('calls DELETE to content endpoint', async () => {
-            vi.mocked(api.apiDelete).mockResolvedValue(undefined);
-
-            const { result } = renderHook(() => useDeleteContent(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            result.current.mutate('11111111-1111-1111-1111-111111111111');
-
-            await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-            expect(api.apiDelete).toHaveBeenCalledWith('/content/11111111-1111-1111-1111-111111111111');
-        });
-
-        it('handles errors', async () => {
-            const error = new Error('Delete failed');
-            vi.mocked(api.apiDelete).mockRejectedValue(error);
-
-            const { result } = renderHook(() => useDeleteContent(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            result.current.mutate('11111111-1111-1111-1111-111111111111');
-
-            await waitFor(() => expect(result.current.isError).toBe(true));
-            expect(result.current.error).toBe(error);
-        });
-    });
-
     describe('useBulkPatchContent', () => {
         it('PATCHes the consolidated bulk route with explicit ids and invalidates the content list', async () => {
             vi.mocked(api.apiPatch).mockResolvedValue({ count: 2, error: null });
@@ -926,7 +924,7 @@ describe('useContent hooks', () => {
                 .mocked(api.apiGet)
                 .mock.calls.filter(([url]) => typeof url === 'string' && url.startsWith('/subjects?'));
             expect(subjectCalls).toHaveLength(1);
-            expect(result.current.data).toEqual({ materialized, contributions, subjects });
+            expect(result.current.data).toEqual({ materialized, contributions, subjects, subjectsTruncated: false });
         });
 
         it('continues paging the contextual result until a referenced subject is resolved', async () => {
@@ -1159,6 +1157,86 @@ describe('useContent hooks', () => {
                     imageUrl: 'https://example.com/keanu.jpg',
                 },
             ]);
+        });
+    });
+
+    describe('useEffectiveRootFolder', () => {
+        const itemId = '11111111-1111-1111-1111-111111111111';
+        const parentId = '22222222-2222-2222-2222-222222222222';
+
+        it('terminates the ancestor walk when the parent chain cycles', async () => {
+            vi.mocked(api.apiGet).mockImplementation((path: string) => {
+                if (path === `/content/${itemId}`) {
+                    return Promise.resolve({
+                        id: itemId,
+                        parentId,
+                        rootFolderId: null,
+                        effectiveRootFolderId: 'rf-1',
+                        name: 'Child',
+                    });
+                }
+                if (path === `/content/${parentId}`) {
+                    return Promise.resolve({
+                        id: parentId,
+                        parentId: itemId,
+                        rootFolderId: null,
+                        effectiveRootFolderId: 'rf-1',
+                        name: 'Parent',
+                    });
+                }
+                if (path === '/root-folders') {
+                    return Promise.resolve([{ id: 'rf-1', name: 'Media', path: '/media' }]);
+                }
+                return Promise.reject(new Error(`unexpected path ${path}`));
+            });
+
+            const { result } = renderHook(() => useEffectiveRootFolder(itemId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(result.current.data).toEqual({
+                rootFolderId: 'rf-1',
+                rootFolderName: 'Media',
+                rootFolderPath: '/media',
+                source: 'ContentTypeDefault',
+                resolvingHierarchyItemId: null,
+                isOverriddenOnItem: false,
+            });
+            expect(vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === `/content/${parentId}`)).toHaveLength(
+                1,
+            );
+        });
+
+        it('stops the ancestor walk at the depth cap when the parent chain never ends', async () => {
+            vi.mocked(api.apiGet).mockImplementation((path: string) => {
+                if (path === '/root-folders') {
+                    return Promise.resolve([{ id: 'rf-1', name: 'Media', path: '/media' }]);
+                }
+                const match = /^\/content\/ancestor-(\d+)$/.exec(path);
+                if (match) {
+                    return Promise.resolve({
+                        id: `ancestor-${match[1]}`,
+                        parentId: `ancestor-${Number(match[1]) + 1}`,
+                        rootFolderId: null,
+                        effectiveRootFolderId: 'rf-1',
+                        name: `Ancestor ${match[1]}`,
+                    });
+                }
+                return Promise.reject(new Error(`unexpected path ${path}`));
+            });
+
+            const { result } = renderHook(() => useEffectiveRootFolder('ancestor-0'), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(result.current.data?.source).toBe('ContentTypeDefault');
+            expect(
+                vi.mocked(api.apiGet).mock.calls.filter(([path]) => path.startsWith('/content/ancestor-')),
+            ).toHaveLength(33);
         });
     });
 

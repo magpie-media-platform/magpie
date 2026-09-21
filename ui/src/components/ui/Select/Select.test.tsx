@@ -49,6 +49,33 @@ function renderSelect(props: {
 }
 
 describe('Select', () => {
+    it.each([
+        { keys: '{Escape}', dismissCount: 1, changeCount: 0 },
+        { keys: '{ArrowDown}{Enter}', dismissCount: 0, changeCount: 1 },
+    ])('distinguishes dismissal from selection: $keys', async ({ keys, dismissCount, changeCount }) => {
+        const user = userEvent.setup();
+        const onDismiss = vi.fn();
+        const onValueChange = vi.fn();
+        render(
+            <Select value="first" onValueChange={onValueChange} onDismiss={onDismiss}>
+                <SelectTrigger aria-label="Choice">
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    <SelectItem value="first">First</SelectItem>
+                    <SelectItem value="second">Second</SelectItem>
+                </SelectContent>
+            </Select>,
+        );
+
+        screen.getByRole('combobox', { name: 'Choice' }).focus();
+        await user.keyboard('{Enter}');
+        await user.keyboard(keys);
+
+        expect(onDismiss).toHaveBeenCalledTimes(dismissCount);
+        expect(onValueChange).toHaveBeenCalledTimes(changeCount);
+    });
+
     it('renders a select trigger', () => {
         renderSelect({});
         expect(screen.getByRole('combobox', { name: /test select/i })).toBeInTheDocument();

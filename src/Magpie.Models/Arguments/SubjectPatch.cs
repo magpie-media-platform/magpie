@@ -1,19 +1,15 @@
 using System;
 
+using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// The fields to change on a subject.
+/// The fields to change on a <see cref="Subject"/>.
 /// </summary>
-public sealed record SubjectPatch
+public sealed record SubjectPatch : TagsPatch
 {
-    /// <summary>
-    /// The patch for the tags.
-    /// </summary>
-    public SetPatch<string, string>? Tags { get; init; }
-
     /// <summary>
     /// The id of the image to make primary.
     /// </summary>

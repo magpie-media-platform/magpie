@@ -22,11 +22,11 @@ internal sealed class RetentionCleanupJob(
     IDownloadService downloadService,
     TimeProvider timeProvider,
     ILogger<RetentionCleanupJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "RetentionCleanup",
+        JobType = MagpieJobs.Types.RetentionCleanup,
         DisplayName = "Retention cleanup",
         Description = "Deletes old job history, activity records, and releases based on retention settings.",
         Category = "System",
@@ -38,13 +38,13 @@ internal sealed class RetentionCleanupJob(
         Parameters =
         [
             new(
-                JobExecutionRetentionDaysParameter,
+                MagpieJobs.Parameters.JobExecutionRetentionDays,
                 "Days to retain terminal job execution rows.",
                 DataType.Number,
                 false,
                 "30"),
             new(
-                AuditRetentionDaysParameter,
+                MagpieJobs.Parameters.AuditRetentionDays,
                 "Days to retain audit records.",
                 DataType.Number,
                 false,
@@ -56,7 +56,7 @@ internal sealed class RetentionCleanupJob(
                 false,
                 "7"),
             new(
-                FailedDownloadRetentionDaysParameter,
+                MagpieJobs.Parameters.FailedDownloadRetentionDays,
                 "Days to retain failed download rows.",
                 DataType.Number,
                 false,
@@ -64,10 +64,9 @@ internal sealed class RetentionCleanupJob(
         ],
     };
 
-    private const string JobExecutionRetentionDaysParameter = "jobExecutionRetentionDays";
-    private const string AuditRetentionDaysParameter = "auditRetentionDays";
-    private const string ReleaseObservationRetentionDaysParameter = "releaseObservationRetentionDays";
-    private const string FailedDownloadRetentionDaysParameter = "failedDownloadRetentionDays";
+    private const string ReleaseObservationRetentionDaysParameter =
+        MagpieJobs.Parameters.ReleaseObservationRetentionDays;
+
     private const int DefaultJobExecutionDays = 30;
     private const int DefaultAuditRecordDays = 90;
     private const int DefaultReleaseDays = 7;
@@ -75,20 +74,18 @@ internal sealed class RetentionCleanupJob(
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
-        var progress = progressReporter;
-
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var jobExecutionCutoff = now -
             TimeSpan.FromDays(
                 ReadRetentionDays(
                     jobContext.Parameters,
-                    JobExecutionRetentionDaysParameter,
+                    MagpieJobs.Parameters.JobExecutionRetentionDays,
                     DefaultJobExecutionDays));
         var auditRecordCutoff = now -
             TimeSpan.FromDays(
                 ReadRetentionDays(
                     jobContext.Parameters,
-                    AuditRetentionDaysParameter,
+                    MagpieJobs.Parameters.AuditRetentionDays,
                     DefaultAuditRecordDays));
         var releaseCutoff = now -
             TimeSpan.FromDays(
@@ -97,12 +94,12 @@ internal sealed class RetentionCleanupJob(
                     ReleaseObservationRetentionDaysParameter,
                     DefaultReleaseDays));
         var failedDownloadCutoff = now -
-            TimeSpan.FromDays(ReadPositiveDaysParameter(
-                FailedDownloadRetentionDaysParameter,
+            TimeSpan.FromDays(ReadRetentionDays(
                 jobContext.Parameters,
+                MagpieJobs.Parameters.FailedDownloadRetentionDays,
                 DefaultFailedDownloadRetentionDays));
 
-        progress?.Report(null, "The retention cleanup will delete old job history.");
+        progressReporter.Report(null, "The retention cleanup will delete old job history.");
         var jobExecutionsDeleted = await jobExecutionRepository
             .DeleteWhereAsync(
                 new JobExecutionQuery
@@ -118,22 +115,22 @@ internal sealed class RetentionCleanupJob(
                 cancellationToken)
             .ConfigureAwait(false);
 
-        progress?.Report(null, "The retention cleanup will delete old activity records.");
+        progressReporter.Report(null, "The retention cleanup will delete old activity records.");
         var auditRecordsDeleted = await auditRecordRepository
             .DeleteWhereAsync(new AuditRecordQuery { TimestampBefore = auditRecordCutoff }, cancellationToken)
             .ConfigureAwait(false);
 
-        progress?.Report(null, "The retention cleanup will delete old release observations.");
+        progressReporter.Report(null, "The retention cleanup will delete old release observations.");
         var releasesDeleted = await releaseRepository.DeleteWhereAsync(
             new ReleaseQuery { ObservedAt = new Range<DateTime>(null, releaseCutoff) },
             cancellationToken).ConfigureAwait(false);
 
-        progress?.Report(null, "The retention cleanup will delete old failed downloads.");
+        progressReporter.Report(null, "The retention cleanup will delete old failed downloads.");
         var failedDownloadsDeleted = await downloadService
             .DeleteClearedFailedDownloadsAsync(failedDownloadCutoff, cancellationToken)
             .ConfigureAwait(false);
 
-        progress?.Report(null, "The retention cleanup completed.");
+        progressReporter.Report(null, "The retention cleanup completed.");
 
         logger.LogInformation(
             "The retention cleanup deleted {JobExecutionsDeleted} job executions before {JobExecutionCutoff:O}.",
@@ -172,32 +169,8 @@ internal sealed class RetentionCleanupJob(
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Raw} is not a non-negative integer. The job will use the default {Default}",
-            parameterName,
-            raw,
-            defaultDays);
-
-        return defaultDays;
-    }
-
-    private int ReadPositiveDaysParameter(
-        string parameterName,
-        IReadOnlyDictionary<string, string> parameters,
-        int defaultDays)
-    {
-        if (!parameters.TryGetValue(parameterName, out var raw))
-        {
-            return defaultDays;
-        }
-
-        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) && configured > 0)
-        {
-            return configured;
-        }
-
-        logger.LogWarning(
-            "Retention job parameter {Parameter} value {Raw} is not a positive integer. " +
-            "The job will use the default {Default}",
+            "Parameter {Parameter} value {Raw} is not a non-negative integer, so the job will use the default" +
+            " {Default}",
             parameterName,
             raw,
             defaultDays);

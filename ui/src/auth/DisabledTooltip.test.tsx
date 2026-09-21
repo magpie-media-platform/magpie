@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
+import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 import { DisabledTooltip, useDisabledState } from './DisabledTooltip';
 import { Role } from './types';
@@ -25,15 +26,34 @@ describe('DisabledTooltip', () => {
                 <DisabledTooltip disabled message="Configure a root folder before adding">
                     <button disabled>Add</button>
                 </DisabledTooltip>,
+                { wrapper: TooltipProvider },
             );
 
             const button = screen.getByRole('button', { name: 'Add' });
-            const descriptionId = button.getAttribute('aria-describedby');
-            expect(descriptionId).toBeTruthy();
+            const trigger = button.parentElement as HTMLElement;
+            const descriptionId = trigger.getAttribute('aria-describedby');
             expect(document.getElementById(descriptionId!)).toHaveTextContent('Configure a root folder before adding');
 
             await user.hover(button);
             expect(await screen.findByRole('tooltip')).toHaveTextContent('Configure a root folder before adding');
+        });
+
+        it('gives the reason to the keyboard when the control itself is disabled', async () => {
+            const user = userEvent.setup();
+
+            render(
+                <DisabledTooltip disabled message="Configure a root folder before adding">
+                    <button disabled>Add</button>
+                </DisabledTooltip>,
+                { wrapper: TooltipProvider },
+            );
+
+            const trigger = screen.getByRole('button', { name: 'Add' }).parentElement as HTMLElement;
+
+            await user.tab();
+
+            expect(trigger).toHaveFocus();
+            expect(trigger).toHaveAccessibleDescription('Configure a root folder before adding');
         });
 
         it('renders the control without a tooltip when the supplied state is enabled', () => {
@@ -41,6 +61,7 @@ describe('DisabledTooltip', () => {
                 <DisabledTooltip disabled={false} message="Unavailable">
                     <button>Add</button>
                 </DisabledTooltip>,
+                { wrapper: TooltipProvider },
             );
 
             expect(screen.getByRole('button', { name: 'Add' })).not.toHaveAttribute('aria-describedby');
@@ -59,6 +80,7 @@ describe('DisabledTooltip', () => {
                         <button disabled>Edit</button>
                     </DisabledTooltip>
                 </AuthProvider>,
+                { wrapper: TooltipProvider },
             );
 
             const button = screen.getByRole('button', { name: 'Edit' });
@@ -76,6 +98,7 @@ describe('DisabledTooltip', () => {
                         <button>Edit</button>
                     </DisabledTooltip>
                 </AuthProvider>,
+                { wrapper: TooltipProvider },
             );
 
             expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
@@ -92,6 +115,7 @@ describe('DisabledTooltip', () => {
                         <button disabled>Manage Users</button>
                     </DisabledTooltip>
                 </AuthProvider>,
+                { wrapper: TooltipProvider },
             );
 
             const button = screen.getByRole('button', { name: 'Manage Users' });
@@ -110,6 +134,7 @@ describe('DisabledTooltip', () => {
                         <button disabled>Delete</button>
                     </DisabledTooltip>
                 </AuthProvider>,
+                { wrapper: TooltipProvider },
             );
 
             const button = screen.getByRole('button', { name: 'Delete' });
@@ -130,6 +155,7 @@ describe('DisabledTooltip', () => {
                         <button disabled>Manage</button>
                     </DisabledTooltip>
                 </AuthProvider>,
+                { wrapper: TooltipProvider },
             );
 
             const button = screen.getByRole('button', { name: 'Manage' });
@@ -147,6 +173,7 @@ describe('DisabledTooltip', () => {
                         <button>Manage</button>
                     </DisabledTooltip>
                 </AuthProvider>,
+                { wrapper: TooltipProvider },
             );
 
             expect(screen.getByRole('button', { name: 'Manage' })).toBeInTheDocument();
@@ -163,6 +190,7 @@ describe('DisabledTooltip', () => {
                         <button disabled>Request</button>
                     </DisabledTooltip>
                 </AuthProvider>,
+                { wrapper: TooltipProvider },
             );
 
             const button = screen.getByRole('button', { name: 'Request' });
@@ -182,6 +210,7 @@ describe('DisabledTooltip', () => {
                         <button disabled>View</button>
                     </DisabledTooltip>
                 </AuthProvider>,
+                { wrapper: TooltipProvider },
             );
 
             const button = screen.getByRole('button', { name: 'View' });

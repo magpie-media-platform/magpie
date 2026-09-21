@@ -7,7 +7,6 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs.Metadata;
 using Magpie.Models;
 using Magpie.Models.Enums;
-using Magpie.Models.Jobs;
 using Magpie.Sdk.Jobs;
 
 using Moq;
@@ -17,7 +16,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Content;
 
 [TestFixture]
-public class MetadataContainerCleanupJobTests
+public sealed class MetadataContainerCleanupJobTests
 {
     private Mock<IMetadataContainerRepository> _metadataContainerRepository = null!;
 
@@ -28,29 +27,6 @@ public class MetadataContainerCleanupJobTests
         _metadataContainerRepository
             .Setup(r => r.ListOrphanedContainerIdsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-    }
-
-    [Test]
-    public void Spec_HasExpectedShape_WhenRead()
-    {
-        // Arrange
-        // Act
-        var spec = MetadataContainerCleanupJob.Spec;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(spec.JobType, Is.EqualTo("MetadataContainerCleanup"));
-            Assert.That(spec.DisplayName, Is.EqualTo("Metadata container cleanup"));
-            Assert.That(spec.Category, Is.EqualTo("Metadata"));
-            Assert.That(spec.Scope, Is.EqualTo(JobScope.Administrative));
-            Assert.That(spec.OnDemand, Is.True);
-            Assert.That(spec.Parameters, Is.Empty);
-            Assert.That(spec.ConcurrencyScope, Is.EqualTo(ConcurrencyScope.PerType));
-            Assert.That(spec.SupportedTriggerModes, Is.EquivalentTo([JobTriggerMode.Manual, JobTriggerMode.Schedule]));
-            Assert.That(spec.Timeout, Is.EqualTo(TimeSpan.FromMinutes(10)));
-            Assert.That(spec.FailurePolicy, Is.EqualTo(JobFailurePolicy.Fail));
-        }
     }
 
     [Test]

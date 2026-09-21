@@ -9,7 +9,7 @@ export interface CdnPhosphorIconProps extends Omit<IconProps, 'name'> {
     name: string | null | undefined;
 }
 
-export function normalizePhosphorIconName(name: string | null | undefined): string | null {
+function normalizePhosphorIconName(name: string | null | undefined): string | null {
     const nameWithoutSuffix = name?.trim().replace(/\s*icon$/i, '');
     if (!nameWithoutSuffix || !/^[a-z0-9 _-]+$/i.test(nameWithoutSuffix)) {
         return null;
@@ -24,7 +24,7 @@ export function normalizePhosphorIconName(name: string | null | undefined): stri
     return normalized || null;
 }
 
-export function buildPhosphorIconUrl(name: string, weight: IconWeight): string {
+function buildPhosphorIconUrl(name: string, weight: IconWeight): string {
     const fileName = weight === 'regular' ? `${name}.svg` : `${name}-${weight}.svg`;
     return `${PHOSPHOR_CORE_CDN_ROOT}/${weight}/${fileName}`;
 }

@@ -16,9 +16,9 @@ namespace Magpie.Data.SQLite;
 /// </summary>
 public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieDbContext>
 {
-    private static readonly TimeSpan BusyTimeout = TimeSpan.FromSeconds(10);
+    private const int CommandTimeoutSeconds = 30;
 
-    private const int DefaultCommandTimeoutSeconds = 30;
+    private static readonly TimeSpan BusyTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Creates a context for the given connection string.
@@ -45,15 +45,11 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
         IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
         IReadOnlyList<EventTrigger> defaultEventTriggers)
     {
-        var tunedConnectionString = new SqliteConnectionStringBuilder(connectionString)
-        {
-            DefaultTimeout = DefaultCommandTimeoutSeconds
-        }.ConnectionString;
-
         optionsBuilder
             .UseSqlite(
-                tunedConnectionString,
+                connectionString,
                 sqlite => sqlite
+                    .CommandTimeout(CommandTimeoutSeconds)
                     .MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name)
                     .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
             .ReplaceService<IModelCustomizer, SqliteModelCustomizer>()

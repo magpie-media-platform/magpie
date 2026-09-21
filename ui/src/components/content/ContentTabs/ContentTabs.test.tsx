@@ -332,7 +332,6 @@ describe('ChildrenTab', () => {
 
         it('suppresses the fulfillment badge for an excluded child', () => {
             renderWithRouter(mockChildren);
-            // Season 3 is the only missing child and it is excluded, so no Missing badge shows
             expect(screen.queryByText('Missing')).not.toBeInTheDocument();
         });
 
@@ -361,13 +360,14 @@ describe('ChildrenTab', () => {
         });
 
         it('provides accessible compact sort controls defaulting to number ascending', async () => {
+            vi.stubGlobal('matchMedia', createMatchMedia(390));
             const user = userEvent.setup();
             renderWithRouter(mockChildren);
 
             const controls = screen.getByTestId('children-tab__sort-controls');
-            const field = within(controls).getByRole('combobox', { name: 'Sort children by' });
+            const field = within(controls).getByRole('combobox', { name: 'Sort by field' });
             const direction = within(controls).getByRole('button', {
-                name: 'Sort children by Number descending',
+                name: 'Sort descending',
             });
 
             expect(direction).toBeEnabled();
@@ -384,7 +384,7 @@ describe('ChildrenTab', () => {
             await user.click(screen.getByRole('option', { name: 'Title' }));
 
             expect(direction).toBeEnabled();
-            expect(direction).toHaveAccessibleName('Sort children by Title descending');
+            expect(direction).toHaveAccessibleName('Sort descending');
         });
 
         it('orders children by sequence number ascending with missing numbers last by default', () => {
@@ -447,9 +447,7 @@ describe('ChildrenTab', () => {
                 Array.from(document.querySelectorAll('.data-table__row')).map((row) => row.getAttribute('data-row-id'));
             expect(getOrder()).toEqual(['child-one', 'child-two']);
 
-            const field = screen.getByRole('combobox', { name: 'Sort children by' });
-            await user.click(field);
-            await user.click(screen.getByRole('option', { name: 'Title' }));
+            await user.click(screen.getByRole('button', { name: 'Sort by Title' }));
 
             expect(getOrder()).toEqual(['child-two', 'child-one']);
         });
@@ -523,7 +521,7 @@ describe('ChildrenTab', () => {
             expect(document.querySelector('[data-component="children-tab"] .data-table')).not.toBeInTheDocument();
             expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
 
-            const field = screen.getByRole('combobox', { name: 'Sort children by' });
+            const field = screen.getByRole('combobox', { name: 'Sort by field' });
             const getMobileOrder = () =>
                 Array.from(document.querySelectorAll('.children-tab__mobile-card')).map((card) =>
                     card.getAttribute('data-child-id'),
@@ -541,7 +539,7 @@ describe('ChildrenTab', () => {
                 expect(getMobileOrder()).toEqual(expected);
             }
 
-            await user.click(screen.getByRole('button', { name: 'Sort children by Status descending' }));
+            await user.click(screen.getByRole('button', { name: 'Sort descending' }));
 
             expect(getMobileOrder()).toEqual(['child-zulu', 'child-alpha', 'child-beta']);
         });
@@ -658,13 +656,43 @@ describe('ChildrenTab', () => {
 });
 
 describe('FilesTab', () => {
+    it('keeps file actions keyboard accessible without an enclosing button', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onDelete = vi.fn();
+        const onUnlink = vi.fn();
+        render(
+            <FilesTab
+                files={[{ id: 'file', fileName: 'sample.mkv', relativePath: 'sample.mkv', size: 1024 }]}
+                onDeleteFile={onDelete}
+                onUnlinkFile={onUnlink}
+            />,
+        );
+
+        // Act
+        const unlink = screen.getByRole('button', { name: 'Unlink sample.mkv' });
+        unlink.focus();
+        await user.keyboard('{Enter}');
+
+        // Assert
+        expect(onUnlink).toHaveBeenCalledWith({
+            id: 'file',
+            fileName: 'sample.mkv',
+            relativePath: 'sample.mkv',
+            size: 1024,
+        });
+        expect(unlink.closest('.files-tab__panel')).not.toHaveAttribute('role', 'button');
+        screen.getByRole('button', { name: 'Delete sample.mkv' }).focus();
+        await user.keyboard('{Enter}');
+        expect(onDelete).toHaveBeenCalledTimes(1);
+        expect(onUnlink).toHaveBeenCalledTimes(1);
+    });
     const mockFiles: MediaFile[] = [
         {
             id: 'file-1',
             relativePath: 'Show/Season 01/Episode.01.mkv',
             fileName: 'Episode.01.mkv',
             size: 1024 * 1024 * 1024,
-            quality: { resolution: '1080p', videoCodec: 'x265' },
             dateAdded: '2023-01-01T00:00:00Z',
         },
         {
@@ -672,7 +700,6 @@ describe('FilesTab', () => {
             relativePath: 'Show/Season 01/Episode.02.mkv',
             fileName: 'Episode.02.mkv',
             size: 2 * 1024 * 1024 * 1024,
-            quality: { resolution: '4K', videoCodec: 'HEVC' },
             dateAdded: '2023-01-02T00:00:00Z',
         },
     ];
@@ -781,22 +808,18 @@ describe('FilesTab', () => {
             expect(onDeleteFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-1' }));
         });
 
-        it('does not invoke a row click when the delete action is clicked', () => {
-            const onFileClick = vi.fn();
+        it('invokes the delete action once', () => {
             const onDeleteFile = vi.fn();
-            render(<FilesTab files={mockFiles} onFileClick={onFileClick} onDeleteFile={onDeleteFile} />);
+            render(<FilesTab files={mockFiles} onDeleteFile={onDeleteFile} />);
             fireEvent.click(screen.getAllByLabelText('Delete Episode.01.mkv')[0]);
             expect(onDeleteFile).toHaveBeenCalledTimes(1);
-            expect(onFileClick).not.toHaveBeenCalled();
         });
 
-        it('invokes unlink without invoking the row click', () => {
-            const onFileClick = vi.fn();
+        it('passes the selected file to the unlink action', () => {
             const onUnlinkFile = vi.fn();
-            render(<FilesTab files={mockFiles} onFileClick={onFileClick} onUnlinkFile={onUnlinkFile} />);
+            render(<FilesTab files={mockFiles} onUnlinkFile={onUnlinkFile} />);
             fireEvent.click(screen.getAllByLabelText('Unlink Episode.01.mkv')[0]);
             expect(onUnlinkFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-1' }));
-            expect(onFileClick).not.toHaveBeenCalled();
         });
 
         it('shows a busy state on the file being deleted', () => {
@@ -830,7 +853,6 @@ describe('FilesTab', () => {
                 relativePath: 'file.mkv',
                 fileName: 'file.mkv',
                 size: 1024,
-                quality: { resolution: '1080p', videoCodec: 'x265' },
                 mediaInfo: {
                     container: 'matroska,webm',
                     durationSeconds: 5400,
@@ -902,6 +924,26 @@ describe('FilesTab', () => {
             expect(text).toHaveTextContent('Commentary');
             expect(text).toHaveTextContent('Forced');
             expect(text).toHaveTextContent('SDH');
+        });
+
+        it('labels the video track at its reported height instead of a lower tier', () => {
+            // Arrange
+            const file: MediaFile = {
+                id: 'file-1440',
+                relativePath: 'file.mkv',
+                fileName: 'file.mkv',
+                size: 1024,
+                mediaInfo: {
+                    tracks: [{ type: 'Video', name: 'video', codec: 'hevc', width: 2560, height: 1440 }],
+                },
+            };
+            // Act
+            render(<FilesTab files={[file]} />);
+            // Assert
+            const video = screen.getByTestId('files-tab-track-video');
+            expect(video).toHaveTextContent('2560x1440');
+            expect(video).toHaveTextContent('1440p');
+            expect(video).not.toHaveTextContent('1080p');
         });
 
         it('falls back to raw properties for codec and bitrate on legacy tracks', () => {

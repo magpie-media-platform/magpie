@@ -5,9 +5,6 @@ import { LibraryBulkActionButtons } from './LibraryBulkActionButtons';
 
 interface LibraryMobileSelectionBarProps {
     selection: BulkSelection;
-    selectedPageCount: number;
-    totalItems: number;
-    displaySelectedCount: number;
     onClearSelection: () => void;
     canEditContent: boolean;
     canManageContent: boolean;
@@ -22,9 +19,6 @@ interface LibraryMobileSelectionBarProps {
 
 export function LibraryMobileSelectionBar({
     selection,
-    selectedPageCount,
-    totalItems,
-    displaySelectedCount,
     onClearSelection,
     canEditContent,
     canManageContent,
@@ -38,12 +32,8 @@ export function LibraryMobileSelectionBar({
 }: LibraryMobileSelectionBarProps) {
     return (
         <MobileSelectionBar
-            className="library-page__mobile-selection-bar"
             data-component="library-mobile-selection-bar"
             selection={selection}
-            pageSelectedCount={selectedPageCount}
-            totalCount={totalItems}
-            displaySelectedCount={displaySelectedCount}
             onClear={onClearSelection}
             itemNounPlural="items"
             actionsClassName="library-page__mobile-selection-actions"

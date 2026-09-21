@@ -31,17 +31,6 @@ export interface PreviewPlayerProps {
     className?: string;
 }
 
-function resolveYouTubeId(preview: PreviewClip): string | null {
-    const direct = parseYouTubeId(preview.url);
-    if (direct) {
-        return direct;
-    }
-    if (preview.embedKind?.toLowerCase() === 'youtube') {
-        return parseYouTubeId(preview.url);
-    }
-    return null;
-}
-
 function previewLabel(preview: PreviewClip): string {
     if (preview.title && preview.title.trim()) {
         return preview.title.trim();
@@ -66,14 +55,15 @@ function AspectBox({ children, className, fit }: { children: ReactNode; classNam
 
 export function PreviewPlayer({ preview, posterUrl, fit = 'wide', className }: PreviewPlayerProps) {
     const label = previewLabel(preview);
-    const youTubeId = resolveYouTubeId(preview);
+    const youTubeId = parseYouTubeId(preview.url);
     const previewUrl = safeHttpUrl(preview.url);
-    const isDirectVideo = !!previewUrl;
+    const isDirectVideo = !!previewUrl && preview.embedKind?.toLowerCase() !== 'youtube';
 
     if (youTubeId || isDirectVideo) {
         return (
             <AspectBox className={className} fit={fit}>
                 <PosterPlayer
+                    mimeType={preview.mimeType ?? undefined}
                     directUrl={youTubeId ? null : previewUrl}
                     youTubeId={youTubeId}
                     posterUrl={posterUrl}
@@ -92,7 +82,7 @@ export function PreviewPlayer({ preview, posterUrl, fit = 'wide', className }: P
             data-testid="preview-player-external"
             data-component="preview-player"
         >
-            <span>{label}</span>
+            <span>{label} unavailable</span>
         </span>
     );
 }

@@ -6,7 +6,7 @@ import { DataTable, type DataTableProps } from '../DataTable';
 import { Badge } from '../Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { TagsCell } from '../TagsCell';
-import { formatSubjectKindLabel } from '@/types';
+import { resolveSubjectKindLabel } from '@/types';
 
 import './SubjectList.css';
 
@@ -74,7 +74,7 @@ function TitleCell({ title }: { title: string }) {
 function KindCell({ kind, label }: { kind: string; label?: string }) {
     return (
         <Badge variant="default" size="sm">
-            {label ?? formatSubjectKindLabel(kind)}
+            {label ?? resolveSubjectKindLabel(kind)}
         </Badge>
     );
 }
@@ -116,6 +116,7 @@ export const SubjectList = forwardRef<HTMLDivElement, SubjectListProps>(
                     id: 'title',
                     accessorKey: 'title',
                     header: 'Title',
+                    meta: { mobileRole: 'header' },
                     size: 300,
                     cell: ({ row }) => <TitleCell title={row.original.title} />,
                 },

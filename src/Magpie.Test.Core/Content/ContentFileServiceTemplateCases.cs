@@ -9,52 +9,138 @@ internal sealed class ContentFileServiceTemplateCases
 {
     public static IEnumerable<TestCaseData> Cases()
     {
-        yield return Case(
+        yield return new TestCaseData(
             "{Title} ({Year}).{Ext}",
-            "Inception (2010).mkv",
-            ("Title", "Inception"),
-            ("Year", "2010"),
-            ("Ext", "mkv"));
-        yield return Case("{Title} ({Year}).{Ext}", "Solo ()", ("Title", "Solo"));
-        yield return Case("{TITLE}|{title}|{Title}", "Inception Inception Inception", ("Title", "Inception"));
-        yield return Case("{Title:lower}", "inception", ("Title", "Inception"));
-        yield return Case("{Title:upper}", "INCEPTION", ("Title", "Inception"));
-        yield return Case("{Title:reverse}", "Inception", ("Title", "Inception"));
-        yield return Case(
+            "Inception",
+            null,
+            new DateTime(2010, 1, 1),
+            "source.mkv",
+            new[] { "Inception (2010).mkv" });
+        yield return new TestCaseData(
+            "{Title} ({Year}).{Ext}",
+            "Solo",
+            null,
+            null,
+            "source",
+            new[] { "Solo ()" });
+        yield return new TestCaseData(
+            "{TITLE}|{title}|{Title}",
+            "Inception",
+            null,
+            null,
+            "source",
+            new[] { "Inception Inception Inception" });
+        yield return new TestCaseData(
+            "{Title:lower}",
+            "Inception",
+            null,
+            null,
+            "source",
+            new[] { "inception" });
+        yield return new TestCaseData(
+            "{Title:upper}",
+            "Inception",
+            null,
+            null,
+            "source",
+            new[] { "INCEPTION" });
+        yield return new TestCaseData(
+            "{Title:reverse}",
+            "Inception",
+            null,
+            null,
+            "source",
+            new[] { "Inception" });
+        yield return new TestCaseData(
             "{Title}.mkv",
-            "Lock, Stock_ _Two_ Smoking _ Barrels_.mkv",
-            ("Title", "Lock, Stock: <Two> Smoking | Barrels?"));
-        yield return Case(
+            "Lock, Stock: <Two> Smoking | Barrels?",
+            null,
+            null,
+            "source",
+            new[] { "Lock, Stock_ _Two_ Smoking _ Barrels_.mkv" });
+        yield return new TestCaseData(
             "{Title} ({Year})/{Title} ({Year}).{Ext}",
-            "Inception (2010)/Inception (2010).mkv",
-            ("Title", "Inception"),
-            ("Year", "2010"),
-            ("Ext", "mkv"));
-        yield return Case("{Title}\\{Title}.{Ext}", "Inception\\Inception.mkv", ("Title", "Inception"), ("Ext", "mkv"));
-        yield return Case("{Title} ({Year}). /next", "Trailing ()/next", ("Title", "Trailing"), ("Year", string.Empty));
-        yield return Case("{{not-a-token}} {Title}", "{not-a-token} Brackets", ("Title", "Brackets"));
-        yield return Case("{Title", "{Title", ("Title", "Inception"));
-        yield return Case("{}{Title}", "Inception", ("Title", "Inception"));
-        yield return Case("{ Title : upper }", "INCEPTION", ("Title", "Inception"));
-        yield return Case("{OriginalTitle}.{Ext}", ".mkv", ("OriginalTitle", null), ("Ext", "mkv"));
-        yield return Case(
+            "Inception",
+            null,
+            new DateTime(2010, 1, 1),
+            "source.mkv",
+            new[] { "Inception (2010)", "Inception (2010).mkv" });
+        yield return new TestCaseData(
+            "{Title}\\{Title}.{Ext}",
+            "Inception",
+            null,
+            null,
+            "source.mkv",
+            new[] { "Inception", "Inception.mkv" });
+        yield return new TestCaseData(
+            "{Title} ({Year}). /next",
+            "Trailing",
+            null,
+            null,
+            "source",
+            new[] { "Trailing ()", "next" });
+        yield return new TestCaseData(
+            "{{not-a-token}} {Title}",
+            "Brackets",
+            null,
+            null,
+            "source",
+            new[] { "{not-a-token} Brackets" });
+        yield return new TestCaseData(
+            "{Title",
+            "Inception",
+            null,
+            null,
+            "source",
+            new[] { "{Title" });
+        yield return new TestCaseData(
+            "{}{Title}",
+            "Inception",
+            null,
+            null,
+            "source",
+            new[] { "Inception" });
+        yield return new TestCaseData(
+            "{ Title : upper }",
+            "Inception",
+            null,
+            null,
+            "source",
+            new[] { "INCEPTION" });
+        yield return new TestCaseData(
+            "{OriginalTitle}.{Ext}",
+            "The Matrix",
+            null,
+            null,
+            "source.mkv",
+            new[] { ".mkv" });
+        yield return new TestCaseData(
             "Movies/{Title} - released {Year}.mkv",
-            "Movies/Inception - released 2010.mkv",
-            ("Title", "Inception"),
-            ("Year", "2010"));
-        yield return Case("{Title}.mkv", "season1_episode2.mkv", ("Title", "season1/episode2"));
-        yield return Case("{Title}.mkv", "____etc.mkv", ("Title", "../../etc"));
-        yield return Case("{Title}/file.mkv", "_/file.mkv", ("Title", ".."));
-    }
-
-    private static TestCaseData Case(string template, string expected, params (string Name, string? Value)[] values)
-    {
-        var tokens = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var value in values)
-        {
-            tokens[value.Name] = value.Value;
-        }
-
-        return new TestCaseData(template, tokens, expected);
+            "Inception",
+            null,
+            new DateTime(2010, 1, 1),
+            "source",
+            new[] { "Movies", "Inception - released 2010.mkv" });
+        yield return new TestCaseData(
+            "{Title}.mkv",
+            "season1/episode2",
+            null,
+            null,
+            "source",
+            new[] { "season1_episode2.mkv" });
+        yield return new TestCaseData(
+            "{Title}.mkv",
+            "../../etc",
+            null,
+            null,
+            "source",
+            new[] { "____etc.mkv" });
+        yield return new TestCaseData(
+            "{Title}/file.mkv",
+            "..",
+            null,
+            null,
+            "source",
+            new[] { "_", "file.mkv" });
     }
 }

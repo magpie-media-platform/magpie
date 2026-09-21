@@ -91,7 +91,7 @@ internal sealed class IndexerFeedsEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return Results.Created(
-            $"api/{Name}/{created.Id}",
+            $"/api/{Name}/{created.Id}",
             CreateResponse(created, schema));
     }
 
@@ -157,9 +157,7 @@ internal sealed class IndexerFeedsEndpointGroup : IApiEndpointGroup
             Description = feed.Description,
             Enabled = feed.Enabled,
             LastSync = feed.LastSync,
-            Settings = schema.Count == 0
-                ? []
-                : feed.Settings.RedactSecrets(schema),
+            Settings = feed.Settings.RedactSecrets(schema),
             CreatedAt = feed.CreatedAt,
             CreatedByUserId = feed.CreatedByUserId,
             ModifiedAt = feed.ModifiedAt,

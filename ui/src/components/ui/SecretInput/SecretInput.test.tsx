@@ -34,7 +34,7 @@ describe('SecretInput', () => {
         const input = screen.getByLabelText('API Key');
         expect(input).toHaveAttribute('type', 'password');
         expect(input).not.toHaveAttribute('readonly');
-        expect(screen.queryByRole('button', { name: 'Clear API Key' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Replace API Key' })).not.toBeInTheDocument();
     });
 
     it('masks and locks a configured secret with a masked placeholder', () => {
@@ -44,17 +44,17 @@ describe('SecretInput', () => {
         expect(input.value).toBe('');
         expect(input).toHaveAttribute('readonly');
         expect(input).toHaveAttribute('placeholder', '********');
-        const clearButton = screen.getByRole('button', { name: 'Clear API Key' });
-        expect(clearButton).toBeInTheDocument();
-        expect(clearButton).toHaveTextContent('Clear');
+        const replaceButton = screen.getByRole('button', { name: 'Replace API Key' });
+        expect(replaceButton).toBeInTheDocument();
+        expect(replaceButton).toHaveTextContent('Replace');
     });
 
-    it('unlocks, focuses, and accepts a replacement when the clear button is clicked', async () => {
+    it('unlocks, focuses, and accepts a replacement when the replace button is clicked', async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         render(<ControlledSecret configured onChange={onChange} />);
 
-        await user.click(screen.getByRole('button', { name: 'Clear API Key' }));
+        await user.click(screen.getByRole('button', { name: 'Replace API Key' }));
 
         const input = screen.getByLabelText('API Key');
         expect(input).not.toHaveAttribute('readonly');
@@ -62,33 +62,33 @@ describe('SecretInput', () => {
 
         await user.type(input, 'new-secret');
         expect(onChange).toHaveBeenLastCalledWith('new-secret');
-        expect(screen.queryByRole('button', { name: 'Clear API Key' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Replace API Key' })).not.toBeInTheDocument();
     });
 
-    it('exposes a keyboard-reachable clear control with a field-specific label', async () => {
+    it('exposes a keyboard-reachable replace control with a field-specific label', async () => {
         const user = userEvent.setup();
         render(<ControlledSecret configured />);
 
         await user.tab();
         await user.tab();
-        expect(screen.getByRole('button', { name: 'Clear API Key' })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Replace API Key' })).toHaveFocus();
     });
 
-    it('disables the clear control while the form is disabled', () => {
+    it('disables the replace control while the form is disabled', () => {
         render(<ControlledSecret configured disabled />);
 
-        expect(screen.getByRole('button', { name: 'Clear API Key' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Replace API Key' })).toBeDisabled();
     });
 
     it('re-locks the mask when an unlocked field is left empty', async () => {
         const user = userEvent.setup();
         render(<ControlledSecret configured />);
 
-        await user.click(screen.getByRole('button', { name: 'Clear API Key' }));
+        await user.click(screen.getByRole('button', { name: 'Replace API Key' }));
         await user.tab();
 
         expect(screen.getByLabelText('API Key')).toHaveAttribute('readonly');
-        expect(screen.getByRole('button', { name: 'Clear API Key' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Replace API Key' })).toBeInTheDocument();
     });
 
     it('restores the masked state on remount without exposing a secret', () => {
@@ -100,6 +100,6 @@ describe('SecretInput', () => {
         const input = screen.getByLabelText('API Key') as HTMLInputElement;
         expect(input.value).toBe('');
         expect(input).toHaveAttribute('readonly');
-        expect(screen.getByRole('button', { name: 'Clear API Key' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Replace API Key' })).toBeInTheDocument();
     });
 });

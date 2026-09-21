@@ -27,7 +27,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
-import { useEventTriggers, useEventTrigger, type ApiEventTrigger } from './useEventTriggers';
+import { useEventTriggers, type ApiEventTrigger } from './useEventTriggers';
 
 const mockApiTriggers: ApiEventTrigger[] = [
     {
@@ -429,72 +429,5 @@ describe('useEventTriggers', () => {
             expect(result.current.triggers[0].eventFilter.eventName?.value).toBe('download.completed');
             expect(result.current.triggers[0].eventFilter.eventContext).toBeUndefined();
         });
-    });
-});
-
-describe('useEventTrigger', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
-
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
-
-    it('should fetch a single trigger by ID', async () => {
-        mockApiGet.mockResolvedValue(mockApiTriggers[0]);
-
-        const { result } = renderHook(() => useEventTrigger('event-1'), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        expect(mockApiGet).toHaveBeenCalledWith('/event-triggers/event-1');
-        expect(result.current.trigger?.id).toBe('event-1');
-        expect(result.current.trigger?.name).toBe('Refresh on Download Complete');
-    });
-
-    it('should not fetch when disabled', async () => {
-        const { result } = renderHook(() => useEventTrigger('event-1', false), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(mockApiGet).not.toHaveBeenCalled();
-        });
-
-        expect(result.current.trigger).toBeNull();
-    });
-
-    it('should not fetch when ID is empty', async () => {
-        const { result } = renderHook(() => useEventTrigger(''), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(mockApiGet).not.toHaveBeenCalled();
-        });
-
-        expect(result.current.trigger).toBeNull();
-    });
-
-    it('should return error on failure', async () => {
-        mockApiGet.mockRejectedValue(new Error('Not found'));
-
-        const { result } = renderHook(() => useEventTrigger('event-1'), {
-            wrapper: createWrapper(),
-        });
-
-        await waitFor(() => {
-            expect(result.current.isLoading).toBe(false);
-        });
-
-        expect(result.current.trigger).toBeNull();
-        expect(result.current.error).toBeInstanceOf(Error);
     });
 });

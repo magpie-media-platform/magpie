@@ -19,7 +19,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class WishlistDiscoveredRepositoryTests
+public sealed class WishlistDiscoveredRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private ILoggerFactory _loggerFactory = null!;
@@ -68,11 +68,10 @@ public class WishlistDiscoveredRepositoryTests
     {
         _context.Database.CloseConnection();
         _context.Dispose();
-        _loggerFactory.Dispose();
     }
 
     [Test]
-    public async Task RecordDiscoveredAsync_IsIdempotent_OnTheUniqueKey()
+    public async Task RecordDiscoveredAsync_IsIdempotent_WhenTheUniqueKeyAlreadyExists()
     {
         // Arrange
 
@@ -326,5 +325,46 @@ public class WishlistDiscoveredRepositoryTests
             .CountAsync(s => s.WishlistId == _wishlistId)
             .ConfigureAwait(false);
         Assert.That(remaining, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task ListEnrichedAsync_PrefersPoster_WhenBackdropHasLowerOrdinal()
+    {
+        // Arrange
+        var container = new MetadataContainer();
+        var contribution = new MetadataContribution { ProviderType = "test-provider", MetadataContainer = container };
+        contribution.ExternalIds.Add(new() { Source = "test-source", Value = "one" });
+        contribution.Images.Add(new()
+        {
+            Type = "backdrop",
+            Ordinal = 0,
+            Url = new Uri("https://example.test/backdrop")
+        });
+        contribution.Images.Add(new() { Type = "poster", Ordinal = 5, Url = new Uri("https://example.test/poster") });
+        _context.MetadataContributions.Add(contribution);
+        _context.ContentHierarchyItems.Add(new()
+        {
+            ContentType = "test-type",
+            Level = "test-level",
+            Slug = "test",
+            Name = "Test",
+            MetadataContainer = container
+        });
+        _context.WishlistDiscovered.Add(new()
+        {
+            WishlistId = _wishlistId,
+            ExternalIdSource = "test-source",
+            ExternalId = "one"
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.ListEnrichedAsync(_wishlistId, new()
+        {
+            Paging = new() { PageNumber = 1, PageSize = 10 }
+        }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(page.Items.Single().PosterUrl, Is.EqualTo("https://example.test/poster"));
     }
 }

@@ -25,7 +25,45 @@ namespace Magpie.Test.Extensions.Wikidata;
 internal sealed class ClientTests
 {
     [Test]
-    public async Task GetEntitiesAsync_Request_UsesBatchParametersAndHeaders()
+    public void SearchEntitiesAsync_FailsAfterTenPages_WhenContinuationNeverEnds()
+    {
+        // Arrange
+        var pages = 0;
+        using var http = new MockHttpMessageHandler();
+        http.When(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
+            .Respond(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"search\":[{\"id\":\"Q42\"}],\"search-continue\":" + ++pages + "}")
+            });
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
+            .Returns(() => new HttpClient(http, disposeHandler: false));
+        var subject = new WikidataClient(factory.Object, TimeProvider.System, NullLogger<WikidataClient>.Instance);
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+
+        // Act
+        var failure = Assert.ThrowsAsync<WikidataBudgetException>(async () =>
+            await subject.SearchEntitiesAsync("common name", context, default).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(failure, Is.TypeOf<WikidataBudgetException>());
+            Assert.That(
+                failure!.Message,
+                Is.EqualTo("Wikidata entity search scanned too many pages without finishing."));
+            Assert.That(pages, Is.EqualTo(10));
+        }
+    }
+
+    [Test]
+    public async Task GetEntitiesAsync_UsesBatchParametersAndHeaders_WhenRequest()
     {
         // Arrange
         string? requestUri = null;
@@ -77,7 +115,7 @@ internal sealed class ClientTests
     }
 
     [Test]
-    public async Task GetEntitiesAsync_FetchAllLanguages_OmitsLanguageRestriction()
+    public async Task GetEntitiesAsync_OmitsLanguageRestriction_WhenFetchAllLanguages()
     {
         // Arrange
         string? requestUri = null;
@@ -121,7 +159,7 @@ internal sealed class ClientTests
     }
 
     [Test]
-    public async Task SearchEntitiesAsync_Continuation_ReturnsStableDistinctQidsFromEveryPage()
+    public async Task SearchEntitiesAsync_ReturnsStableDistinctQidsFromEveryPage_WhenContinuation()
     {
         // Arrange
         var requestUris = new List<string>();
@@ -184,7 +222,7 @@ internal sealed class ClientTests
     }
 
     [Test]
-    public async Task ExecuteSparqlAsync_ShortAndLongQueries_UseGetAndPost()
+    public async Task ExecuteSparqlAsync_UseGetAndPost_WhenShortAndLongQueries()
     {
         // Arrange
         var methods = new List<HttpMethod>();
@@ -257,7 +295,7 @@ internal sealed class ClientTests
     }
 
     [Test]
-    public async Task GetEntitiesAsync_MaxlagEnvelope_RetriesOnce()
+    public async Task GetEntitiesAsync_RetriesOnce_WhenMaxlagEnvelope()
     {
         // Arrange
         using var http = new MockHttpMessageHandler();
@@ -303,7 +341,7 @@ internal sealed class ClientTests
     }
 
     [Test]
-    public void GetEntitiesAsync_TooManyIds_Throws()
+    public void GetEntitiesAsync_Throws_WhenTooManyIds()
     {
         // Arrange
         using var http = new MockHttpMessageHandler();
@@ -415,7 +453,7 @@ internal sealed class ClientTests
     }
 
     [Test]
-    public void ExecuteSparqlAsync_TooManyRequests_ThrowsRateLimited()
+    public void ExecuteSparqlAsync_ThrowsRateLimited_WhenTooManyRequests()
     {
         // Arrange
         using var http = new MockHttpMessageHandler();

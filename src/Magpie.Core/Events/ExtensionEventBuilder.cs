@@ -13,10 +13,10 @@ internal static class ExtensionEventBuilder
     {
         var context = new Dictionary<string, string>
         {
-            ["extension.generation"] = generation.ToString(CultureInfo.InvariantCulture),
+            [MagpieEvents.Keys.ExtensionGeneration] = generation.ToString(CultureInfo.InvariantCulture),
         };
 
-        return new(Guid.Empty, "extension.activation.changed", context, default, default, null);
+        return new(Guid.Empty, MagpieEvents.Names.ExtensionActivationChanged, context, default, default, null);
     }
 
     public static MagpieEvent BuildExtensionDisabledEvent(Guid extensionId, string reason)
@@ -109,5 +109,16 @@ internal static class ExtensionEventBuilder
         };
 
         return new(Guid.Empty, MagpieEvents.Names.ExtensionUpgraded, context, default, default, null);
+    }
+
+    public static MagpieEvent BuildExtensionUpdatedEvent(Guid extensionId, IReadOnlyCollection<string> changedFields)
+    {
+        var context = new Dictionary<string, string>
+        {
+            [MagpieEvents.Keys.ExtensionId] = extensionId.ToString("D", CultureInfo.InvariantCulture),
+            [MagpieEvents.Keys.ExtensionChangedFields] = string.Join(",", changedFields),
+        };
+
+        return new(Guid.Empty, MagpieEvents.Names.ExtensionUpdated, context, default, default, null);
     }
 }

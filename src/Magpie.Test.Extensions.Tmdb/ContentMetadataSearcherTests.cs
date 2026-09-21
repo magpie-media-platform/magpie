@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Core.Caching;
 using Magpie.Extensions.Tmdb;
 using Magpie.Extensions.Tmdb.Mapping;
 using Magpie.Extensions.Tmdb.QueryEngine;
@@ -28,18 +27,58 @@ namespace Magpie.Test.Extensions.Tmdb;
 [TestFixture]
 public class ContentMetadataSearcherTests
 {
-    private MemoryCacheFactory _cacheFactory = null!;
-    private MemoryCacheStore _cacheStore = null!;
     private Mock<IQueryEngine> _engine = null!;
     private Mock<ITmdbClient> _client = null!;
     private ICache _hydrationCache = null!;
     private IContentHierarchyMetadataAdvancedSearcher _searcher = null!;
 
+    private ICacheFactory _cacheFactory = null!;
+
     [SetUp]
     public void SetUp()
     {
-        _cacheStore = new MemoryCacheStore(TimeProvider.System);
-        _cacheFactory = new MemoryCacheFactory(_cacheStore);
+        var cacheFactory = new Mock<ICacheFactory>();
+        var caches = new Dictionary<string, ICache>(StringComparer.Ordinal);
+        cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns<string, Func<CachePolicy>?>((name, _) =>
+            {
+                if (caches.TryGetValue(name, out var existing))
+                {
+                    return existing;
+                }
+
+                var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+                var cache = new Mock<ICache>();
+                cache.Setup(value => value.Set(It.IsAny<string>(), It.IsAny<It.IsAnyType>()))
+                    .Callback(new InvocationAction(invocation =>
+                        values[(string)invocation.Arguments[0]] = invocation.Arguments[1]));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<It.IsAnyType?>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value;
+                        return found;
+                    }));
+                cache.Setup(value => value.Remove(It.IsAny<string>())).Returns<string>(values.Remove);
+                cache.Setup(value => value.GetOrAddAsync(
+                        It.IsAny<string>(),
+                        It.IsAny<Func<CancellationToken, ValueTask<MetadataSearchCandidate?>>>(),
+                        It.IsAny<CancellationToken>()))
+                    .Returns<string, Func<CancellationToken, ValueTask<MetadataSearchCandidate?>>, CancellationToken>(
+                        async (key, valueFactory, token) =>
+                        {
+                            if (values.TryGetValue(key, out var cached))
+                            {
+                                return (MetadataSearchCandidate?)cached;
+                            }
+
+                            var created = await valueFactory(token).ConfigureAwait(false);
+                            values[key] = created;
+                            return created;
+                        });
+                return caches[name] = cache.Object;
+            });
+        _cacheFactory = cacheFactory.Object;
         _hydrationCache = _cacheFactory.GetOrCreate("tmdb-hydration");
         _engine = new Mock<IQueryEngine>();
         _client = new Mock<ITmdbClient>();
@@ -62,13 +101,6 @@ public class ContentMetadataSearcherTests
             _cacheFactory,
             queryCache.Object,
             NullLogger<ContentMetadataSearcher>.Instance);
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        _cacheFactory.Dispose();
-        _cacheStore.Dispose();
     }
 
     [TestCase("")]
@@ -158,15 +190,16 @@ public class ContentMetadataSearcherTests
             Assert.That(results[0].ExternalIdSource, Is.EqualTo("tmdb"));
             Assert.That(results[0].ExternalId, Is.EqualTo("1726"));
             Assert.That(results[0].Title, Is.EqualTo("Iron Man"));
-            _engine.Verify(
-                engine => engine.SearchAsync(
-                    It.Is<QueryRequest>(request =>
-                        request.Route == ContentRoute.Movie &&
-                        request.OrdinarySearchTerm == "Iron Man" &&
-                        request.Page == 1),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
         }
+
+        _engine.Verify(
+            engine => engine.SearchAsync(
+                It.Is<QueryRequest>(request =>
+                    request.Route == ContentRoute.Movie &&
+                    request.OrdinarySearchTerm == "Iron Man" &&
+                    request.Page == 1),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -214,7 +247,7 @@ public class ContentMetadataSearcherTests
     }
 
     [Test]
-    public async Task AdvancedSearchAsync_WarnsAndSearchesShows_WhenTvLevelIncludesSeasonsAndShows()
+    public async Task AdvancedSearchAsync_SearchesShowsWithoutWarning_WhenTvLevelIncludesSeasonsAndShows()
     {
         // Arrange
         List<SearchHit> hits = [new() { Route = ContentRoute.TvShow, Id = 1399, Title = "Game of Thrones" }];
@@ -254,9 +287,7 @@ public class ContentMetadataSearcherTests
         {
             Assert.That(result.Matches, Has.Count.EqualTo(1));
             Assert.That(result.Matches[0].ExternalId, Is.EqualTo("1399"));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("cannot search individual TV seasons or episodes"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 

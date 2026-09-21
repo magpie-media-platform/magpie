@@ -340,6 +340,7 @@ export function FileBrowser({
                             value={manualPath}
                             onChange={(e) => setManualPath(e.target.value)}
                             placeholder="Enter path manually..."
+                            aria-label="Directory path"
                             size="sm"
                             disabled={loading}
                             className="file-browser__path-input"
@@ -378,7 +379,7 @@ export function FileBrowser({
                                 <span>This folder is empty</span>
                             </div>
                         ) : (
-                            <ul className="file-browser__list" role="listbox" aria-label="Directory contents">
+                            <ul className="file-browser__list" aria-label="Directory contents">
                                 {filteredEntries.map((entry) => {
                                     const isSelected = selectedEntry?.path === entry.path;
                                     const isSelectable =
@@ -397,13 +398,12 @@ export function FileBrowser({
                                             ]
                                                 .filter(Boolean)
                                                 .join(' ')}
-                                            role="option"
-                                            aria-selected={isSelected}
                                             data-entry-type={entry.type}
                                             data-entry-path={entry.path}
                                         >
                                             <button
                                                 type="button"
+                                                aria-pressed={isSelected}
                                                 className="file-browser__entry-button"
                                                 onClick={() => handleEntryClick(entry)}
                                                 onDoubleClick={() => handleEntryDoubleClick(entry)}
@@ -417,7 +417,7 @@ export function FileBrowser({
                                                 </span>
                                                 <span className="file-browser__entry-name">{entry.name}</span>
                                             </button>
-                                            {entry.type === 'folder' && mode !== 'folder' && (
+                                            {entry.type === 'folder' && (
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"

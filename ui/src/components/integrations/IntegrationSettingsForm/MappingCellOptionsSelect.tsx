@@ -5,7 +5,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useOptionsSource, type OptionsSourceContext } from '@/hooks/useOptionsSource';
 import type { IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
 
-const JELLYFIN_LIBRARY_OPTIONS_FUNCTION = 'magpieJellyfin.listLibraries';
+type PickerStateKind = 'error' | 'not-configured' | 'loading' | 'empty';
+
+interface OptionsFailure {
+    userMessage?: unknown;
+    notConfigured?: unknown;
+}
+
+function isOptionsFailure(error: unknown): error is OptionsFailure {
+    return typeof error === 'object' && error !== null;
+}
 
 interface MappingCellOptionsSelectProps {
     column: IntegrationSettingDefinition;
@@ -29,97 +38,30 @@ export function MappingCellOptionsSelect({
     optionsSourceContext,
     onPickValue,
 }: MappingCellOptionsSelectProps): ReactNode {
-    const jellyfinPicker =
-        column.optionsSource?.kind === 'JSFunction' &&
-        column.optionsSource.functionName === JELLYFIN_LIBRARY_OPTIONS_FUNCTION;
-    const missingJellyfinCredentials =
-        jellyfinPicker &&
-        !optionsSourceContext.entityId &&
-        (!optionsSourceContext.state.host?.trim() || !optionsSourceContext.state.apiKey?.trim());
-    const query = useOptionsSource(column.optionsSource, optionsSourceContext, !missingJellyfinCredentials);
+    const query = useOptionsSource(column.optionsSource, optionsSourceContext);
     const options = query.data ?? [];
     const errored = query.isError;
     const loading = query.isPending || query.isFetching;
     const label = column.displayName ?? column.key;
 
-    if (jellyfinPicker) {
-        if (missingJellyfinCredentials) {
-            return (
-                <PickerState
-                    column={column}
-                    cellId={cellId}
-                    value={value}
-                    label={label}
-                    message="Enter the Jellyfin host URL and API key to load libraries."
-                    state="missing-credentials"
-                    disabled={disabled}
-                />
-            );
-        }
-
-        if (errored) {
-            const authenticationFailure =
-                query.error instanceof Error && query.error.name === 'JellyfinAuthenticationError';
-            return (
-                <PickerState
-                    column={column}
-                    cellId={cellId}
-                    value={value}
-                    label={label}
-                    message={
-                        authenticationFailure
-                            ? 'Jellyfin rejected the API key. Check the credentials and retry.'
-                            : 'Failed to connect to Jellyfin. Check the host and network, then retry.'
-                    }
-                    state={authenticationFailure ? 'authentication-error' : 'network-error'}
-                    onRetry={() => void query.refetch()}
-                    retryLabel="Retry libraries"
-                    disabled={disabled}
-                />
-            );
-        }
-
-        if (loading) {
-            return (
-                <PickerState
-                    column={column}
-                    cellId={cellId}
-                    value={value}
-                    label={label}
-                    message="Loading Jellyfin libraries..."
-                    state="loading"
-                    disabled={disabled}
-                />
-            );
-        }
-
-        if (options.length === 0) {
-            return (
-                <PickerState
-                    column={column}
-                    cellId={cellId}
-                    value={value}
-                    label={label}
-                    message="No Jellyfin libraries were found. Add a library or verify its access, then retry."
-                    state="empty"
-                    onRetry={() => void query.refetch()}
-                    retryLabel="Retry libraries"
-                    disabled={disabled}
-                />
-            );
-        }
-    }
-
     if (errored) {
+        const failure: OptionsFailure = isOptionsFailure(query.error) ? query.error : {};
+        const notConfigured = failure.notConfigured === true;
+        const userMessage = typeof failure.userMessage === 'string' ? failure.userMessage.trim() : '';
         return (
             <PickerState
                 column={column}
                 cellId={cellId}
                 value={value}
                 label={label}
-                message="Failed to load options. Check the source connection."
-                state="error"
-                onRetry={() => void query.refetch()}
+                message={
+                    userMessage ||
+                    (notConfigured
+                        ? 'Complete the connection settings to load options.'
+                        : 'Failed to load options. Check the source connection.')
+                }
+                state={notConfigured ? 'not-configured' : 'error'}
+                onRetry={notConfigured ? undefined : () => void query.refetch()}
                 disabled={disabled}
             />
         );
@@ -176,24 +118,13 @@ interface PickerStateProps {
     value: string;
     label: string;
     message: string;
-    state: string;
+    state: PickerStateKind;
     onRetry?: () => void;
-    retryLabel?: string;
     disabled: boolean;
 }
 
-function PickerState({
-    column,
-    cellId,
-    value,
-    label,
-    message,
-    state,
-    onRetry,
-    retryLabel = 'Retry options',
-    disabled,
-}: PickerStateProps): ReactNode {
-    const errored = state === 'authentication-error' || state === 'network-error' || state === 'error';
+function PickerState({ column, cellId, value, label, message, state, onRetry, disabled }: PickerStateProps): ReactNode {
+    const errored = state === 'error';
 
     return (
         <div className="integration-settings-form__cell-fallback" data-picker-state={state}>
@@ -211,7 +142,7 @@ function PickerState({
             </p>
             {onRetry && (
                 <Button type="button" variant="ghost" size="sm" onClick={onRetry} disabled={disabled}>
-                    {retryLabel}
+                    Retry options
                 </Button>
             )}
         </div>

@@ -31,13 +31,3 @@ export function SubjectDetailsHeaderSlot({ children, className, entityId, entity
 }
 
 SubjectDetailsHeaderSlot.displayName = 'SubjectDetailsHeaderSlot';
-
-export function SubjectDetailsTabsSlot({ children, className, entityId, entityType }: SubjectSlotProps) {
-    return (
-        <Slot slot="subject.details.tabs" className={className} entityId={entityId} entityType={entityType}>
-            {children}
-        </Slot>
-    );
-}
-
-SubjectDetailsTabsSlot.displayName = 'SubjectDetailsTabsSlot';

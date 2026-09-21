@@ -45,6 +45,11 @@ public sealed record WishlistCreate
     public bool Enabled { get; init; } = true;
 
     /// <summary>
+    /// Whether added content is monitored, or <see langword="null"/> to inherit.
+    /// </summary>
+    public bool? Monitoring { get; init; }
+
+    /// <summary>
     /// Whether only the owner can edit the wishlist.
     /// </summary>
     public bool OwnerLock { get; init; }

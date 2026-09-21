@@ -5,7 +5,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/api')>()),
     apiGet: vi.fn(),
     apiPost: vi.fn(),
 }));
@@ -21,7 +22,7 @@ vi.mock('@/auth', async () => {
     };
 });
 
-import { apiGet, apiPost } from '@/lib/api';
+import { ApiError, apiGet, apiPost } from '@/lib/api';
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import type { ApiContentHierarchyItem } from '@/types/content';
@@ -163,6 +164,7 @@ describe('InteractiveSearchPage', () => {
         });
         expect(screen.getByText('The.Movie.2024.720p.WEB')).toBeInTheDocument();
         expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
+        expect(document.title).toBe('Interactive Search - Magpie');
         expect(screen.getByText('Confident')).toBeInTheDocument();
         expect(screen.getByText('Indeterminate')).toBeInTheDocument();
     });
@@ -264,6 +266,39 @@ describe('InteractiveSearchPage', () => {
             expect(screen.queryByTestId('interactive-search-progress')).not.toBeInTheDocument();
         });
         expect(screen.getByText('The.Movie.2024.1080p.BluRay')).toBeInTheDocument();
+    });
+
+    it.each(['The download client timed out', 'No enabled download client is configured.'])(
+        'reports the actual grab failure: %s',
+        async (message) => {
+            // Arrange
+            const user = userEvent.setup();
+            vi.mocked(apiPost).mockResolvedValueOnce([candidate()]).mockRejectedValueOnce(new Error(message));
+            render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+            // Act
+            await user.click(await screen.findByRole('button', { name: /^grab$/i }));
+            // Assert
+            expect(await screen.findByText('Grab failed')).toBeInTheDocument();
+            expect(screen.getByText(message)).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /^grab$/i })).toBeEnabled();
+        },
+    );
+
+    it('reports the no-download-client conflict as its own actionable condition', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiPost)
+            .mockResolvedValueOnce([candidate()])
+            .mockRejectedValueOnce(new ApiError(409, 'No enabled download client is configured.'));
+        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+        // Act
+        await user.click(await screen.findByRole('button', { name: /^grab$/i }));
+        // Assert
+        expect(await screen.findByText('No download client configured')).toBeInTheDocument();
+        expect(
+            screen.getByText('Add a download client on the Download Clients page to download releases.'),
+        ).toBeInTheDocument();
+        expect(screen.queryByText('Grab failed')).not.toBeInTheDocument();
     });
 
     it('grabs a matched candidate via the grab endpoint', async () => {

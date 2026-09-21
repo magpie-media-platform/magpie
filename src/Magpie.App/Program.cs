@@ -1,12 +1,14 @@
 using System.CommandLine;
 
 using Magpie.App.Commands;
+using Magpie.App.Hosting;
 using Magpie.CommandLine.ApiProxy;
 using Magpie.CommandLine.Dispatch;
 using Magpie.Models;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 
 var rootCommand = new RootCommand("magpie")
 {
@@ -23,7 +25,7 @@ rootCommand.AddApiProxyCommands(async cancellationToken =>
     builder.AddMagpieCli();
     builder.AddMagpieSystem(new HostStatusInfo { Mode = HostMode.Default });
 
-    await builder.MigrateMagpieDatabaseAsync(cancellationToken).ConfigureAwait(false);
+    await builder.PrepareMagpieDatabaseAsync(cancellationToken).ConfigureAwait(false);
     await builder.AddMagpieExtensionsAsync(cancellationToken).ConfigureAwait(false);
 
     var app = builder.Build();
@@ -34,7 +36,8 @@ rootCommand.AddApiProxyCommands(async cancellationToken =>
     app.UseAuthorization();
     app.MapMagpieEndpoints();
 
-    await app.DispatchLifecycleEventsAsync(cancellationToken).ConfigureAwait(false);
+    await app.Services.GetRequiredService<DatabaseStartupService>().RunAsync(cancellationToken)
+        .ConfigureAwait(false);
     await app.StartAsync(cancellationToken).ConfigureAwait(false);
 
     return app;

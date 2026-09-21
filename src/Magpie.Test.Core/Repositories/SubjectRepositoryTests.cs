@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -20,6 +21,7 @@ using Magpie.Sdk.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -28,8 +30,32 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class SubjectRepositoryTests
+public sealed class SubjectRepositoryTests
 {
+    private static readonly object[] ChangedFieldPatches =
+    [
+        new object[] { new SubjectRowPatch(), "" },
+        new object[] { new SubjectRowPatch { DateLastRefreshed = new() { Value = null } }, "" },
+        new object[]
+        {
+            new SubjectRowPatch { DateLastRefreshed = new() { Value = DateTime.UnixEpoch } },
+            "dateLastRefreshed"
+        },
+        new object[] { new SubjectRowPatch { Tags = new() { Add = ["followed"] } }, "tags" },
+        new object[] { new SubjectRowPatch { Tags = new() { Add = ["new-tag"] } }, "tags" },
+        new object[] { new SubjectRowPatch { Tags = new() { Remove = ["absent"] } }, "" },
+        new object[] { new SubjectRowPatch { Tags = new() { Add = ["followed"], Remove = ["followed"] } }, "" },
+        new object[]
+        {
+            new SubjectRowPatch
+            {
+                DateLastRefreshed = new() { Value = DateTime.UnixEpoch },
+                Tags = new() { Add = ["followed"] }
+            },
+            "dateLastRefreshed,tags"
+        }
+    ];
+
     private MagpieDbContext _context = null!;
     private Mock<IEventBus> _eventBus = null!;
     private ISubjectRepository _subject = null!;
@@ -89,9 +115,11 @@ public class SubjectRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         _transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
@@ -100,7 +128,8 @@ public class SubjectRepositoryTests
             auditRecordRepository,
             _transactionManager,
             _eventBus.Object,
-            loggerFactory.CreateLogger<SubjectRepository>());
+            loggerFactory.CreateLogger<SubjectRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         _subject = subject;
 
         _metadataContainerRepository = new MetadataContainerRepository(
@@ -108,7 +137,8 @@ public class SubjectRepositoryTests
             auditRecordRepository,
             _subject,
             _transactionManager,
-            loggerFactory.CreateLogger<MetadataContainerRepository>());
+            loggerFactory.CreateLogger<MetadataContainerRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -231,6 +261,75 @@ public class SubjectRepositoryTests
     }
 
     [Test]
+    public async Task DeleteWhereAsync_KeepsTheOwnedSubject_WhenTheIdListAlsoNamesAnOrphan()
+    {
+        // Arrange
+        var ownedContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var contentContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.AddRange(ownedContainer, contentContainer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var orphan = new Subject
+        {
+            MetadataContainerId = _metadataContainerId,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = new Guid("11111111-1111-1111-1111-111111111111")
+        };
+        var owned = new Subject
+        {
+            MetadataContainerId = ownedContainer.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = new Guid("11111111-1111-1111-1111-111111111111")
+        };
+        var contribution = new MetadataContribution
+        {
+            MetadataContainerId = contentContainer.Id,
+            ProviderType = "provider",
+            Ordinal = 0,
+            CreatedAt = DateTime.UtcNow
+        };
+        contribution.Relationships.Add(new Relationship
+        {
+            RelatedMetadataContainerId = ownedContainer.Id,
+            Kind = "director",
+            Ordinal = 0
+        });
+        _context.Subjects.AddRange(orphan, owned);
+        _context.MetadataContributions.Add(contribution);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            MetadataContainerId = contentContainer.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-a",
+            Name = "Item A",
+            Monitoring = true,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var deleted = await _subject.DeleteWhereAsync(new SubjectQuery
+        {
+            HasContentRelationships = false,
+            HasUserContributions = false,
+            HasTags = false,
+            IsUserCreated = false,
+            Ids = [orphan.Id, owned.Id]
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.EqualTo(1));
+            Assert.That(_context.Subjects.Select(s => s.Id), Is.EquivalentTo([owned.Id]));
+        }
+    }
+
+    [Test]
     public async Task QueryAsync_ExcludesSubject_WhenContentLinkFilterIsFalse()
     {
         // Arrange
@@ -255,7 +354,7 @@ public class SubjectRepositoryTests
         contribution.Relationships.Add(new Relationship
         {
             RelatedMetadataContainerId = _metadataContainerId,
-            Kind = "performer",
+            Kind = "director",
             Ordinal = 0
         });
         _context.Subjects.Add(subject);
@@ -263,10 +362,10 @@ public class SubjectRepositoryTests
         _context.ContentHierarchyItems.Add(new ContentHierarchyItem
         {
             MetadataContainerId = contentContainer.Id,
-            ContentType = "movie",
-            Level = "scene",
-            Slug = "scene",
-            Name = "Scene",
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-a",
+            Name = "Item A",
             Monitoring = true,
             CreatedAt = DateTime.UtcNow
         });
@@ -500,7 +599,7 @@ public class SubjectRepositoryTests
         contribution.Relationships.Add(new Relationship
         {
             RelatedMetadataContainerId = _metadataContainerId,
-            Kind = "performer",
+            Kind = "director",
             Ordinal = 0
         });
         _context.Subjects.Add(subject);
@@ -508,10 +607,10 @@ public class SubjectRepositoryTests
         _context.ContentHierarchyItems.Add(new ContentHierarchyItem
         {
             MetadataContainerId = contentContainer.Id,
-            ContentType = "movie",
-            Level = "scene",
-            Slug = "scene",
-            Name = "Scene",
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-a",
+            Name = "Item A",
             Monitoring = true,
             CreatedAt = DateTime.UtcNow
         });
@@ -528,7 +627,7 @@ public class SubjectRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_LoadsContributionTitleAndImages_ForListRendering()
+    public async Task ListAllAsync_LoadsContributionTitleAndImages_WhenListRenderingIsRequested()
     {
         // Arrange
         var contribution = new MetadataContribution
@@ -886,7 +985,7 @@ public class SubjectRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_AppliesSkipAndTake_AndReportsUnpagedTotal()
+    public async Task QueryAsync_PagesItemsAndReportsTotal_WhenPagingIsSet()
     {
         // Arrange
         for (var i = 0; i < 5; i++)
@@ -941,7 +1040,7 @@ public class SubjectRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_SortsByKindDescending_AcrossPages()
+    public async Task QueryAsync_SortsByKindDescending_WhenMultiplePagesExist()
     {
         // Arrange
         foreach (var (kind, title) in new[] { ("network", "N"), ("person", "P"), ("studio", "S") })
@@ -985,7 +1084,7 @@ public class SubjectRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_SortsByTitleAscendingByDefault_AcrossPages()
+    public async Task QueryAsync_SortsByTitleAscendingByDefault_WhenMultiplePagesExist()
     {
         // Arrange
         foreach (var (kind, title) in new[] { ("person", "Charlie"), ("studio", "Alice"), ("person", "Bob") })
@@ -1257,8 +1356,8 @@ public class SubjectRepositoryTests
         _eventBus.Verify(
             bus => bus.PublishAsync(
                 It.Is<MagpieEvent>(magpieEvent =>
-                    magpieEvent.Name == MagpieEvents.Names.SubjectDeleted &&
-                    magpieEvent.Context[MagpieEvents.Keys.SubjectId] == subject.Id.ToString()),
+                    magpieEvent.Name == "subject.deleted" &&
+                    magpieEvent.Context["subject.id"] == subject.Id.ToString()),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -1313,7 +1412,7 @@ public class SubjectRepositoryTests
         _context.Subjects.Add(subject);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
-        var patch = new TagsPatch { Id = subject.Id };
+        var patch = new SubjectRowPatch { Id = subject.Id };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
@@ -1333,7 +1432,7 @@ public class SubjectRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
-        var patch = new TagsPatch { Id = Guid.NewGuid() };
+        var patch = new SubjectRowPatch { Id = Guid.NewGuid() };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
@@ -1355,7 +1454,7 @@ public class SubjectRepositoryTests
         _context.Subjects.Add(subject);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
-        var patch = new TagsPatch { Id = subject.Id };
+        var patch = new SubjectRowPatch { Id = subject.Id };
 
         // Act
         await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
@@ -1407,7 +1506,7 @@ public class SubjectRepositoryTests
     }
 
     [Test]
-    public async Task InlineSubjectCreate_ThenFailingContributionAdd_RollsBackSubjectAndContainer()
+    public async Task CreateAsync_RollsBackSubjectAndContainer_WhenContributionCreationFails()
     {
         // Arrange
         var subjectsBefore = await _context.Subjects.CountAsync().ConfigureAwait(false);
@@ -1464,7 +1563,7 @@ public class SubjectRepositoryTests
     }
 
     [Test]
-    public async Task InlineSubjectCreate_ThenSuccessfulContributionAdd_PersistsBoth()
+    public async Task CreateAsync_PersistsSubjectAndContainer_WhenContributionCreationSucceeds()
     {
         // Arrange
         var subjectsBefore = await _context.Subjects.CountAsync().ConfigureAwait(false);
@@ -1606,11 +1705,11 @@ public class SubjectRepositoryTests
             MetadataContainerId = contentContainer.Id,
             Ordinal = 1,
             ProviderType = "provider-a",
-            Title = "Scene"
+            Title = "Movie Alpha"
         };
         contributedLayer.Relationships.Add(new Relationship
         {
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = subjectAContainer.Id,
             Ordinal = 0
         });
@@ -1619,17 +1718,17 @@ public class SubjectRepositoryTests
             MetadataContainerId = contentContainer.Id,
             Ordinal = 0,
             ProviderType = "provider-b",
-            Title = "Scene"
+            Title = "Movie Alpha"
         };
         materializedLayer.Relationships.Add(new Relationship
         {
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = subjectAContainer.Id,
             Ordinal = 0
         });
         materializedLayer.Relationships.Add(new Relationship
         {
-            Kind = "studio",
+            Kind = "publisher",
             RelatedMetadataContainerId = subjectBContainer.Id,
             Ordinal = 1
         });
@@ -1638,10 +1737,10 @@ public class SubjectRepositoryTests
         var content = new ContentHierarchyItem
         {
             MetadataContainerId = contentContainer.Id,
-            ContentType = "movie",
-            Level = "scene",
-            Slug = "scene",
-            Name = "Scene",
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-a",
+            Name = "Item A",
             Monitoring = true,
             CreatedAt = DateTime.UtcNow
         };
@@ -1684,11 +1783,11 @@ public class SubjectRepositoryTests
             MetadataContainerId = contentContainer.Id,
             Ordinal = 0,
             ProviderType = "test",
-            Title = "Scene"
+            Title = "Movie Alpha"
         };
         contribution.Relationships.Add(new Relationship
         {
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = subjectContainer.Id,
             Ordinal = 0
         });
@@ -1696,10 +1795,10 @@ public class SubjectRepositoryTests
         _context.ContentHierarchyItems.Add(new ContentHierarchyItem
         {
             MetadataContainerId = contentContainer.Id,
-            ContentType = "movie",
-            Level = "scene",
-            Slug = "scene",
-            Name = "Scene",
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-a",
+            Name = "Item A",
             Monitoring = true,
             CreatedAt = DateTime.UtcNow
         });
@@ -1739,17 +1838,17 @@ public class SubjectRepositoryTests
             MetadataContainerId = contentContainer.Id,
             Ordinal = 0,
             ProviderType = "test",
-            Title = "Scene"
+            Title = "Movie Alpha"
         };
         contribution.Relationships.Add(new Relationship
         {
-            Kind = "performer",
+            Kind = "director",
             RelatedMetadataContainerId = personContainer.Id,
             Ordinal = 0
         });
         contribution.Relationships.Add(new Relationship
         {
-            Kind = "studio",
+            Kind = "publisher",
             RelatedMetadataContainerId = studioContainer.Id,
             Ordinal = 1
         });
@@ -1758,10 +1857,10 @@ public class SubjectRepositoryTests
         var content = new ContentHierarchyItem
         {
             MetadataContainerId = contentContainer.Id,
-            ContentType = "movie",
-            Level = "scene",
-            Slug = "scene",
-            Name = "Scene",
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-a",
+            Name = "Item A",
             Monitoring = true,
             CreatedAt = DateTime.UtcNow
         };
@@ -1782,5 +1881,173 @@ public class SubjectRepositoryTests
             Assert.That(result.TotalItems, Is.EqualTo(1));
             Assert.That(items[0].MetadataContainerId, Is.EqualTo(studioContainer.Id));
         }
+    }
+
+    [TestCase(CriteriaValueOperator.ContainsString, "PH", 1)]
+    [TestCase(CriteriaValueOperator.NotContainsString, "PH", 0)]
+    [TestCase(CriteriaValueOperator.StartsWithString, "AL", 1)]
+    [TestCase(CriteriaValueOperator.NotStartsWithString, "AL", 0)]
+    [TestCase(CriteriaValueOperator.EndsWithString, "HA", 1)]
+    [TestCase(CriteriaValueOperator.NotEndsWithString, "HA", 0)]
+    [TestCase(CriteriaValueOperator.Equals, "ALPHA", 1)]
+    [TestCase(CriteriaValueOperator.NotEquals, "ALPHA", 0)]
+    [TestCase(CriteriaValueOperator.IsNull, null, 0)]
+    [TestCase(CriteriaValueOperator.IsNotNull, null, 1)]
+    public async Task QueryAsync_FiltersByTitle_WhenStringOperatorIsUsed(
+        CriteriaValueOperator operation, string? value, int expectedCount)
+    {
+        // Arrange
+        _context.Subjects.Add(new Subject { Kind = "test-kind", MetadataContainerId = _metadataContainerId });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = _metadataContainerId,
+            ProviderType = "test-provider",
+            Title = "Alpha",
+            OriginalTitle = "Alpha"
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var criteria = new CriteriaSet<PropertyCriterion<string>>
+        {
+            And = [new() { Operator = operation, Value = value }]
+        };
+        var query = new SubjectQuery
+        {
+            Criteria = new()
+            {
+                Metadata = new()
+                {
+                    And = [new MetadataCriteria
+                    {
+                        Title = criteria,
+                        OriginalTitle = new()
+                    }]
+                }
+            }
+        };
+
+        // Act
+        var result = await _subject.QueryAsync(query, new() { PageNumber = 1, PageSize = 10 }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.TotalItems, Is.EqualTo(expectedCount));
+    }
+
+    [TestCase(CriteriaValueOperator.ContainsString, "PH", 1)]
+    [TestCase(CriteriaValueOperator.NotContainsString, "PH", 0)]
+    [TestCase(CriteriaValueOperator.StartsWithString, "AL", 1)]
+    [TestCase(CriteriaValueOperator.NotStartsWithString, "AL", 0)]
+    [TestCase(CriteriaValueOperator.EndsWithString, "HA", 1)]
+    [TestCase(CriteriaValueOperator.NotEndsWithString, "HA", 0)]
+    [TestCase(CriteriaValueOperator.Equals, "ALPHA", 1)]
+    [TestCase(CriteriaValueOperator.NotEquals, "ALPHA", 0)]
+    [TestCase(CriteriaValueOperator.IsNull, null, 0)]
+    [TestCase(CriteriaValueOperator.IsNotNull, null, 1)]
+    public async Task QueryAsync_FiltersByOriginalTitle_WhenStringOperatorIsUsed(
+        CriteriaValueOperator operation, string? value, int expectedCount)
+    {
+        // Arrange
+        _context.Subjects.Add(new Subject { Kind = "test-kind", MetadataContainerId = _metadataContainerId });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = _metadataContainerId,
+            ProviderType = "test-provider",
+            Title = "Alpha",
+            OriginalTitle = "Alpha"
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var criteria = new CriteriaSet<PropertyCriterion<string>>
+        {
+            And = [new() { Operator = operation, Value = value }]
+        };
+        var query = new SubjectQuery
+        {
+            Criteria = new()
+            {
+                Metadata = new()
+                {
+                    And = [new MetadataCriteria
+                    {
+                        Title = new(),
+                        OriginalTitle = criteria
+                    }]
+                }
+            }
+        };
+
+        // Act
+        var result = await _subject.QueryAsync(query, new() { PageNumber = 1, PageSize = 10 }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.TotalItems, Is.EqualTo(expectedCount));
+    }
+
+    [Test]
+    public void PatchAsync_DiscardsUpdatedEvent_WhenOuterTransactionRollsBack()
+    {
+        // Arrange
+        var subject = new Subject { Kind = "test-kind", MetadataContainerId = _metadataContainerId };
+        _context.Subjects.Add(subject);
+        _context.SaveChanges();
+
+        // Act
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await _transactionManager.ExecuteWithTransactionAsync(async token =>
+            {
+                await _subject.PatchAsync(new() { Id = subject.Id }, _userId, token).ConfigureAwait(false);
+                throw new InvalidOperationException("Rollback test.");
+            }).ConfigureAwait(false));
+
+        // Assert
+        _eventBus.Verify(bus => bus.PublishAsync(
+            It.Is<MagpieEvent>(e => e.Name == "subject.updated"),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestCaseSource(nameof(ChangedFieldPatches))]
+    public async Task PatchAsync_PublishesOnlyChangedFields_WhenOuterTransactionCommits(
+        SubjectRowPatch patch,
+        string expectedFields)
+    {
+        // Arrange
+        var subject = new Subject { Kind = "test-kind", MetadataContainerId = _metadataContainerId };
+        _context.Tags.Add(new() { Name = "followed" });
+        _context.Subjects.Add(subject);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async token =>
+        {
+            await _subject.PatchAsync(patch with { Id = subject.Id }, _userId, token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+
+        // Assert
+        _eventBus.Verify(bus => bus.PublishAsync(
+            It.Is<MagpieEvent>(e => e.Name == "subject.updated" &&
+                e.Context["subject.changedFields"] == expectedFields),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
+    public async Task UpdateAsync_PublishesChangedFields_WhenOuterTransactionCommits()
+    {
+        // Arrange
+        var subject = new Subject { Kind = "test-kind", MetadataContainerId = _metadataContainerId };
+        _context.Subjects.Add(subject);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async token =>
+        {
+            await _subject.UpdateAsync(subject with { Kind = "other-kind" }, _userId, token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+
+        // Assert
+        _eventBus.Verify(bus => bus.PublishAsync(
+            It.Is<MagpieEvent>(e => e.Name == "subject.updated" &&
+                e.Context["subject.changedFields"] == "kind"),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 }

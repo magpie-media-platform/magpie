@@ -143,7 +143,7 @@ internal sealed class WebhookNotificationProvider(
         if (!rule.Settings.TryGetValue(SettingUrl, out var urlString) || string.IsNullOrWhiteSpace(urlString))
         {
             logger.LogWarning(
-                "Webhook rule {RuleName} ({RuleId}) has no {SettingUrl} setting. The provider skipped the rule",
+                "The webhook provider skipped rule {RuleName} ({RuleId}) with no {SettingUrl} setting",
                 rule.Name,
                 rule.Id,
                 SettingUrl);
@@ -153,7 +153,7 @@ internal sealed class WebhookNotificationProvider(
         if (!Uri.TryCreate(urlString, UriKind.Absolute, out var url))
         {
             logger.LogWarning(
-                "Webhook rule {RuleName} ({RuleId}) has an invalid URL {Url}. The provider skipped the rule",
+                "The webhook provider skipped rule {RuleName} ({RuleId}) with invalid URL {Url}",
                 rule.Name,
                 rule.Id,
                 urlString);
@@ -191,8 +191,8 @@ internal sealed class WebhookNotificationProvider(
                 if (IsTransientStatus(response.StatusCode))
                 {
                     logger.LogWarning(
-                        "Webhook rule {RuleName} ({RuleId}) returned transient status {StatusCode} " +
-                        "for event {EventName}. The webhook provider will retry",
+                        "Webhook rule {RuleName} ({RuleId}) returned transient status {StatusCode} for " +
+                        "event {EventName} and will retry",
                         ruleName,
                         ruleId,
                         statusCode,
@@ -202,8 +202,8 @@ internal sealed class WebhookNotificationProvider(
                 }
 
                 logger.LogWarning(
-                    "Webhook rule {RuleName} ({RuleId}) returned non-success status {StatusCode} " +
-                    "for event {EventName}. The webhook provider dropped the notification and will not retry",
+                    "Webhook rule {RuleName} ({RuleId}) returned non-success status {StatusCode} for " +
+                    "event {EventName} and dropped the notification",
                     ruleName,
                     ruleId,
                     statusCode,
@@ -218,8 +218,8 @@ internal sealed class WebhookNotificationProvider(
         {
             logger.LogWarning(
                 ex,
-                "The webhook request for rule {RuleName} ({RuleId}) timed out for event {EventName}. " +
-                "The webhook provider will retry",
+                "The webhook request for rule {RuleName} ({RuleId}) timed out for event {EventName} and " +
+                "will retry",
                 ruleName,
                 ruleId,
                 magpieEvent.Name);
@@ -229,8 +229,8 @@ internal sealed class WebhookNotificationProvider(
         {
             logger.LogWarning(
                 ex,
-                "The webhook request for rule {RuleName} ({RuleId}) failed for event {EventName}. " +
-                "The webhook provider will retry",
+                "The webhook request for rule {RuleName} ({RuleId}) failed for event {EventName} and " +
+                "will retry",
                 ruleName,
                 ruleId,
                 magpieEvent.Name);
@@ -271,11 +271,11 @@ internal sealed class WebhookNotificationProvider(
         {
             logger.LogWarning(
                 ex,
-                "Webhook rule {RuleName} ({RuleId}) has invalid JSON in {SettingHeaders}. " +
-                "The webhook provider ignored the headers",
+                "The webhook provider ignored invalid JSON in {SettingHeaders} for rule {RuleName} " +
+                "({RuleId})",
+                SettingHeaders,
                 rule.Name,
-                rule.Id,
-                SettingHeaders);
+                rule.Id);
             return null;
         }
     }

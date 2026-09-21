@@ -12,10 +12,8 @@ namespace Magpie.Core.Jobs.Fulfillment;
 
 internal sealed class ReleaseSearchItemJob(
     IReleaseSearchService contentReleaseService,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
-    private const string ForceParameter = "force";
-
     public static readonly JobSpec Spec = new()
     {
         JobType = MagpieJobs.Types.ReleaseSearchItem,
@@ -40,7 +38,7 @@ internal sealed class ReleaseSearchItemJob(
                 true,
                 null),
             new(
-                ForceParameter,
+                MagpieJobs.Parameters.Force,
                 "Whether the search ignores the recent-search coalescing window.",
                 DataType.Boolean,
                 false,
@@ -63,7 +61,7 @@ internal sealed class ReleaseSearchItemJob(
         }
 
         var forced = context.ExecutionMode is JobExecutionMode.Immediate ||
-            (context.Parameters.TryGetValue(ForceParameter, out var rawForce) &&
+            (context.Parameters.TryGetValue(MagpieJobs.Parameters.Force, out var rawForce) &&
                 bool.TryParse(rawForce, out var force) &&
                 force);
 

@@ -160,6 +160,21 @@
         }
     }
 
+    .execution-row__message-label {
+        flex-shrink: 0;
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+        color: var(--text-muted);
+    }
+
+    .execution-row__message[data-message-kind='live'] .execution-row__message-label {
+        color: var(--accent-secondary);
+    }
+
+    .execution-row__message[data-message-kind='live'] .execution-row__message-text {
+        animation: pulse-opacity 2s ease-in-out infinite;
+    }
+
     .execution-row__message--failed {
         color: var(--status-unhealthy);
     }

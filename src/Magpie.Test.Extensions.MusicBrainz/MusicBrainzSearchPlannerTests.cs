@@ -190,7 +190,7 @@ public class MusicBrainzSearchPlannerTests
     }
 
     [Test]
-    public void Plan_TrackOverview_UsesSeededLocalVerification()
+    public void Plan_UsesSeededLocalVerification_WhenTrackOverview()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -289,9 +289,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 plan.Root!.Flatten().OfType<FetchPlanNode>().Single().DirectValue,
                 Is.EqualTo("550e8400-e29b-41d4-a716-446655440000"));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.One.Contains("dropped invalid identifier alternatives"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -542,9 +540,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(title.RemoteApplied, Is.True);
             Assert.That(title.VerifyLocally, Is.True);
             Assert.That(plan.Root is FilterPlanNode, Is.True);
-            Assert.That(
-                plan.Warnings.Single(),
-                Does.Contain("treats genre searches as tag searches"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -632,9 +628,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 plan.Root!.Flatten().OfType<FetchPlanNode>().Single().Filters.Single().RemoteField,
                 Is.EqualTo("tag"));
-            Assert.That(
-                plan.Warnings.Single(),
-                Does.Contain("treats genre searches as tag searches"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -1134,7 +1128,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 plan.Root!.Flatten().OfType<FilterPlanNode>().Single().Residuals.Single().IncludePrimaryTitle,
                 Is.True);
-            Assert.That(plan.Warnings.Single(), Does.Contain("text field or operator"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -1252,7 +1246,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 plan.Root!.Flatten().OfType<FetchPlanNode>().Single().Filters.Single().TemporalValues,
                 Is.EqualTo([year]));
-            Assert.That(plan.Warnings.Single(), Does.Contain("instant-precision"));
+            Assert.That(plan.Warnings, Is.Empty);
             Assert.That(
                 plan.Root!.Flatten().OfType<FetchPlanNode>().Single().AccessMode,
                 Is.EqualTo(AccessMode.Search));
@@ -2301,14 +2295,8 @@ public class MusicBrainzSearchPlannerTests
         {
             Assert.That(invalidFirstFetch.DirectValue, Is.EqualTo(valid));
             Assert.That(invalidLastFetch.DirectValue, Is.EqualTo(valid));
-            Assert.That(
-                invalidFirst.Warnings.Select(warning => warning),
-                Is.EqualTo(
-                    ["musicbrainz dropped invalid identifier alternatives, so matching candidates may be omitted."]));
-            Assert.That(
-                invalidLast.Warnings.Select(warning => warning),
-                Is.EqualTo(
-                    ["musicbrainz dropped invalid identifier alternatives, so matching candidates may be omitted."]));
+            Assert.That(invalidFirst.Warnings, Is.Empty);
+            Assert.That(invalidLast.Warnings, Is.Empty);
             Assert.That(
                 invalidFirstFilter.Filters.Single().IdentityValues,
                 Is.EqualTo(
@@ -2891,7 +2879,7 @@ public class MusicBrainzSearchPlannerTests
                 plan.Root!.Flatten().OfType<FetchPlanNode>().Single().Filters.Single().StringValues,
                 Is.EqualTo(["eng"]));
             Assert.That(plan.TraceProvenance.Includes(QueryTraceProvenance.Disposition.PlannedEmpty), Is.False);
-            Assert.That(plan.Warnings.Single(), Does.Contain("unrecognized language alternatives"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -2953,7 +2941,7 @@ public class MusicBrainzSearchPlannerTests
         (int)CriteriaValueOperator.EndsWithString,
         true,
         "ng")]
-    public void Plan_AlbumLanguageOperator_UsesSeededRepresentativeReleaseResidual(
+    public void Plan_UsesSeededRepresentativeReleaseResidual_WhenAlbumLanguageOperator(
         int operationValue,
         string value,
         int expectedOperationValue,
@@ -3012,7 +3000,7 @@ public class MusicBrainzSearchPlannerTests
 
     [TestCase((int)CriteriaValueOperator.IsNull)]
     [TestCase((int)CriteriaValueOperator.IsNotNull)]
-    public void Plan_AlbumLanguageNullOperator_UsesSeededRepresentativeReleaseResidual(int operationValue)
+    public void Plan_UsesSeededRepresentativeReleaseResidual_WhenAlbumLanguageNullOperator(int operationValue)
     {
         // Arrange
         var operation = (CriteriaValueOperator)operationValue;
@@ -3111,7 +3099,7 @@ public class MusicBrainzSearchPlannerTests
                 plan.Root!.Flatten().OfType<FetchPlanNode>().Single().Filters
                     .Count(filter => filter.ReleaseIndexApplied),
                 Is.EqualTo(2));
-            Assert.That(plan.Warnings.Single(), Does.Contain("one physical release"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -3183,7 +3171,7 @@ public class MusicBrainzSearchPlannerTests
     }
 
     [Test]
-    public void Plan_Result_WhenKnownEmptyRetainsAllUnsupportedCriterionWarnings()
+    public void Plan_ReturnsAnEmptyPlanWithoutWarnings_WhenAnUnsupportedCriterionIsKnownEmpty()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -3215,9 +3203,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(plan.TraceProvenance.Includes(QueryTraceProvenance.Disposition.PlannedEmpty), Is.True);
             Assert.That(plan.Root, Is.InstanceOf<UnionPlanNode>());
             Assert.That(((UnionPlanNode)plan.Root!).Children, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Is.EqualTo(["musicbrainz does not support this text field or operator."]));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -3541,9 +3527,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 residual.Alternatives.Single().Predicates.Single().Operator,
                 Is.EqualTo(CriteriaValueOperator.ContainsString));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("broader tag data"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -3654,12 +3638,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 plan.Root!.Flatten().OfType<FetchPlanNode>().Single().Filters.Single().Kind,
                 Is.EqualTo(QueryFilterKind.Title));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Is.EqualTo(
-                [
-                    "musicbrainz reference ordinal, display-name, and language criteria cannot be evaluated."
-                ]));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -4012,7 +3991,7 @@ public class MusicBrainzSearchPlannerTests
                 plan.TraceProvenance.Criteria.Single().FinalDisposition &
                 QueryTraceProvenance.Disposition.Residual,
                 Is.EqualTo(QueryTraceProvenance.Disposition.Residual));
-            Assert.That(plan.Warnings.Single(), Does.Contain("positive"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -4939,6 +4918,73 @@ public class MusicBrainzSearchPlannerTests
     }
 
     [Test]
+    public void Plan_ReturnsDifferentFingerprints_WhenBandMembershipTargetsDifferentArtistTypes()
+    {
+        // Arrange
+        var personRelationship = new RelationshipCriteria
+        {
+            Kind = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = [Constants.BandMembershipRelationshipKind] }]
+            },
+            Type = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = [Constants.PersonSubjectKind] }]
+            },
+            Subject = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["Member"] }]
+            }
+        };
+        var artistRelationship = new RelationshipCriteria
+        {
+            Kind = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = [Constants.BandMembershipRelationshipKind] }]
+            },
+            Type = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = [Constants.ArtistLevelSlug] }]
+            },
+            Subject = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["Member"] }]
+            }
+        };
+        var planner = new QueryPlanner();
+
+        // Act
+        var person = planner.Plan(new QueryRequest
+        {
+            Target = QueryTarget.Artist,
+            Criteria = new MetadataCriteria
+            {
+                Relationships = new CollectionCriteria<RelationshipCriteria> { Some = [[personRelationship]] }
+            },
+            RequestedPage = 1,
+            Settings = new Settings()
+        });
+        var artist = planner.Plan(new QueryRequest
+        {
+            Target = QueryTarget.Artist,
+            Criteria = new MetadataCriteria
+            {
+                Relationships = new CollectionCriteria<RelationshipCriteria> { Some = [[artistRelationship]] }
+            },
+            RequestedPage = 1,
+            Settings = new Settings()
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(person.Root!.Flatten().OfType<ResolvePlanNode>(), Is.Not.Empty);
+            Assert.That(artist.Root!.Flatten().OfType<ResolvePlanNode>(), Is.Not.Empty);
+            Assert.That(person.Fingerprint, Is.Not.EqualTo(artist.Fingerprint));
+        }
+    }
+
+    [Test]
     public void Plan_Result_WhenBandMembershipTargetsPersonSubjectKind()
     {
         // Arrange
@@ -4978,7 +5024,7 @@ public class MusicBrainzSearchPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(composition.RelatedEntity, Is.EqualTo(ArtistCompositionEntity.Artist));
-            Assert.That(composition.RelatedArtistType, Is.EqualTo(Constants.PersonArtistType));
+            Assert.That(composition.RelatedArtistType, Is.EqualTo("Person"));
         }
     }
 
@@ -5394,7 +5440,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 plan.Root!.Flatten().OfType<ResolvePlanNode>().Select(node => node.Composition).ToList(),
                 Is.Empty);
-            Assert.That(plan.Warnings.Select(warning => warning), Has.Some.Contains("positive"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -5626,7 +5672,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 resolver.Composition.RelatedNameOperator,
                 Is.EqualTo(CriteriaValueOperator.ContainsString));
-            Assert.That(resolver.Composition.RelatedArtistType, Is.EqualTo(Constants.PersonArtistType));
+            Assert.That(resolver.Composition.RelatedArtistType, Is.EqualTo("Person"));
         }
     }
 
@@ -5731,7 +5777,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(fetch!.AccessMode, Is.EqualTo(AccessMode.Browse));
             Assert.That(
                 fetch.Resolvers.Single().Composition.RelatedArtistType,
-                Is.EqualTo(Constants.PersonArtistType));
+                Is.EqualTo("Person"));
         }
     }
 
@@ -5802,7 +5848,7 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(
                 resolver.Composition.RelatedMbid,
                 Is.EqualTo("11111111-1111-4111-8111-111111111111"));
-            Assert.That(resolver.Composition.RelatedArtistType, Is.EqualTo(Constants.PersonArtistType));
+            Assert.That(resolver.Composition.RelatedArtistType, Is.EqualTo("Person"));
         }
     }
 

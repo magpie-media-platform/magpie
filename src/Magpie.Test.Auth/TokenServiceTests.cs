@@ -373,6 +373,15 @@ public class TokenServiceTests
         // Arrange
         var userId = Guid.NewGuid();
         RefreshToken? capturedToken = null;
+        var time = new Mock<TimeProvider>();
+        time.Setup(value => value.GetUtcNow())
+            .Returns(new DateTimeOffset(2026, 9, 9, 12, 0, 0, TimeSpan.Zero));
+        ITokenService subject = new TokenService(
+            _options,
+            _refreshTokenRepository.Object,
+            _keyStore.Object,
+            new KeyStoreHmacCryptoProviderFactory(),
+            time.Object);
 
         _refreshTokenRepository
             .Setup(m => m.CreateAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()))
@@ -380,7 +389,7 @@ public class TokenServiceTests
             .ReturnsAsync((RefreshToken t, CancellationToken _) => t);
 
         // Act
-        await _subject
+        await subject
             .GenerateRefreshTokenAsync(userId, "11111111-1111-1111-1111-111111111111")
             .ConfigureAwait(false);
 
@@ -391,13 +400,12 @@ public class TokenServiceTests
             Assert.That(
                 capturedToken,
                 Has.Property(nameof(capturedToken.ExpiresAt))
-                    .EqualTo(DateTime.UtcNow.Add(_options.RefreshTokenLifetime))
-                    .Within(TimeSpan.FromSeconds(1)));
+                    .EqualTo(new DateTime(2026, 9, 16, 12, 0, 0, DateTimeKind.Utc)));
         }
     }
 
     [Test]
-    public async Task TryValidateRefreshTokenAsync_ReturnsUserId_ForValidToken()
+    public async Task TryValidateRefreshTokenAsync_ReturnsUserId_WhenValidToken()
     {
         // Arrange
         var userId = Guid.NewGuid();
@@ -421,7 +429,7 @@ public class TokenServiceTests
     }
 
     [Test]
-    public async Task TryValidateRefreshTokenAsync_ReturnsNull_ForExpiredToken()
+    public async Task TryValidateRefreshTokenAsync_ReturnsNull_WhenExpiredToken()
     {
         // Arrange
         var userId = Guid.NewGuid();
@@ -445,7 +453,7 @@ public class TokenServiceTests
     }
 
     [Test]
-    public async Task TryValidateRefreshTokenAsync_ReturnsNull_ForNonexistentToken()
+    public async Task TryValidateRefreshTokenAsync_ReturnsNull_WhenNonexistentToken()
     {
         // Arrange
         _refreshTokenRepository
@@ -518,7 +526,7 @@ public class TokenServiceTests
     }
 
     [Test]
-    public async Task TryValidateAccessTokenAsync_ReturnsClaimsPrincipal_ForValidToken()
+    public async Task TryValidateAccessTokenAsync_ReturnsClaimsPrincipal_WhenValidToken()
     {
         // Arrange
         var user = new User
@@ -577,8 +585,10 @@ public class TokenServiceTests
     }
 
     [Test]
-    public async Task TryValidateAccessTokenAsync_ReturnsNull_ForInvalidToken()
+    public async Task TryValidateAccessTokenAsync_ReturnsNull_WhenInvalidToken()
     {
+        // Arrange
+
         // Act
         var result = await _subject.TryValidateAccessTokenAsync("invalid-token").ConfigureAwait(false);
 

@@ -72,9 +72,7 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                 return null;
             }
 
-            return isMobile
-                ? (container.closest<HTMLElement>('.app-shell__main, .admin-shell__main') ?? container)
-                : container;
+            return isMobile ? (container.closest<HTMLElement>('[data-scroll-container]') ?? container) : container;
         }, [isMobile]);
 
         const refresh = useCallback(async () => {

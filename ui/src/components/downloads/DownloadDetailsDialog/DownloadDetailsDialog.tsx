@@ -14,7 +14,7 @@ import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { ReleaseDetailSections } from '@/components/releases/ReleaseDetailSections';
 
 import { type ApiDownload } from '@/hooks/useDownloads';
-import { displayLineageLeafTitle } from '@/pages/DownloadsPage/buildDownloadColumns';
+import { displayLineageLeafTitle } from '@/lib/downloadTitle';
 
 import './DownloadDetailsDialog.css';
 

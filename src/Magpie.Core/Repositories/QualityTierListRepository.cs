@@ -25,9 +25,17 @@ internal sealed class QualityTierListRepository(
     IContentHierarchyItemRepository contentHierarchyItemRepository,
     IEventBus eventBus,
     ILogger<QualityTierListRepository> logger,
-    TimeProvider? timeProvider = null) : IQualityTierListRepository
+    TimeProvider timeProvider) : IQualityTierListRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private static readonly (string Name, Func<QualityTierList, QualityTierList, bool> Changed)[] UpdateFields =
+    [
+        ("name", (current, model) => !Equals(current.Name, model.Name)),
+        ("mimeTypes", (current, model) => !current.MimeTypes.SequenceEqual(model.MimeTypes)),
+        ("upgradeAllowed", (current, model) => !Equals(current.UpgradeAllowed, model.UpgradeAllowed)),
+        ("rules", (current, model) => !current.Rules.SequenceEqual(model.Rules)),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
 
     private static IReadOnlyCollection<string> ChangedFields(QualityTierListPatch patch)
     {
@@ -164,6 +172,23 @@ internal sealed class QualityTierListRepository(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
+                    var current = await context.QualityTierLists.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    var changedFields = new List<string>();
+                    foreach (var (name, changed) in UpdateFields)
+                    {
+                        if (changed(current, model))
+                        {
+                            changedFields.Add(name);
+                        }
+                    }
+
                     var updated = await context.QualityTierLists
                         .Where(q => q.Id == model.Id)
                         .ExecuteUpdateAsync(
@@ -189,6 +214,15 @@ internal sealed class QualityTierListRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                ConfigurationEventBuilder.BuildQualityTierListUpdatedEvent(
+                                    model.Id, changedFields), token),
                             cancellationToken).ConfigureAwait(false);
                     }
 

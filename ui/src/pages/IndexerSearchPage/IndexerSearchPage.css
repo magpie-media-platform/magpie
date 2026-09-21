@@ -57,12 +57,6 @@
         gap: var(--space-sm);
     }
 
-    .indexer-search__incompatible {
-        margin: 0;
-        font-size: var(--text-sm);
-        color: var(--text-secondary);
-    }
-
     .indexer-search__form {
         display: flex;
         flex-wrap: wrap;
@@ -222,6 +216,13 @@
         object-fit: cover;
         border-radius: var(--radius-xs);
         background-color: var(--bg-tertiary);
+    }
+
+    .content-picker__poster--placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
     }
 
     .content-picker__meta {

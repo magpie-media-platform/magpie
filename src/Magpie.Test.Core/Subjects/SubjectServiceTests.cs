@@ -16,7 +16,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Subjects;
 
 [TestFixture]
-public class SubjectServiceTests
+public sealed class SubjectServiceTests
 {
     private Mock<ISubjectRepository> _subjectRepository = null!;
     private Mock<IMetadataContainerRepository> _metadataContainerRepository = null!;

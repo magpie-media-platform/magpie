@@ -17,7 +17,5 @@ internal sealed record QueryPlan
 
     public required PlanNode Root { get; init; }
 
-    public required IReadOnlyList<string> Warnings { get; init; }
-
     public required IReadOnlyList<CriterionDisposition> Dispositions { get; init; }
 }

@@ -159,7 +159,7 @@ public record MetadataContribution
     public ICollection<ExternalId> ExternalIds { get; } = [];
 
     /// <summary>
-    /// The genres.
+    /// The genre classifications.
     /// </summary>
     public ICollection<Genre> Genres { get; } = [];
 

@@ -18,6 +18,7 @@
         align-items: center;
         justify-content: space-between;
         gap: var(--space-sm);
+        min-width: 0;
         padding: var(--space-xs) var(--space-sm);
         font: inherit;
         color: inherit;

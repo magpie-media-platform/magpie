@@ -45,6 +45,7 @@
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.9" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.7.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageVersion Include="Microsoft.Windows.CsWin32" Version="0.3.333" />
     <PackageVersion Include="MonoTorrent" Version="3.0.2" />
     <PackageVersion Include="Moq" Version="4.20.72" />
     <PackageVersion Include="NewStyleCop.Analyzers" Version="1.2.1">
@@ -72,10 +73,8 @@
     </PackageVersion>
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageVersion Include="Superpower" Version="3.0.0" />
-    <PackageVersion Include="Swashbuckle.AspNetCore" Version="7.3.1" />
     <PackageVersion Include="System.CommandLine" Version="2.0.0" />
     <PackageVersion Include="System.Diagnostics.DiagnosticSource" Version="10.0.9" />
-    <PackageVersion Include="System.DirectoryServices.Protocols" Version="9.0.2" />
     <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.7.0" />
     <PackageVersion Include="System.Reactive" Version="6.1.0" />
     <PackageVersion Include="System.Text.Json" Version="10.0.9" />

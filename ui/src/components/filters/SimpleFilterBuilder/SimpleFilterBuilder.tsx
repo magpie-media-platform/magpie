@@ -63,6 +63,12 @@ interface NeutralYearDraft {
     yearOps: YearOp[];
 }
 
+interface EditDraft {
+    query: string;
+    sourceQuery: string;
+    fields: FieldState;
+}
+
 function sameQuery(a: string | null | undefined, b: string | null | undefined): boolean {
     return (a ?? '').trim() === (b ?? '').trim();
 }
@@ -145,6 +151,12 @@ export function SimpleFilterBuilder({
     const { contentTypes, subjectTypes, isLoading: registryLoading } = useLibraryTypes();
 
     const parsedFields = useMemo(() => parseQuery(value, context) ?? { ...EMPTY_FIELDS }, [value, context]);
+    const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+    const matchedEditDraft =
+        editDraft !== null && (sameQuery(editDraft.query, value) || sameQuery(editDraft.sourceQuery, value))
+            ? editDraft
+            : null;
+    const currentFields = matchedEditDraft?.fields ?? parsedFields;
     const [neutralYearDraft, setNeutralYearDraft] = useState<NeutralYearDraft | null>(null);
     const draftMatchesValue =
         context === 'content' &&
@@ -152,20 +164,26 @@ export function SimpleFilterBuilder({
         (sameQuery(neutralYearDraft.query, value) || sameQuery(neutralYearDraft.sourceQuery, value));
     const fields = useMemo(() => {
         if (!draftMatchesValue || neutralYearDraft === null) {
-            return parsedFields;
+            return currentFields;
         }
         return {
-            ...parsedFields,
+            ...currentFields,
             releaseYear: neutralYearDraft.releaseYear,
             yearOps: neutralYearDraft.yearOps,
         };
-    }, [draftMatchesValue, neutralYearDraft, parsedFields]);
+    }, [draftMatchesValue, neutralYearDraft, currentFields]);
 
     useEffect(() => {
         if (neutralYearDraft && !draftMatchesValue) {
             setNeutralYearDraft(null);
         }
     }, [neutralYearDraft, draftMatchesValue]);
+
+    useEffect(() => {
+        if (editDraft && matchedEditDraft === null) {
+            setEditDraft(null);
+        }
+    }, [editDraft, matchedEditDraft]);
 
     const maxYear = useMemo(() => new Date().getFullYear() + MAX_YEAR_OFFSET, []);
 
@@ -245,6 +263,7 @@ export function SimpleFilterBuilder({
             } else {
                 setNeutralYearDraft(null);
             }
+            setEditDraft({ query, sourceQuery: value, fields: parseQuery(query, context) ?? { ...EMPTY_FIELDS } });
             onChange(query);
         },
         [context, onChange, value],
@@ -430,7 +449,7 @@ export function SimpleFilterBuilder({
                                     value={fields.relationshipName}
                                     onChange={(e) => updateField('relationshipName', e.target.value)}
                                     disabled={disabled}
-                                    placeholder="Scarlett Johansson"
+                                    placeholder="Related name"
                                 />
                                 <Select
                                     value={fields.relationshipKind || ANY_VALUE}

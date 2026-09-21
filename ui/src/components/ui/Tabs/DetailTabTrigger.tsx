@@ -14,7 +14,7 @@ export interface DetailTabTriggerProps {
 
 export function DetailTabTrigger({ value, label, icon, count, ...dataProps }: DetailTabTriggerProps) {
     return (
-        <TabsTrigger value={value} aria-label={label} {...dataProps}>
+        <TabsTrigger value={value} aria-label={count === undefined ? label : `${label} (${count})`} {...dataProps}>
             <Tooltip content={label}>
                 <span className="detail-tab-trigger__anchor">
                     {icon}

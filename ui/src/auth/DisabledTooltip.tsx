@@ -1,6 +1,6 @@
-import { cloneElement, useId, type ReactElement } from 'react';
+import { useId, type ReactElement } from 'react';
 
-import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { useAuth } from './useAuth';
 import { RoleName, Role, type Permission } from './types';
 
@@ -86,22 +86,18 @@ export function DisabledTooltip(props: DisabledTooltipProps) {
         return <>{props.children}</>;
     }
 
-    const child = props.children as ReactElement<{ 'aria-describedby'?: string }>;
-    const existingDescription = child.props['aria-describedby'];
-    const describedBy = [existingDescription, descriptionId].filter(Boolean).join(' ');
-    const describedChild = cloneElement(child, { 'aria-describedby': describedBy });
-
     return (
-        <TooltipProvider>
+        <>
             <Tooltip content={props.message}>
-                <span style={{ display: 'inline-block' }}>
-                    {describedChild}
-                    <span id={descriptionId} className="sr-only">
-                        {props.message}
-                    </span>
+                {/* The wrapped control is disabled and cannot take focus, so the span carries the tab stop and the description. */}
+                <span style={{ display: 'inline-block' }} tabIndex={0} aria-describedby={descriptionId}>
+                    {props.children}
                 </span>
             </Tooltip>
-        </TooltipProvider>
+            <span id={descriptionId} className="sr-only">
+                {props.message}
+            </span>
+        </>
     );
 }
 

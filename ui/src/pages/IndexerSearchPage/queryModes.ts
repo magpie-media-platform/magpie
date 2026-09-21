@@ -19,8 +19,16 @@ function normalizeFields(fields: readonly string[]): string[] {
     ].sort();
 }
 
-function fieldLabel(field: string): string {
-    return field === 'q' ? 'Keyword' : field;
+const FIELD_DISPLAY_NAMES: Record<string, string> = {
+    q: 'Keyword',
+    imdb: 'IMDb',
+    tmdb: 'TMDB',
+    tvdb: 'TVDB',
+    tvmaze: 'TVmaze',
+};
+
+export function fieldLabel(field: string): string {
+    return FIELD_DISPLAY_NAMES[field] ?? field.charAt(0).toUpperCase() + field.slice(1);
 }
 
 function indexerModes(indexer: ApiIndexer): Map<string, string[]> {
@@ -38,17 +46,14 @@ function indexerModes(indexer: ApiIndexer): Map<string, string[]> {
     return modes;
 }
 
-/**
- * Lists the complete query modes that every given indexer supports.
- */
-export function sharedQueryModes(indexers: readonly ApiIndexer[]): QueryMode[] {
+/** Lists the complete query modes that at least one selected indexer supports. */
+export function availableQueryModes(indexers: readonly ApiIndexer[]): QueryMode[] {
     if (indexers.length === 0) {
         return [];
     }
 
-    const [first, ...rest] = indexers.map(indexerModes);
-    return [...first.entries()]
-        .filter(([key]) => rest.every((modes) => modes.has(key)))
+    const modes = new Map(indexers.flatMap((indexer) => [...indexerModes(indexer)]));
+    return [...modes.entries()]
         .map(([key, fields]) => ({ key, fields, label: fields.map(fieldLabel).join(' + ') }))
         .sort((left, right) => left.fields.length - right.fields.length || left.key.localeCompare(right.key));
 }

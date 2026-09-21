@@ -23,7 +23,7 @@ public interface IExtensionService
     Task<IReadOnlyList<ExtensionListItem>> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets an extension by id.
+    /// An extension by id.
     /// </summary>
     /// <param name="extensionId">The id of the extension to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -142,7 +142,7 @@ public interface IExtensionService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets an extension package source by id.
+    /// An extension package source by id.
     /// </summary>
     /// <param name="packageSourceId">The id of the package source to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

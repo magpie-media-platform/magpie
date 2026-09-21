@@ -44,64 +44,6 @@
         gap: var(--space-md);
     }
 
-    .library-landing__type-link {
-        text-decoration: none;
-        color: inherit;
-        display: block;
-    }
-
-    .library-landing__type-card {
-        padding: var(--space-md) var(--space-lg);
-        transition:
-            transform var(--duration-fast) var(--easing-default),
-            box-shadow var(--duration-fast) var(--easing-default);
-
-        &:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-xl);
-        }
-    }
-
-    .library-landing__type-content {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        gap: var(--space-md);
-    }
-
-    .library-landing__type-icon {
-        font-size: var(--text-3xl);
-        color: var(--accent-primary);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-    }
-
-    .library-landing__type-info {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-xs);
-        min-width: 0;
-    }
-
-    .library-landing__type-name {
-        font-size: var(--text-base);
-        font-weight: var(--weight-medium);
-        color: var(--text-primary);
-    }
-
-    .library-landing__type-count {
-        font-size: var(--text-sm);
-        color: var(--text-muted);
-    }
-
-    .library-landing__count-skeleton {
-        width: 48px;
-        height: 14px;
-        border-radius: var(--radius-sm);
-    }
-
     .library-landing__type-card--skeleton {
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
@@ -216,16 +158,8 @@
             gap: var(--space-sm);
         }
 
-        .library-landing__type-card {
+        .library-landing__type-card--skeleton {
             padding: var(--space-sm) var(--space-md);
-        }
-
-        .library-landing__type-icon {
-            font-size: var(--text-2xl);
-        }
-
-        .library-landing__type-name {
-            font-size: var(--text-sm);
         }
     }
 

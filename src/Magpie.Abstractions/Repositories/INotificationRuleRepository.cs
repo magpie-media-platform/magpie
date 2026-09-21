@@ -10,4 +10,5 @@ namespace Magpie.Abstractions.Repositories;
 /// </summary>
 public interface INotificationRuleRepository :
     IQueryRepository<NotificationRule, NotificationRuleQuery>,
-    ICrudRepository<Guid, NotificationRule>;
+    ICrudRepository<Guid, NotificationRule>,
+    IPatchRepository<Guid, NotificationRule, NotificationRulePatch>;

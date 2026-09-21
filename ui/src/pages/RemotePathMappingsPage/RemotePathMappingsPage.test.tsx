@@ -380,10 +380,78 @@ describe('RemotePathMappingsPage actions', () => {
 
         await waitFor(() => {
             expect(mockApiPatch).toHaveBeenCalledWith('/remote-path-mappings/mapping-1', {
-                host: 'downloadbox.example.test',
-                remotePath: 'E:\\Transmission',
-                localPath: '/new/local/path',
+                host: { value: 'downloadbox.example.test' },
+                remotePath: { value: 'E:\\Transmission' },
+                localPath: { value: '/new/local/path' },
             });
+        });
+    });
+});
+
+describe('RemotePathMappingsPage selection', () => {
+    const mockApiGet = vi.mocked(apiGet);
+    const mockApiDelete = vi.mocked(apiDelete);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockApiGet.mockResolvedValue(mockApiMappings);
+        mockApiDelete.mockResolvedValue(undefined);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('renders no selection overlay outside select mode', async () => {
+        render(<RemotePathMappingsPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getByText('downloadbox.example.test')).toBeInTheDocument();
+        });
+        expect(screen.queryByLabelText('Select mapping for downloadbox.example.test')).not.toBeInTheDocument();
+        expect(document.querySelectorAll('[data-action="select-row"]').length).toBe(0);
+        expect(screen.getByRole('button', { name: 'Select' })).toBeInTheDocument();
+    });
+
+    it('shows an overlay circle per row in select mode and clears selection on exit', async () => {
+        const user = userEvent.setup();
+        render(<RemotePathMappingsPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getByText('downloadbox.example.test')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        const toggle = screen.getByLabelText('Select mapping for downloadbox.example.test');
+        await user.click(toggle);
+        expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+        await user.click(screen.getByRole('button', { name: 'Stop selecting' }));
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        expect(screen.getByLabelText('Select mapping for downloadbox.example.test')).toHaveAttribute(
+            'aria-pressed',
+            'false',
+        );
+    });
+
+    it('bulk-deletes every selected mapping', async () => {
+        const user = userEvent.setup();
+        render(<RemotePathMappingsPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getByText('downloadbox.example.test')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByLabelText('Select mapping for downloadbox.example.test'));
+        await user.click(screen.getByLabelText('Select mapping for seedbox.example.com'));
+        const toolbar = screen.getByRole('region', { name: 'Remote path mapping selection actions' });
+        await user.click(within(toolbar).getByRole('button', { name: 'Delete selected remote path mappings' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(mockApiDelete).toHaveBeenCalledWith('/remote-path-mappings/mapping-1');
+            expect(mockApiDelete).toHaveBeenCalledWith('/remote-path-mappings/mapping-2');
         });
     });
 });

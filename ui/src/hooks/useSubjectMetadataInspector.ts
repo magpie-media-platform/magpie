@@ -8,6 +8,8 @@ const subjectMetadataInspectorHooks = createMetadataInspectorHooks({
     inspectorKey,
     detailKey: (id) => subjectQueryKeys.detail(id),
     resolveSubjectRefs: scanSubjectRefs,
+    entityEvents: ['subject.updated', 'subject.deleted'],
+    refreshJobType: 'SubjectMetadataRefreshItem',
 });
 
 export const useSubjectMetadataInspector = subjectMetadataInspectorHooks.useMetadataInspector;

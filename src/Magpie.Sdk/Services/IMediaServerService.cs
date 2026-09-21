@@ -23,7 +23,7 @@ public interface IMediaServerService
     Task<IReadOnlyList<MediaServer>> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a media server by id.
+    /// A media server by id.
     /// </summary>
     /// <param name="id">The id of the media server to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -87,7 +87,7 @@ public interface IMediaServerService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the effective settings of a media server, secrets included.
+    /// Resolves the effective settings of a media server, secrets included.
     /// </summary>
     /// <param name="id">The id of the saved server, or <see langword="null"/> when none applies</param>
     /// <param name="overlay">The partial settings that win over the stored settings</param>

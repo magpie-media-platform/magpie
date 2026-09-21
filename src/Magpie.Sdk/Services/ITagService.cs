@@ -13,7 +13,7 @@ namespace Magpie.Sdk.Services;
 public interface ITagService
 {
     /// <summary>
-    /// Gets the tags that match a name prefix or that an entity carries.
+    /// Looks up the tags that match a name prefix or that an entity carries.
     /// </summary>
     /// <param name="prefix">The prefix of the tag name to match, or <see langword="null"/> for all</param>
     /// <param name="entityId">The entity that carries the tags, or <see langword="null"/> for all</param>

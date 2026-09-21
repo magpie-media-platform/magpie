@@ -117,13 +117,14 @@ public class SettingsResolverTests
                 Assert.That(first!.ApiKey, Is.EqualTo("stored-key"));
                 Assert.That(first.Language, Is.EqualTo("ja-JP"));
                 Assert.That(second!.Language, Is.EqualTo("ja-JP"));
-                settings.Verify(
-                    service => service.GetExtensionGroupAsync(
-                        new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A"),
-                        Settings.GroupName,
-                        It.IsAny<CancellationToken>()),
-                    Times.Once);
             }
+
+            settings.Verify(
+                service => service.GetExtensionGroupAsync(
+                    new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A"),
+                    Settings.GroupName,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
         }
         finally
         {

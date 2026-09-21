@@ -1,7 +1,12 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 
-import { apiGet } from '@/lib/api';
+import { apiGet, buildUrl } from '@/lib/api';
+import type { PagedList } from '@/types/paging';
 import { queryErrorOrNull } from '@/lib/utils';
+import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { indexerQueryKeys } from './useIndexers';
+import { downloadClientQueryKeys } from './useDownloadClients';
+import { rootFolderQueryKeys } from './useRootFolders';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 
 export interface OnboardingStatus {
@@ -20,6 +25,7 @@ export interface OnboardingStep {
     reason: string;
     to: string;
     done: boolean;
+    failed: boolean;
 }
 
 export function deriveOnboardingSteps(status: OnboardingStatus | undefined): OnboardingStep[] {
@@ -30,6 +36,7 @@ export function deriveOnboardingSteps(status: OnboardingStatus | undefined): Onb
             reason: 'Indexers are the sources Magpie searches for releases.',
             to: '/admin/indexers',
             done: status?.hasIndexer ?? false,
+            failed: false,
         },
         {
             key: 'downloadClient',
@@ -37,6 +44,7 @@ export function deriveOnboardingSteps(status: OnboardingStatus | undefined): Onb
             reason: 'Grabbed releases are handed to a download client to fetch.',
             to: '/admin/download-clients',
             done: status?.hasDownloadClient ?? false,
+            failed: false,
         },
         {
             key: 'rootFolder',
@@ -44,6 +52,7 @@ export function deriveOnboardingSteps(status: OnboardingStatus | undefined): Onb
             reason: 'Root folders are where finished downloads are imported and stored.',
             to: '/admin/root-folders',
             done: status?.hasRootFolder ?? false,
+            failed: false,
         },
         {
             key: 'monitoredContent',
@@ -51,56 +60,93 @@ export function deriveOnboardingSteps(status: OnboardingStatus | undefined): Onb
             reason: 'Monitored content is what Magpie keeps searching and grabbing for.',
             to: '/library/add',
             done: status?.hasMonitoredContent ?? false,
+            failed: false,
         },
     ];
 }
 
 export function isOnboardingComplete(status: OnboardingStatus | undefined): boolean {
-    if (!status) {
-        return false;
-    }
-    if (typeof status.isComplete === 'boolean') {
-        return status.isComplete;
-    }
-    return status.hasIndexer && status.hasDownloadClient && status.hasRootFolder && status.hasMonitoredContent;
+    return status?.isComplete ?? false;
 }
 
-const onboardingStatusQueryKey = ['system', 'onboarding-status'] as const;
+const indexerListQueryKey = indexerQueryKeys.list();
+const downloadClientListQueryKey = [...downloadClientQueryKeys.list(), '/download-clients'];
+const rootFolderListQueryKey = rootFolderQueryKeys.list();
+const monitoredContentQueryKey = ['system', 'onboarding-monitored-content'] as const;
 
-async function fetchOnboardingStatus(): Promise<OnboardingStatus> {
-    return apiGet<OnboardingStatus>('/system/onboarding-status');
-}
+const anyItem = (items: unknown[]) => items.length > 0;
+const presenceStaleTime = POLLING_INTERVALS.normal / 2;
 
 export function useOnboardingStatus() {
+    const invalidationOptions = { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'onboarding-shell' };
     useInvalidateQueriesOnEvents(
-        [
-            'indexer.created',
-            'indexer.updated',
-            'indexer.deleted',
-            'downloadClient.created',
-            'downloadClient.updated',
-            'downloadClient.deleted',
-            'library.rootFolder.created',
-            'library.rootFolder.updated',
-            'library.rootFolder.deleted',
-            'content.hierarchyItem.created',
-            'content.hierarchyItem.updated',
-            'content.hierarchyItem.deleted',
-        ],
-        [onboardingStatusQueryKey],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'onboarding-shell' },
+        ['indexer.created', 'indexer.updated', 'indexer.deleted'],
+        [indexerListQueryKey],
+        invalidationOptions,
     );
-    const query = useQuery({
-        queryKey: onboardingStatusQueryKey,
-        queryFn: fetchOnboardingStatus,
+    useInvalidateQueriesOnEvents(
+        ['downloadClient.created', 'downloadClient.updated', 'downloadClient.deleted'],
+        [downloadClientListQueryKey],
+        invalidationOptions,
+    );
+    useInvalidateQueriesOnEvents(
+        ['library.rootFolder.created', 'library.rootFolder.updated', 'library.rootFolder.deleted'],
+        [rootFolderListQueryKey],
+        invalidationOptions,
+    );
+    useInvalidateQueriesOnEvents(
+        ['content.hierarchyItem.created', 'content.hierarchyItem.updated', 'content.hierarchyItem.deleted'],
+        [monitoredContentQueryKey],
+        invalidationOptions,
+    );
+    const queries = useQueries({
+        queries: [
+            {
+                queryKey: indexerListQueryKey,
+                queryFn: () => apiGet<unknown[]>('/indexers'),
+                select: anyItem,
+                staleTime: presenceStaleTime,
+            },
+            {
+                queryKey: downloadClientListQueryKey,
+                queryFn: () => apiGet<unknown[]>('/download-clients'),
+                select: anyItem,
+                staleTime: presenceStaleTime,
+            },
+            {
+                queryKey: rootFolderListQueryKey,
+                queryFn: () => apiGet<unknown[]>('/root-folders'),
+                select: anyItem,
+                staleTime: presenceStaleTime,
+            },
+            {
+                queryKey: monitoredContentQueryKey,
+                queryFn: () => apiGet<PagedList<unknown>>(buildUrl('/content', { monitoring: true, pageSize: 1 })),
+                select: (page: PagedList<unknown>) => page.items.length > 0,
+            },
+        ],
     });
+    const [indexerQuery, downloadClientQuery, rootFolderQuery, monitoredContentQuery] = queries;
+    const status: OnboardingStatus = {
+        hasIndexer: indexerQuery.data ?? false,
+        hasDownloadClient: downloadClientQuery.data ?? false,
+        hasRootFolder: rootFolderQuery.data ?? false,
+        hasMonitoredContent: monitoredContentQuery.data ?? false,
+        isComplete: queries.every((query) => query.data === true),
+    };
+    const failedSteps: Record<OnboardingStepKey, boolean> = {
+        indexer: indexerQuery.isError,
+        downloadClient: downloadClientQuery.isError,
+        rootFolder: rootFolderQuery.isError,
+        monitoredContent: monitoredContentQuery.isError,
+    };
 
     return {
-        status: query.data,
-        steps: deriveOnboardingSteps(query.data),
-        isComplete: isOnboardingComplete(query.data),
-        isLoading: query.isLoading,
-        error: queryErrorOrNull(query),
-        refetch: query.refetch,
+        status,
+        steps: deriveOnboardingSteps(status).map((step) => ({ ...step, failed: failedSteps[step.key] })),
+        isComplete: isOnboardingComplete(status),
+        isLoading: queries.some((query) => query.isLoading),
+        error: queries.every((query) => query.isError) ? queryErrorOrNull(indexerQuery) : null,
+        refetch: () => Promise.all(queries.map((query) => query.refetch())),
     };
 }

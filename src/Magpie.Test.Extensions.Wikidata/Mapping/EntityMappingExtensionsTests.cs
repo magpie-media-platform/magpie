@@ -15,8 +15,65 @@ namespace Magpie.Test.Extensions.Wikidata.Mapping;
 [TestFixture]
 internal sealed class EntityMappingExtensionsTests
 {
+    [TestCase("Q42", "Q42")]
+    [TestCase(" q42 ", "Q42")]
+    [TestCase("https://www.wikidata.org/entity/q42", "Q42")]
+    [TestCase("http://www.wikidata.org/entity/Q42/", null)]
+    [TestCase("Q0", null)]
+    [TestCase("Q042", null)]
+    [TestCase("Q\u0664\u0662", null)]
+    [TestCase("P42", null)]
+    [TestCase("Q42 UNION {}", null)]
+    [TestCase("", null)]
+    [TestCase(null, null)]
+    public void ToQid_ReturnsCanonicalIdOrNull_WhenInputVaries(string? input, string? expected)
+    {
+        // Arrange
+        var value = input;
+
+        // Act
+        var result = value.ToQid();
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [TestCase("EN-us", "en")]
+    [TestCase(" fr ", "fr")]
+    [TestCase("e", null)]
+    [TestCase("en123", null)]
+    public void ToPrimaryLanguage_ReturnsPrimaryCodeOrNull_WhenInputVaries(string input, string? expected)
+    {
+        // Arrange
+        var value = input;
+
+        // Act
+        var result = value.ToPrimaryLanguage();
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [TestCase("{\"id\":42}", null)]
+    [TestCase("{\"id\":\"q42\"}", "Q42")]
+    [TestCase("{\"id\":\"Q042\"}", null)]
+    public void EntityId_ReturnsCanonicalIdOrNull_WhenSnakIdVaries(string json, string? expected)
+    {
+        // Arrange
+        var snak = new SnakDto
+        {
+            DataValue = new DataValueDto { Value = JsonSerializer.Deserialize<JsonElement>(json) }
+        };
+
+        // Act
+        var result = snak.EntityId();
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
     [Test]
-    public void ToMetadataContribution_Movie_MapsTruthyStandardSchema()
+    public void ToMetadataContribution_MapsTruthyStandardSchema_WhenMovie()
     {
         // Arrange
         var typeValue = JsonDocument.Parse("{\"id\":\"Q11424\"}").RootElement.Clone();
@@ -225,32 +282,16 @@ internal sealed class EntityMappingExtensionsTests
         }
     }
 
-    [TestCase("movie")]
-    [TestCase("show")]
-    [TestCase("season")]
-    public void ToMetadataContribution_MapsSharedArtwork_WhenKindCarriesContentArtwork(string kindName)
+    [TestCase(EntityKind.Movie, Constants.MovieQid, null, null)]
+    [TestCase(EntityKind.Show, Constants.TelevisionSeriesQid, null, null)]
+    [TestCase(EntityKind.Season, Constants.SeasonQid, "Q2", null)]
+    public void ToMetadataContribution_MapsSharedArtwork_WhenKindCarriesContentArtwork(
+        EntityKind kind, string? typeQid, string? seriesQid, string? seasonQid)
     {
         // Arrange
-        var kind = kindName switch
+        var claims = new Dictionary<string, List<StatementDto>>
         {
-            "movie" => EntityKind.Movie,
-            "show" => EntityKind.Show,
-            "season" => EntityKind.Season,
-            _ => throw new ArgumentOutOfRangeException(nameof(kindName), kindName, null)
-        };
-        var typeQid = kind switch
-        {
-            EntityKind.Movie => Constants.MovieQid,
-            EntityKind.Show => Constants.TelevisionSeriesQid,
-            EntityKind.Season => Constants.SeasonQid,
-            EntityKind.Episode => Constants.EpisodeQid,
-            EntityKind.Person => Constants.HumanQid,
-            _ => null
-        };
-        var claims = new Dictionary<string, List<StatementDto>>();
-        if (typeQid is not null)
-        {
-            claims[Constants.InstanceOfPropertyId] =
+            [Constants.InstanceOfPropertyId] =
             [
                 new StatementDto
                 {
@@ -264,12 +305,8 @@ internal sealed class EntityMappingExtensionsTests
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind is EntityKind.Season or EntityKind.Episode)
-        {
-            claims[Constants.PartOfSeriesPropertyId] =
+            ],
+            [Constants.PartOfSeriesPropertyId] =
             [
                 new StatementDto
                 {
@@ -279,16 +316,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q2" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seriesQid })
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind == EntityKind.Episode)
-        {
-            claims[Constants.SeasonPropertyId] =
+            ],
+            [Constants.SeasonPropertyId] =
             [
                 new StatementDto
                 {
@@ -298,13 +331,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q3" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seasonQid })
                         }
                     }
                 }
-            ];
-        }
-
+            ]
+        };
         var entity = new EntityDto { Id = "Q1", Claims = claims };
         entity.Claims![Constants.PosterPropertyId] =
         [
@@ -364,30 +396,15 @@ internal sealed class EntityMappingExtensionsTests
         }
     }
 
-    [TestCase("show")]
-    [TestCase("season")]
-    public void ToMetadataContribution_MapsP18AsPoster_WhenContentArtworkHasNoP3383(string kindName)
+    [TestCase(EntityKind.Show, Constants.TelevisionSeriesQid, null, null)]
+    [TestCase(EntityKind.Season, Constants.SeasonQid, "Q2", null)]
+    public void ToMetadataContribution_MapsP18AsPoster_WhenContentArtworkHasNoP3383(
+        EntityKind kind, string? typeQid, string? seriesQid, string? seasonQid)
     {
         // Arrange
-        var kind = kindName switch
+        var claims = new Dictionary<string, List<StatementDto>>
         {
-            "show" => EntityKind.Show,
-            "season" => EntityKind.Season,
-            _ => throw new ArgumentOutOfRangeException(nameof(kindName), kindName, null)
-        };
-        var typeQid = kind switch
-        {
-            EntityKind.Movie => Constants.MovieQid,
-            EntityKind.Show => Constants.TelevisionSeriesQid,
-            EntityKind.Season => Constants.SeasonQid,
-            EntityKind.Episode => Constants.EpisodeQid,
-            EntityKind.Person => Constants.HumanQid,
-            _ => null
-        };
-        var claims = new Dictionary<string, List<StatementDto>>();
-        if (typeQid is not null)
-        {
-            claims[Constants.InstanceOfPropertyId] =
+            [Constants.InstanceOfPropertyId] =
             [
                 new StatementDto
                 {
@@ -401,12 +418,8 @@ internal sealed class EntityMappingExtensionsTests
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind is EntityKind.Season or EntityKind.Episode)
-        {
-            claims[Constants.PartOfSeriesPropertyId] =
+            ],
+            [Constants.PartOfSeriesPropertyId] =
             [
                 new StatementDto
                 {
@@ -416,16 +429,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q2" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seriesQid })
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind == EntityKind.Episode)
-        {
-            claims[Constants.SeasonPropertyId] =
+            ],
+            [Constants.SeasonPropertyId] =
             [
                 new StatementDto
                 {
@@ -435,13 +444,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q3" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seasonQid })
                         }
                     }
                 }
-            ];
-        }
-
+            ]
+        };
         var entity = new EntityDto { Id = "Q1", Claims = claims };
         entity.Claims![Constants.ImagePropertyId] =
         [
@@ -508,34 +516,17 @@ internal sealed class EntityMappingExtensionsTests
         }
     }
 
-    [TestCase("movie")]
-    [TestCase("show")]
-    [TestCase("season")]
-    [TestCase("episode")]
-    public void ToMetadataContribution_MapsRankedDeduplicatedTrailers_WhenKindCarriesPreviews(string kindName)
+    [TestCase(EntityKind.Movie, Constants.MovieQid, null, null)]
+    [TestCase(EntityKind.Show, Constants.TelevisionSeriesQid, null, null)]
+    [TestCase(EntityKind.Season, Constants.SeasonQid, "Q2", null)]
+    [TestCase(EntityKind.Episode, Constants.EpisodeQid, "Q2", "Q3")]
+    public void ToMetadataContribution_MapsRankedDeduplicatedTrailers_WhenKindCarriesPreviews(
+        EntityKind kind, string? typeQid, string? seriesQid, string? seasonQid)
     {
         // Arrange
-        var kind = kindName switch
+        var claims = new Dictionary<string, List<StatementDto>>
         {
-            "movie" => EntityKind.Movie,
-            "show" => EntityKind.Show,
-            "season" => EntityKind.Season,
-            "episode" => EntityKind.Episode,
-            _ => throw new ArgumentOutOfRangeException(nameof(kindName), kindName, null)
-        };
-        var typeQid = kind switch
-        {
-            EntityKind.Movie => Constants.MovieQid,
-            EntityKind.Show => Constants.TelevisionSeriesQid,
-            EntityKind.Season => Constants.SeasonQid,
-            EntityKind.Episode => Constants.EpisodeQid,
-            EntityKind.Person => Constants.HumanQid,
-            _ => null
-        };
-        var claims = new Dictionary<string, List<StatementDto>>();
-        if (typeQid is not null)
-        {
-            claims[Constants.InstanceOfPropertyId] =
+            [Constants.InstanceOfPropertyId] =
             [
                 new StatementDto
                 {
@@ -549,12 +540,8 @@ internal sealed class EntityMappingExtensionsTests
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind is EntityKind.Season or EntityKind.Episode)
-        {
-            claims[Constants.PartOfSeriesPropertyId] =
+            ],
+            [Constants.PartOfSeriesPropertyId] =
             [
                 new StatementDto
                 {
@@ -564,16 +551,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q2" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seriesQid })
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind == EntityKind.Episode)
-        {
-            claims[Constants.SeasonPropertyId] =
+            ],
+            [Constants.SeasonPropertyId] =
             [
                 new StatementDto
                 {
@@ -583,13 +566,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q3" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seasonQid })
                         }
                     }
                 }
-            ];
-        }
-
+            ]
+        };
         var entity = new EntityDto { Id = "Q1", Claims = claims };
         entity.Claims![Constants.TrailerPropertyId] =
         [
@@ -671,7 +653,7 @@ internal sealed class EntityMappingExtensionsTests
             Assert.That(result.Previews.Select(preview => preview.EmbedKind), Is.All.EqualTo("youtube"));
             Assert.That(
                 result.Previews.Select(preview => preview.Source),
-                Is.All.EqualTo(Constants.ProviderType));
+                Is.All.EqualTo("wikidata"));
             Assert.That(result.Previews.Select(preview => preview.Ordinal), Is.EqualTo([0, 1]));
             Assert.That(
                 result.Previews.Select(preview => preview.Url.OriginalString),
@@ -683,30 +665,15 @@ internal sealed class EntityMappingExtensionsTests
         }
     }
 
-    [TestCase("person")]
-    [TestCase("studio")]
-    public void ToMetadataContribution_LeavesPreviewsEmpty_WhenKindDoesNotCarryTrailers(string kindName)
+    [TestCase(EntityKind.Person, Constants.HumanQid, null, null)]
+    [TestCase(EntityKind.Studio, null, null, null)]
+    public void ToMetadataContribution_LeavesPreviewsEmpty_WhenKindDoesNotCarryTrailers(
+        EntityKind kind, string? typeQid, string? seriesQid, string? seasonQid)
     {
         // Arrange
-        var kind = kindName switch
+        var claims = new Dictionary<string, List<StatementDto>>
         {
-            "person" => EntityKind.Person,
-            "studio" => EntityKind.Studio,
-            _ => throw new ArgumentOutOfRangeException(nameof(kindName), kindName, null)
-        };
-        var typeQid = kind switch
-        {
-            EntityKind.Movie => Constants.MovieQid,
-            EntityKind.Show => Constants.TelevisionSeriesQid,
-            EntityKind.Season => Constants.SeasonQid,
-            EntityKind.Episode => Constants.EpisodeQid,
-            EntityKind.Person => Constants.HumanQid,
-            _ => null
-        };
-        var claims = new Dictionary<string, List<StatementDto>>();
-        if (typeQid is not null)
-        {
-            claims[Constants.InstanceOfPropertyId] =
+            [Constants.InstanceOfPropertyId] =
             [
                 new StatementDto
                 {
@@ -720,12 +687,8 @@ internal sealed class EntityMappingExtensionsTests
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind is EntityKind.Season or EntityKind.Episode)
-        {
-            claims[Constants.PartOfSeriesPropertyId] =
+            ],
+            [Constants.PartOfSeriesPropertyId] =
             [
                 new StatementDto
                 {
@@ -735,16 +698,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q2" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seriesQid })
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind == EntityKind.Episode)
-        {
-            claims[Constants.SeasonPropertyId] =
+            ],
+            [Constants.SeasonPropertyId] =
             [
                 new StatementDto
                 {
@@ -754,13 +713,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q3" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seasonQid })
                         }
                     }
                 }
-            ];
-        }
-
+            ]
+        };
         var entity = new EntityDto { Id = "Q1", Claims = claims };
         entity.Claims![Constants.TrailerPropertyId] =
         [
@@ -790,38 +748,19 @@ internal sealed class EntityMappingExtensionsTests
         }
     }
 
-    [TestCase("movie")]
-    [TestCase("show")]
-    [TestCase("season")]
-    [TestCase("episode")]
-    [TestCase("person")]
-    [TestCase("studio")]
-    public void ToMetadataContribution_LeavesSortTitleUnset_WhenWikidataHasNoSource(string kindName)
+    [TestCase(EntityKind.Movie, Constants.MovieQid, null, null)]
+    [TestCase(EntityKind.Show, Constants.TelevisionSeriesQid, null, null)]
+    [TestCase(EntityKind.Season, Constants.SeasonQid, "Q2", null)]
+    [TestCase(EntityKind.Episode, Constants.EpisodeQid, "Q2", "Q3")]
+    [TestCase(EntityKind.Person, Constants.HumanQid, null, null)]
+    [TestCase(EntityKind.Studio, null, null, null)]
+    public void ToMetadataContribution_LeavesSortTitleUnset_WhenWikidataHasNoSource(
+        EntityKind kind, string? typeQid, string? seriesQid, string? seasonQid)
     {
         // Arrange
-        var kind = kindName switch
+        var claims = new Dictionary<string, List<StatementDto>>
         {
-            "movie" => EntityKind.Movie,
-            "show" => EntityKind.Show,
-            "season" => EntityKind.Season,
-            "episode" => EntityKind.Episode,
-            "person" => EntityKind.Person,
-            "studio" => EntityKind.Studio,
-            _ => throw new ArgumentOutOfRangeException(nameof(kindName), kindName, null)
-        };
-        var typeQid = kind switch
-        {
-            EntityKind.Movie => Constants.MovieQid,
-            EntityKind.Show => Constants.TelevisionSeriesQid,
-            EntityKind.Season => Constants.SeasonQid,
-            EntityKind.Episode => Constants.EpisodeQid,
-            EntityKind.Person => Constants.HumanQid,
-            _ => null
-        };
-        var claims = new Dictionary<string, List<StatementDto>>();
-        if (typeQid is not null)
-        {
-            claims[Constants.InstanceOfPropertyId] =
+            [Constants.InstanceOfPropertyId] =
             [
                 new StatementDto
                 {
@@ -835,12 +774,8 @@ internal sealed class EntityMappingExtensionsTests
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind is EntityKind.Season or EntityKind.Episode)
-        {
-            claims[Constants.PartOfSeriesPropertyId] =
+            ],
+            [Constants.PartOfSeriesPropertyId] =
             [
                 new StatementDto
                 {
@@ -850,16 +785,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q2" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seriesQid })
                         }
                     }
                 }
-            ];
-        }
-
-        if (kind == EntityKind.Episode)
-        {
-            claims[Constants.SeasonPropertyId] =
+            ],
+            [Constants.SeasonPropertyId] =
             [
                 new StatementDto
                 {
@@ -869,13 +800,12 @@ internal sealed class EntityMappingExtensionsTests
                         SnakType = "value",
                         DataValue = new DataValueDto
                         {
-                            Value = JsonSerializer.SerializeToElement(new { id = "Q3" })
+                            Value = JsonSerializer.SerializeToElement(new { id = seasonQid })
                         }
                     }
                 }
-            ];
-        }
-
+            ]
+        };
         var entity = new EntityDto { Id = "Q1", Claims = claims };
 
         // Act
@@ -1208,7 +1138,7 @@ internal sealed class EntityMappingExtensionsTests
     [TestCase("+2", "Q1", null)]
     [TestCase("-2", "Q7727", null)]
     [TestCase("+79228162514264337593543950335", "Q25235", null)]
-    public void ToMetadataContribution_DurationUnits_MapOnlyPositiveNonOverflowingCommonValues(
+    public void ToMetadataContribution_MapOnlyPositiveNonOverflowingCommonValues_WhenDurationUnits(
         string amount,
         string unitQid,
         double? expectedSeconds)
@@ -1608,7 +1538,7 @@ internal sealed class EntityMappingExtensionsTests
     }
 
     [Test]
-    public void ToMetadataContribution_Episode_RequiresStandardHierarchyAndMapsQualifierOrdinal()
+    public void ToMetadataContribution_RequiresStandardHierarchyAndMapsQualifierOrdinal_WhenEpisode()
     {
         // Arrange
         var entity = new EntityDto
@@ -1731,7 +1661,7 @@ internal sealed class EntityMappingExtensionsTests
     }
 
     [Test]
-    public void ToMetadataContribution_Movie_MapsAwardWithConferredBodyAndQualifierYear()
+    public void ToMetadataContribution_MapsAwardWithConferredBodyAndQualifierYear_WhenMovie()
     {
         // Arrange
         var entity = new EntityDto
@@ -1867,7 +1797,7 @@ internal sealed class EntityMappingExtensionsTests
     }
 
     [Test]
-    public void ToMetadataContribution_Movie_MapsContentRatingsOnlyForResolvableSystems()
+    public void ToMetadataContribution_MapsContentRatingsOnlyForResolvableSystems_WhenMovie()
     {
         // Arrange
         var entity = new EntityDto
@@ -1980,7 +1910,7 @@ internal sealed class EntityMappingExtensionsTests
     }
 
     [Test]
-    public void ToMetadataContribution_Show_MapsAwardBodyFallbackAndFskRating()
+    public void ToMetadataContribution_MapsAwardBodyFallbackAndFskRating_WhenShow()
     {
         // Arrange
         var entity = new EntityDto
@@ -2079,7 +2009,7 @@ internal sealed class EntityMappingExtensionsTests
     }
 
     [Test]
-    public void ToMetadataContribution_Episode_MapsAwards()
+    public void ToMetadataContribution_MapsAwards_WhenEpisode()
     {
         // Arrange
         var entity = new EntityDto
@@ -2207,7 +2137,7 @@ internal sealed class EntityMappingExtensionsTests
     }
 
     [Test]
-    public void ToMetadataContribution_Person_PrefersConferredByQualifierForAwardBody()
+    public void ToMetadataContribution_PrefersConferredByQualifierForAwardBody_WhenPerson()
     {
         // Arrange
         var entity = new EntityDto
@@ -2342,7 +2272,7 @@ internal sealed class EntityMappingExtensionsTests
     }
 
     [Test]
-    public void ToMetadataContribution_Studio_MapsAwards()
+    public void ToMetadataContribution_MapsAwards_WhenStudio()
     {
         // Arrange
         var entity = new EntityDto
@@ -2402,7 +2332,7 @@ internal sealed class EntityMappingExtensionsTests
 
     [TestCase("movie", Constants.MovieQid)]
     [TestCase("show", Constants.TelevisionSeriesQid)]
-    public void ToMetadataContribution_SearchableKind_MapsAllValidTruthyOfficialWebsites(
+    public void ToMetadataContribution_MapsAllValidTruthyOfficialWebsites_WhenSearchableKind(
         string kindName,
         string typeQid)
     {
@@ -2522,7 +2452,7 @@ internal sealed class EntityMappingExtensionsTests
                 Is.EqualTo(["https://example.com/Official", "http://example.com/archive"]));
             Assert.That(result.References.Select(reference => reference.Ordinal), Is.EqualTo([0, 1]));
             Assert.That(result.References.All(reference => reference.Kind == "official"), Is.True);
-            Assert.That(result.References.All(reference => reference.Source == Constants.ProviderType), Is.True);
+            Assert.That(result.References.All(reference => reference.Source == "wikidata"), Is.True);
         }
     }
 

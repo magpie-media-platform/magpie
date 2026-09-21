@@ -13,6 +13,5 @@ internal sealed class ExtensionActivationStateConfiguration : IEntityTypeConfigu
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Id).ValueGeneratedNever();
         builder.Property(e => e.Generation).IsRequired();
-        builder.HasData(new ExtensionActivationState { Id = 1, Generation = 0 });
     }
 }

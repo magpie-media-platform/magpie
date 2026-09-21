@@ -14,6 +14,6 @@ public interface IEventListener : IDisposable, IAsyncDisposable
     /// <summary>
     /// Reads events as they arrive, until the caller disposes the listener or cancels the token.
     /// </summary>
-    /// <param name="cancellationToken">The token that stops the enumeration</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     IAsyncEnumerable<MagpieEvent> ReadAllAsync(CancellationToken cancellationToken = default);
 }

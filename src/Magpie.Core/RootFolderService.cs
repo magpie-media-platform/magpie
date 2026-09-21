@@ -11,6 +11,8 @@ using Magpie.Models.Data;
 using Magpie.Models.Storage;
 using Magpie.Sdk.Services;
 
+using Windows.Win32;
+
 namespace Magpie.Core;
 
 internal sealed class RootFolderService(
@@ -28,8 +30,12 @@ internal sealed class RootFolderService(
 
         foreach (var folder in rootFolders)
         {
-            var driveInfo = GetDriveInfoForPath(folder.Path, fileSystem);
-            if (driveInfo is null)
+            if (!TryGetPathCapacity(
+                folder.Path,
+                fileSystem,
+                out var volumeName,
+                out var folderTotalBytes,
+                out var folderFreeBytes))
             {
                 diskSpaceInfos.Add(CreateUnavailableDiskSpaceInfo(folder));
                 continue;
@@ -40,14 +46,14 @@ internal sealed class RootFolderService(
                 Id = folder.Id,
                 Name = folder.Name,
                 Path = folder.Path,
-                TotalBytes = driveInfo.TotalSize,
-                FreeBytes = driveInfo.AvailableFreeSpace,
-                UsedBytes = driveInfo.TotalSize - driveInfo.AvailableFreeSpace
+                TotalBytes = folderTotalBytes,
+                FreeBytes = folderFreeBytes,
+                UsedBytes = folderTotalBytes - folderFreeBytes
             });
 
-            if (!volumes.Any(volume => fileSystem.PathsEqual(volume.Name, driveInfo.Name)))
+            if (!volumes.Any(volume => fileSystem.PathsEqual(volume.Name, volumeName)))
             {
-                volumes.Add((driveInfo.Name, driveInfo.TotalSize, driveInfo.AvailableFreeSpace));
+                volumes.Add((volumeName, folderTotalBytes, folderFreeBytes));
             }
         }
 
@@ -63,6 +69,62 @@ internal sealed class RootFolderService(
         };
     }
 
+    private static bool TryGetPathCapacity(
+        string path,
+        IFileSystem fileSystem,
+        out string volumeName,
+        out long totalBytes,
+        out long freeBytes)
+    {
+        volumeName = string.Empty;
+        totalBytes = 0;
+        freeBytes = 0;
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullPath = fileSystem.GetFullPath(path);
+            if (OperatingSystem.IsWindowsVersionAtLeast(5, 1, 2600))
+            {
+                if (!PInvoke.GetDiskFreeSpaceEx(fullPath, out var free, out var total, out _))
+                {
+                    return false;
+                }
+
+                volumeName = Path.GetPathRoot(fullPath)!;
+                totalBytes = (long)total;
+                freeBytes = (long)free;
+                return true;
+            }
+
+            var separator = Path.DirectorySeparatorChar;
+            var candidate = fullPath.EndsWith(separator) ? fullPath : fullPath + separator;
+            var mount = DriveInfo.GetDrives()
+                .Where(drive => drive.IsReady && candidate.StartsWith(
+                    drive.Name.EndsWith(separator) ? drive.Name : drive.Name + separator,
+                    StringComparison.Ordinal))
+                .MaxBy(drive => drive.Name.Length);
+
+            if (mount is null)
+            {
+                return false;
+            }
+
+            volumeName = mount.Name;
+            totalBytes = mount.TotalSize;
+            freeBytes = mount.AvailableFreeSpace;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static DiskSpaceInfo CreateUnavailableDiskSpaceInfo(RootFolder folder)
     {
         return new DiskSpaceInfo
@@ -76,33 +138,6 @@ internal sealed class RootFolderService(
         };
     }
 
-    private static DriveInfo? GetDriveInfoForPath(string path, IFileSystem fileSystem)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return null;
-        }
-
-        try
-        {
-            var fullPath = fileSystem.GetFullPath(path);
-            var root = Path.GetPathRoot(fullPath);
-
-            if (string.IsNullOrEmpty(root))
-            {
-                return null;
-            }
-
-            return DriveInfo.GetDrives()
-                .FirstOrDefault(d => d.IsReady &&
-                    fileSystem.PathsEqual(d.Name, root));
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     private void ValidateContentType(string contentType, string parameterName)
     {
         if (contentTypeRegistry.Exists(contentType))
@@ -110,14 +145,7 @@ internal sealed class RootFolderService(
             return;
         }
 
-        var registeredContentTypes = string.Join(
-            ", ",
-            contentTypeRegistry.Definitions
-                .Select(definition => definition.Slug)
-                .OrderBy(slug => slug, StringComparer.Ordinal));
-        throw new ArgumentException(
-            $"Content type must be one of: {registeredContentTypes}.",
-            parameterName);
+        throw new ArgumentException($"The content type {contentType} is not registered.", parameterName);
     }
 
     private async Task<Dictionary<string, RootFolderDefault>> ValidateDefaultsAsync(
@@ -254,66 +282,48 @@ internal sealed class RootFolderService(
             return false;
         }
 
-        var contentType = patch.ContentType ?? existing.ContentType;
         if (patch.ContentType is not null)
         {
-            ValidateContentType(patch.ContentType, nameof(patch.ContentType));
+            ValidateContentType(patch.ContentType.Value, nameof(patch.ContentType));
         }
 
-        var changed = false;
-        var defaultsChanged = false;
-        var allowEmptyDefaults = false;
-        var requestedDefaults = (IReadOnlyDictionary<string, RootFolderDefault>)existing.Defaults;
+        var contentType = patch.ContentType?.Value ?? existing.ContentType;
+        var defaults = patch.Defaults;
         if (patch.Defaults is not null)
         {
-            requestedDefaults = patch.Defaults;
-            defaultsChanged = true;
-            changed = true;
+            defaults = new()
+            {
+                Value = await ValidateDefaultsAsync(
+                    contentType,
+                    patch.Defaults.Value,
+                    cancellationToken).ConfigureAwait(false)
+            };
         }
         else if (patch.ContentType is not null &&
-            !string.Equals(patch.ContentType, existing.ContentType, StringComparison.Ordinal))
+            !string.Equals(patch.ContentType.Value, existing.ContentType, StringComparison.Ordinal))
         {
-            requestedDefaults = new Dictionary<string, RootFolderDefault>();
-            defaultsChanged = true;
-            allowEmptyDefaults = true;
-            changed = true;
+            defaults = new() { Value = [] };
         }
 
-        if (defaultsChanged)
+        if (patch.Name is not null && string.IsNullOrWhiteSpace(patch.Name.Value))
         {
-            var defaults = requestedDefaults.Count == 0 && allowEmptyDefaults
-                ? []
-                : await ValidateDefaultsAsync(
-                    contentType,
-                    requestedDefaults,
-                    cancellationToken).ConfigureAwait(false);
-            existing.Defaults = defaults;
+            throw new ArgumentException("Name is required.", nameof(patch.Name));
         }
 
-        if (patch.Name is not null)
-        {
-            if (string.IsNullOrWhiteSpace(patch.Name))
-            {
-                throw new ArgumentException("Name is required.", nameof(patch.Name));
-            }
-
-            existing.Name = patch.Name;
-            changed = true;
-        }
-
+        var path = patch.Path;
         if (patch.Path is not null)
         {
-            if (string.IsNullOrWhiteSpace(patch.Path))
+            if (string.IsNullOrWhiteSpace(patch.Path.Value))
             {
                 throw new ArgumentException("Path is required.", nameof(patch.Path));
             }
 
-            if (!Path.IsPathFullyQualified(patch.Path))
+            if (!Path.IsPathFullyQualified(patch.Path.Value))
             {
                 throw new ArgumentException("Path must be absolute.", nameof(patch.Path));
             }
 
-            var fullPath = Path.TrimEndingDirectorySeparator(fileSystem.GetFullPath(patch.Path));
+            var fullPath = Path.TrimEndingDirectorySeparator(fileSystem.GetFullPath(patch.Path.Value));
             if (!fileSystem.PathsEqual(existing.Path, fullPath))
             {
                 if (!fileSystem.DirectoryExists(fullPath))
@@ -329,47 +339,29 @@ internal sealed class RootFolderService(
                 }
             }
 
-            existing.Path = fullPath;
-            changed = true;
+            path = new() { Value = fullPath };
         }
 
-        if (patch.ContentType is not null)
-        {
-            existing.ContentType = patch.ContentType;
-            changed = true;
-        }
-
-        if (patch.IsDefault is { } isDefault)
-        {
-            existing.IsDefault = isDefault;
-            changed = true;
-        }
-
-        if (patch.DefaultMonitoring is { } monitoring)
-        {
-            existing.DefaultMonitoring = monitoring.Value;
-            changed = true;
-        }
-
-        if (patch.RenameTemplate is { } renameTemplate)
-        {
-            existing.RenameTemplate = renameTemplate.Value;
-            changed = true;
-        }
-
-        if (patch.UpgradeFileHandling is { } upgradeFileHandling)
-        {
-            existing.UpgradeFileHandling = upgradeFileHandling;
-            changed = true;
-        }
-
-        if (!changed)
+        if (patch is
+            {
+                Name: null,
+                Path: null,
+                ContentType: null,
+                IsDefault: null,
+                DefaultMonitoring: null,
+                RenameTemplate: null,
+                UpgradeFileHandling: null,
+                Defaults: null
+            })
         {
             return false;
         }
 
         return await rootFolderRepository
-            .UpdateAsync(existing, actingUserId, cancellationToken)
+            .PatchAsync(
+                patch with { Id = rootFolderId, Path = path, Defaults = defaults },
+                actingUserId,
+                cancellationToken)
             .ConfigureAwait(false);
     }
 

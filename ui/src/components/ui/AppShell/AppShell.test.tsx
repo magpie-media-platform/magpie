@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 import { AppShell, AppShellHeader, AppShellSidebar, AppShellMain, AppShellBottomNav, useAppShell } from './AppShell';
 
@@ -95,6 +96,7 @@ describe('AppShellSidebar', () => {
                     <span data-testid="sidebar-content">Sidebar</span>
                 </AppShellSidebar>
             </AppShell>,
+            { wrapper: MemoryRouter },
         );
 
         expect(screen.getByTestId('sidebar-content')).toBeInTheDocument();
@@ -105,6 +107,7 @@ describe('AppShellSidebar', () => {
             <AppShell>
                 <AppShellSidebar ariaLabel="Test navigation" />
             </AppShell>,
+            { wrapper: MemoryRouter },
         );
 
         const sidebar = screen.getByRole('navigation', { name: 'Test navigation' });
@@ -122,6 +125,7 @@ describe('AppShellSidebar', () => {
                 <AppShellSidebar data-testid="sidebar" />
                 <TestComponent />
             </AppShell>,
+            { wrapper: MemoryRouter },
         );
 
         expect(screen.getByTestId('sidebar')).toHaveAttribute('data-open', 'false');
@@ -136,6 +140,7 @@ describe('AppShellSidebar', () => {
             <AppShell>
                 <AppShellSidebar />
             </AppShell>,
+            { wrapper: MemoryRouter },
         );
 
         const backdrop = document.querySelector('.app-shell__sidebar-backdrop');
@@ -158,6 +163,7 @@ describe('AppShellSidebar', () => {
                 <AppShellSidebar data-testid="sidebar" />
                 <TestComponent />
             </AppShell>,
+            { wrapper: MemoryRouter },
         );
 
         fireEvent.click(screen.getByText('Open'));

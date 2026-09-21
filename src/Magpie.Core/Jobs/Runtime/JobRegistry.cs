@@ -18,16 +18,14 @@ internal sealed class JobRegistry : IJobRegistry
 
     public JobRegistry(IEnumerable<JobRegistration> registrations, ILogger<JobRegistry> logger)
     {
-        ArgumentNullException.ThrowIfNull(registrations);
-        ArgumentNullException.ThrowIfNull(logger);
-
         _registrations = new();
         foreach (var registration in registrations)
         {
             if (_registrations.TryGetValue(registration.Spec.JobType, out var existing))
             {
                 logger.LogWarning(
-                    "Multiple jobs declared JobType {JobType}. The registry will use {Winner} and ignore {Displaced}",
+                    "Multiple jobs declared JobType {JobType}, so the registry will use {Winner} and ignore" +
+                    " {Displaced}",
                     registration.Spec.JobType,
                     registration.HandlerType.FullName,
                     existing.HandlerType.FullName);

@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace Magpie.Sdk.Releases;
 
 /// <summary>
@@ -5,4 +7,16 @@ namespace Magpie.Sdk.Releases;
 /// </summary>
 /// <param name="Key">The key of the imported file</param>
 /// <param name="FileName">The name of the imported file</param>
-public sealed record ReleaseFileRef(string Key, string FileName);
+[method: SetsRequiredMembers]
+public sealed record ReleaseFileRef(string Key, string FileName)
+{
+    /// <summary>
+    /// The key of the imported file.
+    /// </summary>
+    public string Key { get; set; } = Key;
+
+    /// <summary>
+    /// The name of the imported file.
+    /// </summary>
+    public string FileName { get; set; } = FileName;
+}

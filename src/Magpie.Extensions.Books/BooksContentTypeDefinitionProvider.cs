@@ -161,9 +161,9 @@ internal sealed class BooksContentTypeDefinitionProvider :
             return ReleaseMatchResult.NoMatch;
         }
 
-        var normalizedRelease = release.Title.NormalizeMediaFilename();
+        var normalizedRelease = " " + release.Title.NormalizeMediaFilename() + " ";
         var metadata = target.Metadata.GetValueOrDefault(book.Id);
-        var titles =
+        var titles = (
             from title in (
                 from text in metadata?.AlternateTexts ?? []
                 where string.Equals(text.Kind, "Title", StringComparison.OrdinalIgnoreCase)
@@ -171,14 +171,13 @@ internal sealed class BooksContentTypeDefinitionProvider :
                 .Prepend(metadata?.OriginalTitle)
                 .Prepend(metadata?.Title)
             where !string.IsNullOrWhiteSpace(title)
-            select title.Trim();
+            select title.Trim()).ToArray();
         var titleMatched = titles.Any(title =>
         {
             var normalizedTitle = title.NormalizeMediaFilename();
-            return string.Equals(normalizedRelease, normalizedTitle, StringComparison.OrdinalIgnoreCase) ||
-                normalizedRelease.StartsWith(
-                    string.Concat(normalizedTitle, " "),
-                    StringComparison.OrdinalIgnoreCase);
+            return normalizedTitle.Length > 0 && normalizedRelease.Contains(
+                string.Concat(" ", normalizedTitle, " "),
+                StringComparison.OrdinalIgnoreCase);
         });
         if (!titleMatched)
         {
@@ -349,6 +348,18 @@ internal sealed class BooksContentTypeDefinitionProvider :
         string originalFileName,
         string extension)
     {
+        var plan = BuildPathPlan(ancestors, relationshipsByNode, originalFileName, extension);
+        return plan is null
+            ? null
+            : string.Join("/", plan.Directories.Select(directory => directory.Name).Append(plan.FileName));
+    }
+
+    public ContentPathPlan? BuildPathPlan(
+        IReadOnlyList<ContentHierarchyItem> ancestors,
+        IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>> relationshipsByNode,
+        string originalFileName,
+        string extension)
+    {
         var book = ancestors[^1];
         if (book.Level is not (Constants.EbookLevelSlug or Constants.AudiobookLevelSlug))
         {
@@ -356,7 +367,7 @@ internal sealed class BooksContentTypeDefinitionProvider :
         }
 
         var bookTitle = book.Name.Trim();
-        var fileName = string.IsNullOrWhiteSpace(bookTitle) ? originalFileName : bookTitle!;
+        var fileName = string.IsNullOrWhiteSpace(bookTitle) ? originalFileName : bookTitle;
         var bookYear = book.MetadataContainer?.Contributions.OrderBy(c => c.Ordinal)
             .Select(c => c.PublishDate?.Year).FirstOrDefault(year => year is not null);
         if (bookYear is { } year)
@@ -364,10 +375,16 @@ internal sealed class BooksContentTypeDefinitionProvider :
             fileName += $" ({year.ToString(CultureInfo.InvariantCulture)})";
         }
 
-        var relative = book.Level == Constants.AudiobookLevelSlug
-            ? Path.Combine(fileName, WithExtension(originalFileName, extension))
-            : WithExtension(fileName, extension);
-        return relative;
+        if (book.Level != Constants.AudiobookLevelSlug)
+        {
+            return new ContentPathPlan { Directories = [], FileName = WithExtension(fileName, extension) };
+        }
+
+        return new ContentPathPlan
+        {
+            Directories = [new ContentPathPlanDirectory { LevelSlug = Constants.AudiobookLevelSlug, Name = fileName }],
+            FileName = WithExtension(originalFileName, extension)
+        };
     }
 
     private static string WithExtension(string name, string extension)

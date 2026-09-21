@@ -1,26 +1,22 @@
 import { render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AdminBackupsSlot, AdminExtensionsSlot, AdminProvidersSlot, AdminUsersSlot } from './AdminSlots';
+import { AdminBackupsSlot, AdminExtensionsSlot } from './AdminSlots';
 import { CalendarMainSlot } from './CalendarSlots';
 import {
     ContentDetailsActionsSlot,
     ContentDetailsFilesSlot,
     ContentDetailsHeaderSlot,
-    ContentDetailsHistorySlot,
     ContentDetailsMetadataSlot,
     ContentDetailsOverviewSlot,
-    ContentDetailsTabsSlot,
     ContentListActionsSlot,
     ContentListColumnsSlot,
     ContentListSlot,
 } from './ContentSlots';
 import { DashboardMainSlot, DashboardWidgetsSlot } from './DashboardSlots';
-import { DownloadQueueActionsSlot, DownloadQueueSlot } from './DownloadSlots';
-import { FiltersEditorSlot, FiltersListSlot } from './FiltersSlots';
-import { HeaderLeftSlot, HeaderRightSlot, HeaderSlot, OverlaySlot } from './GlobalSlots';
-import { SubjectDetailsHeaderSlot, SubjectDetailsTabsSlot, SubjectListSlot } from './SubjectSlots';
-import { SystemLogsSlot, SystemStatusSlot } from './SystemSlots';
+import { HeaderLeftSlot, HeaderRightSlot, HeaderSlot } from './GlobalSlots';
+import { SubjectDetailsHeaderSlot, SubjectListSlot } from './SubjectSlots';
+import { SystemStatusSlot } from './SystemSlots';
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
@@ -40,33 +36,19 @@ const slotWrappers: [string, React.ComponentType<{ children?: React.ReactNode; c
     ['content.details.header', ContentDetailsHeaderSlot],
     ['content.details.actions', ContentDetailsActionsSlot],
     ['content.details.metadata', ContentDetailsMetadataSlot],
-    ['content.details.tabs', ContentDetailsTabsSlot],
     ['content.details.overview', ContentDetailsOverviewSlot],
     ['content.details.files', ContentDetailsFilesSlot],
-    ['content.details.history', ContentDetailsHistorySlot],
 
     ['subject.list', SubjectListSlot],
     ['subject.details.header', SubjectDetailsHeaderSlot],
-    ['subject.details.tabs', SubjectDetailsTabsSlot],
-
-    ['downloads.queue', DownloadQueueSlot],
-    ['downloads.queue.actions', DownloadQueueActionsSlot],
-
-    ['admin.users', AdminUsersSlot],
-    ['admin.providers', AdminProvidersSlot],
     ['admin.extensions', AdminExtensionsSlot],
     ['admin.backups', AdminBackupsSlot],
 
     ['calendar.main', CalendarMainSlot],
 
     ['system.status', SystemStatusSlot],
-    ['system.logs', SystemLogsSlot],
-
-    ['filters.editor', FiltersEditorSlot],
-    ['filters.list', FiltersListSlot],
 
     ['global.header', HeaderSlot],
-    ['global.overlay', OverlaySlot],
     ['header.left', HeaderLeftSlot],
     ['header.right', HeaderRightSlot],
 ];

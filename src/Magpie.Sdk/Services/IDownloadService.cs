@@ -30,7 +30,7 @@ public interface IDownloadService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a download queue entry by id.
+    /// A download queue entry by id.
     /// </summary>
     /// <param name="id">The id of the download to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

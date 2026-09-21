@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { EyeIcon, EyeSlashIcon, ImageBrokenIcon } from '@phosphor-icons/react';
 
 import { Badge } from '@/components/ui/Badge';
@@ -9,15 +9,29 @@ import { resolveEffectiveMonitoring } from '@/lib/monitoring';
 import { getFulfillmentBadge } from '@/types/content';
 import type { FulfillmentStatus } from '@/types';
 
+const brokenImageGlyph = <ImageBrokenIcon weight="thin" />;
+
 export interface ContentPosterProps {
     posterUrl?: string | null;
     title?: string;
     alt?: string;
     className: string;
     placeholderClassName: string;
+    placeholder?: ReactNode;
+    'data-testid'?: string;
+    loading?: 'eager' | 'lazy';
 }
 
-export function ContentPoster({ posterUrl, title, alt, className, placeholderClassName }: ContentPosterProps) {
+export function ContentPoster({
+    posterUrl,
+    title,
+    alt,
+    className,
+    placeholderClassName,
+    placeholder = brokenImageGlyph,
+    loading = 'lazy',
+    ...imageProps
+}: ContentPosterProps) {
     const [posterFailed, setPosterFailed] = useState(false);
 
     useEffect(() => {
@@ -27,10 +41,11 @@ export function ContentPoster({ posterUrl, title, alt, className, placeholderCla
     if (posterUrl && !posterFailed) {
         return (
             <img
+                {...imageProps}
                 src={posterUrl}
                 alt={alt ?? `${title ?? 'Content'} artwork`}
                 className={className}
-                loading="lazy"
+                loading={loading}
                 onError={() => setPosterFailed(true)}
             />
         );
@@ -38,7 +53,7 @@ export function ContentPoster({ posterUrl, title, alt, className, placeholderCla
 
     return (
         <div className={`${className} ${placeholderClassName}`} aria-hidden="true">
-            <ImageBrokenIcon weight="thin" />
+            {posterUrl ? brokenImageGlyph : placeholder}
         </div>
     );
 }

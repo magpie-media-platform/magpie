@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,9 +27,19 @@ internal sealed class SubjectFilterRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<SubjectFilterRepository> logger,
-    TimeProvider? timeProvider = null) : ISubjectFilterRepository
+    TimeProvider timeProvider) : ISubjectFilterRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private static readonly (string Name, Func<SubjectFilter, SubjectFilter, bool> Changed)[] UpdateFields =
+    [
+        ("name", (current, model) => !Equals(current.Name, model.Name)),
+        ("criteria", (current, model) =>
+            !string.Equals(
+                JsonSerializer.Serialize(current.Criteria, JsonSerializerOptions.Default),
+                JsonSerializer.Serialize(model.Criteria, JsonSerializerOptions.Default),
+                StringComparison.Ordinal)),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
 
     private static IReadOnlyCollection<string> ChangedFields(SubjectFilterPatch patch)
     {
@@ -118,14 +129,21 @@ internal sealed class SubjectFilterRepository(
 
             var totalCount = await filters.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(SubjectFilter).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(SubjectFilter.Id), nameof(SubjectFilter.OwnerUserId), nameof(SubjectFilter.Name),
+                nameof(SubjectFilter.CreatedAt),
+                nameof(SubjectFilter.CreatedByUserId),
+                nameof(SubjectFilter.ModifiedAt),
+                nameof(SubjectFilter.ModifiedByUserId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 filters = sort.Direction == SortDirection.Ascending
-                    ? filters.OrderBy(f => EF.Property<SubjectFilter>(f, sortProperty)).ThenBy(f => f.Id)
-                    : filters.OrderByDescending(f => EF.Property<SubjectFilter>(f, sortProperty)).ThenBy(f => f.Id);
+                    ? filters.OrderBy(f => EF.Property<object>(f, sortProperty)).ThenBy(f => f.Id)
+                    : filters.OrderByDescending(f => EF.Property<object>(f, sortProperty)).ThenBy(f => f.Id);
             }
             else
             {
@@ -210,6 +228,23 @@ internal sealed class SubjectFilterRepository(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
+                    var current = await context.SubjectFilters.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    var changedFields = new List<string>();
+                    foreach (var (name, changed) in UpdateFields)
+                    {
+                        if (changed(current, model))
+                        {
+                            changedFields.Add(name);
+                        }
+                    }
+
                     var updated = await context.SubjectFilters
                         .Where(f => f.Id == model.Id)
                         .ExecuteUpdateAsync(
@@ -233,6 +268,14 @@ internal sealed class SubjectFilterRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                SubjectEventBuilder.BuildSubjectFilterUpdatedEvent(model.Id, changedFields), token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -343,6 +386,7 @@ internal sealed class SubjectFilterRepository(
                     if (patch.Tags is not null)
                     {
                         var currentTags = await context.Tags
+                            .Include(t => t.SubjectFilters)
                             .Where(t => t.SubjectFilters.Any(f => f.Id == patch.Id))
                             .ToListAsync(cancellationToken)
                             .ConfigureAwait(false);

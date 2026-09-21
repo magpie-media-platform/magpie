@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
 import { apiPost } from '@/lib/api';
 import { useSetLibraryImportMatch } from './useSetLibraryImportMatch';
 import { libraryImportCandidateQueryKeys } from './useLibraryImportCandidates';
+import { libraryImportCandidateGroupQueryKeys } from './useLibraryImportCandidateGroups';
 
 function createWrapper() {
     const queryClient = new QueryClient({
@@ -83,5 +84,25 @@ describe('useSetLibraryImportMatch', () => {
         });
 
         expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: libraryImportCandidateQueryKeys.all });
+    });
+
+    it('invalidates the import/candidate-groups query family on success', async () => {
+        mockApiPost.mockResolvedValue({ id: 'm-1' });
+        const { Wrapper, queryClient } = createWrapper();
+        const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+        const { result } = renderHook(() => useSetLibraryImportMatch(), { wrapper: Wrapper });
+
+        await act(async () => {
+            await result.current.mutateAsync({
+                id: 'm-1',
+                providerType: 'provider-a',
+                externalIdKey: 'provider-a.movie',
+                externalId: '550',
+                title: 'Fight Club',
+            });
+        });
+
+        expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: libraryImportCandidateGroupQueryKeys.all });
     });
 });

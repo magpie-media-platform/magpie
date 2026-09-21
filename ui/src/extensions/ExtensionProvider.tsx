@@ -6,6 +6,8 @@ import type { ExtensionLoaderState, UIContext, UIExtension } from './types';
 export interface ExtensionContextValue {
     state: ExtensionLoaderState;
 
+    retriesExhausted: boolean;
+
     context: UIContext;
 
     getExtensionsForSlot: (slot: string) => UIExtension[];
@@ -19,12 +21,12 @@ const defaultContextValue: ExtensionContextValue = {
         error: null,
         manifest: null,
     },
+    retriesExhausted: false,
     context: {
         apiBaseUrl: '/api',
         userId: null,
         username: null,
         role: null,
-        theme: null,
     },
     getExtensionsForSlot: () => [],
     retry: () => Promise.resolve(),
@@ -43,8 +45,6 @@ export interface ExtensionProviderProps {
     username?: string | null;
 
     role?: string | null;
-
-    theme?: 'light' | 'dark' | null;
 }
 
 export function ExtensionProvider({
@@ -53,13 +53,13 @@ export function ExtensionProvider({
     userId = null,
     username = null,
     role = null,
-    theme = null,
 }: ExtensionProviderProps) {
     const [loader] = useState(() => new ExtensionLoader({ apiBaseUrl }));
 
     const [loaderState, setLoaderState] = useState<ExtensionLoaderState>(loader.state);
     const automaticRetryCountRef = useRef(0);
     const automaticRetryKeyRef = useRef<string | null>(null);
+    const [retriesExhausted, setRetriesExhausted] = useState(false);
 
     useEffect(() => {
         const unsubscribe = loader.subscribe(setLoaderState);
@@ -77,6 +77,7 @@ export function ExtensionProvider({
         if (loaderState.state === 'ready') {
             automaticRetryCountRef.current = 0;
             automaticRetryKeyRef.current = null;
+            setRetriesExhausted(false);
             return;
         }
 
@@ -91,8 +92,11 @@ export function ExtensionProvider({
         }
 
         if (automaticRetryCountRef.current >= 10) {
+            setRetriesExhausted(true);
             return;
         }
+
+        setRetriesExhausted(false);
 
         const timeoutId = setTimeout(() => {
             automaticRetryCountRef.current += 1;
@@ -106,14 +110,15 @@ export function ExtensionProvider({
     const contextValue = useMemo<ExtensionContextValue>(
         () => ({
             state: loaderState,
-            context: { apiBaseUrl, userId, username, role, theme },
+            retriesExhausted,
+            context: { apiBaseUrl, userId, username, role },
             getExtensionsForSlot: (slot: string) => loader.getExtensionsForSlot(slot),
             retry: async () => {
                 loader.reset();
                 await loader.init();
             },
         }),
-        [loaderState, loader, apiBaseUrl, userId, username, role, theme],
+        [loaderState, retriesExhausted, loader, apiBaseUrl, userId, username, role],
     );
 
     return <ExtensionContext.Provider value={contextValue}>{children}</ExtensionContext.Provider>;

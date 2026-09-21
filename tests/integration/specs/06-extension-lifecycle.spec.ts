@@ -146,7 +146,7 @@ test.describe.serial('Journey 06: add, upgrade, and remove a plugin', () => {
                 });
 
                 await page.goto('/admin/ext/lifecycle');
-                await expect(page.getByRole('heading', { name: 'Lifecycle fixture Settings' })).toBeVisible();
+                await expect(page.getByRole('heading', { name: 'Lifecycle fixture Settings', level: 1 })).toBeVisible();
                 await expect(page.locator('magpie-lifecycle-settings')).toHaveText('Lifecycle settings loaded.');
             });
 
@@ -301,7 +301,7 @@ test.describe.serial('Journey 06: add, upgrade, and remove a plugin', () => {
                 }
                 const source = await api.post<PackageSource>('/api/extensions/package-sources', {
                     name: 'Journey lifecycle feed',
-                    sourceUrl: 'http://package-feed:8081/index.json',
+                    sourceUrl: 'https://package-feed:8081/index.json',
                     enabled: true,
                     searchFilterKind: 'None',
                     credentialKind: 'None',
@@ -309,7 +309,7 @@ test.describe.serial('Journey 06: add, upgrade, and remove a plugin', () => {
                 packageSourceId = source.id;
                 expect(source).toMatchObject({
                     name: 'Journey lifecycle feed',
-                    sourceUrl: 'http://package-feed:8081/index.json',
+                    sourceUrl: 'https://package-feed:8081/index.json',
                     enabled: true,
                 });
 

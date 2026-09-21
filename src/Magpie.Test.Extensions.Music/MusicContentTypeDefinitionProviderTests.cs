@@ -173,6 +173,9 @@ public class MusicContentTypeDefinitionProviderTests
             Assert.That(query, Is.Not.Null);
             Assert.That(query!.GetFirstValue(ParsedFileSignalKeys.Title), Is.EqualTo("The Wall"));
             Assert.That(query!.GetFirstValue("artist"), Is.EqualTo("Pink Floyd"));
+            Assert.That(query!.GetFirstValue("album"), Is.EqualTo("The Wall"));
+            Assert.That(query!.GetFirstValue(ParsedFileSignalKeys.TitleToken), Is.EqualTo("The Wall"));
+            Assert.That(query!.GetFirstValue(ParsedFileSignalKeys.RootTitle), Is.EqualTo("Pink Floyd"));
             Assert.That(levelSlug, Is.EqualTo("artist"));
         }
     }
@@ -216,9 +219,109 @@ public class MusicContentTypeDefinitionProviderTests
                 "01 - In The Flesh", "flac");
 
         // Assert
+        Assert.That(path, Is.EqualTo("Pink Floyd/The Wall (1979)/01 - In The Flesh.flac"));
+    }
+
+    [Test]
+    public void BuildPathPlan_Result_WhenArtistAlbumTrackAreAvailable()
+    {
+        // Arrange
+        var ancestors = new ContentHierarchyItem[]
+       {
+            new()
+            {
+                ContentType = "music",
+                Level = "artist",
+                Slug                 = "pink-floyd",
+                Name = "Pink Floyd"
+            },
+            new()
+            {
+                ContentType = "music",
+                Level = "album",
+                Slug = "the-wall",
+                Name = "The Wall",
+                MetadataContainer = new()
+            },
+            new()
+            {
+                ContentType = "music",
+                Level = "track",
+                Slug = "in-the-flesh",
+                Name = "In The Flesh",
+                Ordinal = 1
+            },
+       };
+        ancestors[1].MetadataContainer!.Contributions.Add(
+            new() { ProviderType = "test", PublishDate = new(1979, 1, 1) });
+
+        // Act
+        var plan = ((IPathResolutionContentTypeDefinitionProvider)_subject)
+            .BuildPathPlan(ancestors, new Dictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>>(),
+                "01 - In The Flesh", "flac");
+
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(path, Is.EqualTo("Pink Floyd/The Wall (1979)/01 - In The Flesh.flac"));
+            Assert.That(plan!.Directories, Has.Count.EqualTo(2));
+            Assert.That(plan.Directories[0].LevelSlug, Is.EqualTo("artist"));
+            Assert.That(plan.Directories[0].Name, Is.EqualTo("Pink Floyd"));
+            Assert.That(plan.Directories[1].LevelSlug, Is.EqualTo("album"));
+            Assert.That(plan.Directories[1].Name, Is.EqualTo("The Wall (1979)"));
+            Assert.That(plan.FileName, Is.EqualTo("01 - In The Flesh.flac"));
         }
+    }
+
+    [Test]
+    public void ResolveDirectoryLevelChain_Result_WhenTrackLevelIsGiven()
+    {
+        // Arrange
+        // Act
+        var chain = ((IPathResolutionContentTypeDefinitionProvider)_subject).ResolveDirectoryLevelChain("track");
+
+        // Assert
+        Assert.That(chain, Is.EqualTo(["artist", "album"]));
+    }
+
+    [TestCase("Sample Song.flac", "Sample Song")]
+    [TestCase("Sample Size.flac", "Sample Size")]
+    [TestCase("The Sample.flac", "The Sample")]
+    [TestCase("The Sample Song.flac", "The Sample Song")]
+    [TestCase("Sampler.flac", "Sampler")]
+    [TestCase("Resample.flac", "Resample")]
+    public void Parse_PreservesTitle_WhenSampleIsATitleWord(
+        string path,
+        string expectedTitle)
+    {
+        // Arrange
+        // Act
+        var result = _subject.Parse(path, out _);
+
+        // Assert
+        Assert.That(result?.GetFirstValue(ParsedFileSignalKeys.Title), Is.EqualTo(expectedTitle));
+    }
+
+    [TestCase("sample.flac")]
+    [TestCase("Sample.flac")]
+    [TestCase("Song.sample.flac")]
+    [TestCase("Song-SAMPLE.flac")]
+    [TestCase("Song_sample.flac")]
+    [TestCase("Song [sample].flac")]
+    [TestCase("sample-Song.Name.2020.flac")]
+    [TestCase("sample.Song.Name.flac")]
+    [TestCase("SAMPLE_Song.Name.flac")]
+    [TestCase("Song.Name.sample.320kbps.flac")]
+    [TestCase("Song.Name-SAMPLE-320kbps.flac")]
+    [TestCase("Song.Name_sample_320kbps.flac")]
+    [TestCase("[sample] Song.Name.flac")]
+    [TestCase("Song.Name [sample] 320kbps.flac")]
+    public void Parse_ReturnsNull_WhenSampleMarkerIsDelimited(string path)
+    {
+        // Arrange
+        // Act
+        var result = _subject.Parse(path, out _);
+
+        // Assert
+        Assert.That(result, Is.Null);
     }
 }

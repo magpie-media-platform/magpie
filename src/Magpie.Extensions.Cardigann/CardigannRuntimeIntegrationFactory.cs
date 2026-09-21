@@ -23,20 +23,17 @@ internal sealed class CardigannRuntimeIntegrationFactory(
     private readonly Queue<string> _definitionOrder = new();
     private readonly Lock _definitionsLock = new();
 
-    public const string DefinitionTypeName = "cardigann";
-
-    public string DefinitionType => DefinitionTypeName;
+    public string DefinitionType => Constants.ProviderTypeName;
 
     public IIndexerIntegration Create(Indexer indexer)
     {
         if (string.IsNullOrWhiteSpace(indexer.SchemaData))
         {
             throw new InvalidOperationException(
-                $"Indexer {indexer.Name} is marked {DefinitionTypeName} but carries no definition " +
+                $"Indexer {indexer.Name} is marked {Constants.ProviderTypeName} but carries no definition " +
                 "(SchemaData is empty).");
         }
 
-        // ponytail: Definition parsing is infrequent. Use a concurrent bounded cache if this lock causes contention.
         lock (_definitionsLock)
         {
             if (!_definitions.TryGetValue(indexer.SchemaData, out var definition))

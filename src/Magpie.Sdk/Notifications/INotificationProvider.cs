@@ -13,7 +13,7 @@ namespace Magpie.Sdk.Notifications;
 public interface INotificationProvider
 {
     /// <summary>
-    /// The provider type.
+    /// The provider type slug.
     /// </summary>
     string ProviderType { get; }
 
@@ -27,6 +27,6 @@ public interface INotificationProvider
     /// </summary>
     /// <param name="rule">The notification rule that matched</param>
     /// <param name="magpieEvent">The event to notify about</param>
-    /// <param name="cancellationToken">The cancellation token</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     Task SendAsync(NotificationRule rule, MagpieEvent magpieEvent, CancellationToken cancellationToken = default);
 }

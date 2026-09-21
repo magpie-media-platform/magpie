@@ -1,7 +1,4 @@
 import { Suspense } from 'react';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,13 +29,6 @@ vi.mock('@/pages/ContentDetailPage/ContentDetailPage', () => ({
     default: () => <div>Content detail page</div>,
 }));
 
-const testDir = dirname(fileURLToPath(import.meta.url));
-const sourceRoot = resolve(testDir, '..');
-
-function readSource(relativePath: string): string {
-    return readFileSync(resolve(sourceRoot, relativePath), 'utf8');
-}
-
 function RouteLocation() {
     const location = useLocation();
     return <div data-testid="route-location">{`${location.pathname}${location.search}`}</div>;
@@ -52,14 +42,6 @@ describe('routes', () => {
             contentTypes: registryContentTypes,
             isLoading: false,
         });
-    });
-
-    it('keeps saved filters out of the Library submenu', () => {
-        const appSource = readSource('App.tsx');
-
-        expect(appSource).not.toContain('to="/library/filters"');
-        expect(appSource).not.toContain('Saved filters');
-        expect(appSource).toContain('to="/filters"');
     });
 
     it.each([

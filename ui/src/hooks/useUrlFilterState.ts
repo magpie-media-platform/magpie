@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 
 export interface SetFilterOptions {
     replace?: boolean;
+    resetParams?: readonly string[];
 }
 
 export function useUrlFilterState<T extends Record<string, string>>(
@@ -37,6 +38,9 @@ export function useUrlFilterState<T extends Record<string, string>>(
                         } else {
                             next.set(key, val);
                         }
+                    }
+                    for (const key of options?.resetParams ?? []) {
+                        next.delete(key);
                     }
                     return next;
                 },

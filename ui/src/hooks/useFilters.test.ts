@@ -278,7 +278,7 @@ describe('useCreateContentFilter', () => {
         vi.restoreAllMocks();
     });
 
-    it('should create a shared filter', async () => {
+    it('should create a filter', async () => {
         mockApiPost.mockResolvedValue({ id: 'new-1', name: 'New Filter' });
 
         const { result } = renderHook(() => useCreateContentFilter(), {
@@ -289,33 +289,11 @@ describe('useCreateContentFilter', () => {
             await result.current.mutateAsync({
                 name: 'New Filter',
                 criteria: {},
-                isShared: true,
             });
         });
 
         expect(mockApiPost).toHaveBeenCalledWith('/content-filters', {
             name: 'New Filter',
-            criteria: {},
-        });
-    });
-
-    it('should create a personal filter', async () => {
-        mockApiPost.mockResolvedValue({ id: 'new-2', name: 'My Filter' });
-
-        const { result } = renderHook(() => useCreateContentFilter(), {
-            wrapper: createWrapper(),
-        });
-
-        await act(async () => {
-            await result.current.mutateAsync({
-                name: 'My Filter',
-                criteria: {},
-                isShared: false,
-            });
-        });
-
-        expect(mockApiPost).toHaveBeenCalledWith('/content-filters', {
-            name: 'My Filter',
             criteria: {},
         });
     });
@@ -332,7 +310,7 @@ describe('useUpdateContentFilter', () => {
         vi.restoreAllMocks();
     });
 
-    it('should update a shared filter', async () => {
+    it('should update a filter name', async () => {
         mockApiPatch.mockResolvedValue(undefined);
 
         const { result } = renderHook(() => useUpdateContentFilter(), {
@@ -342,7 +320,6 @@ describe('useUpdateContentFilter', () => {
         await act(async () => {
             await result.current.mutateAsync({
                 id: 'shared-1',
-                isShared: true,
                 name: { value: 'Updated Name' },
             });
         });
@@ -352,7 +329,7 @@ describe('useUpdateContentFilter', () => {
         });
     });
 
-    it('should update a personal filter', async () => {
+    it('should update a filter owner lock', async () => {
         mockApiPatch.mockResolvedValue(undefined);
 
         const { result } = renderHook(() => useUpdateContentFilter(), {
@@ -362,7 +339,6 @@ describe('useUpdateContentFilter', () => {
         await act(async () => {
             await result.current.mutateAsync({
                 id: 'my-1',
-                isShared: false,
                 ownerLock: { value: true },
             });
         });
@@ -568,7 +544,7 @@ describe('useDeleteContentFilter', () => {
         vi.restoreAllMocks();
     });
 
-    it('should delete a shared filter', async () => {
+    it('should delete a filter', async () => {
         mockApiDelete.mockResolvedValue(undefined);
 
         const { result } = renderHook(() => useDeleteContentFilter(), {
@@ -576,29 +552,9 @@ describe('useDeleteContentFilter', () => {
         });
 
         await act(async () => {
-            await result.current.mutateAsync({
-                id: 'shared-1',
-                isShared: true,
-            });
+            await result.current.mutateAsync({ id: 'shared-1' });
         });
 
         expect(mockApiDelete).toHaveBeenCalledWith('/content-filters/shared-1');
-    });
-
-    it('should delete a personal filter', async () => {
-        mockApiDelete.mockResolvedValue(undefined);
-
-        const { result } = renderHook(() => useDeleteContentFilter(), {
-            wrapper: createWrapper(),
-        });
-
-        await act(async () => {
-            await result.current.mutateAsync({
-                id: 'my-1',
-                isShared: false,
-            });
-        });
-
-        expect(mockApiDelete).toHaveBeenCalledWith('/content-filters/my-1');
     });
 });

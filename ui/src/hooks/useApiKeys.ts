@@ -1,3 +1,4 @@
+import type { ScalarPatch } from '@/types/patch';
 import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
@@ -12,13 +13,12 @@ export const apiKeyQueryKeys = {
     all: ['api-keys'] as const,
     everyone: () => ['api-keys', 'everyone'] as const,
     my: () => ['api-keys', 'my'] as const,
-    user: (userId: string) => ['api-keys', 'user', userId] as const,
 };
 
 const API_KEY_CHANGE_EVENTS = ['apiKey.created', 'apiKey.updated', 'apiKey.deleted'] as const;
 
 interface ApiApiKeyPatch {
-    enabled?: { value: boolean };
+    enabled?: ScalarPatch<boolean>;
 }
 
 async function fetchMyApiKeys(): Promise<ApiKeyItem[]> {
@@ -27,10 +27,6 @@ async function fetchMyApiKeys(): Promise<ApiKeyItem[]> {
 
 async function fetchAllApiKeys(): Promise<ApiKeyItem[]> {
     return apiGet<ApiKeyItem[]>('/api-keys');
-}
-
-async function fetchUserApiKeys(userId: string): Promise<ApiKeyItem[]> {
-    return apiGet<ApiKeyItem[]>(`/users/${encodeURIComponent(userId)}/api-keys`);
 }
 
 async function createApiKey(request: ApiKeyCreate): Promise<ApiKeyCreatedItem> {
@@ -43,10 +39,6 @@ async function deleteMyApiKey(id: string): Promise<void> {
 
 async function deleteUserApiKey({ id }: { userId: string; id: string }): Promise<void> {
     return apiDelete(`/api-keys/${encodeURIComponent(id)}`);
-}
-
-async function rotateApiKey(id: string): Promise<ApiKeyCreatedItem> {
-    return apiPost<ApiKeyCreatedItem>(`/api-keys/my/${encodeURIComponent(id)}/rotate`);
 }
 
 async function updateApiKey(id: string, patch: ApiApiKeyPatch): Promise<void> {
@@ -82,13 +74,6 @@ export function useApiKeys() {
         },
     });
 
-    const rotateMutation = useMutation({
-        mutationFn: rotateApiKey,
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: apiKeyQueryKeys.all });
-        },
-    });
-
     const toggleMutation = useMutation({
         mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
             updateApiKey(id, { enabled: { value: enabled } }),
@@ -114,47 +99,8 @@ export function useApiKeys() {
         deleteApiKey: deleteMutation.mutateAsync,
         isDeleting: deleteMutation.isPending,
 
-        rotateApiKey: rotateMutation.mutateAsync,
-        isRotating: rotateMutation.isPending,
-
         toggleEnabled,
         isToggling: toggleMutation.isPending,
-
-        refetch: keysQuery.refetch,
-    };
-}
-
-export function useUserApiKeys(userId: string | null) {
-    useInvalidateQueriesOnEvents(userId ? API_KEY_CHANGE_EVENTS : [], [apiKeyQueryKeys.user(userId ?? '')], {
-        entityIds: userId ? [userId] : [],
-        exact: true,
-        owner: 'api-keys:user',
-    });
-    const queryClient = useQueryClient();
-
-    const keysQuery = useQuery({
-        queryKey: apiKeyQueryKeys.user(userId ?? ''),
-        queryFn: () => fetchUserApiKeys(userId!),
-        enabled: userId !== null,
-        staleTime: POLLING_INTERVALS.slow / 2,
-    });
-
-    const deleteMutation = useMutation({
-        mutationFn: deleteUserApiKey,
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: apiKeyQueryKeys.all });
-        },
-    });
-
-    const apiKeys: ApiKeyItem[] = useMemo(() => keysQuery.data ?? [], [keysQuery.data]);
-
-    return {
-        apiKeys,
-        isLoading: keysQuery.isLoading,
-        error: queryErrorOrNull(keysQuery),
-
-        deleteApiKey: deleteMutation.mutateAsync,
-        isDeleting: deleteMutation.isPending,
 
         refetch: keysQuery.refetch,
     };

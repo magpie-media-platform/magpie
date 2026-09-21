@@ -1,15 +1,10 @@
 import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback } from 'react';
-import {
-    type ColumnDef,
-    type RowSelectionState,
-    type SortingState,
-    type OnChangeFn,
-    type VisibilityState,
-} from '@tanstack/react-table';
+import { type ColumnDef, type SortingState, type OnChangeFn, type VisibilityState } from '@tanstack/react-table';
 
 import { DataTable, type DataTableProps } from '../DataTable';
 import { AcquisitionBadge } from '../AcquisitionBadge';
-import { Checkbox } from '../Checkbox';
+import { selectColumn } from '../DataTable/selectColumn';
+import type { BulkSelectionState } from '@/types/bulkSelection';
 import { ColumnHeaderFilter, type FacetOption } from '../ColumnHeaderFilter';
 import {
     ContentFulfillmentBadge,
@@ -55,6 +50,8 @@ export interface ContentItem {
 
     dateAdded?: string;
 
+    fulfilledAt?: string;
+
     lastSearched?: string;
 
     acquisitionStatus?: AcquisitionStatus;
@@ -83,18 +80,16 @@ export interface ContentHeaderFilterHandlers {
 type ContentHeaderFilterColumn = 'title' | 'contentType' | 'monitoring' | 'fulfillment' | 'publishDate';
 
 export interface ContentListProps
-    extends Omit<ComponentPropsWithoutRef<'div'>, 'children'>, Omit<DataTableProps<ContentItem>, 'columns' | 'data'> {
+    extends
+        Omit<ComponentPropsWithoutRef<'div'>, 'children'>,
+        Omit<DataTableProps<ContentItem>, 'columns' | 'data' | 'rowSelection' | 'onRowSelectionChange'> {
     items: ContentItem[];
 
     onContentClick?: (item: ContentItem) => void;
 
     loading?: boolean;
 
-    enableSelection?: boolean;
-
-    rowSelection?: RowSelectionState;
-
-    onRowSelectionChange?: OnChangeFn<RowSelectionState>;
+    selection?: BulkSelectionState;
 
     sorting?: SortingState;
 
@@ -208,9 +203,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
             onPaginationChange,
             rowCount,
             emptyState,
-            enableSelection = false,
-            rowSelection,
-            onRowSelectionChange,
+            selection,
             sorting,
             onSortingChange,
             manualSorting = false,
@@ -228,35 +221,6 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                 Boolean(headerFilters) && (headerFilterColumns == null || headerFilterColumns.includes(column));
 
             const cols: ColumnDef<ContentItem>[] = [];
-
-            if (enableSelection) {
-                cols.push({
-                    id: 'select',
-                    header: ({ table }) => (
-                        <div className="content-list__select-all" onClick={(e) => e.stopPropagation()}>
-                            <Checkbox
-                                checked={
-                                    table.getIsAllPageRowsSelected() ||
-                                    (table.getIsSomePageRowsSelected() && 'indeterminate')
-                                }
-                                onCheckedChange={(checked) => table.toggleAllPageRowsSelected(!!checked)}
-                                aria-label="Select all"
-                            />
-                        </div>
-                    ),
-                    cell: ({ row }) => (
-                        <div className="content-list__select-cell" onClick={(e) => e.stopPropagation()}>
-                            <Checkbox
-                                checked={row.getIsSelected()}
-                                onCheckedChange={(checked) => row.toggleSelected(!!checked)}
-                                aria-label={`Select ${row.original.title}`}
-                            />
-                        </div>
-                    ),
-                    enableSorting: false,
-                    size: 50,
-                });
-            }
 
             cols.push(
                 {
@@ -277,7 +241,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                 {
                     id: 'title',
                     accessorKey: 'title',
-                    meta: { headerLabel: 'Title' },
+                    meta: { headerLabel: 'Title', mobileRole: 'header' },
                     header:
                         filterEnabled('title') && headerFilters
                             ? () => (
@@ -409,10 +373,42 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                     size: 100,
                     cell: ({ row }) => <DateAddedCell dateAdded={row.original.dateAdded} />,
                 },
+                {
+                    id: 'fulfilledDate',
+                    accessorKey: 'fulfilledAt',
+                    header: 'Fulfilled',
+                    size: 100,
+                    sortUndefined: 'last',
+                    cell: ({ row }) => <DateAddedCell dateAdded={row.original.fulfilledAt} />,
+                },
             );
 
             return cols;
-        }, [enableSelection, headerFilters, headerFilterHandlers, headerFilterColumns]);
+        }, [headerFilters, headerFilterHandlers, headerFilterColumns]);
+
+        const tableColumns = useMemo(
+            () =>
+                selection
+                    ? [
+                          selectColumn<ContentItem>({
+                              selection,
+                              getId: (item) => item.id,
+                              headerLabel: 'Select all',
+                              rowLabel: (item) => item.title,
+                          }),
+                          ...columns,
+                      ]
+                    : columns,
+            [selection, columns],
+        );
+
+        const rowSelection = useMemo(
+            () =>
+                Object.fromEntries(
+                    items.filter((item) => selection?.isRowChecked(item.id)).map((item) => [item.id, true]),
+                ),
+            [items, selection],
+        );
 
         const handleRowClick = useCallback(
             (row: ContentItem) => {
@@ -434,14 +430,14 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                 ref={ref}
                 className={classes}
                 data-component="content-list"
-                data-selection-enabled={enableSelection ? 'true' : undefined}
+                data-selection-enabled={selection ? 'true' : undefined}
                 {...props}
             >
                 <ContentListActionsSlot className="content-list__extension-actions" />
                 <ContentListColumnsSlot className="content-list__extension-columns" />
 
                 <DataTable<ContentItem>
-                    columns={columns}
+                    columns={tableColumns}
                     data={items}
                     onRowClick={onContentClick ? handleRowClick : undefined}
                     loading={loading}
@@ -459,10 +455,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                     getRowId={getRowId}
                     emptyState={emptyState ?? defaultEmptyState}
                     keepHeaderWhenEmpty={keepHeaderWhenEmpty}
-                    enableRowSelection={enableSelection}
-                    enableMultiRowSelection={enableSelection}
                     rowSelection={rowSelection}
-                    onRowSelectionChange={onRowSelectionChange}
                 />
             </div>
         );

@@ -10,7 +10,7 @@ namespace Magpie.Sdk.Caching;
 public interface ICache
 {
     /// <summary>
-    /// Gets a cached value.
+    /// A cached value.
     /// </summary>
     /// <typeparam name="T">The type of the cached value</typeparam>
     /// <param name="key">The stable cache key</param>
@@ -19,12 +19,12 @@ public interface ICache
     bool TryGet<T>(string key, out T? value);
 
     /// <summary>
-    /// Gets a value or creates and stores it when the key is not cached.
+    /// A cached value, created and stored when the key is not cached.
     /// </summary>
     /// <typeparam name="T">The type of the cached value</typeparam>
     /// <param name="key">The stable cache key</param>
     /// <param name="valueFactory">The factory for a missing value</param>
-    /// <param name="cancellationToken">The token that cancels this operation</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The cached or created value.</returns>
     ValueTask<T> GetOrAddAsync<T>(
         string key,

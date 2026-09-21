@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
@@ -17,7 +18,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class TagRepositoryTests
+public sealed class TagRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private ITagRepository _subject = null!;
@@ -232,5 +233,26 @@ public class TagRepositoryTests
 
         // Assert
         Assert.That(result.Items, Is.Empty);
+    }
+
+    [TestCase(SortDirection.Ascending, new[] { "tag-a", "tag-b", "tag-c" })]
+    [TestCase(SortDirection.Descending, new[] { "tag-c", "tag-b", "tag-a" })]
+    public async Task QueryAsync_OrdersByTheRequestedField_WhenSortIsGiven(
+        SortDirection direction,
+        string[] expectedNames)
+    {
+        // Arrange
+        _context.Tags.AddRange(new Tag { Name = "tag-b" }, new Tag { Name = "tag-c" }, new Tag { Name = "tag-a" });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(
+            new TagQuery(),
+            new() { PageNumber = 1, PageSize = 100 },
+            new() { PropertyName = nameof(Tag.Name), Direction = direction })
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items.Select(tag => tag.Name), Is.EqualTo(expectedNames));
     }
 }

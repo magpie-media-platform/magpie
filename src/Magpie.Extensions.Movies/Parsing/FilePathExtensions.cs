@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -9,6 +10,18 @@ namespace Magpie.Extensions.Movies.Parsing;
 
 internal static class FilePathExtensions
 {
+    private static readonly HashSet<string> ReleaseTagTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "480p", "540p", "576p", "720p", "1080p", "1080i", "2160p", "4320p", "4k", "8k", "uhd", "hd", "sd",
+        "bluray", "bdrip", "brrip", "bdremux", "remux", "web-dl", "webdl", "webrip", "hdrip",
+        "dvdrip", "dvd", "hdtv", "pdtv", "sdtv", "hdcam", "hdts", "telesync", "scr",
+        "x264", "x265", "h264", "h265", "hevc", "avc", "av1", "xvid", "divx", "vp9", "10bit", "8bit",
+        "hdr", "hdr10", "dolbyvision", "sdr",
+        "aac", "ac3", "eac3", "dts", "dtshd", "truehd", "atmos", "flac", "mp3", "ddp", "ddp5",
+        "dd5",
+        "repack", "rerip", "imax", "vostfr"
+    };
+
     public static ParsedMovieFile ParseMovieFilename(this string filePath)
     {
         var stem = Path.GetFileNameWithoutExtension(filePath) ?? string.Empty;
@@ -96,7 +109,36 @@ internal static class FilePathExtensions
             trimmed = trimmed.Substring(0, trimmed.Length - releaseGroup.Length - 1).Trim();
         }
 
-        return trimmed;
+        return StripTrailingReleaseTags(trimmed);
+    }
+
+    private static string StripTrailingReleaseTags(string title)
+    {
+        var tokens = title.Split([' '], StringSplitOptions.RemoveEmptyEntries);
+        var keepLength = tokens.Length;
+        while (keepLength > 1)
+        {
+            if (ReleaseTagTokens.Contains(tokens[keepLength - 1]))
+            {
+                keepLength--;
+            }
+            else if (keepLength > 2 && tokens[keepLength - 1] == "1" &&
+                (string.Equals(tokens[keepLength - 2], "ddp5", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(tokens[keepLength - 2], "dd5", StringComparison.OrdinalIgnoreCase) ||
+                 (keepLength > 3 && tokens[keepLength - 2] is "5" or "7" &&
+                  ReleaseTagTokens.Contains(tokens[keepLength - 3]))))
+            {
+                keepLength -= 2;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return keepLength == tokens.Length
+            ? title
+            : string.Join(' ', tokens, 0, keepLength).Trim().TrimEnd('-').Trim();
     }
 
     private static Match? LastOrDefault(MatchCollection matches)

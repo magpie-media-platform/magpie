@@ -13,7 +13,7 @@ export interface ScanTarget {
 export interface ScanSummary {
     rootFolderName: string;
     outcome: 'completed' | 'failed' | 'cancelled';
-    toImport: number;
+    toImport: number | null;
 }
 
 export interface ImportScanControllerValue {
@@ -33,7 +33,7 @@ interface BatchState {
     label: string;
     total: number;
     index: number;
-    toImport: number;
+    toImport: number | null;
     outcome: ScanSummary['outcome'];
 }
 
@@ -44,13 +44,13 @@ function nextBatchId(): string {
     return `import-batch-${batchSequence}`;
 }
 
-async function fetchPendingTotal(rootFolderId: string): Promise<number> {
+async function fetchPendingTotal(rootFolderId: string): Promise<number | null> {
     try {
         const url = buildUrl('/import/candidates', { rootFolderId, pageSize: 1 });
         const result = await apiGet<PagedLibraryImportCandidates>(url);
         return result.totalItems;
     } catch {
-        return 0;
+        return null;
     }
 }
 
@@ -62,7 +62,7 @@ export function useImportScanController(): ImportScanControllerValue {
     const [lastSummary, setLastSummary] = useState<ScanSummary | null>(null);
     const [batch, setBatch] = useState<BatchState | null>(null);
 
-    const beforeRef = useRef<{ rootFolderId: string; total: number } | null>(null);
+    const beforeRef = useRef<{ rootFolderId: string; total: number | null } | null>(null);
     const queueRef = useRef<ScanTarget[]>([]);
     const batchRef = useRef<BatchState | null>(null);
     const settledExecutionRef = useRef<string | null>(null);
@@ -129,9 +129,7 @@ export function useImportScanController(): ImportScanControllerValue {
         if (!job || job.id !== executionId) {
             return;
         }
-        // the worker writes "Scan complete." at 100% fire-and-forget, a beat before the runtime
-        // flips the status enum to a terminal value; settle on either so the controls re-enable as
-        // soon as the scan finishes rather than stalling until the next poll catches the flip.
+        // The worker reports 100% a beat before the runtime flips the status, so either one settles the scan.
         const reportedComplete = (job.progress ?? 0) >= 100;
         if (!isTerminalJobExecutionStatus(job.status) && !reportedComplete) {
             return;
@@ -144,12 +142,13 @@ export function useImportScanController(): ImportScanControllerValue {
         const finishedName = trackedName;
 
         void (async () => {
-            const after = before ? await fetchPendingTotal(before.rootFolderId) : 0;
-            const folderToImport = before ? Math.max(0, after - before.total) : 0;
+            const after = before ? await fetchPendingTotal(before.rootFolderId) : null;
+            const folderToImport = before?.total != null && after !== null ? Math.max(0, after - before.total) : null;
 
             const current = batchRef.current;
             if (current) {
-                current.toImport += folderToImport;
+                current.toImport =
+                    current.toImport !== null && folderToImport !== null ? current.toImport + folderToImport : null;
                 if (folderOutcome !== 'completed' && current.outcome === 'completed') {
                     current.outcome = folderOutcome;
                 }
@@ -159,8 +158,13 @@ export function useImportScanController(): ImportScanControllerValue {
                     const advanced: BatchState = { ...current, index: current.index + 1 };
                     batchRef.current = advanced;
                     setBatch(advanced);
-                    await startOne(next);
-                    return;
+                    try {
+                        await startOne(next);
+                        return;
+                    } catch {
+                        current.outcome = 'failed';
+                        queueRef.current = [];
+                    }
                 }
 
                 setLastSummary({

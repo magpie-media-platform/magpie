@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,7 +10,10 @@ using Magpie.Extensions.Tmdb.Mapping;
 using Magpie.Extensions.Tmdb.QueryEngine;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
+using Magpie.Sdk.Caching;
 
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -23,6 +27,12 @@ public class QueryExecutorTests
 {
     private static readonly RequestContext Context = new() { ApiKey = "key", Language = "en-US" };
 
+    private static readonly object[] NameSearchCases =
+    [
+        new object[] { CriteriaValueOperator.Equals, 5, "1|2|3|4|5" },
+        new object[] { CriteriaValueOperator.ContainsString, 5, "1|2|3|4|5" }
+    ];
+
     private List<Request> _requests = null!;
     private Dictionary<string, int> _genres = null!;
     private Mock<ITmdbClient> _client = null!;
@@ -30,9 +40,46 @@ public class QueryExecutorTests
     private Dictionary<string, QueryScanState> _scanStates = null!;
     private IQueryExecutor _subject = null!;
 
+    private ICacheFactory _cacheFactory = null!;
+
+    private IServiceScopeFactory _scopeFactory = null!;
+
     [SetUp]
     public void SetUp()
     {
+        var cacheFactory = new Mock<ICacheFactory>();
+        var caches = new Dictionary<string, ICache>(StringComparer.Ordinal);
+        cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns<string, Func<CachePolicy>?>((name, _) =>
+            {
+                if (caches.TryGetValue(name, out var existing))
+                {
+                    return existing;
+                }
+
+                var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+                var cache = new Mock<ICache>();
+                cache.Setup(value => value.Set(It.IsAny<string>(), It.IsAny<It.IsAnyType>()))
+                    .Callback(new InvocationAction(invocation =>
+                        values[(string)invocation.Arguments[0]] = invocation.Arguments[1]));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<It.IsAnyType?>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value;
+                        return found;
+                    }));
+                cache.Setup(value => value.Remove(It.IsAny<string>())).Returns<string>(values.Remove);
+                return caches[name] = cache.Object;
+            });
+        _cacheFactory = cacheFactory.Object;
+        var provider = new Mock<IServiceProvider>();
+        provider.Setup(value => value.GetService(typeof(ICacheFactory))).Returns(_cacheFactory);
+        var scope = new Mock<IServiceScope>();
+        scope.Setup(value => value.ServiceProvider).Returns(provider.Object);
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(value => value.CreateScope()).Returns(scope.Object);
+        _scopeFactory = scopeFactory.Object;
         _requests = [];
         _genres = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         _client = new Mock<ITmdbClient>();
@@ -1070,7 +1117,7 @@ public class QueryExecutorTests
     }
 
     [Test]
-    public async Task ExecuteAsync_RunsTheFirstApplicableCoalesceChild_AndSkipsTheRemainder()
+    public async Task ExecuteAsync_SkipsTheRemainingCoalesceChildren_WhenTheFirstChildIsApplicable()
     {
         // Arrange
         _client.Setup(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
@@ -1189,13 +1236,14 @@ public class QueryExecutorTests
         {
             Assert.That(hits.Single().Id, Is.EqualTo(550));
             Assert.That(execution.Warnings, Is.Empty);
-            _client.Verify(
-                client => client.GetAsync<MovieDetailDto>(
-                    It.IsAny<RequestContext>(),
-                    It.Is<Request>(request => request.CacheKey == "3/movie/550?language=en-US"),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
         }
+
+        _client.Verify(
+            client => client.GetAsync<MovieDetailDto>(
+                It.IsAny<RequestContext>(),
+                It.Is<Request>(request => request.CacheKey == "3/movie/550?language=en-US"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
 
         _client.Verify(
             client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
@@ -1308,14 +1356,15 @@ public class QueryExecutorTests
         {
             Assert.That(hits.Single().Id, Is.EqualTo(550));
             Assert.That(hits.Single().ExternalIds[source], Is.EqualTo("external-1"));
-            _client.Verify(
-                client => client.GetAsync<FindEnvelopeDto>(
-                    It.IsAny<RequestContext>(),
-                    It.Is<Request>(request => request.CacheKey ==
-                        "3/find/external-1?external_source=" + expectedExternalSource + "&language=en-US"),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
         }
+
+        _client.Verify(
+            client => client.GetAsync<FindEnvelopeDto>(
+                It.IsAny<RequestContext>(),
+                It.Is<Request>(request => request.CacheKey ==
+                    "3/find/external-1?external_source=" + expectedExternalSource + "&language=en-US"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -1412,8 +1461,12 @@ public class QueryExecutorTests
         }
     }
 
-    [Test]
-    public async Task ExecuteAsync_WarnsWithoutHits_WhenSupportedIdentifierDoesNotResolve()
+    [TestCase("tmdb", "550")]
+    [TestCase("imdb", "tt0137523")]
+    [TestCase("tvdb", "123")]
+    public async Task ExecuteAsync_ReturnsEmptyWithoutWarnings_WhenSupportedIdentifierDoesNotResolve(
+        string source,
+        string identifier)
     {
         // Arrange
         var plan = new QueryPlan
@@ -1429,7 +1482,7 @@ public class QueryExecutorTests
                 PushedFilters = [],
                 RequestedPage = 1,
                 Fingerprint = "fetch-1",
-                ContentIdFilters = [new ContentIdFilter(false, [new ContentId("tmdb", "550")])]
+                ContentIdFilters = [new ContentIdFilter(false, [new ContentId(source, identifier)])]
             },
             Warnings = [],
             RequestedPage = 1,
@@ -1446,9 +1499,7 @@ public class QueryExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hits, Is.Empty);
-            Assert.That(
-                execution.Warnings,
-                Is.EqualTo(["One or more exact TMDb content identifiers were not found on the requested route."]));
+            Assert.That(execution.Warnings, Is.Empty);
         }
     }
 
@@ -3436,6 +3487,231 @@ public class QueryExecutorTests
         {
             Assert.That(parameters, Does.Not.ContainKey("certification"));
             Assert.That(hits.Single().AppliedCriteria!.AppliedElementFilters, Is.Empty);
+        }
+    }
+
+    [TestCaseSource(nameof(NameSearchCases))]
+    public async Task ExecuteAsync_BoundsThePersonNameSearch_WhenManyPeopleShareTheName(
+        CriteriaValueOperator identityOperator,
+        int expectedNameSearches,
+        string expectedPeople)
+    {
+        // Arrange
+        _client.Setup(client => client.GetAsync<SearchEnvelopeDto<NamedSearchHitDto>>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
+            .ReturnsAsync((RequestContext _, Request request, CancellationToken _) =>
+            {
+                var page = int.Parse(
+                    request.QueryParameters.First(pair => pair.Key == "page").Value,
+                    CultureInfo.InvariantCulture);
+                return new SearchEnvelopeDto<NamedSearchHitDto>
+                {
+                    Page = page,
+                    TotalPages = 50,
+                    TotalResults = 1000,
+                    Results = [new NamedSearchHitDto { Id = page, Name = "Sam Smith" }]
+                };
+            });
+        var executor = new QueryExecutor(
+            _client.Object,
+            new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>()),
+            NullLogger<QueryExecutor>.Instance);
+        var binding = new SubjectResolutionBinding(
+            "person",
+            new SubjectFilter(
+                false,
+                [
+                    new SubjectAlternative(
+                        [SubjectRole.Person],
+                        [[new SubjectIdentity("Sam Smith", null, null, identityOperator)]])
+                ]));
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 2,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Discover,
+                SubjectBindings = [binding],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch-2",
+                DiscoverParameters =
+                [
+                    new DiscoverParameter
+                    {
+                        Name = "with_people",
+                        Combination = DiscoverCombination.Or,
+                        SubjectBindingKeys = ["person"]
+                    }
+                ],
+                Resolve = new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = PlanPrecondition.None,
+                    Contributes = "resolve",
+                    Route = ContentRoute.Movie,
+                    SubjectBindings = [binding],
+                    GenreFilters = [],
+                    ResolveImageBase = false
+                }
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var execution = await executor.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+        var discover = _requests.Single(request => request.Path == "3/discover/movie");
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                _requests.Count(request => request.Path == "3/search/person"),
+                Is.EqualTo(expectedNameSearches));
+            Assert.That(
+                discover.QueryParameters.Single(pair => pair.Key == "with_people").Value,
+                Is.EqualTo(expectedPeople));
+            Assert.That(execution.Warnings, Is.Empty);
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([1726]));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReturnsRowsBeforeTheDiscoverRoundCompletes_WhenSeveralSourcesAreScanned()
+    {
+        // Arrange
+        _genres["action"] = 28;
+        _genres["comedy"] = 35;
+        _genres["drama"] = 18;
+        var pages = new Dictionary<string, IReadOnlyList<MovieSearchHitDto>>(StringComparer.Ordinal)
+        {
+            ["28"] =
+            [
+                new MovieSearchHitDto { Id = 10, Title = "Alpha" },
+                new MovieSearchHitDto { Id = 11, Title = "Bravo" }
+            ],
+            ["35"] =
+            [
+                new MovieSearchHitDto { Id = 20, Title = "Charlie" },
+                new MovieSearchHitDto { Id = 21, Title = "Delta" }
+            ],
+            ["18"] =
+            [
+                new MovieSearchHitDto { Id = 30, Title = "Echo" },
+                new MovieSearchHitDto { Id = 31, Title = "Foxtrot" }
+            ]
+        };
+        _client.Setup(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
+            .ReturnsAsync((RequestContext _, Request request, CancellationToken _) =>
+                new SearchEnvelopeDto<MovieSearchHitDto>
+                {
+                    Page = 1,
+                    TotalPages = 1,
+                    TotalResults = 2,
+                    Results = pages[request.QueryParameters.Single(pair => pair.Key == "with_genres").Value]
+                });
+        var genreFilter = new GenreFilter(
+            false,
+            [[new GenrePredicate(CriteriaValueOperator.In, false, ["action", "comedy", "drama"])]]);
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = PlanPrecondition.None,
+            Contributes = "fetch",
+            Route = ContentRoute.Movie,
+            AnchorKind = QueryAnchorKind.Discover,
+            SubjectBindings = [],
+            PushedFilters = [],
+            RequestedPage = 1,
+            Fingerprint = "fetch-2",
+            DiscoverParameters =
+            [
+                new DiscoverParameter
+                {
+                    Name = "with_genres",
+                    Combination = DiscoverCombination.And,
+                    GenreFilters = [genreFilter]
+                }
+            ],
+            Resolve = new ResolvePlanNode
+            {
+                Id = 1,
+                Precondition = PlanPrecondition.None,
+                Contributes = "resolve",
+                Route = ContentRoute.Movie,
+                SubjectBindings = [],
+                GenreFilters = [genreFilter],
+                ResolveImageBase = false
+            }
+        };
+        var filter = new FilterPlanNode
+        {
+            Id = 3,
+            Precondition = PlanPrecondition.None,
+            Contributes = "filter",
+            Route = ContentRoute.Movie,
+            Child = fetch,
+            ResidualPredicates = [],
+            TextFilters = [],
+            PublishDateFilters = [],
+            DurationFilters = [],
+            GenreFilters = [],
+            SubjectBindings = [],
+            ContentIdFilters = [],
+            ElementFilters = [],
+            RequestedPage = 1,
+            MaximumResults = 1
+        };
+        var limited = new QueryPlan
+        {
+            Root = filter,
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 1,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+        var drained = new QueryPlan
+        {
+            Root = filter with { MaximumResults = 25 },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var first = await _subject.ExecuteAsync(limited, Context, default).ConfigureAwait(false);
+        var firstHits = await first.Hits.ToListAsync().ConfigureAwait(false);
+        var firstRequests = _requests.Count;
+        var second = await _subject.ExecuteAsync(drained, Context, default).ConfigureAwait(false);
+        var secondHits = await second.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(firstHits.Select(hit => hit.Id).ToArray(), Is.EqualTo([10, 20]));
+            Assert.That(firstRequests, Is.EqualTo(2));
+            Assert.That(
+                secondHits.Select(hit => hit.Id).ToArray(),
+                Is.EqualTo([10, 20, 30, 11, 21, 31]));
+            Assert.That(_requests, Has.Count.EqualTo(3));
         }
     }
 }

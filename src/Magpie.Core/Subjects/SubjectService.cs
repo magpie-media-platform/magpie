@@ -42,7 +42,7 @@ internal sealed class SubjectService(
         if (patch.Tags is not null)
         {
             await subjects
-                .PatchAsync(new TagsPatch { Id = subjectId, Tags = patch.Tags }, actingUserId, cancellationToken)
+                .PatchAsync(new SubjectRowPatch { Id = subjectId, Tags = patch.Tags }, actingUserId, cancellationToken)
                 .ConfigureAwait(false);
         }
 

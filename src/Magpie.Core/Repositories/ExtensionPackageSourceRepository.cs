@@ -28,9 +28,23 @@ internal sealed class ExtensionPackageSourceRepository(
     IEventBus eventBus,
     ILogger<ExtensionPackageSourceRepository> logger,
     IDataProtectionService dataProtectionService,
-    TimeProvider? timeProvider = null) : IExtensionPackageSourceRepository
+    TimeProvider timeProvider) : IExtensionPackageSourceRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private static readonly
+        (string Name, Func<ExtensionPackageSource, ExtensionPackageSource, bool> Changed)[] UpdateFields =
+    [
+        ("name", (current, model) => !Equals(current.Name, model.Name)),
+        ("sourceUrl", (current, model) => !Equals(current.SourceUrl, model.SourceUrl)),
+        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
+        ("searchFilterKind", (current, model) => !Equals(current.SearchFilterKind, model.SearchFilterKind)),
+        ("searchFilterValue", (current, model) => !Equals(current.SearchFilterValue, model.SearchFilterValue)),
+        ("credentialKind", (current, model) => !Equals(current.CredentialKind, model.CredentialKind)),
+        ("username", (current, model) => !Equals(current.Username, model.Username)),
+        ("encryptedSecret", (current, model) => !Equals(current.EncryptedSecret, model.EncryptedSecret)),
+        ("secretReference", (current, model) => !Equals(current.SecretReference, model.SecretReference)),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
 
     private const string DefaultTagFilter = "magpie";
 
@@ -290,6 +304,24 @@ internal sealed class ExtensionPackageSourceRepository(
                     var now = _time.GetUtcNow().UtcDateTime;
                     var encryptedSecret = Protect(model.EncryptedSecret);
 
+                    var current = await context.ExtensionPackageSources.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    Unprotect(current);
+                    var changedFields = new List<string>();
+                    foreach (var (name, changed) in UpdateFields)
+                    {
+                        if (changed(current, model))
+                        {
+                            changedFields.Add(name);
+                        }
+                    }
+
                     var updated = await context.ExtensionPackageSources
                         .Where(s => s.Id == model.Id)
                         .ExecuteUpdateAsync(
@@ -321,6 +353,15 @@ internal sealed class ExtensionPackageSourceRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                ExtensionEventBuilder.BuildExtensionPackageSourceUpdatedEvent(
+                                    model.Id, changedFields), token),
                             cancellationToken).ConfigureAwait(false);
                     }
 

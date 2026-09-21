@@ -25,18 +25,12 @@ export interface MimeMapping {
     updatedAt?: string | null;
 }
 
-interface CreateMimeMappingInput {
-    extension: string;
-    mimeType: string;
-}
-
-interface UpdateMimeMappingInput {
+interface MimeMappingInput {
     extension: string;
     mimeType: string;
 }
 
 const fileTypesQueryKeys = {
-    all: ['file-types'] as const,
     denyList: () => ['file-types', 'deny-list'] as const,
     mimeMappings: () => ['file-types', 'mime-mappings'] as const,
 };
@@ -60,13 +54,7 @@ async function deleteDenyListEntry(id: string): Promise<void> {
     return apiDelete(`/system/file-types/exclusions/${id}`);
 }
 
-async function createMimeMapping(input: CreateMimeMappingInput): Promise<MimeMapping> {
-    return apiPut<MimeMapping>(`/system/file-types/mime/${encodeURIComponent(input.extension)}`, {
-        mimeType: input.mimeType,
-    });
-}
-
-async function updateMimeMapping(input: UpdateMimeMappingInput): Promise<MimeMapping> {
+async function saveMimeMapping(input: MimeMappingInput): Promise<MimeMapping> {
     return apiPut<MimeMapping>(`/system/file-types/mime/${encodeURIComponent(input.extension)}`, {
         mimeType: input.mimeType,
     });
@@ -130,15 +118,8 @@ export function useMimeMappings() {
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 
-    const createMutation = useMutation({
-        mutationFn: createMimeMapping,
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: fileTypesQueryKeys.mimeMappings() });
-        },
-    });
-
-    const updateMutation = useMutation({
-        mutationFn: updateMimeMapping,
+    const saveMutation = useMutation({
+        mutationFn: saveMimeMapping,
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: fileTypesQueryKeys.mimeMappings() });
         },
@@ -157,11 +138,8 @@ export function useMimeMappings() {
         error: queryErrorOrNull(listQuery),
         refetch: listQuery.refetch,
 
-        createMapping: createMutation.mutateAsync,
-        isCreating: createMutation.isPending,
-
-        updateMapping: updateMutation.mutateAsync,
-        isUpdating: updateMutation.isPending,
+        saveMapping: saveMutation.mutateAsync,
+        isSaving: saveMutation.isPending,
 
         deleteMapping: deleteMutation.mutateAsync,
         isDeleting: deleteMutation.isPending,

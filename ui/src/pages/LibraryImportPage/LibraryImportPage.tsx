@@ -1,31 +1,30 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     ArrowSquareOutIcon,
     CheckIcon,
     CheckCircleIcon,
-    EyeIcon,
     FolderSimplePlusIcon,
     LinkSimpleIcon,
     MagnifyingGlassIcon,
     WarningCircleIcon,
     XCircleIcon,
 } from '@phosphor-icons/react';
-import { type ColumnDef, type PaginationState, type RowSelectionState, type Updater } from '@tanstack/react-table';
+import { type ColumnDef, type PaginationState, type Updater } from '@tanstack/react-table';
 
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { Checkbox } from '@/components/ui/Checkbox';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
-import { DataTable } from '@/components/ui/DataTable';
+import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { PreviewDrawer, type PreviewDrawerTarget } from '@/components/content/PreviewDrawer';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/Select';
-import { SelectAllBanner } from '@/components/ui/SelectAllBanner';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useToast } from '@/components/ui/Toast';
+import type { BadgeVariant } from '@/types/badge';
 
 import { Role } from '@/auth';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
@@ -33,18 +32,20 @@ import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useRootFolders } from '@/hooks/useRootFolders';
 import { useCurrentUser } from '@/hooks/useUsers';
-import { useBulkAcceptLibraryImportCandidates } from '@/hooks/useBulkAcceptLibraryImportCandidates';
+import { useAcceptLibraryImportCandidateGroup } from '@/hooks/useAcceptLibraryImportCandidateGroup';
+import { useBulkAcceptLibraryImportCandidateGroups } from '@/hooks/useBulkAcceptLibraryImportCandidateGroups';
+import type { LibraryImportMonitoringMode } from '@/hooks/useBulkAcceptLibraryImportCandidates';
+import { isApiError } from '@/lib/api';
 import {
-    getParsedSignalNumber,
-    getParsedSignalValue,
-    PARSED_FILE_SIGNAL_TITLE,
-    PARSED_FILE_SIGNAL_YEAR,
-    useLibraryImportCandidates,
-    type LibraryImportCandidate,
-    type LibraryImportCandidateQueryParams,
-} from '@/hooks/useLibraryImportCandidates';
+    useLibraryImportCandidateGroups,
+    type LibraryImportCandidateGroup,
+    type LibraryImportCandidateStatusCounts,
+} from '@/hooks/useLibraryImportCandidateGroups';
 
-import { ManualMatchDialog } from './ManualMatchDialog';
+import { libraryImportPath } from './libraryImportPath';
+import { ManualMatchDialog, type ManualMatchTarget } from './ManualMatchDialog';
+import { AcceptImportDialog, type ImportAcceptAction } from './AcceptImportDialog';
+import { LibraryImportGroupPage } from './LibraryImportGroupPage';
 import { useImportScanController, type ScanSummary } from './useImportScanController';
 
 import '@/styles/bulk-actions-toolbar.css';
@@ -54,25 +55,22 @@ const PAGE_SIZE = 25;
 
 const ALL_VALUE = '__all__';
 
-function fileName(path: string): string {
-    const segments = path.split(/[/\\]/);
-    return segments[segments.length - 1] || path;
+const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
+    Pending: 'pending',
+    Queued: 'queued',
+    Importing: 'importing',
+    Failed: 'failed',
+    Invalidated: 'stale',
+    MatchingPending: 'warning',
+};
+
+function isMatchingPending(group: LibraryImportCandidateGroup): boolean {
+    return !group.match && (group.statusCounts.MatchingPending ?? 0) > 0;
 }
 
-function isMatched(match: LibraryImportCandidate): boolean {
-    return match.matches.length === 1;
-}
-
-function isPending(match: LibraryImportCandidate): boolean {
-    return match.status === 'Pending';
-}
-
-function isInFlight(match: LibraryImportCandidate): boolean {
-    return match.status === 'Queued' || match.status === 'Importing';
-}
-
-function isSubmittable(match: LibraryImportCandidate): boolean {
-    return isMatched(match) && isPending(match);
+// Mirrors the claim criteria SubmitImportAsync applies.
+function canAcceptGroup(group: LibraryImportCandidateGroup): boolean {
+    return Boolean(group.match) && ((group.statusCounts.Pending ?? 0) > 0 || (group.statusCounts.Failed ?? 0) > 0);
 }
 
 function summaryLine(summary: ScanSummary): string {
@@ -81,6 +79,9 @@ function summaryLine(summary: ScanSummary): string {
     }
     if (summary.outcome === 'cancelled') {
         return `Magpie canceled the scan of "${summary.rootFolderName}".`;
+    }
+    if (summary.toImport === null) {
+        return `Scan of "${summary.rootFolderName}" completed. The import count is unavailable.`;
     }
     if (summary.toImport === 0) {
         return `"${summary.rootFolderName}" is up to date.`;
@@ -240,17 +241,123 @@ function ScanHeader({
     );
 }
 
-interface RowActionHandlers {
-    onPreview: (match: LibraryImportCandidate) => void;
-    onImport: (match: LibraryImportCandidate) => void;
-    onMatch: (match: LibraryImportCandidate) => void;
-    actingId: string | null;
+function GroupTitleCell({ group }: { group: LibraryImportCandidateGroup }) {
+    const sourcePath = group.sourcePath ?? '';
+
+    return (
+        <div className="library-import-page__group-title-cell" data-group-key={group.groupKey}>
+            <span className="library-import-page__group-title">
+                {group.title}
+                {group.subtitle ? <span className="library-import-page__group-subtitle"> {group.subtitle}</span> : null}
+            </span>
+            {group.match ? (
+                <Badge size="sm" variant="info" badgeStyle="outline">
+                    {group.match.providerType}
+                </Badge>
+            ) : (
+                <span className="library-import-page__muted-dash" data-testid="library-import-group-unmatched">
+                    {isMatchingPending(group) ? 'Matching pending' : 'No match'}
+                </span>
+            )}
+            {sourcePath && (
+                <span className="library-import-page__source-path" title={sourcePath}>
+                    {sourcePath}
+                </span>
+            )}
+        </div>
+    );
 }
 
-export function LibraryImportPage() {
+function statusRollup(statusCounts: LibraryImportCandidateStatusCounts): ReactNode {
+    const entries = Object.entries(statusCounts).filter(([status, count]) => status !== 'Pending' && (count ?? 0) > 0);
+    if (entries.length === 0) {
+        return null;
+    }
+    return (
+        <div className="library-import-page__status-rollup">
+            {entries.map(([status, count]) => (
+                <Badge key={status} size="sm" variant={STATUS_BADGE_VARIANT[status] ?? 'default'}>
+                    {count} {status}
+                </Badge>
+            ))}
+        </div>
+    );
+}
+
+interface GroupRowActionsProps {
+    group: LibraryImportCandidateGroup;
+    onAccept: (group: LibraryImportCandidateGroup) => void;
+    onDigIn: (group: LibraryImportCandidateGroup) => void;
+    onMatch: (group: LibraryImportCandidateGroup) => void;
+    acceptingKeys: Set<string>;
+}
+
+function GroupRowActions({ group, onAccept, onDigIn, onMatch, acceptingKeys }: GroupRowActionsProps) {
+    const hasDescendantLevels = group.topLevelSlug !== group.leafLevelSlug;
+    const digInButton = (
+        <Button variant="secondary" size="sm" onClick={() => onDigIn(group)} data-action="dig-in">
+            {hasDescendantLevels && group.childLevelDisplayName ? group.childLevelDisplayName : 'Details'}
+        </Button>
+    );
+
+    if (isMatchingPending(group)) {
+        return (
+            <div className="library-import-page__row-actions">
+                <Button variant="secondary" size="sm" disabled data-action="matching-pending">
+                    Matching pending
+                </Button>
+                {digInButton}
+            </div>
+        );
+    }
+
+    if (!group.match) {
+        return (
+            <div className="library-import-page__row-actions">
+                <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => onMatch(group)}
+                    data-action="match"
+                    data-group-key={group.groupKey}
+                >
+                    <LinkSimpleIcon weight="bold" aria-hidden="true" />
+                    Match
+                </Button>
+                {digInButton}
+            </div>
+        );
+    }
+
+    return (
+        <div className="library-import-page__row-actions">
+            <Button
+                variant="primary"
+                size="sm"
+                onClick={() => onAccept(group)}
+                loading={acceptingKeys.has(group.groupKey)}
+                disabled={acceptingKeys.has(group.groupKey) || !canAcceptGroup(group)}
+                data-action="accept"
+                data-group-key={group.groupKey}
+            >
+                <CheckIcon weight="bold" aria-hidden="true" />
+                Accept
+            </Button>
+            {digInButton}
+        </div>
+    );
+}
+
+interface LibraryImportPageProps {
+    monitoringMode: LibraryImportMonitoringMode | '';
+    onMonitoringModeChange: (mode: LibraryImportMonitoringMode) => void;
+}
+
+export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: LibraryImportPageProps) {
     const usesCardLayout = useCardLayout();
     useDocumentTitle('Library import');
     const { toast } = useToast();
+    const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
 
     const rootFolderFilter = searchParams.get('rootFolderId') ?? '';
@@ -267,7 +374,7 @@ export function LibraryImportPage() {
 
     const pagination = useMemo<PaginationState>(() => ({ pageIndex: page - 1, pageSize: PAGE_SIZE }), [page]);
 
-    const queryParams = useMemo<LibraryImportCandidateQueryParams>(
+    const queryParams = useMemo(
         () => ({
             rootFolderId: rootFolderFilter || undefined,
             pageNumber: page,
@@ -282,33 +389,29 @@ export function LibraryImportPage() {
         isLoading,
         isError,
         refetch,
-    } = useLibraryImportCandidates(queryParams);
+    } = useLibraryImportCandidateGroups(queryParams);
     const totalItems = serverPagination?.totalItems ?? 0;
 
-    const matchedCountParams = useMemo<LibraryImportCandidateQueryParams>(
-        () => ({
-            rootFolderId: rootFolderFilter || undefined,
-            status: 'Pending',
-            hasMatches: true,
-            pageNumber: 1,
-            pageSize: 1,
-        }),
-        [rootFolderFilter],
-    );
-    const { pagination: matchedPagination } = useLibraryImportCandidates(matchedCountParams);
-    const totalMatched = matchedPagination?.totalItems ?? 0;
+    const [acceptingKeys, setAcceptingKeys] = useState<Set<string>>(() => new Set());
+    const [manualMatchTarget, setManualMatchTarget] = useState<ManualMatchTarget | null>(null);
+    const [isBulkAccepting, setIsBulkAccepting] = useState(false);
+    const [acceptAction, setAcceptAction] = useState<ImportAcceptAction | null>(null);
 
-    const [actingId, setActingId] = useState<string | null>(null);
-    const [isBulkActing, setIsBulkActing] = useState(false);
-    const [manualMatch, setManualMatch] = useState<LibraryImportCandidate | null>(null);
-    const [previewTarget, setPreviewTarget] = useState<PreviewDrawerTarget | null>(null);
-    const [previewOpen, setPreviewOpen] = useState(false);
-
-    const pageMatchedIds = useMemo(() => items.filter(isSubmittable).map((m) => m.id), [items]);
-    const selection = useBulkSelection({ pageRowIds: pageMatchedIds, totalCount: totalMatched });
-
-    const bulkAcceptMutation = useBulkAcceptLibraryImportCandidates();
+    const acceptGroupMutation = useAcceptLibraryImportCandidateGroup();
+    const acceptGroupBatchMutation = useAcceptLibraryImportCandidateGroup({ deferInvalidation: true });
+    const bulkAcceptGroupsMutation = useBulkAcceptLibraryImportCandidateGroups();
     const scan = useImportScanController();
+
+    const groupRowIds = useMemo(() => items.map((group) => group.groupKey), [items]);
+    const selection = useBulkSelection({ pageRowIds: groupRowIds, totalCount: totalItems });
+    const selectedGroups = useMemo(
+        () => items.filter((group) => selection.isRowChecked(group.groupKey)),
+        [items, selection],
+    );
+    const bulkFilter = useMemo(() => ({ rootFolderId: rootFolderFilter || undefined }), [rootFolderFilter]);
+
+    const clearSelection = selection.clear;
+    useEffect(() => clearSelection(), [clearSelection, page, rootFolderFilter]);
 
     const setPage = useCallback(
         (next: number) => {
@@ -338,7 +441,6 @@ export function LibraryImportPage() {
 
     const updateRootFolder = useCallback(
         (value: string) => {
-            selection.clear();
             setSearchParams((prev) => {
                 const next = new URLSearchParams(prev);
                 if (value) {
@@ -350,7 +452,7 @@ export function LibraryImportPage() {
                 return next;
             });
         },
-        [setSearchParams, selection],
+        [setSearchParams],
     );
 
     const handleScan = useCallback(async () => {
@@ -378,279 +480,225 @@ export function LibraryImportPage() {
         }
     }, [rootFolderFilter, rootFolderOptions, scan, refetch, toast]);
 
-    const handlePreview = useCallback((match: LibraryImportCandidate) => {
-        const candidate = match.matches[0];
-        if (!candidate) {
-            return;
-        }
-        setPreviewTarget({
-            providerType: candidate.providerType,
-            externalIdKey: candidate.externalIdKey,
-            externalId: candidate.externalId,
-            contentType: match.contentType,
-            levelSlug: candidate.levelSlug ?? undefined,
-            fallbackTitle: candidate.title,
-            fallbackYear: candidate.subtitle ?? undefined,
-        });
-        setPreviewOpen(true);
-    }, []);
+    const handleDigIn = useCallback(
+        (group: LibraryImportCandidateGroup) => {
+            void navigate(
+                libraryImportPath({ groupKey: group.groupKey, rootFolderId: rootFolderFilter, title: group.title }),
+            );
+        },
+        [navigate, rootFolderFilter],
+    );
 
-    const handleImport = useCallback(
-        async (match: LibraryImportCandidate) => {
-            setActingId(match.id);
+    const handleAccept = useCallback(
+        async (group: LibraryImportCandidateGroup, monitoringMode: LibraryImportMonitoringMode) => {
+            setAcceptingKeys((prev) => new Set(prev).add(group.groupKey));
             try {
-                await bulkAcceptMutation.mutateAsync({ ids: [match.id] });
+                const result = await acceptGroupMutation.mutateAsync({
+                    groupKey: group.groupKey,
+                    rootFolderId: rootFolderFilter || undefined,
+                    monitoringMode,
+                });
+                const queuedCount = result.queued.length;
+                const skippedCount = result.skipped.length;
                 toast({
                     title: 'Import queued',
-                    description: 'Magpie queued the file for import.',
-                    variant: 'success',
+                    description:
+                        `${queuedCount} ${queuedCount === 1 ? 'item' : 'items'} queued for import` +
+                        (skippedCount > 0 ? `, ${skippedCount} skipped` : '') +
+                        '.',
+                    variant: skippedCount > 0 ? 'warning' : 'success',
                 });
-                await refetch();
-            } catch {
-                toast({
-                    title: 'Import failed',
-                    description: 'Failed to queue the file for import. Please try again.',
-                    variant: 'error',
-                });
+            } catch (error) {
+                if (isApiError(error) && error.status === 404) {
+                    toast({
+                        title: 'Group is gone',
+                        description: 'The queue was out of date. Magpie refreshed it and removed this group.',
+                        variant: 'error',
+                    });
+                } else {
+                    toast({
+                        title: 'Import failed',
+                        description: 'Failed to queue the group for import. Please try again.',
+                        variant: 'error',
+                    });
+                }
             } finally {
-                setActingId(null);
+                setAcceptingKeys((prev) => {
+                    const next = new Set(prev);
+                    next.delete(group.groupKey);
+                    return next;
+                });
             }
         },
-        [bulkAcceptMutation, toast, refetch],
+        [acceptGroupMutation, rootFolderFilter, toast],
     );
 
-    const selectedCount = selection.selectedCount;
-    const pageSelectedCount = useMemo(
-        () => pageMatchedIds.filter((id) => selection.isRowChecked(id)).length,
-        [pageMatchedIds, selection],
-    );
-
-    const handleRowSelectionChange = useCallback(
-        (updater: RowSelectionState | ((prev: RowSelectionState) => RowSelectionState)) => {
-            const current = selection.rowSelection;
-            const next = typeof updater === 'function' ? updater(current) : updater;
-
-            const changed = pageMatchedIds.filter((id) => selection.isRowChecked(id) !== Boolean(next[id]));
-            if (changed.length === 0) {
-                return;
-            }
-
-            if (changed.length > 1) {
-                selection.toggleHeader(Boolean(next[changed[0]]));
-                return;
-            }
-
-            const id = changed[0];
-            selection.toggleRow(id, Boolean(next[id]));
-        },
-        [pageMatchedIds, selection],
-    );
-
-    const handleBulkAccept = useCallback(async () => {
-        const resolved = selection.resolve();
-        if (resolved.mode === 'ids' && resolved.ids.length === 0) {
-            return;
-        }
-        setIsBulkActing(true);
-        try {
-            const result = await bulkAcceptMutation.mutateAsync(
-                resolved.mode === 'all'
-                    ? { filter: { rootFolderId: rootFolderFilter || undefined, excludeIds: resolved.excludeIds } }
-                    : { ids: resolved.ids },
-            );
-            const queuedCount = result.queued.length;
-            const skippedCount = result.skipped.length;
-            toast({
-                title: 'Import queued',
-                description:
-                    `${queuedCount} file${queuedCount === 1 ? '' : 's'} queued for import` +
-                    (skippedCount > 0 ? `, ${skippedCount} skipped` : '') +
-                    '.',
-                variant: skippedCount > 0 ? 'warning' : 'success',
-            });
-            selection.clear();
-            await refetch();
-        } catch {
-            toast({
-                title: 'Import failed',
-                description: 'Failed to queue the selected files for import. Please try again.',
-                variant: 'error',
-            });
-        } finally {
-            setIsBulkActing(false);
-        }
-    }, [selection, rootFolderFilter, bulkAcceptMutation, toast, refetch]);
-
-    const rowHandlers: RowActionHandlers = useMemo(
-        () => ({
-            onPreview: handlePreview,
-            onImport: handleImport,
-            onMatch: setManualMatch,
-            actingId,
-        }),
-        [handlePreview, handleImport, actingId],
-    );
-
-    const getRowId = useCallback((match: LibraryImportCandidate) => match.id, []);
-
-    const columns: ColumnDef<LibraryImportCandidate>[] = useMemo(
-        () => [
-            {
-                id: 'select',
-                size: 44,
-                enableSorting: false,
-                header: ({ table }) => (
-                    <div className="library-import-page__select-cell">
-                        <Checkbox
-                            checked={
-                                table.getIsAllRowsSelected()
-                                    ? true
-                                    : table.getIsSomeRowsSelected()
-                                      ? 'indeterminate'
-                                      : false
-                            }
-                            onCheckedChange={(value) => table.toggleAllRowsSelected(!!value)}
-                            aria-label="Select all matched files"
-                        />
-                    </div>
-                ),
-                cell: ({ row }) => (
-                    <div className="library-import-page__select-cell">
-                        <Checkbox
-                            checked={row.getIsSelected()}
-                            disabled={!row.getCanSelect()}
-                            onCheckedChange={(value) => row.toggleSelected(!!value)}
-                            aria-label={`Select ${fileName(row.original.filePath)}`}
-                        />
-                    </div>
-                ),
-            },
-            {
-                id: 'filename',
-                header: 'Filename',
-                enableSorting: false,
-                cell: ({ row }) => {
-                    const match = row.original;
-                    const parsedTitle = getParsedSignalValue(match.parsedSignals, PARSED_FILE_SIGNAL_TITLE);
-                    const parsedYear = getParsedSignalNumber(match.parsedSignals, PARSED_FILE_SIGNAL_YEAR);
-                    return (
-                        <div className="library-import-page__file-cell" data-match-id={match.id}>
-                            {parsedTitle && (
-                                <span className="library-import-page__parsed-title">
-                                    {parsedTitle}
-                                    {parsedYear ? (
-                                        <span className="library-import-page__candidate-year"> {parsedYear}</span>
-                                    ) : null}
-                                </span>
-                            )}
-                            <span className="library-import-page__file-path">{fileName(match.filePath)}</span>
-                        </div>
-                    );
-                },
-            },
-            {
-                id: 'match',
-                header: 'Matched content',
-                enableSorting: false,
-                cell: ({ row }) => {
-                    const match = row.original;
-                    const candidate = match.matches[0];
-                    if (!candidate) {
-                        return (
-                            <div className="library-import-page__quarantine-cell" data-testid="library-import-no-match">
-                                <span className="library-import-page__muted-dash">No match</span>
-                                {match.notes ? (
-                                    <span className="library-import-page__quarantine-reason">{match.notes}</span>
-                                ) : null}
-                            </div>
-                        );
+    const handleBulkAccept = useCallback(
+        async (monitoringMode: LibraryImportMonitoringMode) => {
+            setIsBulkAccepting(true);
+            try {
+                const resolved = selection.resolve();
+                if (resolved.mode === 'all') {
+                    try {
+                        const result = await bulkAcceptGroupsMutation.mutateAsync({
+                            ...bulkFilter,
+                            excludeGroupKeys: resolved.excludeIds,
+                            monitoringMode,
+                        });
+                        const queuedCount = result.queued.length;
+                        const skippedCount = result.skipped.length;
+                        toast({
+                            title: 'Import queued',
+                            description:
+                                `${queuedCount} file${queuedCount === 1 ? '' : 's'} queued for import` +
+                                (skippedCount > 0 ? `, ${skippedCount} skipped` : '') +
+                                '.',
+                            variant: skippedCount > 0 ? 'warning' : 'success',
+                        });
+                        selection.clear();
+                    } catch {
+                        toast({
+                            title: 'Import failed',
+                            description: 'Failed to queue the selected groups for import. Please try again.',
+                            variant: 'error',
+                        });
                     }
-                    return (
-                        <div className="library-import-page__candidate-cell">
-                            <span className="library-import-page__parsed-title">
-                                {candidate.title}
-                                {candidate.subtitle ? (
-                                    <span className="library-import-page__candidate-year"> {candidate.subtitle}</span>
-                                ) : null}
-                            </span>
-                            <Badge size="sm" variant="info" badgeStyle="outline">
-                                {candidate.providerType}
-                            </Badge>
-                        </div>
-                    );
-                },
+                    return;
+                }
+
+                let queuedCount = 0;
+                let skippedCount = 0;
+                let notReadyCount = 0;
+                let goneCount = 0;
+                let failedCount = 0;
+                for (const group of selectedGroups) {
+                    if (!canAcceptGroup(group)) {
+                        notReadyCount += 1;
+                        continue;
+                    }
+                    try {
+                        const result = await acceptGroupBatchMutation.mutateAsync({
+                            groupKey: group.groupKey,
+                            rootFolderId: rootFolderFilter || undefined,
+                            monitoringMode,
+                        });
+                        queuedCount += result.queued.length;
+                        skippedCount += result.skipped.length;
+                    } catch (error) {
+                        if (isApiError(error) && error.status === 404) {
+                            goneCount += 1;
+                        } else {
+                            failedCount += 1;
+                        }
+                    }
+                }
+                acceptGroupBatchMutation.invalidate();
+
+                const details = [
+                    queuedCount > 0 ? `${queuedCount} file${queuedCount === 1 ? '' : 's'} queued for import.` : '',
+                    skippedCount > 0 ? `${skippedCount} file${skippedCount === 1 ? '' : 's'} skipped.` : '',
+                    notReadyCount > 0
+                        ? `${notReadyCount} group${notReadyCount === 1 ? ' is' : 's are'} not ready to import.`
+                        : '',
+                    goneCount > 0 ? `${goneCount} group${goneCount === 1 ? ' is' : 's are'} gone from the queue.` : '',
+                    failedCount > 0 ? `${failedCount} group${failedCount === 1 ? '' : 's'} failed to queue.` : '',
+                ].filter(Boolean);
+                const allQueued = skippedCount + notReadyCount + goneCount + failedCount === 0;
+                toast({
+                    title:
+                        queuedCount === 0
+                            ? 'Nothing queued for import'
+                            : allQueued
+                              ? 'Import queued'
+                              : 'Import partially queued',
+                    description: details.join(' '),
+                    variant: queuedCount === 0 ? 'error' : allQueued ? 'success' : 'warning',
+                });
+                selection.clear();
+            } finally {
+                setIsBulkAccepting(false);
+            }
+        },
+        [
+            selectedGroups,
+            selection,
+            acceptGroupBatchMutation,
+            bulkAcceptGroupsMutation,
+            bulkFilter,
+            rootFolderFilter,
+            toast,
+        ],
+    );
+
+    const columns: ColumnDef<LibraryImportCandidateGroup>[] = useMemo(
+        () => [
+            selectColumn<LibraryImportCandidateGroup>({
+                selection,
+                getId: (group) => group.groupKey,
+                headerLabel: 'Select all groups',
+                rowLabel: (group) => group.title,
+            }),
+            {
+                id: 'title',
+                header: 'Title',
+                meta: { mobileRole: 'header' },
+                enableSorting: false,
+                cell: ({ row }) => <GroupTitleCell group={row.original} />,
+            },
+            {
+                id: 'count',
+                header: 'Files',
+                enableSorting: false,
+                cell: ({ row }) => (
+                    <span className="library-import-page__leaf-count">
+                        {row.original.leafLevelDisplayName}: {row.original.leafCount}
+                    </span>
+                ),
+            },
+            {
+                id: 'status',
+                header: 'Status',
+                enableSorting: false,
+                cell: ({ row }) => statusRollup(row.original.statusCounts),
             },
             {
                 id: 'actions',
                 header: '',
                 size: 220,
                 enableSorting: false,
-                cell: ({ row }) => {
-                    const match = row.original;
-                    if (!isMatched(match)) {
-                        return (
-                            <div className="library-import-page__row-actions">
-                                <Button
-                                    variant="primary"
-                                    size="sm"
-                                    onClick={() => rowHandlers.onMatch(match)}
-                                    data-action="match"
-                                    data-match-id={match.id}
-                                >
-                                    <LinkSimpleIcon weight="bold" aria-hidden="true" />
-                                    Match
-                                </Button>
-                            </div>
-                        );
-                    }
-                    return (
-                        <div className="library-import-page__row-actions">
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => rowHandlers.onPreview(match)}
-                                data-action="detail"
-                                data-match-id={match.id}
-                            >
-                                <EyeIcon weight="bold" aria-hidden="true" />
-                                Detail
-                            </Button>
-                            {isSubmittable(match) ? (
-                                <Button
-                                    variant="primary"
-                                    size="sm"
-                                    onClick={() => rowHandlers.onImport(match)}
-                                    loading={rowHandlers.actingId === match.id}
-                                    disabled={rowHandlers.actingId !== null}
-                                    data-action="import"
-                                    data-match-id={match.id}
-                                >
-                                    <CheckIcon weight="bold" aria-hidden="true" />
-                                    Import
-                                </Button>
-                            ) : (
-                                <Button
-                                    variant="secondary"
-                                    size="sm"
-                                    disabled
-                                    data-action="import-status"
-                                    data-match-id={match.id}
-                                >
-                                    {isInFlight(match) ? 'Import queued' : match.status}
-                                </Button>
-                            )}
-                        </div>
-                    );
-                },
+                cell: ({ row }) => (
+                    <GroupRowActions
+                        group={row.original}
+                        onAccept={(group) =>
+                            setAcceptAction(() => (mode: LibraryImportMonitoringMode) => handleAccept(group, mode))
+                        }
+                        onDigIn={handleDigIn}
+                        onMatch={(group) =>
+                            setManualMatchTarget({ kind: 'group', group, rootFolderId: rootFolderFilter || undefined })
+                        }
+                        acceptingKeys={acceptingKeys}
+                    />
+                ),
             },
         ],
-        [rowHandlers],
+        [acceptingKeys, handleAccept, handleDigIn, rootFolderFilter, selection],
     );
+
+    const getRowId = useCallback((group: LibraryImportCandidateGroup) => group.groupKey, []);
 
     const hasRootFolderFilter = rootFolderFilter !== '';
     const hasNoRootFolders = rootFolderOptions.length === 0;
 
-    const emptyState = (
+    const emptyState = hasRootFolderFilter ? (
+        <EmptyState
+            icon={<MagnifyingGlassIcon weight="duotone" />}
+            title="No matching groups"
+            description="No files are waiting to import in this root folder. Clear the filter to see the rest."
+            action={<ClearFiltersButton onClick={() => updateRootFolder('')} />}
+            size="sm"
+            data-testid="library-import-empty-filtered"
+        />
+    ) : (
         <EmptyState
             icon={<FolderSimplePlusIcon weight="duotone" />}
             title="No files to import"
@@ -688,15 +736,13 @@ export function LibraryImportPage() {
         );
     } else {
         body = (
-            <DataTable<LibraryImportCandidate>
+            <DataTable<LibraryImportCandidateGroup>
                 columns={columns}
                 data={items}
                 size="sm"
                 enableSorting={false}
                 manualSorting
-                enableRowSelection={(row) => isSubmittable(row.original)}
-                rowSelection={selection.rowSelection}
-                onRowSelectionChange={handleRowSelectionChange}
+                enableRowSelection={false}
                 getRowId={getRowId}
                 enablePagination
                 manualPagination
@@ -706,7 +752,14 @@ export function LibraryImportPage() {
                 pageSize={PAGE_SIZE}
                 emptyState={emptyState}
                 keepHeaderWhenEmpty={hasRootFolderFilter}
+                mobileSelectionActive={selection.selectionMode}
+                mobileSelectionOverlay={{
+                    isSelected: (group) => selection.isRowChecked(group.groupKey),
+                    onToggle: (group) => selection.toggleRow(group.groupKey, !selection.isRowChecked(group.groupKey)),
+                    rowLabel: (group) => group.title,
+                }}
                 data-table="import"
+                aria-label="Import queue"
             />
         );
     }
@@ -721,14 +774,23 @@ export function LibraryImportPage() {
                     <FolderSimplePlusIcon weight="duotone" aria-hidden="true" data-testid="library-import-page__icon" />
                 }
                 actions={
-                    isAdmin ? (
-                        <Button asChild variant="secondary" size="sm" data-action="manage-root-folders">
-                            <Link to="/admin/root-folders">
-                                <ArrowSquareOutIcon weight="bold" aria-hidden="true" />
-                                Manage root folders
-                            </Link>
-                        </Button>
-                    ) : undefined
+                    <>
+                        <div className="library-import-page__mobile-select-toggle">
+                            <SelectModeToggle
+                                active={selection.selectionMode}
+                                onToggle={selection.toggleSelectionMode}
+                                mobileOnly={false}
+                            />
+                        </div>
+                        {isAdmin && (
+                            <Button asChild variant="secondary" size="sm" data-action="manage-root-folders">
+                                <Link to="/admin/root-folders">
+                                    <ArrowSquareOutIcon weight="bold" aria-hidden="true" />
+                                    Manage root folders
+                                </Link>
+                            </Button>
+                        )}
+                    </>
                 }
             />
 
@@ -745,69 +807,77 @@ export function LibraryImportPage() {
                 onClearSummary={scan.clearSummary}
             />
 
-            {selection.hasSelection && (
-                <div className="library-import-page__bulk-bar" data-component="library-import-bulk-bar">
-                    {(selection.showAcrossPagesPrompt || selection.allPages) && (
-                        <SelectAllBanner
-                            allPages={selection.allPages}
-                            pageSelectedCount={pageSelectedCount}
-                            totalCount={totalMatched}
-                            selectedCount={selectedCount}
-                            onSelectAllAcrossPages={selection.selectAllAcrossPages}
-                            onClear={selection.clear}
-                            itemNounPlural="files"
-                        />
-                    )}
-                    <span className="library-import-page__bulk-count">{selectedCount} selected</span>
-                    <div className="library-import-page__bulk-actions">
-                        <Button
-                            variant="primary"
-                            size="sm"
-                            onClick={handleBulkAccept}
-                            loading={isBulkActing}
-                            data-action="bulk-accept"
-                        >
-                            <CheckIcon weight="bold" aria-hidden="true" />
-                            Import checked
-                        </Button>
-                    </div>
-                </div>
-            )}
+            <BulkActionsToolbar
+                className="library-import-page__desktop-bulk-toolbar"
+                selection={selection}
+                label="Import group selection actions"
+                itemNounPlural="groups"
+            >
+                <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => setAcceptAction(() => handleBulkAccept)}
+                    loading={isBulkAccepting}
+                    data-action="bulk-accept"
+                >
+                    <CheckIcon weight="bold" aria-hidden="true" />
+                    <span className="bulk-actions-toolbar__btn-label">Accept selected</span>
+                </Button>
+            </BulkActionsToolbar>
 
-            <div className="library-import-page__panel">
-                {usesCardLayout && !isLoading && !isError && pageMatchedIds.length > 0 && (
-                    <div className="library-import-page__card-toolbar" data-component="library-import-card-toolbar">
-                        <Checkbox
-                            id="library-import-card-selectall"
-                            checked={selection.headerChecked}
-                            onCheckedChange={(value) => selection.toggleHeader(!!value)}
-                            aria-label="Select all matched files on this page"
-                        />
-                        <label
-                            htmlFor="library-import-card-selectall"
-                            className="library-import-page__card-toolbar-label"
-                        >
-                            Select all matched on this page
-                        </label>
-                    </div>
-                )}
-                {body}
-            </div>
+            <div className="library-import-page__panel">{body}</div>
 
             <ManualMatchDialog
-                match={manualMatch}
-                onClose={() => setManualMatch(null)}
+                target={manualMatchTarget}
+                onClose={() => setManualMatchTarget(null)}
                 onMatched={() => {
-                    selection.clear();
-                    void refetch();
+                    if (manualMatchTarget?.kind === 'group') {
+                        selection.toggleRow(manualMatchTarget.group.groupKey, false);
+                    }
                 }}
             />
+            <AcceptImportDialog
+                action={acceptAction}
+                monitoringMode={monitoringMode}
+                onMonitoringModeChange={onMonitoringModeChange}
+                onClose={() => setAcceptAction(null)}
+            />
 
-            <PreviewDrawer open={previewOpen} onOpenChange={setPreviewOpen} target={previewTarget} />
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    className="library-import-page__selection-bar"
+                    data-component="library-import-selection-bar"
+                    selection={selection}
+                    pageSelectedCount={selectedGroups.length}
+                    totalCount={totalItems}
+                    onClear={selection.clear}
+                    itemNounPlural="groups"
+                >
+                    <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setAcceptAction(() => handleBulkAccept)}
+                        loading={isBulkAccepting}
+                        disabled={!selection.hasSelection}
+                        data-action="bulk-accept"
+                    >
+                        <CheckIcon weight="bold" aria-hidden="true" />
+                        Accept selected
+                    </Button>
+                </MobileSelectionBar>
+            )}
         </div>
     );
 }
 
 LibraryImportPage.displayName = 'LibraryImportPage';
 
-export default LibraryImportPage;
+export default function LibraryImportRoute() {
+    const [searchParams] = useSearchParams();
+    const [monitoringMode, setMonitoringMode] = useState<LibraryImportMonitoringMode | ''>('');
+    return searchParams.has('key') ? (
+        <LibraryImportGroupPage monitoringMode={monitoringMode} onMonitoringModeChange={setMonitoringMode} />
+    ) : (
+        <LibraryImportPage monitoringMode={monitoringMode} onMonitoringModeChange={setMonitoringMode} />
+    );
+}

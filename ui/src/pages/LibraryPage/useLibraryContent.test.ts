@@ -80,6 +80,28 @@ describe('useLibraryContent bulk filter', () => {
         );
     });
 
+    it('sends fulfilled-date sorting to the server', () => {
+        renderHook(() =>
+            useLibraryContent({
+                contentTypeSlug: undefined,
+                currentContentType: null,
+                routeContentTypeSlug: undefined,
+                selectedLevel: null,
+                libraryTypesError: null,
+                debouncedFilterQuery: '',
+                fulfillment: '',
+                sortField: 'fulfilledDate',
+                sortDir: 'desc',
+                pageIndex: 0,
+            }),
+        );
+
+        expect(mockUseContentList).toHaveBeenLastCalledWith(
+            expect.objectContaining({ sortBy: 'FulfilledAt', sortDirection: 'Descending' }),
+            { enabled: true },
+        );
+    });
+
     it('expresses the content type and level scope as magpieql clauses', () => {
         const { result } = renderHook(() =>
             useLibraryContent({

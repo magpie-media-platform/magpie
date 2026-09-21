@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -33,14 +32,14 @@ public interface IMetadataSearchService
     /// <param name="contentType">The content type</param>
     /// <param name="page">The one-based page number</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<IReadOnlyList<MetadataSearchCandidate>> SearchAsync(
+    Task<MetadataSearchPage> SearchAsync(
         string query,
         string contentType,
         int page = 1,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a provider preview for an external id.
+    /// A provider preview for an external id.
     /// </summary>
     /// <param name="providerType">The provider type</param>
     /// <param name="externalIdKey">The external id source</param>

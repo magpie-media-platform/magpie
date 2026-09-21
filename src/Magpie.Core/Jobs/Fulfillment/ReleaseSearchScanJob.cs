@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -22,15 +21,15 @@ internal sealed class ReleaseSearchScanJob(
     IJobManager jobManager,
     IJobExecutionRepository jobExecutionRepository,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
-    TimeProvider timeProvider,
     ILogger<ReleaseSearchScanJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "ReleaseSearchScan",
+        JobType = MagpieJobs.Types.ReleaseSearchScan,
         DisplayName = "Release search scan",
-        Description = "Enqueues a recursive release search at the root of every monitored subtree.",
+        Description = "Enqueues a recursive release search at the root of every monitored subtree that still " +
+            "has a missing or below-cutoff item.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
@@ -42,7 +41,7 @@ internal sealed class ReleaseSearchScanJob(
         Parameters =
         [
             new(
-                BackpressureThresholdParameter,
+                MagpieJobs.Parameters.BackpressureThreshold,
                 "Maximum queued or running downstream ReleaseSearchItem executions before the sweep skips.",
                 DataType.Number,
                 false,
@@ -53,47 +52,45 @@ internal sealed class ReleaseSearchScanJob(
     private const int PageSize = 500;
 
     private const int DefaultBackpressureThreshold = 50;
-    private const string BackpressureThresholdParameter = "backpressureThreshold";
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
         var userId = jobContext.ManualTriggerUserId;
         var correlationId = jobContext.CorrelationId;
-        var progress = progressReporter;
-        var now = timeProvider.GetUtcNow().UtcDateTime;
         var backpressureThreshold = ReadPositiveIntParameter(
             jobContext.Parameters,
-            BackpressureThresholdParameter,
+            MagpieJobs.Parameters.BackpressureThreshold,
             DefaultBackpressureThreshold);
 
-        var activeReleaseSearches = (await jobExecutionRepository
+        var activeReleaseSearches = await jobExecutionRepository
             .QueryAsync(
                 new JobExecutionQuery
                 {
                     JobType = MagpieJobs.Types.ReleaseSearchItem,
-                    Timestamp = new Range<DateTime>(now.AddHours(-1), null),
                     Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
                 },
                 new()
                 {
                     PageNumber = 1,
-                    PageSize = backpressureThreshold == int.MaxValue ? int.MaxValue : backpressureThreshold + 1,
+                    PageSize = 1,
                 },
                 sort: null,
                 cancellationToken)
-            .ConfigureAwait(false)).Items.ToList();
-        if (activeReleaseSearches.Count > backpressureThreshold)
+            .ConfigureAwait(false);
+        if (activeReleaseSearches.TotalItems > backpressureThreshold)
         {
-            logger.LogWarning(
-                "ReleaseSearchItem has {ActiveCount} queued or running executions (threshold {Threshold})." +
-                " The release search scan skipped this run",
-                activeReleaseSearches.Count,
+            logger.LogInformation(
+                "ReleaseSearchItem has {ActiveCount} queued or running executions (threshold {Threshold})," +
+                " so the release search scan skipped this run",
+                activeReleaseSearches.TotalItems,
                 backpressureThreshold);
-            progress?.Report(1, "The scan stopped because the ReleaseSearchItem queue is not empty.");
+            progressReporter.Report(
+                1,
+                "The scan stopped because the ReleaseSearchItem queue is above its backpressure threshold.");
             return;
         }
 
-        progress?.Report(0, "The scan will select the monitored hierarchy roots.");
+        progressReporter.Report(0, "The scan will select the monitored hierarchy roots.");
 
         var roots = await GetSubtreeRootsAsync(cancellationToken).ConfigureAwait(false);
 
@@ -102,7 +99,7 @@ internal sealed class ReleaseSearchScanJob(
         foreach (var rootId in roots)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.ReportFraction(completedItems, totalItems);
+            progressReporter.ReportFraction(completedItems, totalItems);
 
             try
             {
@@ -125,31 +122,73 @@ internal sealed class ReleaseSearchScanJob(
             completedItems++;
         }
 
-        progress?.Report(1, "The release-search scan completed.");
+        progressReporter.Report(1, "The release-search scan completed.");
     }
 
     private async Task<IReadOnlyList<Guid>> GetSubtreeRootsAsync(CancellationToken cancellationToken)
     {
-        var roots = new List<Guid>();
+        var needyLeafIds = await LoadUnfulfilledMonitoredLeafIdsAsync(cancellationToken).ConfigureAwait(false);
+        if (needyLeafIds.Count == 0)
+        {
+            return [];
+        }
+
+        var ancestry = await contentHierarchyItemRepository
+            .GetAncestryAsync(needyLeafIds, cancellationToken)
+            .ConfigureAwait(false);
+
+        var roots = new HashSet<Guid>();
+        foreach (var leafId in needyLeafIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var walked = new HashSet<Guid>();
+            var currentId = leafId;
+            while (walked.Add(currentId) &&
+                ancestry.TryGetValue(currentId, out var node) &&
+                node.EffectiveMonitoring)
+            {
+                if (node.ParentId is not { } parentId ||
+                    !ancestry.TryGetValue(parentId, out var parent) ||
+                    !parent.EffectiveMonitoring)
+                {
+                    roots.Add(currentId);
+                    break;
+                }
+
+                currentId = parentId;
+            }
+        }
+
+        return [.. roots];
+    }
+
+    private async Task<List<Guid>> LoadUnfulfilledMonitoredLeafIdsAsync(CancellationToken cancellationToken)
+    {
+        var leafIds = new List<Guid>();
         var pageNumber = 1;
         while (true)
         {
-            var page = await contentHierarchyItemRepository.QueryAsync(
+            var page = await contentHierarchyItemRepository.QueryIdsAsync(
                 new ContentHierarchyItemCriteria
                 {
+                    LeafOnly = true,
                     EffectiveMonitoring = true,
-                    HasMonitoredParent = false,
+                    Fulfillment = new()
+                    {
+                        And = [new()
+                        {
+                            Operator = CriteriaValueOperator.In,
+                            Values = [FulfillmentStatus.Missing, FulfillmentStatus.Upgradable],
+                        }],
+                    },
                 },
                 new Models.Paging.PagingParameter { PageNumber = pageNumber, PageSize = PageSize },
                 sort: null,
                 cancellationToken).ConfigureAwait(false);
 
-            foreach (var item in page.Items)
-            {
-                roots.Add(item.Id);
-            }
-
-            if (pageNumber * PageSize >= page.TotalItems || !page.Items.Any())
+            leafIds.AddRange(page);
+            if (page.Count < PageSize)
             {
                 break;
             }
@@ -157,7 +196,7 @@ internal sealed class ReleaseSearchScanJob(
             pageNumber++;
         }
 
-        return roots;
+        return leafIds;
     }
 
     private async Task EnqueueReleaseSearchAsync(
@@ -181,7 +220,7 @@ internal sealed class ReleaseSearchScanJob(
             },
             cancellationToken).ConfigureAwait(false);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "The release search scan enqueued a monitored search for content hierarchy item {ContentHierarchyItemId}",
             contentHierarchyItemId);
     }
@@ -202,7 +241,7 @@ internal sealed class ReleaseSearchScanJob(
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Raw} is not a positive integer. The job will use the default {Default}",
+            "Parameter {Parameter} value {Raw} is not a positive integer, so the job will use the default {Default}",
             parameterName,
             raw,
             defaultValue);

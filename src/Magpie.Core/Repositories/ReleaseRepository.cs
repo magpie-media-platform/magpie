@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
-using Magpie.Core.Jobs;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -26,13 +25,13 @@ internal sealed class ReleaseRepository(
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     ILogger<ReleaseRepository> logger,
-    TimeProvider? timeProvider = null) : IReleaseRepository
+    TimeProvider timeProvider) : IReleaseRepository
 {
     private const int ParameterBatchSize = 1_000;
 
     private const string CreateSavepoint = "release_create";
 
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     private static void NormalizeIdentityKeys(Release release)
     {
@@ -485,14 +484,17 @@ internal sealed class ReleaseRepository(
 
             var totalCount = await releases.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(Release).GetProperties()
+            var sortProperty = context.Model.FindEntityType(typeof(Release))!.GetProperties()
+                .Where(property => !property.IsShadowProperty() &&
+                    (property.ClrType.IsValueType || property.ClrType == typeof(string) ||
+                        property.ClrType == typeof(Uri)))
                 .Select(property => property.Name)
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 releases = sort.Direction == SortDirection.Ascending
-                    ? releases.OrderBy(r => EF.Property<Release>(r, sortProperty)).ThenBy(r => r.Id)
-                    : releases.OrderByDescending(r => EF.Property<Release>(r, sortProperty)).ThenBy(r => r.Id);
+                    ? releases.OrderBy(r => EF.Property<object>(r, sortProperty)).ThenBy(r => r.Id)
+                    : releases.OrderByDescending(r => EF.Property<object>(r, sortProperty)).ThenBy(r => r.Id);
             }
             else
             {
@@ -842,73 +844,6 @@ internal sealed class ReleaseRepository(
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<List<Guid>> ListProtectedAcquisitionLockPartitionReleaseIdsAsync(
-        CancellationToken cancellationToken)
-    {
-        var activeStatuses = new[] { JobExecutionStatus.Queued, JobExecutionStatus.Running };
-        var acquisitionPartitionPrefix =
-            $"type:{MagpieJobs.Types.ReleaseDownloadItem}|{MagpieJobs.Parameters.ReleaseId}=";
-        var partitions = await (
-            from job in context.JobExecutions.AsNoTracking()
-            where job.JobType == MagpieJobs.Types.ReleaseDownloadItem
-            where activeStatuses.Contains(job.Status)
-            where job.LockPartition != null && job.LockPartition.StartsWith(acquisitionPartitionPrefix)
-            select job.LockPartition!)
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var releaseIds = new List<Guid>();
-        foreach (var partition in partitions)
-        {
-            var rawReleaseId = partition[acquisitionPartitionPrefix.Length..];
-            var separatorIndex = rawReleaseId.IndexOf('&', StringComparison.Ordinal);
-            if (separatorIndex >= 0)
-            {
-                rawReleaseId = rawReleaseId[..separatorIndex];
-            }
-
-            if (Guid.TryParse(rawReleaseId, out var releaseId))
-            {
-                releaseIds.Add(releaseId);
-            }
-        }
-
-        return releaseIds;
-    }
-
-    private async Task<HashSet<Guid>> ExpandSubtreeIdsAsync(
-        IReadOnlyCollection<Guid> rootIds,
-        CancellationToken cancellationToken)
-    {
-        var rows = await (
-            from item in context.ContentHierarchyItems.AsNoTracking()
-            select new
-            {
-                item.Id,
-                item.ParentId
-            })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var subtreeIds = rootIds.ToHashSet();
-        var added = true;
-        while (added)
-        {
-            added = false;
-            foreach (var row in rows)
-            {
-                if (row.ParentId is not { } parentId || !subtreeIds.Contains(parentId) || !subtreeIds.Add(row.Id))
-                {
-                    continue;
-                }
-
-                added = true;
-            }
-        }
-
-        return subtreeIds;
-    }
-
     public async Task<int> DeleteWhereAsync(
         ReleaseQuery query,
         CancellationToken cancellationToken = default)
@@ -947,6 +882,13 @@ internal sealed class ReleaseRepository(
                     var deleted = 0;
                     foreach (var batch in ids.Chunk(ParameterBatchSize))
                     {
+                        await context.Downloads
+                            .Where(download => download.ReleaseSource != null &&
+                                batch.Contains(download.ReleaseSource.ReleaseId))
+                            .ExecuteUpdateAsync(
+                                setters => setters.SetProperty(download => download.ReleaseSourceId, (Guid?)null),
+                                ct)
+                            .ConfigureAwait(false);
                         deleted += await context.Releases
                             .Where(release => batch.Contains(release.Id))
                             .ExecuteDeleteAsync(ct)
@@ -999,6 +941,13 @@ internal sealed class ReleaseRepository(
                         return false;
                     }
 
+                    await context.Downloads
+                        .Where(download => download.ReleaseSource != null &&
+                            download.ReleaseSource.ReleaseId == id)
+                        .ExecuteUpdateAsync(
+                            setters => setters.SetProperty(download => download.ReleaseSourceId, (Guid?)null),
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     var deleted = await context.Releases
                         .Where(r => r.Id == id)
                         .ExecuteDeleteAsync(cancellationToken)

@@ -92,7 +92,7 @@ export function ExtensionsPage() {
     });
     const displayExtensions = sortable.items;
 
-    const runToggle = useCallback(
+    const handleToggleEnabled = useCallback(
         async (ext: ExtensionItem, enabled: boolean) => {
             setTogglingIds((prev) => new Set([...prev, ext.id]));
             try {
@@ -102,17 +102,12 @@ export function ExtensionsPage() {
                     description: `${ext.name} will be ${enabled ? 'enabled' : 'disabled'} after the next restart.`,
                     variant: 'success',
                 });
-                return true;
             } catch (err) {
                 toast({
                     title: enabled ? 'Failed to Enable' : 'Failed to Disable',
-                    description:
-                        err instanceof Error
-                            ? err.message
-                            : `Failed to ${enabled ? 'enable' : 'disable'} the extension.`,
+                    description: getErrorMessage(err, `Failed to ${enabled ? 'enable' : 'disable'} the extension.`),
                     variant: 'error',
                 });
-                return false;
             } finally {
                 setTogglingIds((prev) => {
                     const next = new Set(prev);
@@ -122,16 +117,6 @@ export function ExtensionsPage() {
             }
         },
         [toggleEnabled, toast],
-    );
-
-    const handleToggleEnabled = useCallback(
-        async (ext: ExtensionItem, enabled: boolean) => {
-            if (ext.disabledReason) {
-                return;
-            }
-            await runToggle(ext, enabled);
-        },
-        [runToggle],
     );
 
     const handleRefresh = useCallback(async () => {
@@ -176,7 +161,7 @@ export function ExtensionsPage() {
                 description:
                     updatesAvailable === 0
                         ? 'All managed extensions are up to date.'
-                        : `${updatesAvailable} extension${updatesAvailable === 1 ? '' : 's'} have updates available.`,
+                        : `${updatesAvailable} extension${updatesAvailable === 1 ? ' has' : 's have'} updates available.`,
                 variant: 'success',
             });
         } catch (err) {
@@ -302,26 +287,24 @@ export function ExtensionsPage() {
                                 </Button>
                             </div>
 
-                            <div className="extensions-page__list" role="list" aria-label="Installed extensions">
-                                {displayExtensions.length === 0 ? (
-                                    <EmptyState
-                                        icon={<PuzzlePieceIcon weight="duotone" />}
-                                        title="No extensions installed"
-                                        description="No extensions are currently installed."
-                                    />
-                                ) : (
-                                    <>
-                                        <p
-                                            className="extensions-page__list-hint"
-                                            data-testid="extensions-page__order-hint"
-                                        >
-                                            Some extensions can override or conflict with one another. Extensions higher
-                                            in the list take precedence. Extensions can be reordered by dragging or
-                                            using the move buttons. Changes take effect after the next restart.
-                                        </p>
-                                        <p className="sr-only" aria-live="polite" aria-atomic="true">
-                                            {sortable.announcement}
-                                        </p>
+                            {displayExtensions.length === 0 ? (
+                                <EmptyState
+                                    icon={<PuzzlePieceIcon weight="duotone" />}
+                                    title="No extensions installed"
+                                    description="No extensions are currently installed."
+                                />
+                            ) : (
+                                <>
+                                    <p className="extensions-page__list-hint" data-testid="extensions-page__order-hint">
+                                        Some extensions can override or conflict with one another. Extensions higher in
+                                        the list take precedence. Extensions can be reordered by dragging or using the
+                                        move buttons. Changes take effect after the next restart.
+                                    </p>
+                                    <div
+                                        className="extensions-page__list"
+                                        role="list"
+                                        aria-label="Installed extensions"
+                                    >
                                         {displayExtensions.map((ext, index) => (
                                             <ExtensionCard
                                                 key={ext.id}
@@ -356,14 +339,14 @@ export function ExtensionsPage() {
                                                 updateInfo={updateInfoByExtensionId.get(ext.id) ?? null}
                                             />
                                         ))}
-                                        <div
-                                            ref={sortable.dragImageRef}
-                                            className="sortable-list__drag-image extensions-page__drag-image"
-                                            aria-hidden="true"
-                                        />
-                                    </>
-                                )}
-                            </div>
+                                    </div>
+                                    <div
+                                        ref={sortable.dragImageRef}
+                                        className="sortable-list__drag-image extensions-page__drag-image"
+                                        aria-hidden="true"
+                                    />
+                                </>
+                            )}
                         </TabsContent>
 
                         <TabsContent value="feeds" forceMount>
@@ -523,6 +506,7 @@ function ExtensionCard({
                     ) : (
                         <PowerIcon weight="bold" className="extensions-page__toggle-icon" aria-hidden="true" />
                     )}
+                    <span className="extensions-page__toggle-label">Enabled</span>
                     <Switch
                         checked={extension.enabled}
                         onCheckedChange={(checked) => onToggleEnabled(extension, checked)}

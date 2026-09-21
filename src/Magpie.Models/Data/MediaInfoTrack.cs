@@ -10,85 +10,85 @@ public record MediaInfoTrack
     /// <summary>
     /// The kind of track, such as video, audio, or subtitle.
     /// </summary>
-    public required string Type { get; init; }
+    public required string Type { get; set; }
 
     /// <summary>
     /// The name of the track to show.
     /// </summary>
-    public required string Name { get; init; }
+    public required string Name { get; set; }
 
     /// <summary>
     /// The codec of the track, such as h264 or aac.
     /// </summary>
-    public string? Codec { get; init; }
+    public string? Codec { get; set; }
 
     /// <summary>
     /// The bit rate of the track in bits per second.
     /// </summary>
-    public long? BitRate { get; init; }
+    public long? BitRate { get; set; }
 
     /// <summary>
     /// The run time of the track in seconds.
     /// </summary>
-    public double? DurationSeconds { get; init; }
+    public double? DurationSeconds { get; set; }
 
     /// <summary>
     /// The frame width in pixels.
     /// </summary>
-    public int? Width { get; init; }
+    public int? Width { get; set; }
 
     /// <summary>
     /// The frame height in pixels.
     /// </summary>
-    public int? Height { get; init; }
+    public int? Height { get; set; }
 
     /// <summary>
     /// The frame rate in frames per second.
     /// </summary>
-    public double? FrameRate { get; init; }
+    public double? FrameRate { get; set; }
 
     /// <summary>
     /// The dynamic range of the video, such as SDR or HDR10.
     /// </summary>
-    public string? VideoRange { get; init; }
+    public string? VideoRange { get; set; }
 
     /// <summary>
     /// The number of bits per sample.
     /// </summary>
-    public int? BitDepth { get; init; }
+    public int? BitDepth { get; set; }
 
     /// <summary>
     /// The number of audio channels.
     /// </summary>
-    public int? Channels { get; init; }
+    public int? Channels { get; set; }
 
     /// <summary>
     /// The audio sample rate in hertz.
     /// </summary>
-    public int? SampleRate { get; init; }
+    public int? SampleRate { get; set; }
 
     /// <summary>
     /// The language of the track, as a language code.
     /// </summary>
-    public string? Language { get; init; }
+    public string? Language { get; set; }
 
     /// <summary>
     /// Whether the media file marks the track as forced.
     /// </summary>
-    public bool? Forced { get; init; }
+    public bool? Forced { get; set; }
 
     /// <summary>
     /// Whether the media file marks the track as the default track.
     /// </summary>
-    public bool? Default { get; init; }
+    public bool? Default { get; set; }
 
     /// <summary>
     /// Whether the track is for deaf and hard-of-hearing viewers.
     /// </summary>
-    public bool? Sdh { get; init; }
+    public bool? Sdh { get; set; }
 
     /// <summary>
     /// The additional track properties, keyed by name.
     /// </summary>
-    public Dictionary<string, string> Properties { get; init; } = [];
+    public Dictionary<string, string> Properties { get; set; } = [];
 }

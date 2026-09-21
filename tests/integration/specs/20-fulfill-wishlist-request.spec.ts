@@ -18,6 +18,7 @@ interface Wishlist {
     id: string;
     name: string;
     enabled: boolean;
+    monitoring: boolean | null;
     createdAt: string;
     lastSyncedAt?: string | null;
     rootFolderId?: string | null;
@@ -50,6 +51,8 @@ interface JobExecution {
 interface ContentItem {
     id: string;
     name: string;
+    monitoring: boolean | null;
+    effectiveMonitoring: boolean;
     pendingMetadataRefresh: boolean;
     contentItem?: {
         fulfillment: string;
@@ -96,7 +99,11 @@ test.describe.serial('Journey 20: fulfill a wishlist request', () => {
             await expect(page.locator(`[data-wishlist-id="${created.id}"]`)).toContainText('Journey requested feature');
             await page.goto(`/wishlists/${created.id}`);
             await expect(page.getByRole('heading', { name: 'Journey requested feature' })).toBeVisible();
-            await expect(page.getByText('Monitored', { exact: true })).toBeVisible();
+            await expect(page.getByText('Inherit', { exact: true })).toBeVisible();
+            expect(await api.get<Wishlist>(`/api/wishlists/${created.id}`)).toMatchObject({
+                enabled: true,
+                monitoring: null,
+            });
 
             const createdByProduct = await until(
                 `wishlist ${created.id} creation refresh job`,
@@ -189,6 +196,7 @@ test.describe.serial('Journey 20: fulfill a wishlist request', () => {
                 500,
             );
             expect(hydrated.contentItem?.fulfillment).toBe('Missing');
+            expect(hydrated).toMatchObject({ monitoring: null, effectiveMonitoring: true });
             expect(await api.get(`/api/content/${id}/metadata`)).toMatchObject({
                 title: 'Wishlist Journey Feature',
                 externalIds: expect.arrayContaining([expect.objectContaining({ value: 'wishlist-feature' })]),

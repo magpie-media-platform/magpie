@@ -186,7 +186,9 @@ test.describe.serial("Journey 13: chase what's missing and upgrade what's medioc
                     60_000,
                     250,
                 );
-                expect((await waitForJob(api, execution.id)).status).toBe('Completed');
+                const rowSearch = await waitForJob(api, execution.id);
+                expect(rowSearch.status).toBe('Completed');
+                expect(rowSearch.statusMessage ?? '').not.toContain('Skipped:');
             });
 
             await test.step('select several rows and search for all of them at once', async () => {
@@ -232,6 +234,20 @@ test.describe.serial("Journey 13: chase what's missing and upgrade what's medioc
                 expect(completed).toHaveLength(12);
                 for (const id of selectedIds) {
                     expect(completed.filter((job) => job.parameters['contentHierarchyItemId'] === id)).toHaveLength(1);
+                }
+                expect(completed.filter((job) => (job.statusMessage ?? '').startsWith('Skipped:'))).toEqual([]);
+            });
+
+            await test.step('a second manual search for the same item is coalesced with the first', async () => {
+                const target = allContent.find((item) => item.name === 'Journey Catalog 26');
+                const parameters = { contentHierarchyItemId: target!.id, force: 'true' };
+                const first = await api.post<string>('/api/jobs/enqueue', { jobType: 'ReleaseSearchItem', parameters });
+                const second = await api.post<string>('/api/jobs/enqueue', { jobType: 'ReleaseSearchItem', parameters });
+                expect((await waitForJob(api, first)).status).toBe('Completed');
+                if (second !== first) {
+                    const execution = await waitForJob(api, second);
+                    expect(execution.status).toBe('Completed');
+                    expect(execution.statusMessage ?? '').toContain('Skipped:');
                 }
             });
 
@@ -297,9 +313,6 @@ test.describe.serial("Journey 13: chase what's missing and upgrade what's medioc
                     parameters: { contentHierarchyItemId: track.id, force: 'true' },
                 });
                 expect((await waitForJob(api, searchId)).status).toBe('Completed');
-                // a follow-on auto-grab only exists when the search associates a release, and
-                // coalescing discards its parent id, so the step proves the negative: drain the
-                // acquisition jobs to terminal and assert nothing was grabbed
                 await drainReleaseAcquisitionJobs(api);
                 expect(await mocks.downloadClient.calls('DownloadReleaseAsync')).toHaveLength(0);
                 expect((await api.get<Paged<Download>>('/api/downloads?pageSize=100')).totalItems).toBe(
@@ -362,8 +375,6 @@ test.describe.serial("Journey 13: chase what's missing and upgrade what's medioc
                     500,
                 );
                 expect(upgradeDownload.status).toBe('Imported');
-                // the shim records the ARMED download id as the request externalId, so the release
-                // identity asserts through the title and info url instead
                 expect(await mocks.downloadClient.calls<{ title: string }>('DownloadReleaseAsync')).toEqual([
                     expect.objectContaining({
                         request: expect.objectContaining({

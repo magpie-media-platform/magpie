@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,9 +11,12 @@ using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
+using Magpie.Models.Bulk;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Import;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Content;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -26,9 +30,38 @@ internal sealed class LibraryImportCandidateRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<LibraryImportCandidateRepository> logger,
-    TimeProvider? timeProvider = null) : ILibraryImportCandidateRepository
+    TimeProvider timeProvider) : ILibraryImportCandidateRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private const int BulkPageSize = 1_000;
+
+    private readonly TimeProvider _time = timeProvider;
+
+    private static string ResolveGroupKey(LibraryImportCandidate candidate)
+    {
+        if (candidate.LayoutKey is { } layoutKey)
+        {
+            return layoutKey;
+        }
+
+        if (candidate.Matches.Count == 1)
+        {
+            var match = candidate.Matches[0];
+            return $"match:{candidate.ContentType}:{match.ProviderType}:{match.ExternalIdKey}:{match.ExternalId}";
+        }
+
+        var title = FirstNonEmptySignal(candidate, ParsedFileSignalKeys.RootTitle)
+            ?? FirstNonEmptySignal(candidate, ParsedFileSignalKeys.TitleToken)
+            ?? FirstNonEmptySignal(candidate, ParsedFileSignalKeys.Title)
+            ?? Path.GetFileNameWithoutExtension(candidate.FilePath)
+            ?? string.Empty;
+
+        return $"query:{candidate.ContentType}:{title.Trim().ToLowerInvariant()}";
+    }
+
+    private static string? FirstNonEmptySignal(LibraryImportCandidate candidate, string key) =>
+        candidate.ParsedSignals.TryGetValue(key, out var values)
+            ? values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
+            : null;
 
     public async Task<IEnumerable<LibraryImportCandidate>> ListAllAsync(CancellationToken cancellationToken)
     {
@@ -63,6 +96,161 @@ internal sealed class LibraryImportCandidateRepository(
         }
     }
 
+    private IQueryable<LibraryImportCandidate> ApplyCriteria(LibraryImportCandidateQuery query)
+    {
+        var matches = context.LibraryImportCandidates.AsNoTracking().AsQueryable();
+
+        if (query.RootFolderId is not null)
+        {
+            matches = matches.Where(m => m.RootFolderId == query.RootFolderId);
+        }
+
+        if (query.ScanRunId is not null)
+        {
+            matches = matches.Where(m => m.ScanRunId == query.ScanRunId);
+        }
+
+        if (query.Status is not null)
+        {
+            matches = matches.Where(m => m.Status == query.Status);
+        }
+
+        if (query.Statuses is { Count: > 0 })
+        {
+            var statuses = query.Statuses as LibraryImportCandidateStatus[] ?? [.. query.Statuses];
+            matches = matches.Where(m => statuses.Contains(m.Status));
+        }
+
+        if (query.HasMatches is not null)
+        {
+            matches = query.HasMatches.Value
+                ? matches.Where(m => m.MatchCount > 0)
+                : matches.Where(m => m.MatchCount == 0);
+        }
+
+        if (query.ExcludeIds is { Count: > 0 })
+        {
+            var excludeIds = query.ExcludeIds as Guid[] ?? [.. query.ExcludeIds];
+            matches = matches.Where(m => !excludeIds.Contains(m.Id));
+        }
+
+        if (query.GroupKey is not null)
+        {
+            matches = matches.Where(m => m.GroupKey == query.GroupKey);
+        }
+
+        if (query.ExcludeGroupKeys is { Count: > 0 })
+        {
+            var excludeGroupKeys = query.ExcludeGroupKeys as string[] ?? [.. query.ExcludeGroupKeys];
+            matches = matches.Where(m => m.GroupKey == null || !excludeGroupKeys.Contains(m.GroupKey));
+        }
+
+        return matches;
+    }
+
+    public async Task<PagedList<Guid>> QueryIdsAsync(
+        LibraryImportCandidateQuery query,
+        PagingParameter paging,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var matches = ApplyCriteria(query);
+            var totalCount = await matches.CountAsync(cancellationToken).ConfigureAwait(false);
+            var ids = await matches
+                .OrderBy(m => m.Id)
+                .Skip((paging.PageNumber - 1) * paging.PageSize)
+                .Take(paging.PageSize)
+                .Select(m => m.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return new()
+            {
+                Items = ids,
+                PageNumber = paging.PageNumber,
+                PageSize = paging.PageSize,
+                TotalItems = totalCount
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The library import repository failed to query library import candidate ids.");
+            throw;
+        }
+    }
+
+    public async Task<PagedList<LibraryImportCandidateGroupSummary>> QueryGroupsAsync(
+        LibraryImportCandidateQuery query,
+        PagingParameter paging,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var matches = ApplyCriteria(query).Where(m => m.GroupKey != null);
+
+            var groupKeys = matches.Select(m => m.GroupKey!).Distinct();
+            var totalCount = await groupKeys.CountAsync(cancellationToken).ConfigureAwait(false);
+            var pageKeys = await groupKeys
+                .OrderBy(groupKey => groupKey)
+                .Skip((paging.PageNumber - 1) * paging.PageSize)
+                .Take(paging.PageSize)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var statusCounts = await matches
+                .Where(m => pageKeys.Contains(m.GroupKey!))
+                .GroupBy(m => new { m.GroupKey, m.Status })
+                .Select(group => new { group.Key.GroupKey, group.Key.Status, Count = group.Count() })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var representatives = await matches
+                .Where(m => pageKeys.Contains(m.GroupKey!) && m.Id == matches
+                    .Where(other => other.GroupKey == m.GroupKey)
+                    .OrderByDescending(other => other.MatchCount == 1)
+                    .ThenBy(other => other.Id)
+                    .Select(other => other.Id)
+                    .First())
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var representativeByGroupKey = representatives.ToDictionary(
+                m => m.GroupKey!,
+                StringComparer.Ordinal);
+
+            var items = new List<LibraryImportCandidateGroupSummary>(pageKeys.Count);
+            foreach (var groupKey in pageKeys)
+            {
+                if (!representativeByGroupKey.TryGetValue(groupKey, out var representative))
+                {
+                    continue;
+                }
+
+                items.Add(new()
+                {
+                    GroupKey = groupKey,
+                    Representative = representative,
+                    StatusCounts = statusCounts
+                        .Where(count => count.GroupKey == groupKey)
+                        .ToDictionary(count => count.Status, count => count.Count)
+                });
+            }
+
+            return new()
+            {
+                Items = items,
+                PageNumber = paging.PageNumber,
+                PageSize = paging.PageSize,
+                TotalItems = totalCount
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The library import repository failed to query library import candidate groups.");
+            throw;
+        }
+    }
+
     public async Task<PagedList<LibraryImportCandidate>> QueryAsync(
         LibraryImportCandidateQuery query,
         PagingParameter paging,
@@ -71,52 +259,21 @@ internal sealed class LibraryImportCandidateRepository(
     {
         try
         {
-            var matches = context.LibraryImportCandidates.AsNoTracking().AsQueryable();
-
-            if (query.RootFolderId is not null)
-            {
-                matches = matches.Where(m => m.RootFolderId == query.RootFolderId);
-            }
-
-            if (query.ScanRunId is not null)
-            {
-                matches = matches.Where(m => m.ScanRunId == query.ScanRunId);
-            }
-
-            if (query.Status is not null)
-            {
-                matches = matches.Where(m => m.Status == query.Status);
-            }
-
-            if (query.Statuses is { Count: > 0 })
-            {
-                var statuses = query.Statuses as LibraryImportCandidateStatus[] ?? [.. query.Statuses];
-                matches = matches.Where(m => statuses.Contains(m.Status));
-            }
-
-            if (query.HasMatches is not null)
-            {
-                matches = query.HasMatches.Value
-                    ? matches.Where(m => m.MatchCount > 0)
-                    : matches.Where(m => m.MatchCount == 0);
-            }
-
-            if (query.ExcludeIds is { Count: > 0 })
-            {
-                var excludeIds = query.ExcludeIds as Guid[] ?? [.. query.ExcludeIds];
-                matches = matches.Where(m => !excludeIds.Contains(m.Id));
-            }
+            var matches = ApplyCriteria(query);
 
             var totalCount = await matches.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(LibraryImportCandidate).GetProperties()
+            var sortProperty = context.Model.FindEntityType(typeof(LibraryImportCandidate))!.GetProperties()
+                .Where(property => !property.IsShadowProperty() &&
+                    (property.ClrType.IsValueType || property.ClrType == typeof(string) ||
+                        property.ClrType == typeof(Uri)))
                 .Select(property => property.Name)
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 matches = sort.Direction == SortDirection.Ascending
-                    ? matches.OrderBy(m => EF.Property<LibraryImportCandidate>(m, sortProperty)).ThenBy(m => m.Id)
-                    : matches.OrderByDescending(m => EF.Property<LibraryImportCandidate>(m, sortProperty))
+                    ? matches.OrderBy(m => EF.Property<object>(m, sortProperty)).ThenBy(m => m.Id)
+                    : matches.OrderByDescending(m => EF.Property<object>(m, sortProperty))
                         .ThenBy(m => m.Id);
             }
             else
@@ -150,7 +307,7 @@ internal sealed class LibraryImportCandidateRepository(
     {
         return await TransitionStatusAsync(
             candidateId,
-            LibraryImportCandidateStatus.Pending,
+            [LibraryImportCandidateStatus.Pending, LibraryImportCandidateStatus.Failed],
             LibraryImportCandidateStatus.Queued,
             note: null,
             claimedByUserId,
@@ -161,9 +318,35 @@ internal sealed class LibraryImportCandidateRepository(
     {
         return await TransitionStatusAsync(
             candidateId,
-            LibraryImportCandidateStatus.Queued,
+            [LibraryImportCandidateStatus.Queued],
             LibraryImportCandidateStatus.Importing,
             note: null,
+            userId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryResetImportAsync(Guid candidateId, Guid? userId, CancellationToken cancellationToken)
+    {
+        return await TransitionStatusAsync(
+            candidateId,
+            [LibraryImportCandidateStatus.Queued, LibraryImportCandidateStatus.Importing],
+            LibraryImportCandidateStatus.Pending,
+            note: null,
+            userId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> MarkMatchingFailedAsync(
+        Guid candidateId,
+        string reason,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        return await TransitionStatusAsync(
+            candidateId,
+            [LibraryImportCandidateStatus.MatchingPending],
+            LibraryImportCandidateStatus.Failed,
+            reason,
             userId,
             cancellationToken).ConfigureAwait(false);
     }
@@ -174,47 +357,18 @@ internal sealed class LibraryImportCandidateRepository(
         Guid? userId,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var now = _time.GetUtcNow().UtcDateTime;
-            var affected = await context.LibraryImportCandidates
-                .Where(m => m.Id == candidateId &&
-                    (m.Status == LibraryImportCandidateStatus.Queued ||
-                        m.Status == LibraryImportCandidateStatus.Importing))
-                .ExecuteUpdateAsync(
-                    s => s
-                        .SetProperty(m => m.Status, LibraryImportCandidateStatus.Failed)
-                        .SetProperty(m => m.Notes, reason)
-                        .SetProperty(m => m.ModifiedAt, now)
-                        .SetProperty(m => m.ModifiedByUserId, userId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            if (affected > 0)
-            {
-                await transactionManager.OnCommittedAsync(
-                    token => eventBus.PublishAsync(
-                        ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(candidateId),
-                        token),
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            return affected > 0;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "The library import repository failed to mark library import candidate {LibraryImportCandidateId} " +
-                "failed.",
-                candidateId);
-            throw;
-        }
+        return await TransitionStatusAsync(
+            candidateId,
+            [LibraryImportCandidateStatus.Queued, LibraryImportCandidateStatus.Importing],
+            LibraryImportCandidateStatus.Failed,
+            reason,
+            userId,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<bool> TransitionStatusAsync(
         Guid candidateId,
-        LibraryImportCandidateStatus expected,
+        IReadOnlyCollection<LibraryImportCandidateStatus> expected,
         LibraryImportCandidateStatus next,
         string? note,
         Guid? userId,
@@ -224,11 +378,11 @@ internal sealed class LibraryImportCandidateRepository(
         {
             var now = _time.GetUtcNow().UtcDateTime;
             var affected = await context.LibraryImportCandidates
-                .Where(m => m.Id == candidateId && m.Status == expected)
+                .Where(m => m.Id == candidateId && expected.Contains(m.Status))
                 .ExecuteUpdateAsync(
                     s => s
                         .SetProperty(m => m.Status, next)
-                        .SetProperty(m => m.Notes, m => note ?? m.Notes)
+                        .SetProperty(m => m.Notes, note)
                         .SetProperty(m => m.ModifiedAt, now)
                         .SetProperty(m => m.ModifiedByUserId, userId),
                     cancellationToken)
@@ -279,7 +433,7 @@ internal sealed class LibraryImportCandidateRepository(
 
                     if (deleted > 0)
                     {
-                        var importCandidateCountLabel = deleted == 1
+                        var candidateCountLabel = deleted == 1
                             ? "1 import candidate"
                             : $"{deleted} import candidates";
                         await auditRecordRepository.CreateAsync(
@@ -289,7 +443,7 @@ internal sealed class LibraryImportCandidateRepository(
                                 Operation = "Delete",
                                 EntityId = rootFolderId.ToString(),
                                 EntityType = nameof(LibraryImportCandidate),
-                                Detail = $"Deleted {importCandidateCountLabel} for root folder {rootFolderId}.",
+                                Detail = $"Deleted {candidateCountLabel} for root folder {rootFolderId}.",
                                 Timestamp = now,
                                 UserId = deletedByUserId
                             },
@@ -323,6 +477,7 @@ internal sealed class LibraryImportCandidateRepository(
                     model.CreatedByUserId = createdByUserId;
 
                     model.MatchCount = model.Matches.Count;
+                    model.GroupKey = ResolveGroupKey(model);
 
                     context.LibraryImportCandidates.Add(model);
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -363,6 +518,7 @@ internal sealed class LibraryImportCandidateRepository(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
+                    model.GroupKey = ResolveGroupKey(model);
 
                     var affected = await context.LibraryImportCandidates
                         .Where(m => m.Id == model.Id)
@@ -376,6 +532,8 @@ internal sealed class LibraryImportCandidateRepository(
                                 .SetProperty(m => m.ParsedSignals, model.ParsedSignals)
                                 .SetProperty(m => m.Matches, model.Matches)
                                 .SetProperty(m => m.MatchCount, model.Matches.Count)
+                                .SetProperty(m => m.LayoutKey, model.LayoutKey)
+                                .SetProperty(m => m.GroupKey, model.GroupKey)
                                 .SetProperty(m => m.Notes, model.Notes)
                                 .SetProperty(m => m.ModifiedAt, now)
                                 .SetProperty(m => m.ModifiedByUserId, modifiedByUserId),
@@ -417,6 +575,126 @@ internal sealed class LibraryImportCandidateRepository(
         {
             logger.LogError(ex, "The library import repository failed to update library import candidate " +
                 "{LibraryImportCandidateId}.", model.Id);
+            throw;
+        }
+    }
+
+    public async Task<BulkResult> BulkPatchAsync(
+        BulkPatch<LibraryImportCandidateQuery, LibraryImportCandidatePatch> patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var patchedIds = new List<Guid>();
+            var result = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    if (patch.Patch.Matches is not { } matchesPatch)
+                    {
+                        return new BulkResult { Count = 0 };
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var targets = new List<LibraryImportCandidate>();
+                    var targetIds = new HashSet<Guid>();
+                    if (patch.Ids is { Count: > 0 } ids)
+                    {
+                        var idList = ids as Guid[] ?? [.. ids];
+                        var selected = await context.LibraryImportCandidates
+                            .AsNoTracking()
+                            .Where(m => idList.Contains(m.Id))
+                            .ToListAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                        targets.AddRange(selected.Where(candidate => targetIds.Add(candidate.Id)));
+                    }
+
+                    if (patch.Filter is not null)
+                    {
+                        var filtered = ApplyCriteria(patch.Filter).OrderBy(candidate => candidate.Id);
+                        for (var pageNumber = 0; ; pageNumber++)
+                        {
+                            var page = await filtered
+                                .Skip(pageNumber * BulkPageSize)
+                                .Take(BulkPageSize)
+                                .ToListAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                            targets.AddRange(page.Where(candidate => targetIds.Add(candidate.Id)));
+                            if (page.Count < BulkPageSize)
+                            {
+                                break;
+                            }
+                        }
+                    }
+
+                    if (targets.Count == 0)
+                    {
+                        return new BulkResult { Count = 0 };
+                    }
+
+                    var matches = matchesPatch.Value;
+                    var affected = 0;
+
+                    foreach (var group in targets.GroupBy(
+                        candidate => ResolveGroupKey(candidate with { Matches = matches })))
+                    {
+                        var groupIds = group.Select(candidate => candidate.Id).ToArray();
+                        affected += await context.LibraryImportCandidates
+                            .Where(m => groupIds.Contains(m.Id))
+                            .ExecuteUpdateAsync(
+                                s => s
+                                    .SetProperty(m => m.Matches, matches)
+                                    .SetProperty(m => m.MatchCount, matches.Count)
+                                    .SetProperty(m => m.GroupKey, group.Key)
+                                    .SetProperty(m => m.ModifiedAt, now)
+                                    .SetProperty(m => m.ModifiedByUserId, modifiedByUserId),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        patchedIds.AddRange(groupIds);
+                    }
+
+                    if (affected > 0)
+                    {
+                        var candidateCountLabel = affected == 1
+                            ? "1 import candidate"
+                            : $"{affected} import candidates";
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Content,
+                                Operation = "Update",
+                                EntityType = nameof(LibraryImportCandidate),
+                                Detail = $"Updated the matches of {candidateCountLabel}.",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return new BulkResult { Count = affected };
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patchedIds.Count > 0)
+            {
+                await transactionManager.OnCommittedAsync(
+                    async token =>
+                    {
+                        foreach (var id in patchedIds)
+                        {
+                            await eventBus.PublishAsync(
+                                ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(id),
+                                token).ConfigureAwait(false);
+                        }
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The library import repository failed to bulk-patch the library import candidates.");
             throw;
         }
     }

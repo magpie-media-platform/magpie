@@ -25,7 +25,7 @@ export class CliClient {
     private apiKey: string | undefined;
 
     async run(args: readonly string[], options: { allowFailure?: boolean; timeoutMs?: number } = {}): Promise<CliExecution> {
-        const invocation = await this.invocation(args);
+        const invocation = this.invocation(args);
         const execution = redact(
             await execute(
                 integrationEnvironment.cli.executable,
@@ -63,28 +63,19 @@ export class CliClient {
         this.apiKey = apiKey;
     }
 
-    private async invocation(args: readonly string[]): Promise<string[]> {
+    private invocation(args: readonly string[]): string[] {
         const invocation = integrationEnvironment.cli.dll ? [integrationEnvironment.cli.dll, ...args] : [...args];
-        if (integrationEnvironment.cli.mode === 'local' || hasHelpOrVersion(args)) {
+        if (hasHelpOrVersion(args)) {
             return invocation;
         }
 
-        const apiKey = await this.remoteApiKey();
-        invocation.push('--url', integrationEnvironment.cli.url, '--api-key', apiKey);
+        this.apiKey ??= integrationEnvironment.cli.apiKey;
+        if (!this.apiKey) {
+            throw new Error('The Magpie CLI requires an API key created by the bootstrap journey.');
+        }
+
+        invocation.push('--url', integrationEnvironment.cli.url, '--api-key', this.apiKey);
         return invocation;
-    }
-
-    private async remoteApiKey(): Promise<string> {
-        if (this.apiKey) {
-            return this.apiKey;
-        }
-
-        if (integrationEnvironment.cli.apiKey) {
-            this.apiKey = integrationEnvironment.cli.apiKey;
-            return this.apiKey;
-        }
-
-        throw new Error('Remote CLI mode requires an API key created by the bootstrap journey.');
     }
 }
 

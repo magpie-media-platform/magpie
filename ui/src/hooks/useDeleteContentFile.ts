@@ -8,17 +8,11 @@ interface DeleteContentFileVariables {
     mediaFileId: string;
 }
 
-interface DeleteContentFileResult {
-    mediaFileId: string;
-    filePath: string;
-    fileWasMissingOnDisk: boolean;
-}
-
 export function useDeleteContentFile() {
     const queryClient = useQueryClient();
-    return useMutation<DeleteContentFileResult, Error, DeleteContentFileVariables>({
+    return useMutation<void, Error, DeleteContentFileVariables>({
         mutationFn: async ({ contentHierarchyItemId, mediaFileId }) => {
-            return apiDelete<DeleteContentFileResult>(`/content/${contentHierarchyItemId}/files/${mediaFileId}`);
+            await apiDelete(`/content/${contentHierarchyItemId}/files/${mediaFileId}`);
         },
         onSuccess: (_, variables) => {
             void queryClient.invalidateQueries({

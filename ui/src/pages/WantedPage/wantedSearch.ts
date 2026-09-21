@@ -5,12 +5,12 @@ function isSearchEligibleLeaf(item: ContentListItem): boolean {
 }
 
 export async function countMissingDescendants(
-    container: ContentListItem,
+    containerId: string,
     isContainer: (item: ContentListItem) => boolean,
     loadChildren: (parentId: string) => Promise<ContentListItem[]>,
 ): Promise<number> {
-    const pending = await loadChildren(container.id);
-    const visited = new Set([container.id]);
+    const pending = await loadChildren(containerId);
+    const visited = new Set([containerId]);
     let count = 0;
 
     while (pending.length > 0) {

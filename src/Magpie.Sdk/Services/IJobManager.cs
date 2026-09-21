@@ -13,12 +13,12 @@ using Magpie.Models.Paging;
 namespace Magpie.Sdk.Services;
 
 /// <summary>
-/// Manages job execution.
+/// The management of job execution.
 /// </summary>
 public interface IJobManager
 {
     /// <summary>
-    /// Gets the concurrency partition for a job and its parameters.
+    /// Resolves the concurrency partition for a job and its parameters.
     /// </summary>
     /// <param name="jobType">The job type</param>
     /// <param name="parameters">The job parameters</param>
@@ -71,21 +71,23 @@ public interface IJobManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a job execution.
+    /// A job execution.
     /// </summary>
     /// <param name="executionId">The execution id</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<JobExecution?> GetExecutionAsync(Guid executionId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a job execution tree.
+    /// A job execution tree.
     /// </summary>
     /// <param name="executionId">The execution id</param>
     /// <param name="includeSiblings">Whether to include sibling branches</param>
+    /// <param name="maxNodes">The maximum number of executions in the tree</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<JobExecutionTree?> GetExecutionTreeAsync(
         Guid executionId,
         bool includeSiblings,
+        int maxNodes = 500,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -113,7 +115,7 @@ public interface IJobManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a schedule trigger.
+    /// A schedule trigger.
     /// </summary>
     /// <param name="triggerId">The trigger id</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -176,7 +178,7 @@ public interface IJobManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets an event trigger.
+    /// An event trigger.
     /// </summary>
     /// <param name="triggerId">The trigger id</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

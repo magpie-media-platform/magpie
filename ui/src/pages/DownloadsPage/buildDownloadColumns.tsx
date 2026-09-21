@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { type ColumnDef, type Row } from '@tanstack/react-table';
+import { type ColumnDef } from '@tanstack/react-table';
 import {
     PauseIcon,
     PlayIcon,
@@ -9,12 +9,12 @@ import {
     StopCircleIcon,
     InfoIcon,
     LinkBreakIcon,
-    ImageBrokenIcon,
 } from '@phosphor-icons/react';
 
 import { Badge } from '@/components/ui/Badge';
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
-import { Checkbox } from '@/components/ui/Checkbox';
+import { selectColumn } from '@/components/ui/DataTable/selectColumn';
 import {
     DropdownMenu,
     DropdownMenuTrigger,
@@ -32,6 +32,7 @@ import {
 import { type BulkSelection } from '@/hooks/useBulkSelection';
 import { type DownloadFilterState } from '@/types';
 import { formatDateTime } from '@/lib/dateFormatting';
+import { displayLineageLeafTitle } from '@/lib/downloadTitle';
 import { formatRelativeTime } from '@/lib/formatTime';
 
 export const stoppableStatuses = new Set<DownloadStatusValue>([
@@ -67,10 +68,6 @@ interface DownloadColumnConfig {
 
 function displayTitle(download: ApiDownload): string {
     return download.contentHierarchyName?.trim() || download.title;
-}
-
-export function displayLineageLeafTitle(download: ApiDownload): string {
-    return download.contentMetadataTitle?.trim() || displayTitle(download);
 }
 
 export function getEndedAt(download: ApiDownload): string {
@@ -156,15 +153,14 @@ export function HoldAnnotation({ download }: { download: ApiDownload }) {
 }
 
 function PosterCell({ download }: { download: ApiDownload }) {
-    const label = displayLineageLeafTitle(download);
-    if (!download.posterUrl) {
-        return (
-            <div className="downloads-page__poster downloads-page__poster--placeholder" aria-hidden="true">
-                <ImageBrokenIcon weight="thin" />
-            </div>
-        );
-    }
-    return <img src={download.posterUrl} alt={`${label} artwork`} className="downloads-page__poster" loading="lazy" />;
+    return (
+        <ContentPoster
+            posterUrl={download.posterUrl}
+            title={displayLineageLeafTitle(download)}
+            className="downloads-page__poster"
+            placeholderClassName="downloads-page__poster--placeholder"
+        />
+    );
 }
 
 export function TitleCell({ download }: { download: ApiDownload }) {
@@ -321,31 +317,12 @@ export function buildDownloadColumns(config: DownloadColumnConfig): ColumnDef<Ap
     return [
         ...(canSelectRows
             ? [
-                  {
-                      id: 'select',
-                      header: () => (
-                          <div className="downloads-page__select-cell" onClick={(e) => e.stopPropagation()}>
-                              <Checkbox
-                                  checked={selection.headerChecked}
-                                  onCheckedChange={(checked) => selection.toggleHeader(!!checked)}
-                                  aria-label="Select all"
-                                  data-action="select-all"
-                              />
-                          </div>
-                      ),
-                      enableSorting: false,
-                      size: 44,
-                      cell: ({ row }: { row: Row<ApiDownload> }) => (
-                          <div className="downloads-page__select-cell" onClick={(e) => e.stopPropagation()}>
-                              <Checkbox
-                                  checked={selection.isRowChecked(row.original.id)}
-                                  onCheckedChange={(checked) => selection.toggleRow(row.original.id, !!checked)}
-                                  aria-label={`Select ${displayLineageLeafTitle(row.original)}`}
-                                  data-action="select-row"
-                              />
-                          </div>
-                      ),
-                  } satisfies ColumnDef<ApiDownload>,
+                  selectColumn<ApiDownload>({
+                      selection,
+                      getId: (item) => item.id,
+                      headerLabel: 'Select all',
+                      rowLabel: (item) => displayLineageLeafTitle(item),
+                  }),
               ]
             : []),
         {

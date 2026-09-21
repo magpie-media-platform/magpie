@@ -33,9 +33,11 @@ export function useExtensions(): UseExtensionsReturn {
     return useMemo(
         () => ({
             state: contextValue.state.state,
-            isLoading: contextValue.state.state === 'loading',
+            isLoading:
+                contextValue.state.state === 'loading' ||
+                (contextValue.state.state === 'error' && !contextValue.retriesExhausted),
             isReady: contextValue.state.state === 'ready',
-            isError: contextValue.state.state === 'error',
+            isError: contextValue.state.state === 'error' && contextValue.retriesExhausted,
             error: contextValue.state.error?.message ?? null,
             getExtensionsForSlot: contextValue.getExtensionsForSlot,
             retry: contextValue.retry,
@@ -49,6 +51,8 @@ export function useExtensions(): UseExtensionsReturn {
 }
 
 export interface UseSlotExtensionsReturn {
+    isError: boolean;
+
     extensions: UIExtension[];
 
     isReady: boolean;
@@ -57,7 +61,7 @@ export interface UseSlotExtensionsReturn {
 }
 
 export function useSlotExtensions(slot: string): UseSlotExtensionsReturn {
-    const { isReady, isLoading, getExtensionsForSlot } = useExtensions();
+    const { isReady, isLoading, isError, getExtensionsForSlot } = useExtensions();
 
     const extensions = useMemo(
         () => (isReady ? getExtensionsForSlot(slot) : []),
@@ -66,6 +70,7 @@ export function useSlotExtensions(slot: string): UseSlotExtensionsReturn {
 
     return {
         extensions,
+        isError,
         isReady,
         isLoading,
     };

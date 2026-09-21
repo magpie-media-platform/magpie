@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { useAuth, Role } from '@/auth';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -26,9 +26,6 @@ export function useLibraryPage() {
     const canManageContent = hasRole(Role.Manager);
     const route = useLibraryRoute();
 
-    const clearSelectionRef = useRef<() => void>(() => {});
-    const clearSelection = useCallback(() => clearSelectionRef.current(), []);
-
     const pagination = useLibraryPagination({ params, updateParams });
     const filters = useLibraryFilters({
         params,
@@ -36,7 +33,6 @@ export function useLibraryPage() {
         contentTypes: route.contentTypes,
         routeContentTypeSlug: route.routeContentTypeSlug,
         selectedLevel: route.selectedLevel,
-        clearSelection,
         user,
         canManageContent,
         hasRole,
@@ -53,13 +49,18 @@ export function useLibraryPage() {
         sortDir: filters.sortDir,
         pageIndex: pagination.pagination.pageIndex,
     });
-    const hasBulkActions = content.bulkFilter !== null && (canEditContent || canManageContent || canDeleteContent);
+    const hasBulkActions = canEditContent || canManageContent || canDeleteContent;
     const selection = useLibrarySelection({
         pageRowIds: content.pageRowIds,
         totalItems: content.totalItems,
         contentItems: content.contentItems,
+        resetKey: [
+            route.routeContentTypeSlug,
+            route.selectedLevel?.slug,
+            filters.fulfillment,
+            filters.filterQuery.trim(),
+        ].join('\u0000'),
     });
-    clearSelectionRef.current = selection.selection.clear;
 
     const bulk = useLibraryBulkActions({
         selection: selection.selection,
@@ -137,13 +138,10 @@ export function useLibraryPage() {
         goToPage: pagination.goToPage,
 
         selection: selection.selection,
-        selectedPageCount: selection.selectedPageCount,
         selectedItems: selection.selectedItems,
         selectedCount: selection.selectedCount,
         hasSelection: selection.hasSelection,
-        displaySelectedCount: selection.displaySelectedCount,
         handleClearSelection: selection.handleClearSelection,
-        handleRowSelectionChange: selection.handleRowSelectionChange,
 
         selectionMode,
         enterSelectionMode,
@@ -173,6 +171,8 @@ export function useLibraryPage() {
         closeSaveFilterDialog: filters.closeSaveFilterDialog,
         bulkDeleteConfirmOpen: bulk.bulkDeleteConfirmOpen,
         closeBulkDeleteConfirm: bulk.closeBulkDeleteConfirm,
+        bulkDeleteFiles: bulk.bulkDeleteFiles,
+        setBulkDeleteFiles: bulk.setBulkDeleteFiles,
 
         canOfferUpdate: filters.canOfferUpdate,
         handleSaveFilter: filters.handleSaveFilter,

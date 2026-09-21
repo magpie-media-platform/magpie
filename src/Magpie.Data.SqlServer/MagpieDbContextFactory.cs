@@ -15,6 +15,8 @@ namespace Magpie.Data.SqlServer;
 /// </summary>
 public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieDbContext>
 {
+    private const int CommandTimeoutSeconds = 300;
+
     /// <summary>
     /// Creates a context for the given connection string.
     /// </summary>
@@ -44,6 +46,7 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
             .UseSqlServer(
                 connectionString,
                 sql => sql
+                    .CommandTimeout(CommandTimeoutSeconds)
                     .MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name)
                     .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
             .ReplaceService<IModelCustomizer, SqlServerModelCustomizer>()

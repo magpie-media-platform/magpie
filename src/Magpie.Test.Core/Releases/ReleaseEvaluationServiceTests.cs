@@ -7,8 +7,10 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Releases;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Models.Releases;
 using Magpie.Sdk.Content;
@@ -28,6 +30,9 @@ public sealed class ReleaseEvaluationServiceTests
     private Mock<IContentFactProvider> _contentFactProvider = null!;
     private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
     private Mock<IReleaseMatchContentTypeDefinitionProvider> _releaseMatchProvider = null!;
+    private Mock<IReleaseRepository> _releases = null!;
+    private Mock<IDownloadRepository> _downloads = null!;
+    private Mock<IQualityTierListRepository> _qualityTierLists = null!;
     private ReleaseEvaluationService _subject = null!;
     private HashSet<Guid> _matchingIds = null!;
     private ContentHierarchyItem _show = null!;
@@ -159,7 +164,7 @@ public sealed class ReleaseEvaluationServiceTests
         };
         var items = lineage.ToDictionary(pair => pair.Key, pair => pair.Value[0]);
 
-        _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
+        _contentHierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
         _contentHierarchyItems
             .Setup(value => value.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid id, CancellationToken _) => lineage[id]);
@@ -187,7 +192,7 @@ public sealed class ReleaseEvaluationServiceTests
                 };
             });
 
-        var materializedMetadata = new Mock<IMaterializedMetadataRepository>();
+        var materializedMetadata = new Mock<IMaterializedMetadataRepository> { CallBase = true };
         materializedMetadata
             .Setup(value => value.QueryAsync(
                 It.IsAny<MetadataCriteria>(),
@@ -235,13 +240,16 @@ public sealed class ReleaseEvaluationServiceTests
             }]);
         contentTypeRegistry.Setup(value => value.GetChildLevels("tv", "episode")).Returns([]);
         _contentFactProvider = new Mock<IContentFactProvider>();
+        _releases = new Mock<IReleaseRepository> { CallBase = true };
+        _downloads = new Mock<IDownloadRepository> { CallBase = true };
+        _qualityTierLists = new Mock<IQualityTierListRepository> { CallBase = true };
 
         _subject = new ReleaseEvaluationService(
             _contentHierarchyItems.Object,
             materializedMetadata.Object,
-            Mock.Of<IReleaseRepository>(),
-            Mock.Of<IDownloadRepository>(),
-            Mock.Of<IQualityTierListRepository>(),
+            _releases.Object,
+            _downloads.Object,
+            _qualityTierLists.Object,
             contentTypeRegistry.Object,
             [_contentFactProvider.Object],
             TimeProvider.System,
@@ -322,7 +330,7 @@ public sealed class ReleaseEvaluationServiceTests
     }
 
     [Test]
-    public async Task ResolveScopeAsync_UsesPrecomputedAnchorAssessment_AndStillAssessesChildren()
+    public async Task ResolveScopeAsync_AssessesChildren_WhenTheAnchorIsPrecomputed()
     {
         // Arrange
         var release = new Release { Protocol = "torrent", Title = "Show.Complete.Series" };
@@ -490,5 +498,102 @@ public sealed class ReleaseEvaluationServiceTests
                 Is.EquivalentTo(
                 [_episode1.Id, _episode2.Id, _episode3.Id, _episode4.Id, _episode5.Id, _episode6.Id]));
         }
+    }
+
+    [TestCase("Show S01E01 1080p PROPER-GROUP", "Show S01E01 1080p-GROUP", true)]
+    [TestCase("Show S01E01 1080p PROPER-OTHER", "Show S01E01 1080p-GROUP", false)]
+    [TestCase("Show S01E01 1080p PROPER", "Show S01E01 1080p", false)]
+    [TestCase("Show S01E01 1080p-GROUP", "Show S01E01 1080p-GROUP", false)]
+    public async Task AssessForContentAsync_AcceptsOnlyTheSameGroup_WhenTierAndRevisionTie(
+        string title,
+        string currentFileTitle,
+        bool expected)
+    {
+        // Arrange
+        var tierListId = Guid.NewGuid();
+        var importedReleaseId = Guid.NewGuid();
+        var tier = new QualityTier
+        {
+            Id = Guid.NewGuid(),
+            Name = "1080p",
+            Criteria = new QualityTierCriteria
+            {
+                And =
+                [
+                    new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            ["Title"] = new()
+                            {
+                                Operator = CriteriaValueOperator.ContainsString,
+                                Value = "1080p"
+                            }
+                        }
+                    }
+                ]
+            },
+            CreatedAt = DateTime.UtcNow
+        };
+        _show.EffectiveQualityTierListId = tierListId;
+        _qualityTierLists
+            .Setup(repository => repository.GetByIdAsync(tierListId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = tierListId,
+                Name = "List",
+                CreatedAt = DateTime.UtcNow,
+                QualityTierRanks =
+                [
+                    new QualityTierListRank
+                    {
+                        QualityTierListId = tierListId,
+                        QualityTierId = tier.Id,
+                        QualityTier = tier,
+                        Ordinal = 2,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                ]
+            });
+        _downloads
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = importedReleaseId,
+                        ExternalId = "download-1",
+                        Title = currentFileTitle,
+                        Status = DownloadStatus.Imported,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                ],
+                TotalItems = 1
+            });
+        _releases
+            .Setup(repository => repository.GetByIdAsync(importedReleaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release
+            {
+                Id = importedReleaseId,
+                Title = currentFileTitle,
+                Protocol = "torrent"
+            });
+
+        // Act
+        var assessment = await _subject.AssessForContentAsync(
+                new Release { Title = title, Protocol = "torrent" },
+                [],
+                _show.Id)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(assessment.IsAcceptable, Is.EqualTo(expected));
     }
 }

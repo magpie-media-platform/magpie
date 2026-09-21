@@ -18,15 +18,15 @@ namespace Magpie.Core.Security;
 
 internal sealed class AtomicFileKeyStore(
     MagpieHostEnvironment hostEnvironment,
-    ILogger<AtomicFileKeyStore> logger) : IKeyStore, IAtomicKeyStore
+    ILogger<AtomicFileKeyStore> logger) : IKeyStore
 {
-    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         Converters = { new JsonStringEnumConverter() },
         WriteIndented = false
     };
+
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
     private const string FileExtension = ".key";
 
@@ -39,74 +39,6 @@ internal sealed class AtomicFileKeyStore(
     }
 
     public string KeysDirectory { get; } = Path.Combine(hostEnvironment.DataRoot, "keys");
-
-    private void EnsureKeyDirectory(string path)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            Directory.CreateDirectory(path);
-            return;
-        }
-
-        Directory.CreateDirectory(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        TryRestrictDirectory(path);
-    }
-
-    private FileStream CreateRestrictedKeyFile(string path)
-    {
-        var options = new FileStreamOptions
-        {
-            Access = FileAccess.Write,
-            Mode = FileMode.CreateNew,
-            Options = FileOptions.WriteThrough,
-            Share = FileShare.None
-        };
-
-        if (!OperatingSystem.IsWindows())
-        {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        }
-
-        return new FileStream(path, options);
-    }
-
-    [UnsupportedOSPlatform("windows")]
-    private void TryRestrictDirectory(string path)
-    {
-        try
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
-        {
-            logger.LogWarning(ex, "The key store failed to restrict directory {DirectoryPath}", path);
-        }
-    }
-
-    [UnsupportedOSPlatform("windows")]
-    private void TryRestrictFile(string path)
-    {
-        try
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
-        {
-            logger.LogWarning(ex, "The key store failed to restrict file {FilePath}", path);
-        }
-    }
-
-    private void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            logger.LogWarning(ex, "The key store failed to delete temporary file {FilePath}", path);
-        }
-    }
 
     public Task<bool> KeyExistsAsync(string keyName, CancellationToken cancellationToken = default)
     {
@@ -182,12 +114,80 @@ internal sealed class AtomicFileKeyStore(
         return Task.FromResult(CryptographicOperations.FixedTimeEquals(computed, hmac));
     }
 
-    public void WriteKeyFileAtomically(string path, string contents)
+    private static void EnsureKeyDirectory(string path, ILogger logger)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(path);
+            return;
+        }
+
+        Directory.CreateDirectory(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        TryRestrictDirectory(path, logger);
+    }
+
+    private static FileStream CreateRestrictedKeyFile(string path)
+    {
+        var options = new FileStreamOptions
+        {
+            Access = FileAccess.Write,
+            Mode = FileMode.CreateNew,
+            Options = FileOptions.WriteThrough,
+            Share = FileShare.None
+        };
+
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        return new FileStream(path, options);
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void TryRestrictDirectory(string path, ILogger logger)
+    {
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            logger.LogWarning(ex, "The key store failed to restrict directory {DirectoryPath}", path);
+        }
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void TryRestrictFile(string path, ILogger logger)
+    {
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            logger.LogWarning(ex, "The key store failed to restrict file {FilePath}", path);
+        }
+    }
+
+    private static void TryDelete(string path, ILogger logger)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "The key store failed to delete temporary file {FilePath}", path);
+        }
+    }
+
+    private static void WriteKeyFileAtomically(string path, string contents, ILogger logger)
     {
         var directory = Path.GetDirectoryName(path)
             ?? throw new ArgumentException("Key path must include a directory.", nameof(path));
 
-        EnsureKeyDirectory(directory);
+        EnsureKeyDirectory(directory, logger);
 
         var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         try
@@ -199,25 +199,25 @@ internal sealed class AtomicFileKeyStore(
                 stream.Flush(flushToDisk: true);
             }
 
-            RestrictExistingKeyFile(temporaryPath);
+            RestrictExistingKeyFile(temporaryPath, logger);
             File.Move(temporaryPath, path, overwrite: false);
-            RestrictExistingKeyFile(path);
+            RestrictExistingKeyFile(path, logger);
         }
         catch
         {
-            TryDelete(temporaryPath);
+            TryDelete(temporaryPath, logger);
             throw;
         }
     }
 
-    public void RestrictExistingKeyFile(string path)
+    private static void RestrictExistingKeyFile(string path, ILogger logger)
     {
         if (OperatingSystem.IsWindows())
         {
             return;
         }
 
-        TryRestrictFile(path);
+        TryRestrictFile(path, logger);
     }
 
     private void CreateKey(string keyName, KeyStoreKeyType type, int sizeBytes)
@@ -230,7 +230,7 @@ internal sealed class AtomicFileKeyStore(
 
         var keyBytes = RandomNumberGenerator.GetBytes(sizeBytes);
         var envelope = new KeyEnvelope(type, Convert.ToBase64String(keyBytes));
-        WriteKeyFileAtomically(path, JsonSerializer.Serialize(envelope, JsonOptions));
+        WriteKeyFileAtomically(path, JsonSerializer.Serialize(envelope, JsonOptions), logger);
         _cache[keyName] = new KeyStoreEntry(keyBytes, type);
     }
 
@@ -266,7 +266,7 @@ internal sealed class AtomicFileKeyStore(
 
         try
         {
-            RestrictExistingKeyFile(path);
+            RestrictExistingKeyFile(path, logger);
             var envelope = JsonSerializer.Deserialize<KeyEnvelope>(File.ReadAllText(path), JsonOptions)
                 ?? throw new InvalidOperationException($"Key {keyName} file is empty");
             var loaded = new KeyStoreEntry(Convert.FromBase64String(envelope.Material), envelope.Type);
@@ -297,5 +297,6 @@ internal sealed class AtomicFileKeyStore(
     }
 
     private sealed record KeyEnvelope(KeyStoreKeyType Type, string Material);
+
     private sealed record KeyStoreEntry(byte[] KeyMaterial, KeyStoreKeyType Type);
 }

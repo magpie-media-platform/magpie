@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
 namespace Magpie.CommandLine.Generators;
@@ -15,6 +17,63 @@ namespace Magpie.CommandLine.Generators;
 [Generator]
 public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
 {
+    private enum BodyKind
+    {
+        None,
+        OptionalJson,
+        RequiredJson,
+        File
+    }
+
+    private sealed class CommandEntry(
+        IMethodSymbol methodSymbol,
+        string group,
+        string command,
+        string methodExpression,
+        string routeTemplate,
+        string? description,
+        string groupDescription,
+        IReadOnlyList<ParameterDescriptor> pathParameters,
+        IReadOnlyList<ParameterDescriptor> queryParameters,
+        BodyKind bodyKind,
+        string? fileFieldName,
+        bool blobResult)
+    {
+        public IMethodSymbol MethodSymbol { get; } = methodSymbol;
+
+        public string Group { get; } = group;
+
+        public string Command { get; } = command;
+
+        public string MethodExpression { get; } = methodExpression;
+
+        public string RouteTemplate { get; } = routeTemplate;
+
+        public string? Description { get; } = description;
+
+        public string GroupDescription { get; } = groupDescription;
+
+        public IReadOnlyList<ParameterDescriptor> PathParameters { get; } = pathParameters;
+
+        public IReadOnlyList<ParameterDescriptor> QueryParameters { get; } = queryParameters;
+
+        public BodyKind BodyKind { get; } = bodyKind;
+
+        public string? FileFieldName { get; } = fileFieldName;
+
+        public bool BlobResult { get; } = blobResult;
+    }
+
+    private sealed class ParameterDescriptor(string name, string cliName, bool isCollection)
+    {
+        public string Name { get; } = name;
+
+        public string CliName { get; } = cliName;
+
+        public bool IsCollection { get; } = isCollection;
+    }
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
     private static readonly DiagnosticDescriptor MissingRouteParameter = new(
         "MCLI001",
         "CLI route parameter is missing",
@@ -63,6 +122,22 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor RouteMismatch = new(
+        "MCLI007",
+        "CLI route does not match an endpoint",
+        "CLI handler '{0}' declares a method and route the group does not map",
+        "Magpie.CommandLine",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor UnreadableRouteShape = new(
+        "MCLI008",
+        "CLI route validation is off for a group",
+        "CLI group '{0}' declares a name or a route the generator cannot read, so route checks are off",
+        "Magpie.CommandLine",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
     private const string ApiAssemblyName = "Magpie.Api";
     private const string AuthenticatedUserName = "Magpie.Sdk.Api.AuthenticatedUser";
     private const string CommandAttributeName = "Magpie.Api.MagpieCommandAttribute";
@@ -77,18 +152,8 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
     private const string HttpRequestName = "Microsoft.AspNetCore.Http.HttpRequest";
     private const string HttpResponseName = "Microsoft.AspNetCore.Http.HttpResponse";
 
-    private enum BodyKind
+    private static void Execute(SourceProductionContext context, IAssemblySymbol? apiAssembly)
     {
-        None,
-        OptionalJson,
-        RequiredJson,
-        File
-    }
-
-    private static void Execute(SourceProductionContext context, Compilation compilation)
-    {
-        var apiAssembly = compilation.SourceModule.ReferencedAssemblySymbols
-            .FirstOrDefault(assembly => assembly.Name == ApiAssemblyName);
         if (apiAssembly is null)
         {
             return;
@@ -721,54 +786,90 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
     /// <param name="context">Generator initialization context</param>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        context.RegisterSourceOutput(context.CompilationProvider, Execute);
+        var apiAssembly = context.CompilationProvider
+            .Select(static (compilation, _) => compilation.SourceModule.ReferencedAssemblySymbols
+                .FirstOrDefault(assembly => assembly.Name == ApiAssemblyName))
+            .WithComparer(SymbolEqualityComparer.Default)
+            .WithTrackingName("ApiAssembly");
+        context.RegisterSourceOutput(apiAssembly, Execute);
+
+        var routeDiagnostics = context.SyntaxProvider.ForAttributeWithMetadataName(
+            CommandGroupAttributeName,
+            static (node, _) => node is TypeDeclarationSyntax,
+            static (syntax, _) => ValidateMappedRoutes(syntax));
+        context.RegisterSourceOutput(routeDiagnostics, static (output, diagnostics) =>
+        {
+            foreach (var diagnostic in diagnostics)
+            {
+                output.ReportDiagnostic(diagnostic);
+            }
+        });
     }
 
-    private sealed class CommandEntry(
-        IMethodSymbol methodSymbol,
-        string group,
-        string command,
-        string methodExpression,
-        string routeTemplate,
-        string? description,
-        string groupDescription,
-        IReadOnlyList<ParameterDescriptor> pathParameters,
-        IReadOnlyList<ParameterDescriptor> queryParameters,
-        BodyKind bodyKind,
-        string? fileFieldName,
-        bool blobResult)
+    private static IReadOnlyList<Diagnostic> ValidateMappedRoutes(GeneratorAttributeSyntaxContext syntax)
     {
-        public IMethodSymbol MethodSymbol { get; } = methodSymbol;
+        var group = (INamedTypeSymbol)syntax.TargetSymbol;
+        var declaration = (TypeDeclarationSyntax)syntax.TargetNode;
+        if (!TryGetCommandGroup(group, out _, out var prefix, out _))
+        {
+            return [];
+        }
 
-        public string Group { get; } = group;
+        var name = declaration.Members.OfType<PropertyDeclarationSyntax>()
+            .FirstOrDefault(property => property.Identifier.ValueText == "Name")?.ExpressionBody?.Expression;
+        if (name is null || syntax.SemanticModel.GetConstantValue(name).Value is not string mappedPrefix)
+        {
+            return [Diagnostic.Create(UnreadableRouteShape, declaration.Identifier.GetLocation(), group.Name)];
+        }
 
-        public string Command { get; } = command;
+        if (prefix != mappedPrefix)
+        {
+            return [];
+        }
 
-        public string MethodExpression { get; } = methodExpression;
+        var mapped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var invocation in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (invocation.Expression is not MemberAccessExpressionSyntax member ||
+                !member.Name.Identifier.ValueText.StartsWith("Map", StringComparison.Ordinal))
+            {
+                continue;
+            }
 
-        public string RouteTemplate { get; } = routeTemplate;
+            if (member.Name.Identifier.ValueText is not
+                    ("MapGet" or "MapPost" or "MapPut" or "MapPatch" or "MapDelete") ||
+                invocation.ArgumentList.Arguments.Count == 0 ||
+                syntax.SemanticModel.GetConstantValue(invocation.ArgumentList.Arguments[0].Expression).Value
+                    is not string route)
+            {
+                return [Diagnostic.Create(UnreadableRouteShape, invocation.GetLocation(), group.Name)];
+            }
 
-        public string? Description { get; } = description;
+            mapped.Add(member.Name.Identifier.ValueText + " " + route);
+        }
 
-        public string GroupDescription { get; } = groupDescription;
+        if (mapped.Count == 0)
+        {
+            return [];
+        }
 
-        public IReadOnlyList<ParameterDescriptor> PathParameters { get; } = pathParameters;
+        var diagnostics = new List<Diagnostic>();
+        foreach (var method in group.GetMembers().OfType<IMethodSymbol>())
+        {
+            var attribute = FindAttribute(method, CommandAttributeName);
+            if (attribute is null)
+            {
+                continue;
+            }
 
-        public IReadOnlyList<ParameterDescriptor> QueryParameters { get; } = queryParameters;
+            var verb = TryGetStringConstructorArgument(attribute, 1, out var declaredVerb) ? declaredVerb : "GET";
+            var route = TryGetStringConstructorArgument(attribute, 2, out var declaredRoute) ? declaredRoute : "";
+            if (!mapped.Contains("Map" + verb + " " + route))
+            {
+                diagnostics.Add(Diagnostic.Create(RouteMismatch, GetLocation(method), method.Name));
+            }
+        }
 
-        public BodyKind BodyKind { get; } = bodyKind;
-
-        public string? FileFieldName { get; } = fileFieldName;
-
-        public bool BlobResult { get; } = blobResult;
-    }
-
-    private sealed class ParameterDescriptor(string name, string cliName, bool isCollection)
-    {
-        public string Name { get; } = name;
-
-        public string CliName { get; } = cliName;
-
-        public bool IsCollection { get; } = isCollection;
+        return diagnostics;
     }
 }

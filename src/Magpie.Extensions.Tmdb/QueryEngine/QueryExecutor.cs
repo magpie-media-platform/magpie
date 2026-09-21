@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -20,6 +21,31 @@ internal sealed class QueryExecutor(
     IQueryCoordinator cache,
     ILogger<QueryExecutor> logger) : IQueryExecutor
 {
+    private sealed record PageResult(IReadOnlyList<SearchHit> Hits, int TotalPages, int TotalResults);
+
+    private sealed class ExecutionState
+    {
+        internal HashSet<int> ResolvedNodeIds { get; } = [];
+
+        internal SubjectResolutionSet SubjectSet { get; set; } = new()
+        {
+            Groups = [],
+            Warnings = [],
+            RequiredGroupUnresolved = false,
+            HadRemoteFailure = false
+        };
+
+        internal IReadOnlyDictionary<string, int> GenreIds { get; set; } =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        internal string? ImageBase { get; set; }
+
+        internal bool ProvablyEmpty { get; set; }
+
+        internal bool ResultLimitSatisfied { get; set; }
+    }
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
     private const int MaximumConcurrency = 4;
 
     private const int SourcePageSize = 20;
@@ -1090,8 +1116,8 @@ internal sealed class QueryExecutor(
                 identity.Operator is CriteriaValueOperator.Equals or CriteriaValueOperator.In;
             var normalized = NormalizeName(requestedName);
             var resolved = new List<SubjectResolution>();
-            var pageLimitReached = false;
-            for (var page = 1; page <= QueryLimits.MaximumPage; page++)
+            var truncated = false;
+            for (var page = 1; page <= QueryLimits.MaximumNameSearchPages; page++)
             {
                 var request = BuildSubjectSearch(role, requestedName.Trim(), context.Language, page);
                 var envelope = await client.GetAsync<SearchEnvelopeDto<NamedSearchHitDto>>(
@@ -1115,42 +1141,27 @@ internal sealed class QueryExecutor(
                     Id = match.Id,
                     Name = match.Name!.Trim()
                 }));
+
                 if (envelope is null || page >= envelope.TotalPages)
                 {
                     break;
                 }
 
-                if (page == QueryLimits.MaximumPage)
+                if (page == QueryLimits.MaximumNameSearchPages)
                 {
-                    pageLimitReached = true;
+                    truncated = true;
                 }
             }
 
             var unique = resolved.GroupBy(result => result.Id).Select(group => group.First()).ToList();
             if (unique.Count == 0)
             {
-                return [new SubjectResolution
-                {
-                    Kind = SubjectResolutionKind.NotFound,
-                    Warning = pageLimitReached
-                        ? string.Format(
-                            CultureInfo.InvariantCulture,
-                            "TMDb {0} name search reached the 500-page API limit.",
-                            RoleNoun(role))
-                        : null
-                }];
+                return [new SubjectResolution { Kind = SubjectResolutionKind.NotFound }];
             }
 
-            if (pageLimitReached)
+            if (truncated)
             {
-                unique[0] = unique[0] with
-                {
-                    Incomplete = true,
-                    Warning = string.Format(
-                        CultureInfo.InvariantCulture,
-                        "TMDb {0} name search reached the 500-page API limit.",
-                        RoleNoun(role))
-                };
+                unique[0] = unique[0] with { Incomplete = true };
             }
 
             return unique;
@@ -1960,12 +1971,7 @@ internal sealed class QueryExecutor(
                 appendCredits: HasPersonSubjects(fetch.SubjectBindings, []),
                 cancellationToken)
                 .ConfigureAwait(false);
-            if (fetchedGroup.MissingSupportedAlternatives > 0)
-            {
-                warnings.Add("One or more exact TMDb content identifiers were not found on the requested route.");
-            }
-
-            groupHits.Add(fetchedGroup.Hits);
+            groupHits.Add(fetchedGroup);
         }
 
         var fetched = groupHits.Skip(1).Aggregate(groupHits[0], (current, next) => IntersectHits(current, next));
@@ -1973,7 +1979,7 @@ internal sealed class QueryExecutor(
         return LogicalResult(fetched, warnings, fetch.RequestedPage);
     }
 
-    private async Task<ContentIdGroupResult> FetchContentIdGroupAsync(
+    private async Task<List<SearchHit>> FetchContentIdGroupAsync(
         FetchPlanNode fetch,
         RequestContext context,
         ContentIdFilter filter,
@@ -1996,17 +2002,15 @@ internal sealed class QueryExecutor(
         }).ToList();
         var lookups = await Task.WhenAll(tasks).ConfigureAwait(false);
         var resolved = lookups
-            .Where(lookup => lookup.Hit is not null)
-            .Select(lookup => lookup.Hit!)
+            .Where(hit => hit is not null)
+            .Select(hit => hit!)
             .ToList();
         var hits = resolved
             .GroupBy(hit => hit.Id)
             .Select(group => group.First())
             .OrderBy(hit => hit.SourceOrder)
             .ToList();
-        return new ContentIdGroupResult(
-            hits,
-            lookups.Count(lookup => lookup.Supported && lookup.Hit is null));
+        return hits;
     }
 
     private async IAsyncEnumerable<SearchHit> ScanAsync(
@@ -2030,7 +2034,6 @@ internal sealed class QueryExecutor(
         var searchTerms = discover ? [] : SearchTerms(fetch);
         var discoverSources = discover ? DiscoverSources(fetch, subjects, genreIds) : [];
         var sourceCount = discover ? discoverSources.Count : searchTerms.Count;
-        var searchRoundBatches = new List<IReadOnlyList<SearchHit>>();
         await state.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -2092,7 +2095,11 @@ internal sealed class QueryExecutor(
                 }).ToList();
                 if (sourceCount > 1)
                 {
-                    searchRoundBatches.Add(hits);
+                    state.RoundBatches.Add(hits);
+                    if (hits.Count > 0)
+                    {
+                        AddOrMerge(state.Hits, hits[0]);
+                    }
                 }
                 else
                 {
@@ -2110,12 +2117,12 @@ internal sealed class QueryExecutor(
                 var roundComplete = AdvanceSearchSource(state, sourceCount);
                 if (sourceCount > 1 && (roundComplete || state.Exhausted))
                 {
-                    foreach (var hit in InterleaveHits(searchRoundBatches))
+                    foreach (var hit in InterleaveHits(state.RoundBatches))
                     {
                         AddOrMerge(state.Hits, hit);
                     }
 
-                    searchRoundBatches.Clear();
+                    state.RoundBatches.Clear();
                 }
             }
         }
@@ -2157,7 +2164,7 @@ internal sealed class QueryExecutor(
     private IEnumerable<SearchHit> InterleaveHits(IReadOnlyList<IReadOnlyList<SearchHit>> batches)
     {
         var maximum = batches.Count == 0 ? 0 : batches.Max(batch => batch.Count);
-        for (var index = 0; index < maximum; index++)
+        for (var index = 1; index < maximum; index++)
         {
             foreach (var batch in batches)
             {
@@ -2262,7 +2269,7 @@ internal sealed class QueryExecutor(
         return tv is null ? null : MergeHit(hit, tv.FromTvDetail());
     }
 
-    private async Task<(bool Supported, SearchHit? Hit)> FetchContentIdAsync(
+    private async Task<SearchHit?> FetchContentIdAsync(
         FetchPlanNode fetch,
         RequestContext context,
         ContentId contentId,
@@ -2274,7 +2281,7 @@ internal sealed class QueryExecutor(
         {
             if (!int.TryParse(contentId.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id <= 0)
             {
-                return (false, null);
+                return null;
             }
 
             var appendExternalIds = HasExternalIdExclusions(fetch.ContentIdFilters) ||
@@ -2293,18 +2300,18 @@ internal sealed class QueryExecutor(
             {
                 var detail = await FetchAsync<MovieDetailDto>(context, request, cancellationToken)
                     .ConfigureAwait(false);
-                return (true, detail is null
+                return detail is null
                     ? null
-                    : detail.FromMovieDetail() with { SourceOrder = sourceOrder });
+                    : detail.FromMovieDetail() with { SourceOrder = sourceOrder };
             }
 
             var tv = await FetchAsync<TvDetailDto>(context, request, cancellationToken).ConfigureAwait(false);
-            return (true, tv is null ? null : tv.FromTvDetail() with { SourceOrder = sourceOrder });
+            return tv is null ? null : tv.FromTvDetail() with { SourceOrder = sourceOrder };
         }
 
         if (!TryMapExternalContentIdSource(contentId.Source, out var externalSource, out var resultSource))
         {
-            return (false, null);
+            return null;
         }
 
         var find = BuildFind(contentId.Value, externalSource, context.Language);
@@ -2316,14 +2323,14 @@ internal sealed class QueryExecutor(
                 .FirstOrDefault();
         if (hit is null)
         {
-            return (true, null);
+            return null;
         }
 
         var externalIds = new Dictionary<string, string>(hit.ExternalIds, StringComparer.OrdinalIgnoreCase)
         {
             [resultSource] = contentId.Value
         };
-        return (true, hit with { ExternalIds = externalIds });
+        return hit with { ExternalIds = externalIds };
     }
 
     private async Task<IReadOnlyDictionary<string, int>> ResolveGenresAsync(
@@ -2655,31 +2662,5 @@ internal sealed class QueryExecutor(
                 ? resolution with { ViaCompanySearch = true }
                 : resolution)]
             : resolutions;
-    }
-
-    private sealed record PageResult(IReadOnlyList<SearchHit> Hits, int TotalPages, int TotalResults);
-
-    private sealed record ContentIdGroupResult(List<SearchHit> Hits, int MissingSupportedAlternatives);
-
-    private sealed class ExecutionState
-    {
-        internal HashSet<int> ResolvedNodeIds { get; } = [];
-
-        internal SubjectResolutionSet SubjectSet { get; set; } = new()
-        {
-            Groups = [],
-            Warnings = [],
-            RequiredGroupUnresolved = false,
-            HadRemoteFailure = false
-        };
-
-        internal IReadOnlyDictionary<string, int> GenreIds { get; set; } =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-        internal string? ImageBase { get; set; }
-
-        internal bool ProvablyEmpty { get; set; }
-
-        internal bool ResultLimitSatisfied { get; set; }
     }
 }

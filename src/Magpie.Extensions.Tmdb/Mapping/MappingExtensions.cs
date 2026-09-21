@@ -943,7 +943,7 @@ internal static class MappingExtensions
             return null;
         }
 
-        var basePart = string.IsNullOrEmpty(imageBase) ? "https://image.tmdb.org/t/p/" : imageBase!;
+        var basePart = string.IsNullOrEmpty(imageBase) ? Constants.DefaultImageBaseUrl : imageBase!;
         if (!basePart.EndsWith("/", StringComparison.Ordinal))
         {
             basePart += "/";

@@ -107,8 +107,12 @@
         height: 100%;
     }
 
-    .preview-player__stop-target {
-        cursor: pointer;
+    .preview-player__fullscreen.preview-player__youtube-stop {
+        position: absolute;
+        top: 0;
+        right: 0;
+        padding: var(--space-xs);
+        background: var(--overlay-backdrop);
     }
 
     .preview-player__yt-mount {
@@ -182,6 +186,7 @@
         min-width: 0;
     }
 
+    .preview-player__stop,
     .preview-player__fullscreen,
     .preview-player__volume-toggle {
         display: inline-flex;

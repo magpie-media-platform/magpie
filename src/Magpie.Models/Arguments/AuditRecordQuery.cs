@@ -58,4 +58,9 @@ public sealed record AuditRecordQuery
     /// <inheritdoc cref="AuditRecord.CorrelationId" path="/summary"/>
     /// </summary>
     public Guid? CorrelationId { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.JobExecutionId" path="/summary"/>
+    /// </summary>
+    public Guid? JobExecutionId { get; init; }
 }

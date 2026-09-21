@@ -141,13 +141,13 @@ describe('ForbiddenPage', () => {
         expect(screen.getByText(/requires Admin role/i)).toBeInTheDocument();
     });
 
-    it('shows required permission when provided in location state', () => {
+    it('shows generic denial when location state has no required role', () => {
         render(
             <MemoryRouter
                 initialEntries={[
                     {
                         pathname: '/forbidden',
-                        state: { requiredPermission: 'users.manage' },
+                        state: {},
                     },
                 ]}
             >
@@ -157,7 +157,7 @@ describe('ForbiddenPage', () => {
             </MemoryRouter>,
         );
 
-        expect(screen.getByText(/requires the "users.manage" permission/i)).toBeInTheDocument();
+        expect(screen.getByText('You do not have permission to access this page.')).toBeInTheDocument();
     });
 
     it('has correct data-page attribute', () => {

@@ -31,6 +31,7 @@ internal sealed class AuditHistoryEndpointGroup : IApiEndpointGroup
     internal async Task<IResult> GetAuditHistoryAsync(
         [FromServices] IAuditHistoryService auditHistoryService,
         Guid? contentId,
+        Guid? jobExecutionId,
         AuditHistoryEntryKind? kind,
         string? status,
         DateTime? from,
@@ -47,6 +48,7 @@ internal sealed class AuditHistoryEndpointGroup : IApiEndpointGroup
                 PageSize = pageSize ?? 25
             },
             ContentId = contentId,
+            JobExecutionId = jobExecutionId,
             Kind = kind,
             Status = status,
             From = from,

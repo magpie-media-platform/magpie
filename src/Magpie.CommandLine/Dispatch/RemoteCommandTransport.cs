@@ -32,8 +32,6 @@ internal sealed class RemoteCommandTransport(HttpClient client, string? apiKey) 
         HttpCompletionOption completionOption,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
-
         request.Headers.Remove(ApiKeyHeader);
         if (!string.IsNullOrWhiteSpace(apiKey))
         {

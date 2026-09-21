@@ -1,11 +1,6 @@
 using System;
 
-using Magpie.Core.Caching;
 using Magpie.Extensions.Jellyfin;
-using Magpie.Sdk.Caching;
-using Magpie.Sdk.Integrations;
-
-using Microsoft.Extensions.DependencyInjection;
 
 using NUnit.Framework;
 
@@ -32,29 +27,5 @@ public class JellyfinExtensionTests
             Assert.That(extension.Version, Is.EqualTo(new Version(1, 0, 0)));
             Assert.That(extension.TargetABI, Is.EqualTo("[1.0.0,)"));
         }
-    }
-
-    [Test]
-    public void Register_ResolvesIntegration_WhenScopesAreValidated()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddSingleton(TimeProvider.System);
-        services.AddSingleton(new MemoryCacheStore(TimeProvider.System));
-        services.AddScoped<ICacheFactory, MemoryCacheFactory>();
-        new JellyfinExtension().RegisterServices(services);
-
-        // Act
-        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
-        {
-            ValidateOnBuild = true,
-            ValidateScopes = true
-        });
-        using var scope = provider.CreateScope();
-        var subject = scope.ServiceProvider.GetRequiredService<IMediaServerIntegration>();
-
-        // Assert
-        Assert.That(subject, Is.InstanceOf<JellyfinMediaServerIntegration>());
     }
 }

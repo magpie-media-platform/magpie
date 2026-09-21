@@ -475,7 +475,7 @@ describe('DataTable', () => {
             render(<DataTable columns={testColumns} data={testData} />);
 
             const firstRow = screen.getAllByRole('row')[1];
-            const cells = within(firstRow).getAllByRole('cell');
+            const cells = within(firstRow).getAllByRole('gridcell');
 
             expect(cells[0]).toHaveAttribute('data-label', 'ID');
             expect(cells[1]).toHaveAttribute('data-label', 'Name');
@@ -498,7 +498,7 @@ describe('DataTable', () => {
             render(<DataTable columns={columnsWithEmpty} data={testData} />);
 
             const firstRow = screen.getAllByRole('row')[1];
-            const cells = within(firstRow).getAllByRole('cell');
+            const cells = within(firstRow).getAllByRole('gridcell');
 
             expect(cells[0]).not.toHaveAttribute('data-label');
             expect(cells[1]).toHaveAttribute('data-label', 'Name');
@@ -521,33 +521,87 @@ describe('DataTable', () => {
             render(<DataTable columns={columnsWithMeta} data={testData} />);
 
             const firstRow = screen.getAllByRole('row')[1];
-            const cells = within(firstRow).getAllByRole('cell');
+            const cells = within(firstRow).getAllByRole('gridcell');
 
             expect(cells[0]).toHaveAttribute('data-label', 'Status');
-            expect(cells[0]).not.toHaveClass('data-table__cell--unlabeled');
         });
+    });
 
-        it('marks label-less cells with the unlabeled modifier for compact card layout', () => {
-            const columnsWithUnlabeled: ColumnDef<TestData, unknown>[] = [
-                {
-                    id: 'actions',
-                    header: '',
-                    cell: () => <button type="button">act</button>,
-                    enableSorting: false,
-                },
-                {
-                    accessorKey: 'name',
-                    header: 'Name',
-                },
+    describe('mobile card collapse roles', () => {
+        it('infers field role for labeled cells and actions role for unlabeled cells', () => {
+            const columns: ColumnDef<TestData, unknown>[] = [
+                { id: 'actions', header: '', cell: () => <button type="button">act</button> },
+                { accessorKey: 'name', header: 'Name' },
             ];
 
-            render(<DataTable columns={columnsWithUnlabeled} data={testData} />);
+            render(<DataTable columns={columns} data={testData} />);
 
             const firstRow = screen.getAllByRole('row')[1];
-            const cells = within(firstRow).getAllByRole('cell');
+            const cells = within(firstRow).getAllByRole('gridcell');
 
-            expect(cells[0]).toHaveClass('data-table__cell--unlabeled');
-            expect(cells[1]).not.toHaveClass('data-table__cell--unlabeled');
+            expect(cells[0]).toHaveAttribute('data-mobile-role', 'actions');
+            expect(cells[1]).toHaveAttribute('data-mobile-role', 'field');
+        });
+
+        it('honors an explicit meta.mobileRole over the default inference', () => {
+            const columns: ColumnDef<TestData, unknown>[] = [
+                { accessorKey: 'name', header: 'Name', meta: { mobileRole: 'header' } },
+                { accessorKey: 'status', header: 'Status', meta: { mobileRole: 'actions' } },
+            ];
+
+            render(<DataTable columns={columns} data={testData} />);
+
+            const firstRow = screen.getAllByRole('row')[1];
+            const cells = within(firstRow).getAllByRole('gridcell');
+
+            expect(cells[0]).toHaveAttribute('data-mobile-role', 'header');
+            expect(cells[1]).toHaveAttribute('data-mobile-role', 'actions');
+        });
+
+        it('honors an explicit meta.mobileRole of hidden, for a value already shown elsewhere on the card', () => {
+            const columns: ColumnDef<TestData, unknown>[] = [
+                { accessorKey: 'name', header: 'Name', meta: { mobileRole: 'header' } },
+                { accessorKey: 'status', header: 'Status', meta: { mobileRole: 'hidden' } },
+            ];
+
+            render(<DataTable columns={columns} data={testData} />);
+
+            const firstRow = screen.getAllByRole('row')[1];
+            const cells = within(firstRow).getAllByRole('gridcell');
+
+            expect(cells[1]).toHaveAttribute('data-mobile-role', 'hidden');
+        });
+
+        it('keeps a later header-role cell marked header even with a field-role cell between it and the first header cell', () => {
+            const columns: ColumnDef<TestData, unknown>[] = [
+                { accessorKey: 'name', header: 'Name', meta: { mobileRole: 'header' } },
+                { accessorKey: 'id', header: 'Provider' },
+                { accessorKey: 'status', header: 'Status', meta: { mobileRole: 'header' } },
+            ];
+
+            render(<DataTable columns={columns} data={testData} />);
+
+            const firstRow = screen.getAllByRole('row')[1];
+            const cells = within(firstRow).getAllByRole('gridcell');
+
+            expect(cells[0]).toHaveAttribute('data-mobile-role', 'header');
+            expect(cells[1]).toHaveAttribute('data-mobile-role', 'field');
+            expect(cells[2]).toHaveAttribute('data-mobile-role', 'header');
+        });
+
+        it('omits data-mobile-selection-active when the prop is not supplied', () => {
+            const { container } = render(<DataTable columns={testColumns} data={testData} />);
+            expect(container.querySelector('.data-table')).not.toHaveAttribute('data-mobile-selection-active');
+        });
+
+        it('reflects mobileSelectionActive on the root element', () => {
+            const { container, rerender } = render(
+                <DataTable columns={testColumns} data={testData} mobileSelectionActive={false} />,
+            );
+            expect(container.querySelector('.data-table')).toHaveAttribute('data-mobile-selection-active', 'false');
+
+            rerender(<DataTable columns={testColumns} data={testData} mobileSelectionActive={true} />);
+            expect(container.querySelector('.data-table')).toHaveAttribute('data-mobile-selection-active', 'true');
         });
     });
 });
@@ -590,4 +644,11 @@ describe('DataTable header reconciliation', () => {
         await user.click(screen.getByTestId('bump'));
         expect(screen.getByTestId('hdr')).toHaveTextContent('open');
     });
+});
+
+it('keeps explicit rows and cells when table display changes', () => {
+    render(<DataTable columns={testColumns} data={testData} />);
+    expect(screen.getAllByRole('row')[1]).toHaveAttribute('role', 'row');
+    expect(screen.getAllByRole('gridcell')[0]).toHaveAttribute('role', 'gridcell');
+    expect(screen.getAllByRole('columnheader')[0]).toHaveAttribute('role', 'columnheader');
 });

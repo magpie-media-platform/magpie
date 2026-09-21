@@ -11,5 +11,5 @@ public record DictionaryCriteria<TCriteria>
     /// <summary>
     /// The criterion for each dictionary value, keyed by name.
     /// </summary>
-    public Dictionary<string, TCriteria> Items { get; init; } = [];
+    public Dictionary<string, TCriteria> Items { get; set; } = [];
 }

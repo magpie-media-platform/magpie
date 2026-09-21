@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, type ComponentType } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
     FloppyDiskIcon,
     MagnifyingGlassIcon,
@@ -9,24 +9,6 @@ import {
     CheckSquareIcon,
     SquareIcon,
     MinusSquareIcon,
-    StarIcon,
-    HeartIcon,
-    LightningIcon,
-    FilmStripIcon,
-    MusicNoteIcon,
-    BookIcon,
-    GameControllerIcon,
-    GlobeIcon,
-    HouseIcon,
-    UserIcon,
-    UsersIcon,
-    FolderIcon,
-    ArchiveIcon,
-    WarningIcon,
-    CheckCircleIcon,
-    EyeIcon,
-    ClockIcon,
-    type IconProps,
 } from '@phosphor-icons/react';
 
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
@@ -37,59 +19,12 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFo
 
 import './BulkTagAssignment.css';
 
-export type TagIconName =
-    | 'tag'
-    | 'star'
-    | 'heart'
-    | 'lightning'
-    | 'film-strip'
-    | 'music-note'
-    | 'book'
-    | 'game-controller'
-    | 'globe'
-    | 'house'
-    | 'user'
-    | 'users'
-    | 'folder'
-    | 'archive'
-    | 'warning'
-    | 'check-circle'
-    | 'eye'
-    | 'clock';
-
-const ICON_COMPONENTS: Record<TagIconName, ComponentType<IconProps>> = {
-    tag: TagIcon,
-    star: StarIcon,
-    heart: HeartIcon,
-    lightning: LightningIcon,
-    'film-strip': FilmStripIcon,
-    'music-note': MusicNoteIcon,
-    book: BookIcon,
-    'game-controller': GameControllerIcon,
-    globe: GlobeIcon,
-    house: HouseIcon,
-    user: UserIcon,
-    users: UsersIcon,
-    folder: FolderIcon,
-    archive: ArchiveIcon,
-    warning: WarningIcon,
-    'check-circle': CheckCircleIcon,
-    eye: EyeIcon,
-    clock: ClockIcon,
-};
-
-function getTagIconComponent(iconName?: TagIconName): ComponentType<IconProps> {
-    return iconName ? ICON_COMPONENTS[iconName] : TagIcon;
-}
-
 export interface BulkTagItem {
     id: string;
 
     name: string;
 
     color?: string;
-
-    icon?: TagIconName;
 }
 
 export interface ContentWithTags {
@@ -329,7 +264,6 @@ export function BulkTagAssignment({
                         ) : (
                             filteredTags.map((tag) => {
                                 const checkboxState = getCheckboxState(tag.id);
-                                const IconComponent = getTagIconComponent(tag.icon);
                                 const tagColor = tag.color || 'var(--accent-secondary)';
 
                                 return (
@@ -361,7 +295,7 @@ export function BulkTagAssignment({
                                             className="bulk-tag-assignment__tag-icon"
                                             style={{ '--tag-color': tagColor } as React.CSSProperties}
                                         >
-                                            <IconComponent weight="duotone" aria-hidden="true" />
+                                            <TagIcon weight="duotone" aria-hidden="true" />
                                         </span>
                                         <span
                                             className="bulk-tag-assignment__tag-name"

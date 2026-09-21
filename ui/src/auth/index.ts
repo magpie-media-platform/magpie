@@ -16,6 +16,7 @@ export { AuthContext, AuthProvider, type AuthContextValue, type AuthProviderProp
 export { useAuth } from './useAuth';
 
 export { RequireRole, type RequireRoleProps } from './RequireRole';
+export { AdminLink } from './AdminLink';
 export {
     DisabledTooltip,
     type DisabledTooltipProps,

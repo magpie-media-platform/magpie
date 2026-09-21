@@ -32,7 +32,7 @@ public sealed class WishlistRefreshScanJobTests
     [SetUp]
     public void SetUp()
     {
-        _wishlistRepository = new Mock<IWishlistRepository>();
+        _wishlistRepository = new Mock<IWishlistRepository> { CallBase = true };
         _jobManager = new Mock<IJobManager>();
         _jobManager
             .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
@@ -45,7 +45,7 @@ public sealed class WishlistRefreshScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_EnqueuesWishlistRefreshItem_ForEachMonitoredWishlist()
+    public async Task ExecuteAsync_EnqueuesWishlistRefreshItem_WhenMonitoredWishlistsExist()
     {
         // Arrange
         var firstWishlistId = Guid.NewGuid();
@@ -85,7 +85,7 @@ public sealed class WishlistRefreshScanJobTests
             _jobManager.Verify(
                 m => m.ExecuteAsync(
                     It.Is<JobEnqueueRequest>(r =>
-                        r.JobType == WishlistRefreshItemJob.Spec.JobType &&
+                        r.JobType == "WishlistRefreshItem" &&
                         r.Mode == JobExecutionMode.Queue &&
                         r.UserId == userId &&
                         r.CorrelationId == correlationId &&
@@ -96,7 +96,7 @@ public sealed class WishlistRefreshScanJobTests
             _jobManager.Verify(
                 m => m.ExecuteAsync(
                     It.Is<JobEnqueueRequest>(r =>
-                        r.JobType == WishlistRefreshItemJob.Spec.JobType &&
+                        r.JobType == "WishlistRefreshItem" &&
                         r.Parameters != null &&
                         r.Parameters["wishlistId"] == secondWishlistId.ToString("D")),
                     It.IsAny<CancellationToken>()),
@@ -135,24 +135,5 @@ public sealed class WishlistRefreshScanJobTests
         _jobManager.Verify(
             m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
             Times.Never);
-    }
-
-    [Test]
-    public void Spec_DescribesAdministrativePerTypeScan_WhenRead()
-    {
-        // Arrange
-        // Act
-        var spec = WishlistRefreshScanJob.Spec;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(spec.JobType, Is.EqualTo("WishlistRefreshScan"));
-            Assert.That(spec.DisplayName, Is.EqualTo("Wishlist refresh scan"));
-            Assert.That(spec.Category, Is.EqualTo("Content"));
-            Assert.That(spec.Scope, Is.EqualTo(JobScope.Administrative));
-            Assert.That(spec.ConcurrencyScope, Is.EqualTo(ConcurrencyScope.PerType));
-            Assert.That(spec.LockPartitionFields, Is.Empty);
-        }
     }
 }

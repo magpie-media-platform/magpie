@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
-using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -27,11 +26,15 @@ namespace Magpie.Test.Core.Jobs.Fulfillment;
 [TestFixture]
 public sealed class ReleaseSearchScanJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private const int DefaultBackpressureThreshold = 50;
 
     private Mock<IJobManager> _jobManager = null!;
     private Mock<IJobExecutionRepository> _jobExecutionRepository = null!;
     private Mock<IContentHierarchyItemRepository> _hierarchyRepository = null!;
+    private IReadOnlyDictionary<Guid, ContentHierarchyItemAncestry> _ancestry = null!;
+    private IReadOnlyList<Guid> _unfulfilledLeafIds = null!;
     private IJob _subject = null!;
     private JobContext _jobContext = null!;
     private Guid _userId;
@@ -55,14 +58,19 @@ public sealed class ReleaseSearchScanJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<JobExecution>());
 
+        _unfulfilledLeafIds = [];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>();
         _hierarchyRepository = new Mock<IContentHierarchyItemRepository>();
         _hierarchyRepository
-            .Setup(r => r.QueryAsync(
+            .Setup(r => r.QueryIdsAsync(
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(() => _unfulfilledLeafIds);
+        _hierarchyRepository
+            .Setup(r => r.GetAncestryAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => _ancestry);
 
         _jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
@@ -77,51 +85,8 @@ public sealed class ReleaseSearchScanJobTests
             _jobManager.Object,
             _jobExecutionRepository.Object,
             _hierarchyRepository.Object,
-            TimeProvider.System,
-            NullLogger<ReleaseSearchScanJob>.Instance);
-    }
-
-    private void SetupRoots(params Guid[] rootIds)
-    {
-        _hierarchyRepository
-            .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c =>
-                    c.EffectiveMonitoring == true && c.HasMonitoredParent == false),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items =
-                [
-                    .. rootIds.Select(id => new ContentHierarchyItem
-                    {
-                        Id = id,
-                        ContentType = "tv",
-                        Level = "show",
-                        Slug = id.ToString("N"),
-                        Name = id.ToString("N"),
-                        EffectiveMonitoring = true,
-                    }),
-                ],
-            });
-    }
-
-    [Test]
-    public void Spec_DefinesSweepParameters_WithoutRequesterTriggerModes()
-    {
-        // Arrange
-        // Act
-        var spec = ReleaseSearchScanJob.Spec;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(spec.RequesterTriggerModes, Is.Empty);
-            Assert.That(spec.Parameters, Has.Count.EqualTo(1));
-            Assert.That(spec.Parameters[0].Name, Is.EqualTo("backpressureThreshold"));
-            Assert.That(spec.Parameters[0].DefaultValue, Is.EqualTo("50"));
-        }
+            NullLogger<ReleaseSearchScanJob>.Instance,
+            _progressReporter);
     }
 
     [Test]
@@ -137,11 +102,15 @@ public sealed class ReleaseSearchScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_EnqueuesReleaseSearch_ForEachSubtreeRoot()
+    public async Task ExecuteAsync_EnqueuesReleaseSearch_WhenMultipleSubtreeRootsNeedSearch()
     {
         // Arrange
         var rootId = Guid.NewGuid();
-        SetupRoots(rootId);
+        _unfulfilledLeafIds = [rootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -150,12 +119,12 @@ public sealed class ReleaseSearchScanJobTests
         _jobManager.Verify(
             m => m.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(r =>
-                    r.JobType == MagpieJobs.Types.ReleaseSearchItem &&
+                    r.JobType == "ReleaseSearchItem" &&
                     r.Parameters != null &&
-                    r.Parameters[MagpieJobs.Parameters.ContentHierarchyItemId] ==
+                    r.Parameters["contentHierarchyItemId"] ==
                         rootId.ToString("D") &&
-                    r.Parameters[MagpieJobs.Parameters.SearchKind] ==
-                        MagpieJobs.ParameterValues.NodeSearchKind &&
+                    r.Parameters["searchKind"] ==
+                        "node" &&
                     r.Mode == JobExecutionMode.Queue &&
                     r.UserId == _userId),
                 It.IsAny<CancellationToken>()),
@@ -163,40 +132,221 @@ public sealed class ReleaseSearchScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_SelectsMonitoredRoots_WithoutFilteringOnResidualWork()
+    public async Task ExecuteAsync_QueriesUnfulfilledLeavesAndAncestry_WhenLeavesNeedSearch()
     {
         // Arrange
-        SetupRoots(Guid.NewGuid());
+        var leafId = Guid.NewGuid();
+        _unfulfilledLeafIds = [leafId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [leafId] = new() { Id = leafId, EffectiveMonitoring = true }
+        };
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
-        _hierarchyRepository.Verify(
-            r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c =>
-                    c.EffectiveMonitoring == true &&
-                    c.HasMonitoredParent == false &&
-                    c.LeafOnly == null &&
-                    !c.Fulfillment.And.Any()),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
+        using (Assert.EnterMultipleScope())
+        {
+            _hierarchyRepository.Verify(
+                r => r.QueryIdsAsync(
+                    It.Is<ContentHierarchyItemCriteria>(c =>
+                        c.LeafOnly == true &&
+                        c.EffectiveMonitoring == true &&
+                        c.Fulfillment.And.Any(criterion =>
+                            criterion.Operator == CriteriaValueOperator.In &&
+                            criterion.Values!.Contains(FulfillmentStatus.Missing) &&
+                            criterion.Values!.Contains(FulfillmentStatus.Upgradable))),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _hierarchyRepository.Verify(
+                r => r.GetAncestryAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()),
+                Times.Once);
+            _hierarchyRepository.Verify(
+                r => r.QueryAsync(
+                    It.IsAny<ContentHierarchyItemCriteria>(),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReadsTheAncestryOnce_WhenManyNeedyLeavesShareAnAncestor()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var firstLeafId = Guid.NewGuid();
+        var secondLeafId = Guid.NewGuid();
+        _unfulfilledLeafIds = [firstLeafId, secondLeafId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [firstLeafId] = new() { Id = firstLeafId, ParentId = rootId, EffectiveMonitoring = true },
+            [secondLeafId] = new() { Id = secondLeafId, ParentId = rootId, EffectiveMonitoring = true },
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _hierarchyRepository.Verify(
+                r => r.GetAncestryAsync(
+                    It.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 2),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _hierarchyRepository.Verify(
+                r => r.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(r =>
+                        r.Parameters != null &&
+                        r.Parameters["contentHierarchyItemId"] == rootId.ToString("D")),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_EnqueuesReleaseSearchForTheSubtreeRoot_WhenTheNeedyLeafIsNested()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var seasonId = Guid.NewGuid();
+        var leafId = Guid.NewGuid();
+        var libraryId = Guid.NewGuid();
+        _unfulfilledLeafIds = [leafId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [leafId] = new() { Id = leafId, ParentId = seasonId, EffectiveMonitoring = true },
+            [seasonId] = new() { Id = seasonId, ParentId = rootId, EffectiveMonitoring = true },
+            [rootId] = new() { Id = rootId, ParentId = libraryId, EffectiveMonitoring = true },
+            [libraryId] = new() { Id = libraryId, EffectiveMonitoring = false }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(r =>
+                    r.Parameters != null &&
+                    r.Parameters["contentHierarchyItemId"] == rootId.ToString("D")),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Test]
-    public async Task ExecuteAsync_ContinuesProcessingSiblings_WhenEnqueueThrowsForOneRoot()
+    public async Task ExecuteAsync_EnqueuesReleaseSearch_WhenRootIsMonitoredAndMissing()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        _unfulfilledLeafIds = [rootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(r =>
+                    r.Parameters != null &&
+                    r.Parameters["contentHierarchyItemId"] == rootId.ToString("D")),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_DoesNotEnqueueReleaseSearch_WhenRootIsFulfilledAtCutoff()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_EnqueuesReleaseSearch_WhenRootIsFulfilledBelowCutoffAndUpgradeEligible()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        _unfulfilledLeafIds = [rootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(r =>
+                    r.Parameters != null &&
+                    r.Parameters["contentHierarchyItemId"] == rootId.ToString("D")),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_DoesNotEnqueueReleaseSearch_WhenItemIsUnmonitored()
+    {
+        // Arrange
+        var leafId = Guid.NewGuid();
+        _unfulfilledLeafIds = [leafId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [leafId] = new() { Id = leafId, EffectiveMonitoring = false }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ContinuesProcessingSiblings_WhenAcquisitionIsEnqueuedThrowsForOneRoot()
     {
         // Arrange
         var firstRootId = Guid.NewGuid();
         var secondRootId = Guid.NewGuid();
-        SetupRoots(firstRootId, secondRootId);
+        _unfulfilledLeafIds = [firstRootId, secondRootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [firstRootId] = new() { Id = firstRootId, EffectiveMonitoring = true },
+            [secondRootId] = new() { Id = secondRootId, EffectiveMonitoring = true }
+        };
         _jobManager
             .Setup(m => m.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(r =>
                     r.Parameters != null &&
-                    r.Parameters[MagpieJobs.Parameters.ContentHierarchyItemId] ==
+                    r.Parameters["contentHierarchyItemId"] ==
                         firstRootId.ToString("D")),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("boom"));
@@ -208,9 +358,9 @@ public sealed class ReleaseSearchScanJobTests
         _jobManager.Verify(
             m => m.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(r =>
-                    r.JobType == MagpieJobs.Types.ReleaseSearchItem &&
+                    r.JobType == "ReleaseSearchItem" &&
                     r.Parameters != null &&
-                    r.Parameters[MagpieJobs.Parameters.ContentHierarchyItemId] ==
+                    r.Parameters["contentHierarchyItemId"] ==
                         secondRootId.ToString("D") &&
                     r.Mode == JobExecutionMode.Queue &&
                     r.UserId == _userId),
@@ -219,14 +369,67 @@ public sealed class ReleaseSearchScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_Bails_WhenReleaseSearchBacklogExceedsThreshold()
+    public async Task ExecuteAsync_Bails_WhenReleaseSearchBacklogIsOlderThanOneHour()
     {
         // Arrange
-        SetupRoots(Guid.NewGuid());
+        var rootId = Guid.NewGuid();
+        _unfulfilledLeafIds = [rootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
         var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
             .Select(_ => new JobExecution
             {
-                JobType = MagpieJobs.Types.ReleaseSearchItem,
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Queued,
+                CreatedAt = DateTime.UtcNow.AddHours(-2)
+            })
+            .ToList();
+        _jobExecutionRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _jobExecutionRepository.Verify(
+                r => r.QueryAsync(
+                    It.Is<JobExecutionQuery>(q =>
+                        q.JobType == "ReleaseSearchItem" &&
+                        q.Timestamp == null),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _jobManager.Verify(
+                m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_Bails_WhenReleaseSearchBacklogExceedsThreshold()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        _unfulfilledLeafIds = [rootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
+        var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
+            .Select(_ => new JobExecution
+            {
+                JobType = "ReleaseSearchItem",
                 Scope = JobScope.System,
                 Status = JobExecutionStatus.Queued,
                 CreatedAt = DateTime.UtcNow
@@ -238,7 +441,7 @@ public sealed class ReleaseSearchScanJobTests
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows });
+            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -253,11 +456,16 @@ public sealed class ReleaseSearchScanJobTests
     public async Task ExecuteAsync_ProceedsWithEnqueue_WhenReleaseSearchBacklogIsAtThreshold()
     {
         // Arrange
-        SetupRoots(Guid.NewGuid());
+        var rootId = Guid.NewGuid();
+        _unfulfilledLeafIds = [rootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
         var rows = Enumerable.Range(0, DefaultBackpressureThreshold)
             .Select(_ => new JobExecution
             {
-                JobType = MagpieJobs.Types.ReleaseSearchItem,
+                JobType = "ReleaseSearchItem",
                 Scope = JobScope.System,
                 Status = JobExecutionStatus.Queued,
                 CreatedAt = DateTime.UtcNow
@@ -269,7 +477,7 @@ public sealed class ReleaseSearchScanJobTests
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows });
+            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -278,7 +486,7 @@ public sealed class ReleaseSearchScanJobTests
         _jobManager.Verify(
             m => m.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(r =>
-                    r.JobType == MagpieJobs.Types.ReleaseSearchItem &&
+                    r.JobType == "ReleaseSearchItem" &&
                     r.Mode == JobExecutionMode.Queue &&
                     r.UserId == _userId),
                 It.IsAny<CancellationToken>()),
@@ -286,10 +494,46 @@ public sealed class ReleaseSearchScanJobTests
     }
 
     [Test]
-    public void ExecuteAsync_PropagatesOperationCanceledException_FromJobManager()
+    public async Task ExecuteAsync_Bails_WhenReleaseSearchBacklogExceedsAThresholdAboveThePageSizeLimit()
     {
         // Arrange
-        SetupRoots(Guid.NewGuid());
+        var rootId = Guid.NewGuid();
+        _unfulfilledLeafIds = [rootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
+        var context = _jobContext with
+        {
+            Parameters = new Dictionary<string, string> { ["backpressureThreshold"] = "2000" }
+        };
+        _jobExecutionRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { TotalItems = 2001 });
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public void ExecuteAsync_PropagatesOperationCanceledException_WhenTheJobManagerCancels()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        _unfulfilledLeafIds = [rootId];
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+        };
         using var cts = new CancellationTokenSource();
         _jobManager
             .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))

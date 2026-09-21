@@ -9,6 +9,8 @@ internal sealed class QueryScanState
 
     internal List<SearchHit> Hits { get; } = [];
 
+    internal List<IReadOnlyList<SearchHit>> RoundBatches { get; } = [];
+
     internal int NextSourcePage { get; set; } = 1;
 
     internal int NextSourceIndex { get; set; }

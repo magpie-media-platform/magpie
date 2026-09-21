@@ -134,7 +134,7 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
         var connections = await indexerService.ListConnectionsAsync(created.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", CreateResponse(created, connections.Count));
+        return Results.Created($"/api/{Name}/{created.Id}", CreateResponse(created, connections.Count));
     }
 
     internal async Task<IResult> TestIndexerSettingsAsync(
@@ -197,6 +197,12 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
         Guid id,
         CancellationToken cancellationToken)
     {
+        var indexer = await indexerService.GetAsync(id, cancellationToken).ConfigureAwait(false);
+        if (indexer is null)
+        {
+            return Results.NotFound();
+        }
+
         var schema = await indexerService.GetSettingsSchemaAsync(id, cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(schema);
@@ -236,7 +242,7 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
         var schema = await indexerService.GetSettingsSchemaAsync(id, cancellationToken).ConfigureAwait(false);
 
         return Results.Created(
-            $"api/{Name}/{id}/connections/{created.Id}",
+            $"/api/{Name}/{id}/connections/{created.Id}",
             RedactSecrets(created, schema));
     }
 
@@ -316,9 +322,7 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
     {
         return connection with
         {
-            Settings = schema.Count == 0
-                ? []
-                : connection.Settings.RedactSecrets(schema),
+            Settings = connection.Settings.RedactSecrets(schema),
         };
     }
 }

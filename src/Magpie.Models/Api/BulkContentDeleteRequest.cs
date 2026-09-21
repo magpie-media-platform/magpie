@@ -16,4 +16,9 @@ public sealed record BulkContentDeleteRequest
     /// The MagpieQL filter that selects the content items to delete.
     /// </summary>
     public string? Filter { get; init; }
+
+    /// <summary>
+    /// Whether the delete also removes the files from disk.
+    /// </summary>
+    public bool DeleteFromLibrary { get; init; }
 }

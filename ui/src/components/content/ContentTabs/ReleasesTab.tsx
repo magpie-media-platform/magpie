@@ -1,26 +1,12 @@
 import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback, useState } from 'react';
-import {
-    ArrowsDownUpIcon,
-    CircleNotchIcon,
-    DownloadSimpleIcon,
-    MagnifyingGlassIcon,
-    SortAscendingIcon,
-    SortDescendingIcon,
-    WarningCircleIcon,
-} from '@phosphor-icons/react';
-import {
-    getCoreRowModel,
-    getSortedRowModel,
-    useReactTable,
-    type ColumnDef,
-    type SortingState,
-} from '@tanstack/react-table';
+import { CircleNotchIcon, DownloadSimpleIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
+import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
-import { Alert } from '@/components/ui/Alert';
 import { Badge, type BadgeVariant } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { DataTable } from '@/components/ui/DataTable';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
+import { MobileListToolbar } from '@/components/ui/MobileListToolbar';
+import { sortTableRows } from '@/lib/sortTableRows';
 
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { formatDate } from '@/lib/dateFormatting';
@@ -75,17 +61,15 @@ export interface ReleasesTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 
 
     onTitleClick?: (release: ReleaseRow) => void;
 
-    acquisitionBlockReason?: string | null;
-
     emptyMessage?: string;
 }
 
-const RELEASE_SORT_LABELS: Record<string, string> = {
-    title: 'Title',
-    size: 'Size',
-    status: 'Status',
-    publishDate: 'Publish date',
-};
+const RELEASE_SORT_OPTIONS = [
+    { id: 'title', label: 'Title' },
+    { id: 'size', label: 'Size' },
+    { id: 'status', label: 'Status' },
+    { id: 'publishDate', label: 'Publish date' },
+];
 
 function SizeCell({ size }: { size?: number | null }) {
     if (size === null || size === undefined || size <= 0) {
@@ -210,7 +194,6 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
             onGrab,
             canGrab = true,
             onTitleClick,
-            acquisitionBlockReason = null,
             emptyMessage = 'No releases found. Try Search Now to query indexers.',
             className,
             ...props
@@ -226,24 +209,13 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
             [onGrab],
         );
 
-        const blockBanner = acquisitionBlockReason ? (
-            <Alert
-                variant="warning"
-                className="releases-tab__block-banner"
-                icon={<WarningCircleIcon weight="fill" aria-hidden="true" />}
-                title="Automatic grab is not available"
-                data-testid="releases-tab__block-banner"
-            >
-                {acquisitionBlockReason}
-            </Alert>
-        ) : null;
-
         const columns: ColumnDef<ReleaseRow>[] = useMemo(
             () => [
                 {
                     id: 'title',
                     accessorKey: 'title',
                     header: 'Title',
+                    meta: { mobileRole: 'header' },
                     cell: ({ row }) => <TitleCell release={row.original} onTitleClick={onTitleClick} />,
                 },
                 {
@@ -292,33 +264,10 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
 
         const getRowId = useCallback((row: ReleaseRow) => row.id, []);
 
-        const mobileTable = useReactTable({
-            columns,
-            data: releases,
-            state: { sorting },
-            getCoreRowModel: getCoreRowModel(),
-            getSortedRowModel: getSortedRowModel(),
-            getRowId,
-        });
-        const sortedReleases = mobileTable.getSortedRowModel().rows.map((row) => row.original);
-        const activeSort = sorting[0];
-        const activeSortLabel = activeSort ? RELEASE_SORT_LABELS[activeSort.id] : undefined;
-        const DirectionIcon = activeSort?.desc ? SortDescendingIcon : SortAscendingIcon;
-
-        const handleSortFieldChange = useCallback((id: string) => {
-            setSorting((current) => {
-                const currentSort = current[0];
-                return [{ id, desc: currentSort?.id === id ? currentSort.desc : false }];
-            });
-        }, []);
-
-        const handleSortDirectionToggle = useCallback(() => {
-            if (!activeSort) {
-                return;
-            }
-            setSorting([{ id: activeSort.id, desc: !activeSort.desc }]);
-        }, [activeSort]);
-
+        const sortedReleases = useMemo(
+            () => (usesCardLayout ? sortTableRows(releases, columns, sorting) : releases),
+            [usesCardLayout, releases, columns, sorting],
+        );
         const classes = ['releases-tab', className].filter(Boolean).join(' ');
 
         if (!loading && releases.length === 0) {
@@ -330,7 +279,6 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                     data-layout={usesCardLayout ? 'card' : 'table'}
                     {...props}
                 >
-                    {blockBanner}
                     <div className="releases-tab__empty">
                         <MagnifyingGlassIcon weight="thin" aria-hidden="true" />
                         <p>{emptyMessage}</p>
@@ -347,37 +295,16 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                 data-layout={usesCardLayout ? 'card' : 'table'}
                 {...props}
             >
-                {blockBanner}
-                <div className="releases-tab__sort-controls" data-testid="releases-tab__sort-controls">
-                    <ArrowsDownUpIcon className="releases-tab__sort-icon" weight="duotone" aria-hidden="true" />
-                    <Select value={activeSort?.id ?? ''} onValueChange={handleSortFieldChange}>
-                        <SelectTrigger size="sm" aria-label="Sort releases by" data-sort="field">
-                            <SelectValue placeholder="Sort by" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="title">Title</SelectItem>
-                            <SelectItem value="size">Size</SelectItem>
-                            <SelectItem value="status">Status</SelectItem>
-                            <SelectItem value="publishDate">Publish date</SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleSortDirectionToggle}
-                        disabled={!activeSort}
-                        aria-label={
-                            activeSort
-                                ? `Sort releases by ${activeSortLabel} ${activeSort.desc ? 'ascending' : 'descending'}`
-                                : 'Choose a release sort field before changing direction'
-                        }
-                        data-sort="direction"
-                        data-direction={activeSort?.desc ? 'desc' : 'asc'}
-                        className="releases-tab__sort-direction"
-                    >
-                        <DirectionIcon weight="bold" aria-hidden="true" />
-                    </Button>
-                </div>
+                {usesCardLayout && (
+                    <MobileListToolbar
+                        className="releases-tab__sort-controls"
+                        data-testid="releases-tab__sort-controls"
+                        sorting={sorting}
+                        sortOptions={RELEASE_SORT_OPTIONS}
+                        onSortingChange={setSorting}
+                        allowUnsorted
+                    />
+                )}
                 {usesCardLayout ? (
                     <div className="releases-tab__mobile-list">
                         {sortedReleases.map((release) => {

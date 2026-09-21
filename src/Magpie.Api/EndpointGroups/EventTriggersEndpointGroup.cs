@@ -91,7 +91,7 @@ internal sealed class EventTriggersEndpointGroup : IApiEndpointGroup
         var trigger = await jobManager.CreateEventTriggerAsync(create, user.Id, user.Role, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{trigger.Id}", trigger);
+        return Results.Created($"/api/{Name}/{trigger.Id}", trigger);
     }
 
     [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on an event trigger")]

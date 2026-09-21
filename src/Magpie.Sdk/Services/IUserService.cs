@@ -27,7 +27,7 @@ public interface IUserService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a user by id.
+    /// A user by id.
     /// </summary>
     /// <param name="userId">The id of the user to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -113,7 +113,7 @@ public interface IUserService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a user by id for authentication.
+    /// A user by id for authentication.
     /// </summary>
     /// <param name="userId">The id of the user to authenticate</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -122,7 +122,7 @@ public interface IUserService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a user by username for authentication.
+    /// A user by username for authentication.
     /// </summary>
     /// <param name="username">The username of the user to authenticate</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -142,7 +142,7 @@ public interface IUserService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Sets the password of a local user.
+    /// Replaces the stored password of a local user.
     /// </summary>
     /// <param name="userId">The id of the user whose password changes</param>
     /// <param name="newPassword">The plaintext password to store</param>

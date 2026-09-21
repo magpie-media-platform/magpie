@@ -1,17 +1,21 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { HardDrivesIcon, PlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { HardDrivesIcon, PlusIcon, PowerIcon, TrashIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
 
 import { Badge } from '@/components/ui/Badge';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
-import { DataTable } from '@/components/ui/DataTable';
+import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Pager } from '@/components/ui/Pager';
 import { MultiSelectColumnFilter, encodeMultiValue, decodeMultiValue } from '@/components/ui/MultiSelectColumnFilter';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -42,6 +46,7 @@ import { mapStatusParam } from '@/lib/urlParams';
 import { DownloadClientForm, type DownloadClientFormValues } from '@/components/configuration/DownloadClientForm';
 
 import './DownloadClientsPage.css';
+import '@/styles/bulk-actions-toolbar.css';
 import '@/styles/card-actions.css';
 
 interface DownloadClientItem {
@@ -116,7 +121,12 @@ export function DownloadClientsPage() {
     const [deletingClient, setDeletingClient] = useState<DownloadClientItem | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const [testingId, setTestingId] = useState<string | null>(null);
+    const [pageRowIds, setPageRowIds] = useState<string[]>([]);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const [isBulkSettingEnabled, setIsBulkSettingEnabled] = useState(false);
     const { toast } = useToast();
+    const runBulk = useBulkRun();
 
     const {
         clients: apiClients,
@@ -321,6 +331,50 @@ export function DownloadClientsPage() {
         setDeletingClient(null);
     }, []);
 
+    const selectionResetKey = useMemo(
+        () => [filters.provider, filters.status, filters.enabled].join('|'),
+        [filters.provider, filters.status, filters.enabled],
+    );
+    const selection = useBulkSelection({
+        pageRowIds,
+        totalCount: filteredClients.length,
+        resetKey: selectionResetKey,
+    });
+    const selectedClients = useMemo(
+        () => filteredClients.filter((c) => selection.isRowChecked(c.id)),
+        [filteredClients, selection],
+    );
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedClients, selection, {
+                action: (client) => deleteClient(client.id),
+                verb: 'delete',
+                itemNounPlural: 'download clients',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [deleteClient, runBulk, selectedClients, selection]);
+
+    const handleBulkSetEnabled = useCallback(
+        async (isEnabled: boolean) => {
+            setIsBulkSettingEnabled(true);
+            try {
+                await runBulk(selectedClients, selection, {
+                    action: (client) => toggleClientEnabled(client.id, isEnabled),
+                    verb: isEnabled ? 'enable' : 'disable',
+                    itemNounPlural: 'download clients',
+                });
+            } finally {
+                setIsBulkSettingEnabled(false);
+            }
+        },
+        [runBulk, selectedClients, selection, toggleClientEnabled],
+    );
+
     const handleClientFormSubmit = useCallback(
         async (values: DownloadClientFormValues) => {
             try {
@@ -359,7 +413,7 @@ export function DownloadClientsPage() {
                         variant: 'success',
                     });
                 }
-                closeClientForm();
+                handleFormClose(false);
             } catch (error) {
                 toast({
                     title: values.name || 'Error',
@@ -369,7 +423,7 @@ export function DownloadClientsPage() {
                 throw error;
             }
         },
-        [createClient, currentEditingClient, updateClient, toast, closeClientForm],
+        [createClient, currentEditingClient, updateClient, toast, handleFormClose],
     );
 
     const handleRefresh = useCallback(async () => {
@@ -383,10 +437,17 @@ export function DownloadClientsPage() {
 
     const columns = useMemo<ColumnDef<DownloadClientItem>[]>(
         () => [
+            selectColumn<DownloadClientItem>({
+                selection,
+                getId: (row) => row.id,
+                headerLabel: 'Select all download clients',
+                rowLabel: (row) => row.name,
+            }),
             {
                 id: 'name',
                 accessorFn: (row) => row.name,
                 header: 'Name',
+                meta: { mobileRole: 'header' },
                 size: 240,
                 cell: ({ row }) => (
                     <span className="download-clients-table__name" title={row.original.name}>
@@ -422,7 +483,7 @@ export function DownloadClientsPage() {
                         onChange={(value) => setFilters({ status: value })}
                     />
                 ),
-                meta: { headerLabel: 'Status' },
+                meta: { headerLabel: 'Status', mobileRole: 'header' },
                 size: 140,
                 cell: ({ row }) => {
                     const variant = downloadClientStatusVariants[row.original.status];
@@ -446,7 +507,7 @@ export function DownloadClientsPage() {
                         onChange={(value) => setFilters({ enabled: value })}
                     />
                 ),
-                meta: { headerLabel: 'Enabled' },
+                meta: { headerLabel: 'Enabled', mobileRole: 'hidden' },
                 size: 140,
                 cell: ({ row }) => (
                     <Badge variant={row.original.enabled ? 'healthy' : 'unknown'} size="sm">
@@ -490,6 +551,7 @@ export function DownloadClientsPage() {
             },
         ],
         [
+            selection,
             providerOptions,
             statusOptions,
             provider,
@@ -556,6 +618,49 @@ export function DownloadClientsPage() {
                     }
                 />
 
+                <BulkActionsToolbar
+                    selection={selection}
+                    label="Download client selection actions"
+                    itemNounPlural="download clients"
+                >
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled}
+                        onClick={() => void handleBulkSetEnabled(true)}
+                        aria-label="Enable selected download clients"
+                        data-action="bulk-enable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Enable</span>
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled}
+                        onClick={() => void handleBulkSetEnabled(false)}
+                        aria-label="Disable selected download clients"
+                        data-action="bulk-disable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Disable</span>
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected download clients"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                    </Button>
+                </BulkActionsToolbar>
+
+                <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+
                 <div className="download-clients-table" data-area="clients">
                     <DataTable<DownloadClientItem>
                         columns={columns}
@@ -570,9 +675,15 @@ export function DownloadClientsPage() {
                         pageSize={PAGE_SIZE}
                         pagination={pagination}
                         getRowId={getRowId}
+                        onPageRowIdsChange={setPageRowIds}
                         loading={isLoading}
                         emptyState={error ? errorState : emptyState}
                         keepHeaderWhenEmpty={hasActiveFilters}
+                        mobileSelectionActive={selection.selectionMode}
+                        mobileSelectionOverlay={{
+                            isSelected: (client) => selection.isRowChecked(client.id),
+                            onToggle: (client) => selection.toggleRow(client.id, !selection.isRowChecked(client.id)),
+                        }}
                         aria-label="Download clients"
                     />
                     {filteredClients.length > PAGE_SIZE && (
@@ -610,6 +721,59 @@ export function DownloadClientsPage() {
                 itemType="Download Client"
                 isDeleting={isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Download Clients"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="download-clients-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="download clients"
+                >
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(true)}
+                        aria-label="Enable selected download clients"
+                        data-action="bulk-enable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Enable
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(false)}
+                        aria-label="Disable selected download clients"
+                        data-action="bulk-disable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Disable
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected download clients"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
         </div>
     );
 }

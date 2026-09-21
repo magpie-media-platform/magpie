@@ -2,16 +2,19 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -20,7 +23,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class RefreshTokenRepositoryTests
+public sealed class RefreshTokenRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IRefreshTokenRepository _subject = null!;
@@ -54,9 +57,11 @@ public class RefreshTokenRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
@@ -64,7 +69,8 @@ public class RefreshTokenRepositoryTests
             _context,
             auditRecordRepository,
             transactionManager,
-            loggerFactory.CreateLogger<RefreshTokenRepository>());
+            loggerFactory.CreateLogger<RefreshTokenRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -352,6 +358,56 @@ public class RefreshTokenRepositoryTests
         {
             Assert.That(first, Is.Null);
             Assert.That(second, Is.Not.Null);
+        }
+    }
+
+    [Test]
+    public async Task DeleteByUserAsync_DeletesEveryTokenOfTheUser_WhenTheUserHasTokens()
+    {
+        // Arrange
+        var otherUser = new User
+        {
+            Username = "OtherUser",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Users.Add(otherUser);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        await _subject.CreateAsync(new RefreshToken
+        {
+            UserId = _userId,
+            TokenHash = "first",
+            AccessTokenJti = "jti-first",
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        }).ConfigureAwait(false);
+        await _subject.CreateAsync(new RefreshToken
+        {
+            UserId = _userId,
+            TokenHash = "second",
+            AccessTokenJti = "jti-second",
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        }).ConfigureAwait(false);
+        await _subject.CreateAsync(new RefreshToken
+        {
+            UserId = otherUser.Id,
+            TokenHash = "third",
+            AccessTokenJti = "jti-third",
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        }).ConfigureAwait(false);
+
+        // Act
+        var deleted = await _subject.DeleteByUserAsync(_userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.EqualTo(2));
+            Assert.That(await _subject.GetByHashAsync("first").ConfigureAwait(false), Is.Null);
+            Assert.That(await _subject.GetByAccessTokenJtiAsync("jti-second").ConfigureAwait(false), Is.Null);
+            Assert.That(await _subject.GetByHashAsync("third").ConfigureAwait(false), Is.Not.Null);
         }
     }
 }

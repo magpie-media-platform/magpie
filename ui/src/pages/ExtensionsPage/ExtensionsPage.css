@@ -192,14 +192,13 @@
         color: var(--text-muted);
     }
 
+    .extensions-page__toggle-label {
+        display: none;
+    }
+
     @media (max-width: 480px) {
         .extensions-page__pull-to-refresh .pull-to-refresh__content {
             padding: var(--space-md);
-        }
-
-        .extensions-page__card-link {
-            flex-wrap: wrap;
-            gap: var(--space-sm);
         }
 
         .extensions-page__card-badges {
@@ -213,39 +212,62 @@
 
     @media (max-width: 640px) {
         .extensions-page__card {
-            align-items: stretch;
-            flex-direction: column;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: var(--space-sm);
+            padding: var(--space-md);
         }
 
         .extensions-page__drag-handle {
-            width: auto;
-            justify-content: center;
+            order: -3;
+            flex: 0 0 auto;
+            align-self: center;
             border-right: none;
-            border-bottom: 1px solid var(--border-default);
-            padding: var(--space-2xs) var(--space-md);
-        }
-
-        .extensions-page__order-controls {
-            flex-direction: row;
-            align-self: auto;
-            border-right: none;
-            border-bottom: 1px solid var(--border-default);
         }
 
         .extensions-page__card-link {
-            width: 100%;
+            order: -2;
+            flex: 1 1 auto;
+            flex-wrap: wrap;
+            width: auto;
+            padding: 0;
         }
 
         .extensions-page__card-badges {
             justify-content: flex-start;
-            margin-left: 0;
         }
 
         .extensions-page__card-toggle {
-            justify-content: flex-end;
-            padding: var(--space-sm) var(--space-md);
-            border-top: 1px solid var(--border-default);
+            order: -1;
+            flex: 1 1 100%;
+            justify-content: space-between;
+            padding: 0;
             border-left: none;
+        }
+
+        .extensions-page__toggle-label {
+            display: inline-flex;
+            font-size: var(--text-xs);
+            font-weight: var(--weight-semibold);
+            text-transform: uppercase;
+            letter-spacing: var(--tracking-wide);
+            color: var(--text-muted);
+        }
+
+        .extensions-page__order-controls {
+            order: 0;
+            flex: 1 1 100%;
+            flex-direction: row;
+            align-self: auto;
+            justify-content: flex-start;
+            gap: var(--space-sm);
+            padding: var(--space-2-5) 0 0;
+            border: none;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        .extensions-page__order-button {
+            min-height: var(--touch-target-min);
         }
     }
 

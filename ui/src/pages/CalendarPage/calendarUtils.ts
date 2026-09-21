@@ -34,7 +34,7 @@ export function getFirstDayOfWeek(locale?: string): number {
             return firstDay === 7 ? 0 : firstDay;
         }
     } catch {
-        // Intl.Locale weekInfo/getWeekInfo is not supported in every engine; fall back to Sunday.
+        // Not every engine supplies Intl.Locale week info, so an unsupported engine falls back to Sunday.
     }
     return 0;
 }
@@ -53,8 +53,9 @@ export function getMonthDays(year: number, month: number): Date[] {
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
 
-    const startPadding = firstDay.getDay();
-    const endPadding = 6 - lastDay.getDay();
+    const weekStart = getFirstDayOfWeek();
+    const startPadding = (firstDay.getDay() - weekStart + 7) % 7;
+    const endPadding = 6 - ((lastDay.getDay() - weekStart + 7) % 7);
 
     const days: Date[] = [];
 

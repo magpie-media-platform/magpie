@@ -1,4 +1,4 @@
-import type { DetailRow } from '@/components/ui/DetailsPanel';
+import type { DetailRow } from '@/types/details';
 import { formatShortDate } from '@/lib/dateFormatting';
 import { formatTimeSpanDuration } from '@/lib/formatTime';
 import type { MaterializedMetadata } from '@/types/contentMetadata';
@@ -35,7 +35,7 @@ function formatDisplayDuration(value: string): string {
         return `${hours[1]} h${hours[2] ? ` ${hours[2].padStart(2, '0')} m` : ''}`;
     }
 
-    return duration.replace('m', ' m');
+    return duration.replace(/([ms])$/, ' $1');
 }
 
 export function buildMaterializedDetailRows(

@@ -56,4 +56,9 @@ public record AuditRecord
     /// The correlation id of the request.
     /// </summary>
     public Guid? CorrelationId { get; set; }
+
+    /// <summary>
+    /// The id of the job execution that wrote the record, when a job wrote it.
+    /// </summary>
+    public Guid? JobExecutionId { get; set; }
 }

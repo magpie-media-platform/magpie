@@ -153,7 +153,7 @@ public sealed class RootFolderServiceTests
             [
                 new RootFolder
                 {
-                    Id = Guid.Parse("66666666-6666-6666-6666-666666666666"),
+                    Id = Guid.NewGuid(),
                     Name = "Television",
                     Path = @"D:\Tv",
                     ContentType = "movies"
@@ -205,6 +205,7 @@ public sealed class RootFolderServiceTests
             Name = "Movies",
             Path = @"C:\media\shows\..\movies",
             ContentType = "movies",
+            IsDefault = true,
             Defaults = new()
             {
                 ["movie"] = new RootFolderDefault
@@ -298,7 +299,7 @@ public sealed class RootFolderServiceTests
     }
 
     [Test]
-    public void CreateAsync_ThrowsWithRegisteredTypes_WhenContentTypeIsNotRegistered()
+    public void CreateAsync_Throws_WhenContentTypeIsNotRegistered()
     {
         // Arrange
         _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media")).Returns(true);
@@ -316,12 +317,92 @@ public sealed class RootFolderServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(exception!.ParamName, Is.EqualTo("ContentType"));
-            Assert.That(exception.Message, Does.StartWith("Content type must be one of: movies, series."));
+            Assert.That(exception.Message, Does.StartWith("The content type unknown is not registered."));
             _rootFolderRepository.Verify(repository => repository.CreateAsync(
                 It.IsAny<RootFolder>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()), Times.Never);
         }
+    }
+
+    [Test]
+    public async Task CreateAsync_CreatesRootFolder_WhenTheContentTypeHasNoDefaultYet()
+    {
+        // Arrange
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media\movies")).Returns(true);
+        _rootFolderRepository.Setup(repository => repository.CreateAsync(
+                It.IsAny<RootFolder>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RootFolder folder, Guid? _, CancellationToken _) => folder);
+        var create = new RootFolderCreate
+        {
+            Name = "Movies",
+            Path = @"C:\media\movies",
+            ContentType = "movies",
+            IsDefault = false,
+            Defaults = new()
+            {
+                ["movie"] = new RootFolderDefault
+                {
+                    QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                }
+            }
+        };
+
+        // Act
+        await _subject.CreateAsync(create, null).ConfigureAwait(false);
+
+        // Assert
+        _rootFolderRepository.Verify(repository => repository.CreateAsync(
+            It.Is<RootFolder>(rootFolder => rootFolder.ContentType == "movies"),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
+    public async Task CreateAsync_CreatesRootFolder_WhenContentTypeAlreadyHasADefault()
+    {
+        // Arrange
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media\movies-2")).Returns(true);
+        _rootFolderRepository
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new RootFolder
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Movies",
+                    Path = @"C:\media\movies",
+                    ContentType = "movies",
+                    IsDefault = true
+                }
+            ]);
+        _rootFolderRepository.Setup(repository => repository.CreateAsync(
+                It.IsAny<RootFolder>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RootFolder folder, Guid? _, CancellationToken _) => folder);
+        var create = new RootFolderCreate
+        {
+            Name = "Movies 2",
+            Path = @"C:\media\movies-2",
+            ContentType = "movies",
+            IsDefault = false,
+            Defaults = new()
+            {
+                ["movie"] = new RootFolderDefault
+                {
+                    QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                }
+            }
+        };
+
+        // Act
+        var result = await _subject.CreateAsync(create, null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.IsDefault, Is.False);
     }
 
     [TestCase("")]
@@ -346,7 +427,7 @@ public sealed class RootFolderServiceTests
                     }
                 }
             });
-        var patch = new RootFolderPatch { Name = name };
+        var patch = new RootFolderPatch { Name = new() { Value = name } };
 
         // Act
         var exception = Assert.ThrowsAsync<ArgumentException>(
@@ -357,8 +438,8 @@ public sealed class RootFolderServiceTests
         {
             Assert.That(exception!.ParamName, Is.EqualTo("Name"));
             Assert.That(exception.Message, Does.StartWith("Name is required."));
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()), Times.Never);
         }
@@ -387,7 +468,7 @@ public sealed class RootFolderServiceTests
                     }
                 }
             });
-        var patch = new RootFolderPatch { Path = path };
+        var patch = new RootFolderPatch { Path = new() { Value = path } };
 
         // Act
         var exception = Assert.ThrowsAsync<ArgumentException>(
@@ -398,8 +479,8 @@ public sealed class RootFolderServiceTests
         {
             Assert.That(exception!.ParamName, Is.EqualTo("Path"));
             Assert.That(exception.Message, Does.StartWith(message));
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()), Times.Never);
         }
@@ -428,15 +509,15 @@ public sealed class RootFolderServiceTests
                 }
             });
         _rootFolderRepository
-            .Setup(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var patch = new RootFolderPatch
         {
-            Name = "Films",
-            Path = @"C:\missing"
+            Name = new() { Value = "Films" },
+            Path = new() { Value = @"C:\missing" }
         };
 
         // Act
@@ -451,11 +532,11 @@ public sealed class RootFolderServiceTests
                 Times.Never);
             _rootFolderRepository.Verify(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()),
                 Times.Never);
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.Is<RootFolder>(folder =>
-                    folder.Id == rootFolderId &&
-                    folder.Name == "Films" &&
-                    folder.Path == @"C:\missing"),
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.Is<RootFolderPatch>(applied =>
+                    applied.Id == rootFolderId &&
+                    applied.Name!.Value == "Films" &&
+                    applied.Path!.Value == @"C:\missing"),
                 null,
                 It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -483,15 +564,15 @@ public sealed class RootFolderServiceTests
                 }
             });
         _rootFolderRepository
-            .Setup(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var patch = new RootFolderPatch
         {
-            Name = "Films",
-            Path = @"\\nas\media\"
+            Name = new() { Value = "Films" },
+            Path = new() { Value = @"\\nas\media\" }
         };
 
         // Act
@@ -506,11 +587,11 @@ public sealed class RootFolderServiceTests
                 Times.Never);
             _rootFolderRepository.Verify(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()),
                 Times.Never);
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.Is<RootFolder>(folder =>
-                    folder.Id == rootFolderId &&
-                    folder.Name == "Films" &&
-                    folder.Path == @"\\nas\media"),
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.Is<RootFolderPatch>(applied =>
+                    applied.Id == rootFolderId &&
+                    applied.Name!.Value == "Films" &&
+                    applied.Path!.Value == @"\\nas\media"),
                 null,
                 It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -538,12 +619,12 @@ public sealed class RootFolderServiceTests
                 }
             });
         _rootFolderRepository
-            .Setup(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        var patch = new RootFolderPatch { Path = @"C:\media" };
+        var patch = new RootFolderPatch { Path = new() { Value = @"C:\media" } };
 
         // Act
         var result = await _subject.PatchAsync(rootFolderId, patch, null).ConfigureAwait(false);
@@ -557,8 +638,9 @@ public sealed class RootFolderServiceTests
                 Times.Never);
             _rootFolderRepository.Verify(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()),
                 Times.Never);
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.Is<RootFolder>(folder => folder.Id == rootFolderId && folder.Path == @"C:\media"),
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.Is<RootFolderPatch>(applied =>
+                    applied.Id == rootFolderId && applied.Path!.Value == @"C:\media"),
                 null,
                 It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -592,21 +674,24 @@ public sealed class RootFolderServiceTests
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([existing]);
         _rootFolderRepository
-            .Setup(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 actingUserId,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var patch = new RootFolderPatch
         {
-            Name = "Films",
-            Path = @"C:\media\shows\..\movies",
-            ContentType = "movies",
+            Name = new() { Value = "Films" },
+            Path = new() { Value = @"C:\media\shows\..\movies" },
+            ContentType = new() { Value = "movies" },
             Defaults = new()
             {
-                ["movie"] = new RootFolderDefault
+                Value = new()
                 {
-                    QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                    ["movie"] = new RootFolderDefault
+                    {
+                        QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                    }
                 }
             }
         };
@@ -618,12 +703,12 @@ public sealed class RootFolderServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.Is<RootFolder>(folder =>
-                    folder.Id == rootFolderId &&
-                    folder.Name == "Films" &&
-                    folder.Path == @"C:\media\movies" &&
-                    folder.ContentType == "movies"),
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.Is<RootFolderPatch>(applied =>
+                    applied.Id == rootFolderId &&
+                    applied.Name!.Value == "Films" &&
+                    applied.Path!.Value == @"C:\media\movies" &&
+                    applied.ContentType!.Value == "movies"),
                 actingUserId,
                 It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -651,7 +736,7 @@ public sealed class RootFolderServiceTests
                     }
                 }
             });
-        var patch = new RootFolderPatch { Path = @"C:\missing" };
+        var patch = new RootFolderPatch { Path = new() { Value = @"C:\missing" } };
 
         // Act
         var exception = Assert.ThrowsAsync<ArgumentException>(
@@ -662,8 +747,8 @@ public sealed class RootFolderServiceTests
         {
             Assert.That(exception!.ParamName, Is.EqualTo("Path"));
             Assert.That(exception.Message, Does.StartWith("Directory does not exist."));
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()), Times.Never);
         }
@@ -673,7 +758,7 @@ public sealed class RootFolderServiceTests
     public void PatchAsync_Throws_WhenPathMatchesAnotherStoredRootIgnoringCase()
     {
         // Arrange
-        var rootFolderId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var rootFolderId = Guid.NewGuid();
         _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media\movies")).Returns(true);
         _rootFolderRepository
             .Setup(repository => repository.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
@@ -697,13 +782,13 @@ public sealed class RootFolderServiceTests
             [
                 new RootFolder
                 {
-                    Id = Guid.Parse("44444444-4444-4444-4444-444444444444"),
+                    Id = Guid.NewGuid(),
                     Name = "Existing",
                     Path = @"c:\MEDIA\MOVIES",
                     ContentType = "movies"
                 }
             ]);
-        var patch = new RootFolderPatch { Path = @"C:\media\movies" };
+        var patch = new RootFolderPatch { Path = new() { Value = @"C:\media\movies" } };
 
         // Act
         var exception = Assert.ThrowsAsync<ArgumentException>(
@@ -714,15 +799,15 @@ public sealed class RootFolderServiceTests
         {
             Assert.That(exception!.ParamName, Is.EqualTo("Path"));
             Assert.That(exception.Message, Does.StartWith("Path is already configured as a root folder."));
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()), Times.Never);
         }
     }
 
     [Test]
-    public void PatchAsync_ThrowsWithRegisteredTypes_WhenContentTypeIsNotRegistered()
+    public void PatchAsync_Throws_WhenContentTypeIsNotRegistered()
     {
         // Arrange
         var rootFolderId = Guid.Parse("55555555-5555-5555-5555-555555555555");
@@ -759,12 +844,15 @@ public sealed class RootFolderServiceTests
             });
         var patch = new RootFolderPatch
         {
-            ContentType = "unknown",
+            ContentType = new() { Value = "unknown" },
             Defaults = new()
             {
-                ["unknown"] = new RootFolderDefault
+                Value = new()
                 {
-                    QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                    ["unknown"] = new RootFolderDefault
+                    {
+                        QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                    }
                 }
             }
         };
@@ -777,11 +865,124 @@ public sealed class RootFolderServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(exception!.ParamName, Is.EqualTo("ContentType"));
-            Assert.That(exception.Message, Does.StartWith("Content type must be one of: movies, series."));
-            _rootFolderRepository.Verify(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+            Assert.That(exception.Message, Does.StartWith("The content type unknown is not registered."));
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_AppliesThePatch_WhenTheOnlyDefaultOfAContentTypeIsCleared()
+    {
+        // Arrange
+        var rootFolderId = Guid.NewGuid();
+        _rootFolderRepository
+            .Setup(repository => repository.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RootFolder
+            {
+                Id = rootFolderId,
+                Name = "Movies",
+                Path = @"C:\media",
+                ContentType = "movies",
+                IsDefault = true,
+                Defaults = new()
+                {
+                    ["movie"] = new RootFolderDefault
+                    {
+                        QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                    }
+                }
+            });
+        _rootFolderRepository
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new RootFolder
+                {
+                    Id = rootFolderId,
+                    Name = "Movies",
+                    Path = @"C:\media",
+                    ContentType = "movies",
+                    IsDefault = true
+                }
+            ]);
+        var patch = new RootFolderPatch { IsDefault = new() { Value = false } };
+
+        // Act
+        await _subject.PatchAsync(rootFolderId, patch, null).ConfigureAwait(false);
+
+        // Assert
+        _rootFolderRepository.Verify(repository => repository.PatchAsync(
+            It.Is<RootFolderPatch>(applied => applied.Id == rootFolderId && !applied.IsDefault!.Value),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
+    public async Task PatchAsync_UpdatesIsDefault_WhenAnotherDefaultExistsForContentType()
+    {
+        // Arrange
+        var rootFolderId = Guid.NewGuid();
+        var otherRootFolderId = Guid.NewGuid();
+        _rootFolderRepository
+            .Setup(repository => repository.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RootFolder
+            {
+                Id = rootFolderId,
+                Name = "Movies",
+                Path = @"C:\media",
+                ContentType = "movies",
+                IsDefault = true,
+                Defaults = new()
+                {
+                    ["movie"] = new RootFolderDefault
+                    {
+                        QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                    }
+                }
+            });
+        _rootFolderRepository
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new RootFolder
+                {
+                    Id = rootFolderId,
+                    Name = "Movies",
+                    Path = @"C:\media",
+                    ContentType = "movies",
+                    IsDefault = true
+                },
+                new RootFolder
+                {
+                    Id = otherRootFolderId,
+                    Name = "Movies 2",
+                    Path = @"C:\media2",
+                    ContentType = "movies",
+                    IsDefault = true
+                }
+            ]);
+        _rootFolderRepository
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var patch = new RootFolderPatch { IsDefault = new() { Value = false } };
+
+        // Act
+        var result = await _subject.PatchAsync(rootFolderId, patch, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.Is<RootFolderPatch>(applied => applied.Id == rootFolderId && !applied.IsDefault!.Value),
+                null,
+                It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 
@@ -843,6 +1044,7 @@ public sealed class RootFolderServiceTests
             Name = "Publications",
             Path = @"C:\library",
             ContentType = "publication",
+            IsDefault = true,
             Defaults = new()
             {
                 ["written"] = new RootFolderDefault { QualityTierListId = ebookTierListId },
@@ -890,7 +1092,8 @@ public sealed class RootFolderServiceTests
         {
             Name = "Books",
             Path = @"C:\books",
-            ContentType = "book"
+            ContentType = "book",
+            IsDefault = true
         };
 
         // Act
@@ -928,6 +1131,7 @@ public sealed class RootFolderServiceTests
             Name = "Books",
             Path = @"C:\books",
             ContentType = "book",
+            IsDefault = true,
             Defaults = new()
             {
                 ["book"] = new RootFolderDefault
@@ -986,6 +1190,7 @@ public sealed class RootFolderServiceTests
             Name = "Books",
             Path = @"C:\books",
             ContentType = "book",
+            IsDefault = true,
             Defaults = new()
             {
                 ["book"] = new RootFolderDefault { QualityTierListId = tierListId }
@@ -1022,30 +1227,30 @@ public sealed class RootFolderServiceTests
                     }
                 }
             });
-        RootFolder? updated = null;
-        _rootFolderRepository.Setup(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+        RootFolderPatch? updated = null;
+        _rootFolderRepository.Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 null,
                 It.IsAny<CancellationToken>()))
-            .Callback((RootFolder folder, Guid? _, CancellationToken _) => updated = folder)
+            .Callback((RootFolderPatch applied, Guid? _, CancellationToken _) => updated = applied)
             .ReturnsAsync(true);
 
         // Act
         var result = await _subject
-            .PatchAsync(rootFolderId, new RootFolderPatch { ContentType = "audio" }, null)
+            .PatchAsync(rootFolderId, new RootFolderPatch { ContentType = new() { Value = "audio" } }, null)
             .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            Assert.That(updated!.ContentType, Is.EqualTo("audio"));
-            Assert.That(updated.Defaults, Is.Empty);
+            Assert.That(updated!.ContentType!.Value, Is.EqualTo("audio"));
+            Assert.That(updated.Defaults!.Value, Is.Empty);
         }
     }
 
     [Test]
-    public async Task PatchAsync_PreservesDefaults_WhenPatchOnlyChangesName()
+    public async Task PatchAsync_SendsOnlyTheNamedField_WhenPatchOnlyChangesName()
     {
         // Arrange
         var rootFolderId = Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
@@ -1066,29 +1271,27 @@ public sealed class RootFolderServiceTests
                     ["book"] = new() { QualityTierListId = tierListId }
                 }
             });
-        RootFolder? updated = null;
-        _rootFolderRepository.Setup(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+        RootFolderPatch? updated = null;
+        _rootFolderRepository.Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 null,
                 It.IsAny<CancellationToken>()))
-            .Callback((RootFolder folder, Guid? _, CancellationToken _) => updated = folder)
+            .Callback((RootFolderPatch applied, Guid? _, CancellationToken _) => updated = applied)
             .ReturnsAsync(true);
 
         // Act
         var result = await _subject
-            .PatchAsync(rootFolderId, new RootFolderPatch { Name = "New name" }, null)
+            .PatchAsync(rootFolderId, new RootFolderPatch { Name = new() { Value = "New name" } }, null)
             .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            Assert.That(updated!.Name, Is.EqualTo("New name"));
-            Assert.That(updated.DefaultMonitoring, Is.True);
-            Assert.That(updated.RenameTemplate, Is.EqualTo("{Title}.{Ext}"));
-            Assert.That(updated.Defaults, Has.Count.EqualTo(1));
-            Assert.That(updated.Defaults.ContainsKey("book"), Is.True);
-            Assert.That(updated.Defaults["book"].QualityTierListId, Is.EqualTo(tierListId));
+            Assert.That(updated!.Name!.Value, Is.EqualTo("New name"));
+            Assert.That(updated.DefaultMonitoring, Is.Null);
+            Assert.That(updated.RenameTemplate, Is.Null);
+            Assert.That(updated.Defaults, Is.Null);
         }
     }
 
@@ -1142,19 +1345,22 @@ public sealed class RootFolderServiceTests
                     MimeTypes = ["audio/*"]
                 }
             ]);
-        RootFolder? updated = null;
-        _rootFolderRepository.Setup(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+        RootFolderPatch? updated = null;
+        _rootFolderRepository.Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 null,
                 It.IsAny<CancellationToken>()))
-            .Callback((RootFolder folder, Guid? _, CancellationToken _) => updated = folder)
+            .Callback((RootFolderPatch applied, Guid? _, CancellationToken _) => updated = applied)
             .ReturnsAsync(true);
         var patch = new RootFolderPatch
         {
-            ContentType = "audio",
+            ContentType = new() { Value = "audio" },
             Defaults = new()
             {
-                ["album"] = new RootFolderDefault { QualityTierListId = tierListId }
+                Value = new()
+                {
+                    ["album"] = new RootFolderDefault { QualityTierListId = tierListId }
+                }
             }
         };
 
@@ -1166,10 +1372,10 @@ public sealed class RootFolderServiceTests
         {
             Assert.That(result, Is.True);
             Assert.That(updated, Is.Not.Null);
-            Assert.That(updated!.ContentType, Is.EqualTo("audio"));
-            Assert.That(updated.Defaults, Has.Count.EqualTo(1));
-            Assert.That(updated.Defaults.ContainsKey("album"), Is.True);
-            Assert.That(updated.Defaults["album"].QualityTierListId, Is.EqualTo(tierListId));
+            Assert.That(updated!.ContentType!.Value, Is.EqualTo("audio"));
+            Assert.That(updated.Defaults!.Value, Has.Count.EqualTo(1));
+            Assert.That(updated.Defaults.Value.ContainsKey("album"), Is.True);
+            Assert.That(updated.Defaults.Value["album"].QualityTierListId, Is.EqualTo(tierListId));
         }
     }
 
@@ -1235,7 +1441,7 @@ public sealed class RootFolderServiceTests
     public async Task PatchAsync_AppliesNullableScalarPatches_WhenWrappersArePresent()
     {
         // Arrange
-        var rootFolderId = Guid.Parse("abababab-abab-abab-abab-abababababab");
+        var rootFolderId = Guid.NewGuid();
         _rootFolderRepository.Setup(repository => repository.GetByIdAsync(
                 rootFolderId,
                 It.IsAny<CancellationToken>()))
@@ -1255,12 +1461,12 @@ public sealed class RootFolderServiceTests
                     }
                 }
             });
-        RootFolder? updated = null;
-        _rootFolderRepository.Setup(repository => repository.UpdateAsync(
-                It.IsAny<RootFolder>(),
+        RootFolderPatch? updated = null;
+        _rootFolderRepository.Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
                 null,
                 It.IsAny<CancellationToken>()))
-            .Callback((RootFolder folder, Guid? _, CancellationToken _) => updated = folder)
+            .Callback((RootFolderPatch applied, Guid? _, CancellationToken _) => updated = applied)
             .ReturnsAsync(true);
 
         // Act
@@ -1277,8 +1483,66 @@ public sealed class RootFolderServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            Assert.That(updated!.DefaultMonitoring, Is.Null);
-            Assert.That(updated.RenameTemplate, Is.Null);
+            Assert.That(updated!.DefaultMonitoring!.Value, Is.Null);
+            Assert.That(updated.RenameTemplate!.Value, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task GetDiskSpaceAsync_ReturnsUnavailableFolder_WhenFullPathResolutionThrows()
+    {
+        // Arrange
+        var rootFolderId = Guid.NewGuid();
+        _fileSystem.Setup(fileSystem => fileSystem.GetFullPath(@"\\broken\share")).Throws<IOException>();
+        _rootFolderRepository
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new RootFolder
+                {
+                    Id = rootFolderId,
+                    Name = "Broken",
+                    Path = @"\\broken\share",
+                    ContentType = "movies"
+                }
+            ]);
+
+        // Act
+        var result = await _subject.GetDiskSpaceAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Folders, Has.Length.EqualTo(1));
+            Assert.That(result.Folders[0].TotalBytes, Is.EqualTo(0));
+            Assert.That(result.Folders[0].FreeBytes, Is.EqualTo(0));
+            Assert.That(result.TotalBytes, Is.EqualTo(0));
+        }
+    }
+
+    [Test]
+    public async Task GetDiskSpaceAsync_CountsVolumeOnce_WhenTwoFoldersShareARealDrive()
+    {
+        // Arrange
+        var firstId = Guid.NewGuid();
+        var secondId = Guid.NewGuid();
+        var systemDrive = Path.GetPathRoot(Environment.SystemDirectory)!;
+        _rootFolderRepository
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new RootFolder { Id = firstId, Name = "Movies", Path = systemDrive, ContentType = "movies" },
+                new RootFolder { Id = secondId, Name = "Shows", Path = systemDrive, ContentType = "series" }
+            ]);
+
+        // Act
+        var result = await _subject.GetDiskSpaceAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Folders, Has.Length.EqualTo(2));
+            Assert.That(result.TotalBytes, Is.EqualTo(result.Folders[0].TotalBytes));
         }
     }
 }

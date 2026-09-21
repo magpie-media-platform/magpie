@@ -22,9 +22,9 @@ public static class TextNormalizationExtensions
         = new(() => BuildLanguageCodes(static culture => culture.ThreeLetterISOLanguageName));
 
     /// <summary>
-    /// Returns the trimmed text, or <see langword="null" /> when it is blank.
+    /// Trims text, or returns <see langword="null"/> when it is blank.
     /// </summary>
-    /// <param name="value">Text to inspect.</param>
+    /// <param name="value">Text to inspect</param>
     public static string? NullIfBlank(this string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value!.Trim();
@@ -33,7 +33,7 @@ public static class TextNormalizationExtensions
     /// <summary>
     /// Replaces filename separator punctuation with spaces and collapses whitespace runs.
     /// </summary>
-    /// <param name="input">Filename or folder name to normalize.</param>
+    /// <param name="input">Filename or folder name to normalize</param>
     public static string NormalizeMediaFilename(this string input)
     {
         if (string.IsNullOrEmpty(input))
@@ -58,7 +58,7 @@ public static class TextNormalizationExtensions
     /// <summary>
     /// Strips HTML tags, decodes entities, and collapses whitespace runs.
     /// </summary>
-    /// <param name="value">Markup to convert to plain text.</param>
+    /// <param name="value">Markup to convert to plain text</param>
     public static string? NormalizeHtmlToText(this string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -74,7 +74,7 @@ public static class TextNormalizationExtensions
     /// <summary>
     /// Resolves any culture name, tag, or English/native language name to its ISO 639-1 two-letter code.
     /// </summary>
-    /// <param name="value">Language name or code to resolve.</param>
+    /// <param name="value">Language name or code to resolve</param>
     public static string? NormalizeTwoLetterLanguageCode(this string? value)
     {
         return LookupLanguageCode(TwoLetterCodes.Value, value);
@@ -83,7 +83,7 @@ public static class TextNormalizationExtensions
     /// <summary>
     /// Resolves any culture name, tag, or English/native language name to its ISO 639-2 three-letter code.
     /// </summary>
-    /// <param name="value">Language name or code to resolve.</param>
+    /// <param name="value">Language name or code to resolve</param>
     public static string? NormalizeThreeLetterLanguageCode(this string? value)
     {
         return LookupLanguageCode(ThreeLetterCodes.Value, value);

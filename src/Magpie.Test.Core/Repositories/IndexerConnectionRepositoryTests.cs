@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Core;
@@ -11,10 +12,12 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -23,7 +26,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class IndexerConnectionRepositoryTests
+public sealed class IndexerConnectionRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IIndexerConnectionRepository _subject = null!;
@@ -68,9 +71,11 @@ public class IndexerConnectionRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
@@ -87,7 +92,8 @@ public class IndexerConnectionRepositoryTests
             auditRecordRepository,
             transactionManager,
             loggerFactory.CreateLogger<IndexerConnectionRepository>(),
-            protector.Object);
+            protector.Object,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -227,7 +233,7 @@ public class IndexerConnectionRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_WritesLastError_AndNullClearsIt()
+    public async Task PatchAsync_WritesAndClearsLastError_WhenPatched()
     {
         // Arrange
         var connection = new IndexerConnection
@@ -278,7 +284,7 @@ public class IndexerConnectionRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_TruncatesLastError_ToColumnLength()
+    public async Task PatchAsync_TruncatesLastError_WhenTheErrorExceedsColumnLength()
     {
         // Arrange
         var connection = new IndexerConnection

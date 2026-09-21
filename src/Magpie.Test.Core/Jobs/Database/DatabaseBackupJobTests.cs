@@ -54,8 +54,8 @@ public sealed class DatabaseBackupJobTests
         var subject = (IJob)new DatabaseBackupJob(
             eventBus.Object,
             NullLogger<DatabaseBackupJob>.Instance,
-            databaseProvider.Object,
-            progress.Object);
+            progress.Object,
+            databaseProvider.Object);
         var context = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,

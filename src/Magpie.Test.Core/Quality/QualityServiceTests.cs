@@ -19,7 +19,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Quality;
 
 [TestFixture]
-public class QualityServiceTests
+public sealed class QualityServiceTests
 {
     private Mock<IQualityTierListRepository> _tierLists = null!;
     private Mock<IQualityTierRepository> _tiers = null!;
@@ -120,10 +120,10 @@ public class QualityServiceTests
     }
 
     [Test]
-    public void PatchTierListAsync_ThrowsMagpieException_WhenMimeChangeBreaksLevelDefault()
+    public async Task PatchTierListAsync_ReturnsValidationError_WhenMimeChangeBreaksLevelDefault()
     {
         // Arrange
-        var tierListId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var tierListId = Guid.NewGuid();
         _rootFolders.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -173,11 +173,14 @@ public class QualityServiceTests
         };
 
         // Act
-        var exception = Assert.ThrowsAsync<MagpieException>(() =>
-            _subject.PatchTierListAsync(tierListId, patch, null));
+        var result = await _subject.PatchTierListAsync(tierListId, patch, null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(exception!.Message, Does.Contain("level book accepts application/epub+zip"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Updated, Is.False);
+            Assert.That(result.ValidationError, Does.Contain("level book accepts application/epub+zip"));
+        }
     }
 
     [Test]

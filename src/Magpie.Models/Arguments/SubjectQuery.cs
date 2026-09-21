@@ -16,6 +16,11 @@ public sealed record SubjectQuery
     public SubjectFilterCriteria? Criteria { get; init; }
 
     /// <summary>
+    /// The ids to restrict the result to, or <c>null</c> to not constrain by id.
+    /// </summary>
+    public IReadOnlyCollection<Guid>? Ids { get; init; }
+
+    /// <summary>
     /// The kind slug to match, or <c>null</c> to not constrain by kind.
     /// </summary>
     public string? Kind { get; init; }

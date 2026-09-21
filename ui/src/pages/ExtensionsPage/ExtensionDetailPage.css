@@ -290,10 +290,14 @@
         color: var(--text-muted);
     }
 
-    .extension-detail__versions-empty {
+    .extension-detail__section-note {
         margin: var(--space-xs) 0 0;
         font-size: var(--text-xs);
         color: var(--text-muted);
+    }
+
+    .extension-detail__section-note--error {
+        color: var(--status-unhealthy);
     }
 
     @media (max-width: 480px) {

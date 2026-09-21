@@ -135,9 +135,10 @@ public sealed class CardigannDuplicateFeedRepairTests
         {
             Assert.That(result.Success, Is.True);
             Assert.That(store, Has.Count.EqualTo(1));
-            indexers.Verify(
-                s => s.DeleteFeedAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
-                Times.Never);
         }
+
+        indexers.Verify(
+            s => s.DeleteFeedAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

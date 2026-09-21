@@ -8,8 +8,12 @@ using System.Text;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.Qbittorrent;
+using Magpie.Sdk.Caching;
 
 using Microsoft.Extensions.Logging.Abstractions;
+
+using Moq;
+using Moq.Protected;
 
 using NUnit.Framework;
 
@@ -27,6 +31,8 @@ public class QbittorrentClientTests
     private MockHttpMessageHandler _handler = null!;
     private HttpClient _http = null!;
     private IQbittorrentClient _client = null!;
+    private Mock<ICache> _cache = null!;
+    private ICacheFactory _cacheFactory = null!;
     private QbittorrentSettings _anonymousSettings = null!;
     private QbittorrentSettings _credentialSettings = null!;
 
@@ -35,7 +41,12 @@ public class QbittorrentClientTests
     {
         _handler = new MockHttpMessageHandler();
         _http = new HttpClient(_handler, disposeHandler: false);
-        _client = new QbittorrentClient(_http, NullLogger<QbittorrentClient>.Instance);
+        _cache = new Mock<ICache>();
+        var factory = new Mock<ICacheFactory>();
+        factory.Setup(cache => cache.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns(_cache.Object);
+        _cacheFactory = factory.Object;
+        _client = new QbittorrentClient(_http, NullLogger<QbittorrentClient>.Instance, _cacheFactory);
         _anonymousSettings = QbittorrentSettings.Parse(new Dictionary<string, string>
         {
             ["host"] = "http://qbit.local:8080"
@@ -270,7 +281,7 @@ public class QbittorrentClientTests
     }
 
     [Test]
-    public async Task DeleteAsync_False_WhenReloginIsForbidden()
+    public void DeleteAsync_ThrowsAuthenticationFailure_WhenReloginIsForbidden()
     {
         // Arrange
         _handler.Expect(HttpMethod.Post, "http://qbit.local:8080/api/v2/auth/login")
@@ -281,10 +292,11 @@ public class QbittorrentClientTests
             .Respond(HttpStatusCode.Forbidden);
 
         // Act
-        var result = await _client.DeleteAsync(_credentialSettings, Hash, true, default).ConfigureAwait(false);
+        var action = async () => await _client.DeleteAsync(_credentialSettings, Hash, true, default)
+            .ConfigureAwait(false);
 
         // Assert
-        Assert.That(result, Is.False);
+        Assert.That(action, Throws.TypeOf<QbittorrentAuthenticationException>());
         _handler.VerifyNoOutstandingExpectation();
     }
 
@@ -311,7 +323,7 @@ public class QbittorrentClientTests
     }
 
     [Test]
-    public async Task PauseAsync_RetriesVersionProbe_AfterTransientFailure()
+    public async Task PauseAsync_RetriesVersionProbe_WhenTransientFailure()
     {
         // Arrange
         _handler.Expect(HttpMethod.Get, "http://qbit.local:8080/api/v2/app/version")
@@ -542,5 +554,66 @@ public class QbittorrentClientTests
         }
 
         _handler.VerifyNoOutstandingExpectation();
+    }
+
+    [Test]
+    public async Task PauseAsync_ReusesVersionAcrossClients_WhenServerWasAlreadyProbed()
+    {
+        // Arrange
+        var handler = new Moq.Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<System.Threading.CancellationToken>())
+            .ReturnsAsync((HttpRequestMessage request, System.Threading.CancellationToken _) =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(request.RequestUri!.AbsolutePath.EndsWith(
+                        "version", StringComparison.Ordinal)
+                        ? "v5.0.0" : "Ok."),
+                });
+        using var http = new HttpClient(handler.Object);
+        using var first = new QbittorrentClient(http, NullLogger<QbittorrentClient>.Instance, _cacheFactory);
+        using var second = new QbittorrentClient(http, NullLogger<QbittorrentClient>.Instance, _cacheFactory);
+
+        var savedKey = string.Empty;
+        _cache.Setup(cache => cache.Set(It.IsAny<string>(), true))
+            .Callback<string, bool>((key, _) => savedKey = key);
+
+        // Act
+        await first.PauseAsync(_anonymousSettings, Hash, default).ConfigureAwait(false);
+        var cachedVersion = true;
+        _cache.Setup(cache => cache.TryGet(savedKey, out cachedVersion)).Returns(true);
+        await second.ResumeAsync(_anonymousSettings, Hash, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(savedKey, Is.Not.Empty);
+        handler.Protected().Verify("SendAsync", Moq.Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(request => request.RequestUri!.AbsolutePath == "/api/v2/app/version"),
+            ItExpr.IsAny<System.Threading.CancellationToken>());
+        handler.Protected().Verify("SendAsync", Moq.Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(request => request.RequestUri!.AbsolutePath == "/api/v2/torrents/start"),
+            ItExpr.IsAny<System.Threading.CancellationToken>());
+    }
+
+    [TestCase(HttpStatusCode.OK, "Fails.")]
+    [TestCase(HttpStatusCode.Unauthorized, "")]
+    [TestCase(HttpStatusCode.Forbidden, "")]
+    public void GetTorrentInfoAsync_ThrowsAuthenticationFailure_WhenLoginIsRejected(HttpStatusCode status, string body)
+    {
+        // Arrange
+        var handler = new Moq.Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<System.Threading.CancellationToken>())
+            .ReturnsAsync(() => new HttpResponseMessage(status) { Content = new StringContent(body) });
+        using var http = new HttpClient(handler.Object);
+        using var client = new QbittorrentClient(http, NullLogger<QbittorrentClient>.Instance, _cacheFactory);
+
+        // Act
+        var action = async () => await client.GetTorrentInfoAsync(_credentialSettings, Hash, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(action, Throws.TypeOf<QbittorrentAuthenticationException>());
+        handler.Protected().Verify("SendAsync", Moq.Times.Once(),
+            ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<System.Threading.CancellationToken>());
     }
 }

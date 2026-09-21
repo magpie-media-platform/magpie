@@ -45,6 +45,10 @@
         font-size: var(--text-sm);
         min-height: 32px;
         min-width: 120px;
+
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
+        }
     }
 
     .select-trigger--md {
@@ -91,6 +95,7 @@
         box-shadow: var(--shadow-lg);
         overflow: hidden;
         min-width: var(--radix-select-trigger-width);
+        max-width: var(--radix-select-content-available-width);
         max-height: var(--radix-select-content-available-height);
         animation-duration: var(--duration-fast);
         animation-timing-function: var(--easing-default);
@@ -147,6 +152,14 @@
         outline: none;
         user-select: none;
         transition: background-color var(--duration-fast) var(--easing-default);
+
+        & > span:first-child {
+            overflow: hidden;
+            flex: 1 1 auto;
+            min-width: 0;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
 
         &[data-highlighted] {
             background-color: var(--bg-tertiary);

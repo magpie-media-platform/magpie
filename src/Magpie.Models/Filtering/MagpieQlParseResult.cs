@@ -10,12 +10,12 @@ public sealed record MagpieQlParseResult<T>
     /// <summary>
     /// The parsed criteria, or <see langword="null"/> when the parse failed.
     /// </summary>
-    public T? Value { get; set; }
+    public T? Value { get; init; }
 
     /// <summary>
     /// The parse error, or <see langword="null"/> when the parse succeeded.
     /// </summary>
-    public MagpieQlParseError? Error { get; set; }
+    public MagpieQlParseError? Error { get; init; }
 
     /// <summary>
     /// Whether the parse succeeded.

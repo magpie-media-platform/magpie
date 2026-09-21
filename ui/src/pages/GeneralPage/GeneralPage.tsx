@@ -31,15 +31,25 @@ const defaultValues: GeneralFormValues = {
 export function GeneralPage() {
     useDocumentTitle('Advanced Settings');
     const [showStaleSaveConfirmation, setShowStaleSaveConfirmation] = useState(false);
-    const { values, handleChange, hasChanges, isLoading, loadError, isUncreated, isUpdating, conflictState, save } =
-        useSettingsGroupForm<GeneralFormValues>({
-            settingsGroup: SETTINGS_GROUP,
-            defaultValues,
-            fromRecord: (record) => ({
-                instanceName: record.instanceName ?? '',
-                baseUrl: record.baseUrl ?? '',
-            }),
-        });
+    const {
+        values,
+        handleChange,
+        hasChanges,
+        isLoading,
+        loadError,
+        refetch,
+        isUncreated,
+        isUpdating,
+        conflictState,
+        save,
+    } = useSettingsGroupForm<GeneralFormValues>({
+        settingsGroup: SETTINGS_GROUP,
+        defaultValues,
+        fromRecord: (record) => ({
+            instanceName: record.instanceName ?? '',
+            baseUrl: record.baseUrl ?? '',
+        }),
+    });
 
     const saveSettings = useCallback(() => {
         void save(
@@ -103,8 +113,10 @@ export function GeneralPage() {
                             icon={<WarningCircleIcon weight="duotone" />}
                             data-testid="settings-error"
                         >
-                            Failed to load settings. If the settings group does not exist, save the settings to create
-                            it.
+                            <p>Failed to load settings.</p>
+                            <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                                Retry
+                            </Button>
                         </Alert>
                     ) : (
                         <>

@@ -21,6 +21,11 @@ public sealed record AuditHistoryQuery
     public Guid? ContentId { get; set; }
 
     /// <summary>
+    /// The id of the job execution that wrote the audit records, or <see langword="null"/> for no filter.
+    /// </summary>
+    public Guid? JobExecutionId { get; set; }
+
+    /// <summary>
     /// The source kind to filter on, or <see langword="null"/> for both kinds.
     /// </summary>
     public AuditHistoryEntryKind? Kind { get; set; }

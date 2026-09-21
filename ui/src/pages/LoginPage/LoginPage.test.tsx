@@ -7,6 +7,7 @@ import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 import { Role } from '@/auth/types';
 import { ApiError } from '@/lib/api';
 import * as authApiModule from '@/lib/authApi';
+import { clearAuthStorage } from '@/lib/tokenStorage';
 
 import { LoginPage } from './LoginPage';
 
@@ -50,7 +51,7 @@ function LocationProbe() {
 describe('LoginPage', () => {
     beforeEach(() => {
         vi.resetAllMocks();
-        authApiModule.clearAuthStorage();
+        clearAuthStorage();
     });
 
     afterEach(() => {

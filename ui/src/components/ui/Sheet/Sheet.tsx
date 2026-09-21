@@ -74,6 +74,7 @@ const SheetContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, Sh
                     ref={ref}
                     className={classes}
                     data-component="sheet"
+                    data-overlay-content
                     data-side={side}
                     aria-describedby={ariaDescribedBy}
                     onInteractOutside={(event) => {
@@ -82,7 +83,10 @@ const SheetContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, Sh
                             return;
                         }
                         const target = event.target;
-                        if (target instanceof Element && target.closest('.dialog-content, .dialog-overlay')) {
+                        if (
+                            target instanceof Element &&
+                            target.closest('[data-dialog-content], [data-dialog-overlay]')
+                        ) {
                             event.preventDefault();
                         }
                     }}

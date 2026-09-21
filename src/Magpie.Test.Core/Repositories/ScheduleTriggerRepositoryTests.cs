@@ -1,28 +1,38 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Paging;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class ScheduleTriggerRepositoryTests
+public sealed class ScheduleTriggerRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IScheduleTriggerRepository _subject = null!;
+    private List<MagpieEvent> _publishedEvents = null!;
     private Guid _userId;
 
     [SetUp]
@@ -53,18 +63,28 @@ public class ScheduleTriggerRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+
+        _publishedEvents = [];
+        var eventBus = new Mock<IEventBus>();
+        eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) => _publishedEvents.Add(magpieEvent))
+            .Returns(Task.CompletedTask);
 
         _subject = new ScheduleTriggerRepository(
             _context,
             auditRecordRepository,
             transactionManager,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
-            loggerFactory.CreateLogger<ScheduleTriggerRepository>());
+            eventBus.Object,
+            loggerFactory.CreateLogger<ScheduleTriggerRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -571,6 +591,47 @@ public class ScheduleTriggerRepositoryTests
     }
 
     [Test]
+    public async Task PatchAsync_NamesNextRunAtInTheChangedFields_WhenOnlyNextRunAtIsProvided()
+    {
+        // Arrange
+        var trigger = new ScheduleTrigger
+        {
+            Name = "ToReschedule",
+            JobType = "Job",
+            Scope = JobScope.System,
+            Schedule = "0 0 * * *",
+            Enabled = true,
+            NextRunAt = new DateTime(2026, 8, 4, 12, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ScheduleTriggers.Add(trigger);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        var patch = new ScheduleTriggerPatch
+        {
+            Id = trigger.Id,
+            NextRunAt = new() { Value = new DateTime(2026, 8, 5, 12, 0, 0, DateTimeKind.Utc) }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        var patched = await _subject.GetByIdAsync(trigger.Id).ConfigureAwait(false);
+        var published = _publishedEvents.Single(magpieEvent =>
+            magpieEvent.Name == "scheduleTrigger.updated");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(patched!.NextRunAt, Is.EqualTo(new DateTime(2026, 8, 5, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(
+                published.Context["scheduleTrigger.changedFields"],
+                Is.EqualTo("nextRunAt"));
+        }
+    }
+
+    [Test]
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
@@ -581,5 +642,49 @@ public class ScheduleTriggerRepositoryTests
 
         // Assert
         Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public async Task PatchAsync_AddsUpdatesAndRemovesParameters_WhenTheParameterPatchNamesEachOperation()
+    {
+        // Arrange
+        var trigger = new ScheduleTrigger
+        {
+            Name = "ParameterPatch",
+            JobType = "Job",
+            Scope = JobScope.System,
+            Schedule = "0 0 * * *",
+            Enabled = true,
+            Parameters = new() { ["mode"] = "old", ["stale"] = "drop" },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ScheduleTriggers.Add(trigger);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        var patch = new ScheduleTriggerPatch
+        {
+            Id = trigger.Id,
+            Parameters = new()
+            {
+                Add = new() { ["limit"] = "10" },
+                Update = new() { ["mode"] = "new", ["absent"] = "ignored" },
+                Remove = ["stale"]
+            }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        var patched = await _subject.GetByIdAsync(trigger.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(patched!.Parameters["limit"], Is.EqualTo("10"));
+            Assert.That(patched.Parameters["mode"], Is.EqualTo("new"));
+            Assert.That(patched.Parameters.ContainsKey("stale"), Is.False);
+            Assert.That(patched.Parameters.ContainsKey("absent"), Is.False);
+        }
     }
 }

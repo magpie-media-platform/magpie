@@ -42,7 +42,7 @@ internal sealed class QbittorrentCategoryDiagnostic : IDiagnosticCheck
             if (!client.Enabled ||
                 !string.Equals(
                     client.ProviderType,
-                    QbittorrentDownloadClientIntegration.ProviderTypeId,
+                    Constants.ProviderTypeId,
                     StringComparison.OrdinalIgnoreCase))
             {
                 continue;

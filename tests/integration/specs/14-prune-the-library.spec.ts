@@ -304,7 +304,10 @@ test.describe.serial('Journey 14: make room', () => {
             await dialog.locator('[data-action="confirm-delete"]').click();
             const response = await deleted;
             expect(response.ok()).toBe(true);
-            expect(response.request().postDataJSON()).toEqual({ ids: [catalog44.id, catalog45.id, catalog46.id] });
+            expect(response.request().postDataJSON()).toEqual({
+                ids: [catalog44.id, catalog45.id, catalog46.id],
+                deleteFromLibrary: false,
+            });
             expect((await response.json()) as BulkResult).toEqual({ count: 3, error: null });
             await expect(rows).toHaveCount(6);
             for (const id of [catalog44.id, catalog45.id, catalog46.id]) {

@@ -8,7 +8,6 @@ import { AuthContext, Role, type AuthContextValue } from '@/auth';
 
 vi.mock('@/lib/api', () => ({
     apiPost: vi.fn(),
-    tokenStorage: { get: () => null },
 }));
 
 import { apiPost } from '@/lib/api';

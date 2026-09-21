@@ -19,9 +19,10 @@ export interface FallbackProps {
     resetErrorBoundary: () => void;
 }
 
-interface ErrorBoundaryState {
-    hasError: boolean;
-    error: Error | null;
+type ErrorBoundaryState = { hasError: false; error: null } | { hasError: true; error: Error };
+
+function toError(error: unknown): Error {
+    return error instanceof Error ? error : new Error(String(error));
 }
 
 function resetKeysChanged(prev: unknown[] | undefined, next: unknown[] | undefined): boolean {
@@ -48,14 +49,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         this.state = { hasError: false, error: null };
     }
 
-    static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-        return { hasError: true, error };
+    static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+        return { hasError: true, error: toError(error) };
     }
 
-    componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    componentDidCatch(error: unknown, errorInfo: ErrorInfo): void {
         console.error('[ErrorBoundary] Caught error:', error);
         console.error('[ErrorBoundary] Component stack:', errorInfo.componentStack);
-        this.props.onError?.(error, errorInfo);
+        this.props.onError?.(toError(error), errorInfo);
     }
 
     componentDidUpdate(prevProps: ErrorBoundaryProps): void {
@@ -73,7 +74,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         const { hasError, error } = this.state;
         const { children, fallback } = this.props;
 
-        if (hasError && error) {
+        if (hasError) {
             if (fallback !== undefined) {
                 if (typeof fallback === 'function') {
                     return fallback({ error, resetErrorBoundary: this.resetErrorBoundary });

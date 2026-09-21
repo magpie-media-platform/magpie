@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -10,7 +11,9 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Core.Jobs;
 using Magpie.Data;
+using Magpie.Data.Configuration;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -32,9 +35,9 @@ internal sealed class JobExecutionRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<JobExecutionRepository> logger,
-    TimeProvider? timeProvider = null) : IJobExecutionRepository
+    TimeProvider timeProvider) : IJobExecutionRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     private const string DedupInsertSavepoint = "job_execution_dedup_insert";
 
@@ -44,8 +47,8 @@ internal sealed class JobExecutionRepository(
 
     private static ContentEventImpact? ParameterImpact(JobExecution execution)
     {
-        var hierarchyItemId = ParameterId(execution, "contentHierarchyItemId");
-        var contentItemId = ParameterId(execution, "contentItemId");
+        var hierarchyItemId = ParameterId(execution, MagpieJobs.Parameters.ContentHierarchyItemId);
+        var contentItemId = ParameterId(execution, MagpieJobs.Parameters.ContentItemId);
         return hierarchyItemId is null && contentItemId is null
             ? null
             : new() { HierarchyItemId = hierarchyItemId, ItemId = contentItemId };
@@ -61,16 +64,8 @@ internal sealed class JobExecutionRepository(
     private static DateTime? ReconcileNotBeforeAt(
         DateTime? existing,
         DateTime? incoming,
-        bool clearDeferralOnCoalesce,
         DateTime now)
     {
-        if (clearDeferralOnCoalesce)
-        {
-            return existing is null || incoming is null
-                ? null
-                : (incoming.Value < existing.Value ? incoming : existing);
-        }
-
         if (existing is { } existingDeferral &&
             existingDeferral > now &&
             incoming is { } incomingDeferral &&
@@ -81,6 +76,14 @@ internal sealed class JobExecutionRepository(
         }
 
         return existing;
+    }
+
+    private static string NormalizeReferenceValue(string value)
+    {
+        var bounded = value.Length > JobExecutionReferenceColumns.MaxLength
+            ? value[..JobExecutionReferenceColumns.MaxLength]
+            : value;
+        return bounded.ToLowerInvariant();
     }
 
     private static string BuildCoalescingLockKey(string jobType, string lockPartition)
@@ -96,6 +99,18 @@ internal sealed class JobExecutionRepository(
         lockPartitionBytes.CopyTo(identity.AsSpan(partitionLengthOffset + sizeof(int)));
 
         return Convert.ToHexString(SHA256.HashData(identity));
+    }
+
+    private static bool IsPartitionUniqueViolation(DbException exception)
+    {
+        return exception.SqlState == "23505" &&
+                exception.Message.Contains("UX_job_execution_LockPartition_Running", StringComparison.Ordinal) ||
+            exception.GetType().FullName == "Microsoft.Data.SqlClient.SqlException" &&
+                exception.GetType().GetProperty("Number")?.GetValue(exception) is 2601 or 2627 &&
+                exception.Message.Contains("UX_job_execution_LockPartition_Running", StringComparison.Ordinal) ||
+            exception.GetType().FullName == "Microsoft.Data.Sqlite.SqliteException" &&
+                exception.GetType().GetProperty("SqliteExtendedErrorCode")?.GetValue(exception) is 2067 &&
+                exception.Message.Contains("job_execution.LockPartition", StringComparison.Ordinal);
     }
 
     private async Task<EntityEntry<Dictionary<string, object>>> AcquireCoalescingLockAsync(
@@ -184,14 +199,27 @@ internal sealed class JobExecutionRepository(
 
             var totalCount = await jobExecutions.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(JobExecution).GetProperties()
+            var sortProperty = context.Model.FindEntityType(typeof(JobExecution))!.GetProperties()
+                .Where(property => !property.IsShadowProperty() &&
+                    (property.ClrType.IsValueType || property.ClrType == typeof(string) ||
+                        property.ClrType == typeof(Uri)))
                 .Select(property => property.Name)
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
-            if (sort is not null && sortProperty is not null)
+            if (sort is not null && string.Equals(
+                sort.PropertyName,
+                nameof(JobExecutionQuery.ExecutionTimestamp),
+                StringComparison.OrdinalIgnoreCase))
             {
                 jobExecutions = sort.Direction == SortDirection.Ascending
-                    ? jobExecutions.OrderBy(e => EF.Property<JobExecution>(e, sortProperty)).ThenBy(e => e.Id)
-                    : jobExecutions.OrderByDescending(e => EF.Property<JobExecution>(e, sortProperty))
+                    ? jobExecutions.OrderBy(e => e.CompletedAt ?? e.StartedAt ?? e.CreatedAt).ThenBy(e => e.Id)
+                    : jobExecutions.OrderByDescending(e => e.CompletedAt ?? e.StartedAt ?? e.CreatedAt)
+                        .ThenBy(e => e.Id);
+            }
+            else if (sort is not null && sortProperty is not null)
+            {
+                jobExecutions = sort.Direction == SortDirection.Ascending
+                    ? jobExecutions.OrderBy(e => EF.Property<object>(e, sortProperty)).ThenBy(e => e.Id)
+                    : jobExecutions.OrderByDescending(e => EF.Property<object>(e, sortProperty))
                         .ThenBy(e => e.Id);
             }
             else
@@ -364,32 +392,31 @@ internal sealed class JobExecutionRepository(
 
     private IQueryable<JobExecution> BuildParameterValueReferenceQuery(IReadOnlyCollection<string> references)
     {
-        var tableName = context.Model.FindEntityType(typeof(JobExecution))?.GetTableName()
-            ?? throw new InvalidOperationException("JobExecution entity is not mapped to a table.");
-        var distinct = references.Distinct(StringComparer.Ordinal).ToArray();
-        var clauses = string.Join(
-            " OR ",
-            distinct.Select((_, i) => $"(\"Parameters\" LIKE {{{i}}} OR \"TriggerContext\" LIKE {{{i}}})"));
-        var patterns = distinct.Select(v => (object)("%" + v + "%")).ToArray();
-        var sql = $"SELECT * FROM \"{tableName}\" WHERE {clauses}";
+        var distinct = references
+            .Select(NormalizeReferenceValue)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
         return context.JobExecutions
-            .FromSqlRaw(sql, patterns)
-            .AsNoTracking();
-    }
-
-    public Task<JobExecution> CreateAsync(
-        JobExecution model,
-        Guid? createdByUserId,
-        CancellationToken cancellationToken)
-    {
-        return CreateAsync(model, createdByUserId, clearDeferralOnCoalesce: false, cancellationToken);
+            .AsNoTracking()
+            .Where(execution =>
+                distinct.Contains(EF.Property<string>(
+                    execution, JobExecutionReferenceColumns.ParameterContentHierarchyItemId)) ||
+                distinct.Contains(EF.Property<string>(
+                    execution, JobExecutionReferenceColumns.ParameterContentItemId)) ||
+                distinct.Contains(EF.Property<string>(
+                    execution, JobExecutionReferenceColumns.ParameterDownloadId)) ||
+                distinct.Contains(EF.Property<string>(
+                    execution, JobExecutionReferenceColumns.TriggerContextContentHierarchyItemId)) ||
+                distinct.Contains(EF.Property<string>(
+                    execution, JobExecutionReferenceColumns.TriggerContextContentItemId)) ||
+                distinct.Contains(EF.Property<string>(
+                    execution, JobExecutionReferenceColumns.TriggerContextDownloadId)));
     }
 
     public async Task<JobExecution> CreateAsync(
         JobExecution model,
         Guid? createdByUserId,
-        bool clearDeferralOnCoalesce,
         CancellationToken cancellationToken)
     {
         try
@@ -406,6 +433,7 @@ internal sealed class JobExecutionRepository(
                             .ConfigureAwait(false);
                     }
 
+                    var failed = false;
                     try
                     {
                         var now = _time.GetUtcNow().UtcDateTime;
@@ -427,7 +455,7 @@ internal sealed class JobExecutionRepository(
                         if (model.LockPartition is { } partition)
                         {
                             var coalesced = await TryCoalesceAsync(
-                                model, partition, createdByUserId, clearDeferralOnCoalesce, cancellationToken)
+                                model, partition, createdByUserId, cancellationToken)
                                 .ConfigureAwait(false);
                             if (coalesced is not null)
                             {
@@ -484,7 +512,6 @@ internal sealed class JobExecutionRepository(
                                     model,
                                     conflictPartition,
                                     createdByUserId,
-                                    clearDeferralOnCoalesce,
                                     cancellationToken)
                                     .ConfigureAwait(false);
                                 if (coalesced is not null)
@@ -520,11 +547,23 @@ internal sealed class JobExecutionRepository(
                         inserted = true;
                         return model;
                     }
+                    catch
+                    {
+                        failed = true;
+                        throw;
+                    }
                     finally
                     {
                         if (coalescingLock is not null)
                         {
-                            await ReleaseCoalescingLockAsync(coalescingLock).ConfigureAwait(false);
+                            try
+                            {
+                                await ReleaseCoalescingLockAsync(coalescingLock).ConfigureAwait(false);
+                            }
+                            catch (Exception ex) when (failed)
+                            {
+                                logger.LogError(ex, "The coalescing lock release failed after an enqueue failure.");
+                            }
                         }
                     }
                 },
@@ -563,7 +602,6 @@ internal sealed class JobExecutionRepository(
         JobExecution incoming,
         string partition,
         Guid? createdByUserId,
-        bool clearDeferralOnCoalesce,
         CancellationToken cancellationToken)
     {
         var now = _time.GetUtcNow().UtcDateTime;
@@ -583,22 +621,11 @@ internal sealed class JobExecutionRepository(
         else
         {
             existing = await matching
-                .Where(e => e.Status == JobExecutionStatus.Running ||
-                    (e.Status == JobExecutionStatus.Queued &&
-                        (e.NotBeforeAt == null || e.NotBeforeAt <= now)))
+                .Where(e => e.Status == JobExecutionStatus.Queued &&
+                    (e.NotBeforeAt == null || e.NotBeforeAt <= now))
                 .OrderBy(e => e.CreatedAt)
                 .FirstOrDefaultAsync(cancellationToken)
                 .ConfigureAwait(false);
-
-            if (existing is null && clearDeferralOnCoalesce)
-            {
-                existing = await matching
-                    .Where(e => e.Status == JobExecutionStatus.Queued && e.NotBeforeAt != null && e.NotBeforeAt > now)
-                    .OrderBy(e => e.NotBeforeAt)
-                    .ThenBy(e => e.CreatedAt)
-                    .FirstOrDefaultAsync(cancellationToken)
-                    .ConfigureAwait(false);
-            }
         }
 
         if (existing is null)
@@ -606,7 +633,7 @@ internal sealed class JobExecutionRepository(
             return null;
         }
 
-        var reconciled = ReconcileNotBeforeAt(existing.NotBeforeAt, incoming.NotBeforeAt, clearDeferralOnCoalesce, now);
+        var reconciled = ReconcileNotBeforeAt(existing.NotBeforeAt, incoming.NotBeforeAt, now);
 
         if (reconciled != existing.NotBeforeAt)
         {
@@ -764,7 +791,26 @@ internal sealed class JobExecutionRepository(
                                 x.Status == JobExecutionStatus.CancellationRequested) &&
                             x.LockPartition != null &&
                             x.LockPartition == e.LockPartition)));
-            return await claimable
+
+            var jobTypes = await claimable
+                .Select(e => e.JobType)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (jobTypes.Count == 0)
+            {
+                return [];
+            }
+
+            var headPerJobType = Math.Max(1, paging.PageSize / jobTypes.Count);
+            var heads = jobTypes
+                .Select(jobType => claimable
+                    .Where(e => e.JobType == jobType)
+                    .OrderBy(e => e.CreatedAt)
+                    .ThenBy(e => e.Id)
+                    .Take(headPerJobType))
+                .Aggregate(Queryable.Concat);
+            return await heads
                 .OrderBy(e => e.CreatedAt)
                 .ThenBy(e => e.Id)
                 .Select(e => new JobClaimCandidate(e.Id, e.JobType, e.LockPartition))
@@ -795,7 +841,14 @@ internal sealed class JobExecutionRepository(
                         select e.LockPartition)
                         .FirstOrDefaultAsync(cancellationToken)
                         .ConfigureAwait(false);
-                    int updated;
+                    var transaction = context.Database.CurrentTransaction;
+                    const string savepoint = "job_execution_partition_claim";
+                    if (transaction is { SupportsSavepoints: true })
+                    {
+                        await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    var updated = 0;
                     try
                     {
                         updated = await context.JobExecutions
@@ -817,8 +870,14 @@ internal sealed class JobExecutionRepository(
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
-                    catch (DbUpdateException ex)
+                    catch (DbException ex) when (IsPartitionUniqueViolation(ex))
                     {
+                        if (transaction is { SupportsSavepoints: true })
+                        {
+                            await transaction.RollbackToSavepointAsync(savepoint, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+
                         logger.LogDebug(
                             ex,
                             "The claim on partition {LockPartition} for candidate {ExecutionId} lost the race",
@@ -887,7 +946,14 @@ internal sealed class JobExecutionRepository(
                         select e.LockPartition)
                         .FirstOrDefaultAsync(cancellationToken)
                         .ConfigureAwait(false);
-                    int updated;
+                    var transaction = context.Database.CurrentTransaction;
+                    const string savepoint = "job_execution_partition_claim";
+                    if (transaction is { SupportsSavepoints: true })
+                    {
+                        await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    var updated = 0;
                     try
                     {
                         updated = await context.JobExecutions
@@ -909,8 +975,14 @@ internal sealed class JobExecutionRepository(
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
-                    catch (DbUpdateException ex)
+                    catch (DbException ex) when (IsPartitionUniqueViolation(ex))
                     {
+                        if (transaction is { SupportsSavepoints: true })
+                        {
+                            await transaction.RollbackToSavepointAsync(savepoint, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+
                         logger.LogDebug(
                             ex,
                             "The start on partition {LockPartition} for execution {ExecutionId} lost the race",
@@ -1320,9 +1392,11 @@ internal sealed class JobExecutionRepository(
     public async Task<IReadOnlyList<JobExecution>> GetLineageAsync(
         Guid executionId,
         int pageSize,
+        int maxNodes,
         CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(pageSize, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxNodes, 1);
 
         try
         {
@@ -1335,15 +1409,13 @@ internal sealed class JobExecutionRepository(
                 return [];
             }
 
+            var collected = new Dictionary<Guid, JobExecution> { [execution.Id] = execution };
+            var chain = new List<Guid> { execution.Id };
             var root = execution;
-            var ancestors = new HashSet<Guid> { root.Id };
-            while (root.ParentExecutionId is { } parentId)
+            while (root.ParentExecutionId is { } parentId &&
+                collected.Count < maxNodes &&
+                !collected.ContainsKey(parentId))
             {
-                if (!ancestors.Add(parentId))
-                {
-                    break;
-                }
-
                 var parent = await context.JobExecutions
                     .AsNoTracking()
                     .FirstOrDefaultAsync(e => e.Id == parentId, cancellationToken)
@@ -1353,50 +1425,64 @@ internal sealed class JobExecutionRepository(
                     break;
                 }
 
+                collected[parent.Id] = parent;
+                chain.Add(parent.Id);
                 root = parent;
             }
 
-            var collected = new Dictionary<Guid, JobExecution> { [root.Id] = root };
-            IReadOnlyList<Guid> frontier = [root.Id];
-
-            while (frontier.Count > 0)
+            async Task CollectDescendantsAsync(IReadOnlyList<Guid> seeds)
             {
-                var nextFrontier = new List<Guid>();
-                for (var parentOffset = 0; parentOffset < frontier.Count; parentOffset += pageSize)
+                var frontier = seeds;
+                while (frontier.Count > 0 && collected.Count < maxNodes)
                 {
-                    var parentIds = frontier.Skip(parentOffset).Take(pageSize).ToList();
-                    var pageNumber = 1;
-                    while (true)
+                    var nextFrontier = new List<Guid>();
+                    for (var parentOffset = 0;
+                        parentOffset < frontier.Count && collected.Count < maxNodes;
+                        parentOffset += pageSize)
                     {
-                        var children = await context.JobExecutions
-                            .AsNoTracking()
-                            .Where(e => e.ParentExecutionId != null && parentIds.Contains(e.ParentExecutionId.Value))
-                            .OrderBy(e => e.CreatedAt)
-                            .ThenBy(e => e.Id)
-                            .Skip((pageNumber - 1) * pageSize)
-                            .Take(pageSize)
-                            .ToListAsync(cancellationToken)
-                            .ConfigureAwait(false);
-
-                        foreach (var child in children)
+                        var parentIds = frontier.Skip(parentOffset).Take(pageSize).ToList();
+                        var pageNumber = 1;
+                        while (collected.Count < maxNodes)
                         {
-                            if (collected.TryAdd(child.Id, child))
+                            var children = await context.JobExecutions
+                                .AsNoTracking()
+                                .Where(e => e.ParentExecutionId != null &&
+                                    parentIds.Contains(e.ParentExecutionId.Value))
+                                .OrderBy(e => e.CreatedAt)
+                                .ThenBy(e => e.Id)
+                                .Skip((pageNumber - 1) * pageSize)
+                                .Take(pageSize)
+                                .ToListAsync(cancellationToken)
+                                .ConfigureAwait(false);
+
+                            foreach (var child in children)
                             {
-                                nextFrontier.Add(child.Id);
+                                if (collected.Count >= maxNodes)
+                                {
+                                    break;
+                                }
+
+                                if (collected.TryAdd(child.Id, child))
+                                {
+                                    nextFrontier.Add(child.Id);
+                                }
                             }
-                        }
 
-                        if (children.Count < pageSize)
-                        {
-                            break;
-                        }
+                            if (children.Count < pageSize)
+                            {
+                                break;
+                            }
 
-                        pageNumber++;
+                            pageNumber++;
+                        }
                     }
-                }
 
-                frontier = nextFrontier;
+                    frontier = nextFrontier;
+                }
             }
+
+            await CollectDescendantsAsync([execution.Id]).ConfigureAwait(false);
+            await CollectDescendantsAsync([.. chain.Skip(1)]).ConfigureAwait(false);
 
             return [.. collected.Values];
         }

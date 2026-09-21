@@ -1,4 +1,4 @@
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -143,7 +143,7 @@ function dataRows() {
     const table = screen.getByRole('grid');
     return within(table)
         .getAllByRole('row')
-        .filter((r) => within(r).queryAllByRole('cell').length > 0);
+        .filter((r) => within(r).queryAllByRole('gridcell').length > 0);
 }
 
 describe('DownloadClientsPage', () => {
@@ -339,6 +339,36 @@ describe('DownloadClientsPage row actions', () => {
             expect(screen.getByText('Edit Download Client')).toBeInTheDocument();
             expect(screen.getAllByDisplayValue('SABnzbd').length).toBeGreaterThan(0);
         });
+    });
+
+    it('cancels a pending test when the client form closes after save', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        let resolveTest!: (result: { success: boolean; message: string }) => void;
+        const pending = new Promise<{ success: boolean; message: string }>((resolve) => {
+            resolveTest = resolve;
+        });
+        vi.mocked(apiPost).mockReturnValue(pending);
+        vi.mocked(apiPatch).mockResolvedValue(undefined);
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+        await user.click(await screen.findByRole('button', { name: /^edit sabnzbd$/i }));
+        const dialog = await screen.findByRole('dialog');
+        await user.click(within(dialog).getByRole('button', { name: 'Test' }));
+        await waitFor(() =>
+            expect(apiPost).toHaveBeenCalledWith('/download-clients/test', expect.anything(), expect.anything()),
+        );
+        const signal = vi.mocked(apiPost).mock.calls.at(-1)?.[2]?.signal;
+        // Act
+        fireEvent.submit(dialog.querySelector('form')!);
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        await act(async () => {
+            resolveTest({ success: true, message: 'Stale test result' });
+            await pending;
+        });
+        // Assert
+        expect(signal?.aborted).toBe(true);
+        expect(screen.getByText('Download client updated')).toBeInTheDocument();
+        expect(screen.queryByText('Stale test result')).not.toBeInTheDocument();
     });
 
     it('keeps saved settings in the update bucket when an edited client is saved without changes', async () => {
@@ -617,5 +647,184 @@ describe('DownloadClientsPage empty state', () => {
 
         expect(document.querySelector('[data-action="add-client"]')).toBeInTheDocument();
         expect(document.querySelector('[data-action="add-client-empty"]')).not.toBeInTheDocument();
+    });
+});
+
+describe('DownloadClientsPage (mobile card collapse)', () => {
+    const mockApiDelete = vi.mocked(apiDelete);
+    const mockApiPatch = vi.mocked(apiPatch);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockClientList();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('marks the name cell as header role and the select column as hidden (no layout-participating checkbox)', async () => {
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(dataRows().length).toBe(7));
+        expect(document.querySelector('td[data-column="name"]')).toHaveAttribute('data-mobile-role', 'header');
+        expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
+    });
+
+    it('bulk-deletes every selected client', async () => {
+        mockApiDelete.mockResolvedValue(undefined);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(dataRows().length).toBe(7));
+
+        await user.click(screen.getByLabelText('Select SABnzbd'));
+        await user.click(screen.getByLabelText('Select NZBGet'));
+        await user.click(screen.getByRole('button', { name: 'Delete selected download clients' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(mockApiDelete).toHaveBeenCalledWith('/download-clients/client-1');
+            expect(mockApiDelete).toHaveBeenCalledWith('/download-clients/client-2');
+        });
+    });
+
+    it('bulk-enables every selected client', async () => {
+        mockApiPatch.mockResolvedValue(undefined);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(dataRows().length).toBe(7));
+
+        await user.click(screen.getByLabelText('Select Deluge (Seedbox)'));
+        await user.click(screen.getByRole('button', { name: 'Enable selected download clients' }));
+
+        await waitFor(() => {
+            expect(mockApiPatch).toHaveBeenCalledWith('/download-clients/client-5', {
+                enabled: { value: true },
+            });
+        });
+    });
+
+    it('reports a partial bulk failure once and leaves the failed clients selected', async () => {
+        mockApiDelete.mockImplementation((path: string) =>
+            path === '/download-clients/client-2' ? Promise.reject(new Error('busy')) : Promise.resolve(undefined),
+        );
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(dataRows().length).toBe(7));
+
+        await user.click(screen.getByLabelText('Select SABnzbd'));
+        await user.click(screen.getByLabelText('Select NZBGet'));
+        await user.click(screen.getByRole('button', { name: 'Delete selected download clients' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        expect(
+            await screen.findByText('1 succeeded and 1 failed. Failed download clients remain selected.'),
+        ).toBeInTheDocument();
+        expect(screen.getAllByRole('alert')).toHaveLength(1);
+        expect(screen.getByLabelText('Select NZBGet')).toBeChecked();
+        expect(screen.getByLabelText('Select SABnzbd')).not.toBeChecked();
+    });
+});
+
+describe('DownloadClientsPage selection vs filters', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockClientList();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('clears the selection when a column filter changes the row set', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(dataRows().length).toBe(7));
+
+        await user.click(screen.getByLabelText('Select Deluge (Seedbox)'));
+        expect(screen.getByText('1 selected')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: /filter by enabled/i }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Enabled' }));
+
+        await waitFor(() => {
+            expect(dataRows().length).toBe(6);
+        });
+        expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+    });
+});
+
+describe('DownloadClientsPage select-all scope', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('takes only the current page and offers the across-pages escalation when more rows match', async () => {
+        vi.mocked(apiGet).mockResolvedValue(
+            Array.from({ length: 30 }, (_, index) => ({
+                ...mockApiClients[0],
+                id: `client-${index + 1}`,
+                name: `Client ${String(index + 1).padStart(2, '0')}`,
+            })) as Awaited<ReturnType<typeof apiGet>>,
+        );
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(dataRows().length).toBe(25));
+
+        await user.click(screen.getByLabelText('Select all download clients'));
+
+        expect(screen.getByText('25 selected')).toBeInTheDocument();
+        expect(screen.getByText('All 25 on this page are selected.')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Select all 30 across all pages' })).toBeInTheDocument();
+    });
+
+    it('reaches the off-page rows only through the banner', async () => {
+        vi.mocked(apiGet).mockResolvedValue(
+            Array.from({ length: 30 }, (_, index) => ({
+                ...mockApiClients[0],
+                id: `client-${index + 1}`,
+                name: `Client ${String(index + 1).padStart(2, '0')}`,
+            })) as Awaited<ReturnType<typeof apiGet>>,
+        );
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(dataRows().length).toBe(25));
+
+        await user.click(screen.getByLabelText('Select all download clients'));
+        await user.click(screen.getByRole('button', { name: 'Select all 30 across all pages' }));
+
+        expect(screen.getByText('30 selected')).toBeInTheDocument();
+        expect(screen.getByText('All 30 matching download clients across all pages are selected.')).toBeInTheDocument();
+    });
+
+    it('offers no escalation when one page already holds every client', async () => {
+        mockClientList();
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(dataRows().length).toBe(7));
+
+        await user.click(screen.getByLabelText('Select all download clients'));
+
+        expect(screen.getByText('7 selected')).toBeInTheDocument();
+        expect(screen.queryByText(/across all pages/)).not.toBeInTheDocument();
     });
 });

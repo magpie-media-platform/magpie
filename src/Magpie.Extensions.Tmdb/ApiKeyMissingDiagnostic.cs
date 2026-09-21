@@ -26,7 +26,7 @@ internal sealed class ApiKeyMissingDiagnostic(ISettingsResolver resolver) : IDia
             return [];
         }
 
-        var extensionId = new System.Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A");
+        var extensionId = Constants.ExtensionId;
         return
         [
             new DiagnosticFinding

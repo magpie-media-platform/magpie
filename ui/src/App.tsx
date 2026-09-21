@@ -8,7 +8,6 @@ import {
     DownloadSimpleIcon,
     FolderSimplePlusIcon,
     GaugeIcon,
-    GearIcon,
     StarIcon,
     FunnelIcon,
     DatabaseIcon,
@@ -52,8 +51,9 @@ import { ExtensionMainNavigation } from './components/ui/Slot';
 import { ToastProvider, ToastViewport, ToastStateProvider, ToastList, ToastTray } from './components/ui/Toast';
 import { TooltipProvider } from './components/ui/Tooltip';
 import { LiveAnnouncerProvider } from './components/ui/LiveAnnouncer';
+import { ExtensionLoadFailureBanner } from './components/ui/ExtensionLoadFailureBanner';
 import { RestartRequiredBanner, RestartRequiredProvider } from './components/ui/RestartRequiredBanner';
-import { AuthProvider, RequireRole, Role, RoleName, useAuth } from './auth';
+import { AdminLink, AuthProvider, RequireRole, Role, RoleName, useAuth } from './auth';
 import { useSetupStatus } from './hooks/useSetup';
 import { UnsavedChangesGuardProvider, UnsavedChangesBlocker } from './hooks/useUnsavedChangesGuard';
 import { routes, RouteLoadingState, RouteErrorState } from './router';
@@ -63,7 +63,7 @@ import { SkipLink } from './components/ui/SkipLink';
 import { ContentLineageProvider } from './components/content/ContentLineageTitle';
 import { ExtensionProvider } from './extensions';
 import { queryClient } from '@/lib/queryClient';
-import { useIsActive } from '@/lib/routes';
+import { isAdminRoute, useIsActive } from '@/lib/routes';
 import { Logo } from './components/ui/Logo';
 
 function AppHeader() {
@@ -84,7 +84,12 @@ function AppHeader() {
                 sidebarOpen={sidebarExpanded}
                 leftSlot={<HeaderLeftSlot />}
                 rightSlot={<HeaderRightSlot />}
-                actions={<UserMenu />}
+                actions={
+                    <>
+                        <AdminLink />
+                        <UserMenu />
+                    </>
+                }
             />
         </HeaderSlot>
     );
@@ -243,18 +248,6 @@ const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppS
                     </RequireRole>
                 </SidebarGroup>
                 <ExtensionMainNavigation onNavigate={closeSidebar} />
-                <RequireRole min={Role.Admin}>
-                    <SidebarGroup>
-                        <SidebarItem
-                            to="/admin"
-                            icon={<GearIcon weight="duotone" />}
-                            active={isActive('/admin')}
-                            onClick={closeSidebar}
-                        >
-                            Admin
-                        </SidebarItem>
-                    </SidebarGroup>
-                </RequireRole>
             </SidebarContent>
             <SidebarFooter>
                 <Link to="/about">{version ? `Magpie v${version}` : 'Magpie'}</Link>
@@ -269,6 +262,9 @@ const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppS
 
 function AppBottomNav() {
     const isActive = useIsActive();
+    const { pathname } = useLocation();
+    const isAddContentActive = isRouteWithin(pathname, '/library/add');
+    const isLibraryActive = isRouteWithin(pathname, '/library') && !isAddContentActive;
 
     return (
         <BottomNav>
@@ -277,13 +273,13 @@ function AppBottomNav() {
                 to="/library"
                 icon={<BooksIcon weight="duotone" />}
                 label="Library"
-                active={isActive('/library')}
+                active={isLibraryActive}
             />
             <BottomNavItem
-                to="/wanted"
-                icon={<TargetIcon weight="duotone" />}
-                label="Wanted"
-                active={isActive('/wanted')}
+                to="/library/add"
+                icon={<BinocularsIcon weight="duotone" />}
+                label="Add content"
+                active={isAddContentActive}
             />
             <BottomNavItem
                 to="/downloads"
@@ -347,10 +343,6 @@ const STANDALONE_ROUTES: string[] = ['/login', '/setup', '/forbidden'];
 
 function isStandaloneRoute(pathname: string): boolean {
     return STANDALONE_ROUTES.some((route) => pathname === route || pathname.startsWith(route + '/'));
-}
-
-function isAdminRoute(pathname: string): boolean {
-    return pathname === '/admin' || pathname.startsWith('/admin/');
 }
 
 function SetupRedirectGate({ children }: { children: ReactNode }) {
@@ -418,6 +410,7 @@ function AppLayout() {
 
                     <AppShellMain>
                         <RestartRequiredBanner />
+                        <ExtensionLoadFailureBanner />
                         <RouteOutlet />
                     </AppShellMain>
                 </div>
@@ -475,7 +468,11 @@ function RootLayout() {
 }
 
 function App() {
-    const [router] = useState(() => createBrowserRouter([{ element: <RootLayout />, children: routes }]));
+    const [router] = useState(() =>
+        createBrowserRouter([{ element: <RootLayout />, children: routes }], {
+            basename: import.meta.env.BASE_URL,
+        }),
+    );
 
     return (
         <QueryClientProvider client={queryClient}>

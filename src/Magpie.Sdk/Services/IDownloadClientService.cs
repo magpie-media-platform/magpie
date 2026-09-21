@@ -22,7 +22,7 @@ public interface IDownloadClientService
     Task<IReadOnlyList<DownloadClient>> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a download client by id.
+    /// A download client by id.
     /// </summary>
     /// <param name="id">The id of the download client to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

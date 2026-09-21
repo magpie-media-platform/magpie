@@ -23,8 +23,6 @@ internal sealed class ContentMetadataProvider(
     TimeProvider timeProvider,
     ILogger<ContentMetadataProvider> logger) : IContentHierarchyMetadataRelationshipProvider
 {
-    private const int PublisherCap = 12;
-    private const int SubjectFacetCap = 12;
     private const int ContributorCap = 10;
 
     private static readonly Regex LegacyContribution = new(
@@ -123,7 +121,7 @@ internal sealed class ContentMetadataProvider(
         }
     }
 
-    private string PublisherUrlSlug(string publisher) => publisher.Replace(' ', '_');
+    private string PublisherUrlSlug(string publisher) => Uri.EscapeDataString(publisher.Replace(' ', '_'));
 
     private string ContributorRelationshipKind(string role)
     {
@@ -167,32 +165,27 @@ internal sealed class ContentMetadataProvider(
         return contributors;
     }
 
-    private string FacetIdentity(string name, string? key)
-    {
-        if (!string.IsNullOrWhiteSpace(key))
-        {
-            return key.Trim();
-        }
-
-        return name.NormalizeSubjectKey();
-    }
-
     private void AddSubjectFacets(
         List<SubjectRelationshipDefinition> result,
         IReadOnlyList<SubjectFacetPair> facets,
         string kind,
         string externalIdSource)
     {
-        var count = Math.Min(facets.Count, SubjectFacetCap);
-        for (var index = 0; index < count; index++)
+        var added = 0;
+        foreach (var facet in facets)
         {
-            var facet = facets[index];
-            var identity = FacetIdentity(facet.Name, facet.Key);
+            if (added == Constants.SubjectFacetCap)
+            {
+                break;
+            }
+
+            var identity = facet.FacetIdentity();
             if (string.IsNullOrEmpty(identity))
             {
                 continue;
             }
 
+            added++;
             var contribution = new MetadataContribution
             {
                 ProviderType = Constants.ProviderType,
@@ -329,7 +322,7 @@ internal sealed class ContentMetadataProvider(
         var result = new List<SubjectRelationshipDefinition>();
         foreach (var publisher in hit.Publishers)
         {
-            if (result.Count == PublisherCap)
+            if (result.Count == Constants.PublisherCap)
             {
                 break;
             }

@@ -7,6 +7,4 @@ internal sealed record CriterionDisposition
     public required CriterionDispositionKind Disposition { get; init; }
 
     public required string Reason { get; init; }
-
-    public string? Warning { get; init; }
 }

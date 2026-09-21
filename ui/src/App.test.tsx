@@ -51,8 +51,7 @@ vi.mock('@/lib/setupApi', async (importOriginal) => {
 });
 
 import App from './App';
-import { tokenStorage } from '@/lib/api';
-import { clearAuthStorage, tokenExpirationStorage } from '@/lib/authApi';
+import { clearAuthStorage, tokenExpirationStorage, tokenStorage } from '@/lib/tokenStorage';
 import { queryClient } from '@/lib/queryClient';
 import * as setupApiModule from '@/lib/setupApi';
 
@@ -180,8 +179,15 @@ describe('App', () => {
             expect(screen.getAllByText('Wishlists').length).toBeGreaterThanOrEqual(1);
         });
 
-        const addContentLink = screen.getByRole('link', { name: 'Add content' });
+        const addContentLink = within(screen.getByRole('complementary')).getByRole('link', { name: 'Add content' });
         expect(addContentLink).toHaveAttribute('href', '/library/add');
+    });
+
+    it('renders the mobile bottom nav Add content link to the same route as the sidebar', async () => {
+        render(<App />);
+
+        const bottomNav = await screen.findByRole('navigation', { name: 'Primary navigation' });
+        expect(within(bottomNav).getByRole('link', { name: 'Add content' })).toHaveAttribute('href', '/library/add');
     });
 
     it('defaults the Library navigation group to expanded and keeps it manually collapsible', async () => {
@@ -204,9 +210,14 @@ describe('App', () => {
     it('renders admin link for Admin users', async () => {
         render(<App />);
 
-        await waitFor(() => {
-            expect(screen.getAllByText('Admin').length).toBeGreaterThanOrEqual(1);
-        });
+        expect(await screen.findByRole('link', { name: 'Admin' })).toHaveAttribute('href', '/admin');
+    });
+
+    it('keeps the admin link out of the sidebar navigation', async () => {
+        render(<App />);
+
+        const sidebar = await screen.findByRole('navigation', { name: 'Main navigation' });
+        expect(within(sidebar).queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument();
     });
 
     it('uses router Links for navigation', async () => {
@@ -231,10 +242,12 @@ describe('App', () => {
 
         await user.click(closedToggle);
 
-        const sidebarDialog = screen.getByRole('dialog', { name: 'Main navigation' });
-        const openToggle = within(sidebarDialog).getByRole('button', { name: 'Collapse sidebar' });
-        expect(openToggle).toHaveTextContent('Collapse sidebar');
-        expect(document.querySelector('[data-component="app-shell-header"]')).toHaveProperty('inert', true);
+        const sidebar = screen.getByRole('navigation', { name: 'Main navigation' });
+        expect(within(sidebar).queryByRole('button', { name: /sidebar/i })).not.toBeInTheDocument();
+        expect(document.querySelector('[data-component="app-shell-header"]')).not.toHaveProperty('inert', true);
+
+        const openToggle = screen.getByRole('button', { name: 'Collapse sidebar' });
+        expect(openToggle).toHaveAttribute('aria-expanded', 'true');
 
         await user.click(openToggle);
 
@@ -242,7 +255,7 @@ describe('App', () => {
         expect(screen.getByRole('navigation', { name: 'Main navigation' })).toHaveAttribute('data-open', 'false');
     });
 
-    it('treats the open mobile sidebar as a modal and closes it with Escape', async () => {
+    it('keeps the open mobile sidebar a navigation landmark and closes it with Escape', async () => {
         vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
         render(<App />);
@@ -250,7 +263,9 @@ describe('App', () => {
         const toggle = await screen.findByRole('button', { name: 'Expand sidebar' });
         await user.click(toggle);
 
-        expect(screen.getByRole('dialog', { name: 'Main navigation' })).toHaveAttribute('aria-modal', 'true');
+        const sidebar = screen.getByRole('navigation', { name: 'Main navigation' });
+        expect(sidebar).toHaveAttribute('data-open', 'true');
+        expect(sidebar).not.toHaveAttribute('aria-modal');
         expect(screen.getByRole('main')).toHaveProperty('inert', true);
         expect(document.body.style.overflow).toBe('hidden');
         expect(document.querySelector('.app-shell__sidebar-backdrop')).toHaveAttribute('data-visible', 'true');
@@ -260,6 +275,26 @@ describe('App', () => {
         expect(screen.getByRole('navigation', { name: 'Main navigation' })).toHaveAttribute('data-open', 'false');
         expect(screen.getByRole('main')).toHaveProperty('inert', false);
         expect(screen.getByRole('button', { name: 'Expand sidebar' })).toHaveFocus();
+    });
+
+    it('closes the mobile sidebar when a header control navigates away', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        window.history.replaceState({}, '', '/library/add');
+
+        const user = userEvent.setup();
+        render(<App />);
+
+        await user.click(await screen.findByRole('button', { name: 'Expand sidebar' }));
+        expect(screen.getByRole('navigation', { name: 'Main navigation' })).toHaveAttribute('data-open', 'true');
+
+        await user.click(screen.getAllByRole('link', { name: /magpie/i })[0]);
+
+        expect(window.location.pathname).toBe('/');
+        expect(screen.getByRole('navigation', { name: 'Main navigation' })).toHaveAttribute('data-open', 'false');
+        expect(document.querySelector('.app-shell__sidebar-backdrop')).toHaveAttribute('data-visible', 'false');
+        expect(document.body.style.overflow).toBe('');
+        expect(screen.getByRole('main')).toHaveProperty('inert', false);
+        expect(document.activeElement).not.toBe(document.body);
     });
 
     it('marks only Library import current on the import route', async () => {
@@ -304,18 +339,18 @@ describe('App', () => {
         render(<App />);
 
         expect(await screen.findByRole('button', { name: 'Library' })).toHaveAttribute('data-active', 'true');
-        expect(screen.getByRole('link', { name: 'Add content' })).not.toHaveAttribute('data-active');
+        expect(
+            within(screen.getByRole('complementary')).getByRole('link', { name: 'Add content' }),
+        ).not.toHaveAttribute('data-active');
         expect(screen.getByRole('link', { name: 'Library import' })).not.toHaveAttribute('data-active');
     });
 });
 
 describe('App with different roles', () => {
-    it('shows the Admin section when signed in as Admin', async () => {
+    it('shows the header admin link when signed in as Admin', async () => {
         render(<App />);
 
-        await waitFor(() => {
-            expect(screen.getAllByText('Admin').length).toBeGreaterThanOrEqual(1);
-        });
+        expect(await screen.findByRole('link', { name: 'Admin' })).toBeInTheDocument();
     });
 });
 

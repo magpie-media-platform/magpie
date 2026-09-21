@@ -5,6 +5,7 @@ export const SERVER_SORT_FIELD: Record<string, string> = {
     title: 'Name',
     publishDate: 'PublishDate',
     dateAdded: 'CreatedAt',
+    fulfilledDate: 'FulfilledAt',
 };
 
 export const VALID_SORT_FIELDS = Object.keys(SERVER_SORT_FIELD);

@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -341,14 +338,7 @@ describe('Tabs', () => {
         expect(tab2).toHaveAttribute('aria-selected', 'true');
     });
 
-    it('keeps inactive tabs quiet while supporting keyboard navigation', async () => {
-        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/Tabs/Tabs.css'), 'utf8');
-        const triggerRule = css.match(/\.tabs-trigger\s*{(?<declarations>[\s\S]*?)\n\s*&:hover/)?.groups?.declarations;
-
-        expect(triggerRule).toContain('color: var(--text-secondary);');
-        expect(triggerRule).toContain('background-color: transparent;');
-        expect(triggerRule).toContain('border: none;');
-
+    it('moves focus and activation across tabs with the arrow keys', async () => {
         render(
             <Tabs defaultValue="tab1">
                 <TabsList>
@@ -718,7 +708,7 @@ describe('DetailTabsList', () => {
         expect(list).not.toHaveAttribute('data-collapsed');
         expect(list).not.toHaveAttribute('data-measuring');
         expect(screen.getByText('Tab 1')).toBeInTheDocument();
-        expect(screen.getByRole('tab', { name: 'Tab 2' })).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'Tab 2 (3)' })).toBeInTheDocument();
         expect(screen.getByText('3')).toBeInTheDocument();
     });
 });

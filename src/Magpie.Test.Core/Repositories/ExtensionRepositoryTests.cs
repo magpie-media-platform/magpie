@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -13,12 +14,12 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Patch;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -27,7 +28,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class ExtensionRepositoryTests
+public sealed class ExtensionRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IExtensionRepository _subject = null!;
@@ -65,11 +66,18 @@ public class ExtensionRepositoryTests
             .Callback<MagpieEvent, CancellationToken>((magpieEvent, _) => _publishedEvents.Add(magpieEvent))
             .Returns(Task.CompletedTask);
 
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+        var auditRepository = new AuditRecordRepository(
+            _context, Mock.Of<IEventBus>(), NullLogger<AuditRecordRepository>.Instance, transactionManager,
+            Mock.Of<IJobExecutionScopeFactory>(),
+            new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         _subject = new ExtensionRepository(
             _context,
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            transactionManager,
+            auditRepository,
             eventBus.Object,
-            NullLoggerFactory.Instance.CreateLogger<ExtensionRepository>());
+            NullLoggerFactory.Instance.CreateLogger<ExtensionRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -638,12 +646,12 @@ public class ExtensionRepositoryTests
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.AutoUpgrade)).True);
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.LoadOrder)).EqualTo(42));
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
-            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.ExtensionUpdated));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("extension.updated"));
             Assert.That(
-                _publishedEvents[0].Context[MagpieEvents.Keys.ExtensionId],
+                _publishedEvents[0].Context["extension.id"],
                 Is.EqualTo(extension.Id.ToString("D")));
             Assert.That(
-                _publishedEvents[0].Context[MagpieEvents.Keys.ExtensionChangedFields],
+                _publishedEvents[0].Context["extension.changedFields"],
                 Is.EqualTo("nuGetId,packageRepository,autoUpgrade,loadOrder"));
         }
     }
@@ -663,5 +671,42 @@ public class ExtensionRepositoryTests
 
         // Assert
         Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public async Task WriteAsync_AuditsExtensionAndSettings_WhenLifecycleChanges()
+    {
+        // Arrange
+        var model = new Extension
+        {
+            Name = "Audited",
+            Version = "1.0",
+            AssemblyName = "Audited",
+            FilePath = "/test/extension.dll"
+        };
+
+        // Act
+        await _subject.CreateAsync(model, _userId).ConfigureAwait(false);
+        await _subject.UpdateAsync(model with { Enabled = false }, _userId).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        await _subject.PatchAsync(new() { Id = model.Id, LoadOrder = new() { Value = 7 } }, _userId)
+            .ConfigureAwait(false);
+        var group = new SettingsGroup { ExtensionId = model.Id, Name = "settings" };
+        group.Settings.Add(new Setting { Key = "token", Value = "never-audit-this-value" });
+        _context.SettingsGroups.Add(group);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        await _subject.DeleteAsync(model.Id, _userId).ConfigureAwait(false);
+        var audits = await _context.AuditRecords.AsNoTracking().ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(audits.Where(a => a.EntityType == nameof(Extension)).Select(a => a.Operation),
+                Is.EquivalentTo(["Create", "Update", "Patch", "Delete"]));
+            Assert.That(audits.Count(a => a.EntityType == nameof(Setting) && a.Operation == "Delete"), Is.EqualTo(1));
+            Assert.That(audits.Count(a => a.EntityType == nameof(SettingsGroup) && a.Operation == "Delete"),
+                Is.EqualTo(1));
+            Assert.That(audits.Select(a => a.Detail), Has.None.Contains("never-audit-this-value"));
+        }
     }
 }

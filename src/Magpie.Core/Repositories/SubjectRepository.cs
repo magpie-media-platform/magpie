@@ -29,7 +29,7 @@ internal sealed class SubjectRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<SubjectRepository> logger,
-    TimeProvider? timeProvider = null) : ISubjectRepository
+    TimeProvider timeProvider) : ISubjectRepository
 {
     private static readonly Expression<Func<Subject, string?>> EffectiveTitle =
         s => s.MetadataContainer == null
@@ -40,7 +40,12 @@ internal sealed class SubjectRepository(
                 orderby c.Ordinal
                 select c.Title).FirstOrDefault();
 
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private const string UserProviderType = "user";
+    private const string SystemProviderType = "system";
+
+    private const int ParameterBatchSize = 1_000;
+
+    private readonly TimeProvider _time = timeProvider;
 
     private static IQueryable<Subject> IncludeReadModel(IQueryable<Subject> query)
     {
@@ -115,6 +120,110 @@ internal sealed class SubjectRepository(
         }
     }
 
+    private async Task<IQueryable<Subject>> BuildFilteredAsync(
+        SubjectQuery query,
+        CancellationToken cancellationToken)
+    {
+        var filtered = context.Subjects.AsNoTracking();
+
+        if (query.Criteria is not null)
+        {
+            filtered = ApplyCriteria(filtered, query.Criteria);
+        }
+
+        if (query.Ids is { } queryIds)
+        {
+            var ids = queryIds as Guid[] ?? [.. queryIds];
+            filtered = filtered.Where(s => ids.Contains(s.Id));
+        }
+
+        if (!string.IsNullOrEmpty(query.Kind))
+        {
+            filtered = filtered.Where(s => s.Kind == query.Kind);
+        }
+
+        if (query.Kinds is { Count: > 0 })
+        {
+            filtered = filtered.Where(s => query.Kinds.Contains(s.Kind));
+        }
+
+        if (query.LastRefreshedBefore is { } lastRefreshedBefore)
+        {
+            filtered = filtered.Where(s =>
+                s.DateLastRefreshed == null || s.DateLastRefreshed < lastRefreshedBefore);
+        }
+
+        if (query.HasExternalIds is { } hasExternalIds)
+        {
+            filtered = filtered.Where(s => context.MetadataContributions.AsNoTracking()
+                .Where(c => c.MetadataContainerId == s.MetadataContainerId)
+                .SelectMany(c => context.ExternalIds.Where(e => e.MetadataContributionId == c.Id))
+                .Any() == hasExternalIds);
+        }
+
+        if (query.ExternalId is not null)
+        {
+            var containerIds = MatchingContainerIdsByExternalId(query.ExternalId);
+            filtered = filtered.Where(s => containerIds.Contains(s.MetadataContainerId));
+        }
+
+        if (!string.IsNullOrEmpty(query.Tag))
+        {
+            var taggedContainerIds =
+                from t in context.Tags.AsNoTracking()
+                where t.Name == query.Tag
+                from c in t.MetadataContainers
+                select c.Id;
+            filtered = filtered.Where(s => taggedContainerIds.Contains(s.MetadataContainerId));
+        }
+
+        if (query.RelatedContentHierarchyItemId is { } relatedContentHierarchyItemId)
+        {
+            var pivotContainerId = await (
+                from i in context.ContentHierarchyItems.AsNoTracking()
+                where i.Id == relatedContentHierarchyItemId
+                select (Guid?)i.MetadataContainerId)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (pivotContainerId is null)
+            {
+                var noContainerIds = Array.Empty<Guid>();
+                return filtered.Where(s => noContainerIds.Contains(s.MetadataContainerId));
+            }
+
+            var candidateContainerIds = RelatedCandidateContainerIds(pivotContainerId.Value);
+            filtered = filtered.Where(s => candidateContainerIds.Contains(s.MetadataContainerId));
+        }
+
+        if (query.HasContentRelationships is { } hasContentRelationships)
+        {
+            var containerIds = ContentRelatedContainerIds();
+            filtered = filtered.Where(s =>
+                containerIds.Contains(s.MetadataContainerId) == hasContentRelationships);
+        }
+
+        if (query.HasUserContributions is { } hasUserContributions)
+        {
+            filtered = filtered.Where(s => context.MetadataContributions.AsNoTracking().Any(contribution =>
+                contribution.MetadataContainerId == s.MetadataContainerId &&
+                contribution.ProviderType == UserProviderType) == hasUserContributions);
+        }
+
+        if (query.HasTags is { } hasTags)
+        {
+            var containerIds = TaggedContainerIds();
+            filtered = filtered.Where(s => containerIds.Contains(s.MetadataContainerId) == hasTags);
+        }
+
+        if (query.IsUserCreated is { } isUserCreated)
+        {
+            filtered = filtered.Where(s => context.Users.Any(user =>
+                user.Id == s.CreatedByUserId && user.ProviderType != SystemProviderType) == isUserCreated);
+        }
+
+        return filtered;
+    }
+
     public async Task<PagedList<Subject>> QueryAsync(
         SubjectQuery query,
         PagingParameter paging,
@@ -123,104 +232,7 @@ internal sealed class SubjectRepository(
     {
         try
         {
-            var filtered = context.Subjects.AsNoTracking();
-
-            if (query.Criteria is not null)
-            {
-                filtered = ApplyCriteria(filtered, query.Criteria);
-            }
-
-            if (!string.IsNullOrEmpty(query.Kind))
-            {
-                filtered = filtered.Where(s => s.Kind == query.Kind);
-            }
-
-            if (query.Kinds is { Count: > 0 })
-            {
-                filtered = filtered.Where(s => query.Kinds.Contains(s.Kind));
-            }
-
-            if (query.LastRefreshedBefore is { } lastRefreshedBefore)
-            {
-                filtered = filtered.Where(s =>
-                    s.DateLastRefreshed == null || s.DateLastRefreshed < lastRefreshedBefore);
-            }
-
-            if (query.HasExternalIds is { } hasExternalIds)
-            {
-                filtered = filtered.Where(s => context.MetadataContributions.AsNoTracking()
-                    .Where(c => c.MetadataContainerId == s.MetadataContainerId)
-                    .SelectMany(c => context.ExternalIds.Where(e => e.MetadataContributionId == c.Id))
-                    .Any() == hasExternalIds);
-            }
-
-            if (query.ExternalId is not null)
-            {
-                var containerIds = MatchingContainerIdsByExternalId(query.ExternalId);
-                filtered = filtered.Where(s => containerIds.Contains(s.MetadataContainerId));
-            }
-
-            if (!string.IsNullOrEmpty(query.Tag))
-            {
-                var taggedContainerIds =
-                    from t in context.Tags.AsNoTracking()
-                    where t.Name == query.Tag
-                    from c in t.MetadataContainers
-                    select c.Id;
-                filtered = filtered.Where(s => taggedContainerIds.Contains(s.MetadataContainerId));
-            }
-
-            if (query.RelatedContentHierarchyItemId is { } relatedContentHierarchyItemId)
-            {
-                var pivotContainerId = await (
-                    from i in context.ContentHierarchyItems.AsNoTracking()
-                    where i.Id == relatedContentHierarchyItemId
-                    select (Guid?)i.MetadataContainerId)
-                    .FirstOrDefaultAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                if (pivotContainerId is null)
-                {
-                    return new()
-                    {
-                        Items = [],
-                        PageNumber = paging.PageNumber,
-                        PageSize = paging.PageSize,
-                        TotalItems = 0
-                    };
-                }
-
-                var scope = new MetadataRelationshipScope(
-                    pivotContainerId.Value,
-                    MetadataRelationshipDirection.PivotIsSource);
-                var candidateContainerIds = RelatedCandidateContainerIds(scope);
-                filtered = filtered.Where(s => candidateContainerIds.Contains(s.MetadataContainerId));
-            }
-
-            if (query.HasContentRelationships is { } hasContentRelationships)
-            {
-                var containerIds = ContentRelatedContainerIds();
-                filtered = filtered.Where(s =>
-                    containerIds.Contains(s.MetadataContainerId) == hasContentRelationships);
-            }
-
-            if (query.HasUserContributions is { } hasUserContributions)
-            {
-                filtered = filtered.Where(s => context.MetadataContributions.AsNoTracking().Any(contribution =>
-                    contribution.MetadataContainerId == s.MetadataContainerId &&
-                    contribution.ProviderType == "user") == hasUserContributions);
-            }
-
-            if (query.HasTags is { } hasTags)
-            {
-                var containerIds = TaggedContainerIds();
-                filtered = filtered.Where(s => containerIds.Contains(s.MetadataContainerId) == hasTags);
-            }
-
-            if (query.IsUserCreated is { } isUserCreated)
-            {
-                filtered = filtered.Where(s => context.Users.Any(user =>
-                    user.Id == s.CreatedByUserId && user.ProviderType != "system") == isUserCreated);
-            }
+            var filtered = await BuildFilteredAsync(query, cancellationToken).ConfigureAwait(false);
 
             var totalItems = await filtered.CountAsync(cancellationToken).ConfigureAwait(false);
 
@@ -276,6 +288,8 @@ internal sealed class SubjectRepository(
         return ordered.ThenBy(s => s.Id);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1310",
+        Justification = "EF Core cannot translate the StringComparison overloads, and both operands are lower-cased.")]
     private static IQueryable<Subject> ApplyTitleCriteria(
         IQueryable<Subject> query,
         CriteriaSet<PropertyCriterion<string>> criteria,
@@ -303,21 +317,31 @@ internal sealed class SubjectRepository(
                     !s.MetadataContainer.Contributions.Any(c =>
                         (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
                         (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower().Contains(value))),
+                CriteriaValueOperator.NotStartsWithString => query.Where(s =>
+                    value == null ||
+                    s.MetadataContainer == null ||
+                    !s.MetadataContainer.Contributions.Any(c =>
+                        (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
+                        (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower().StartsWith(value))),
                 CriteriaValueOperator.StartsWithString => query.Where(s =>
                     value != null &&
                     s.MetadataContainer != null &&
                     s.MetadataContainer.Contributions.Any(c =>
                         (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
-                        (isOriginalTitle ? c.OriginalTitle! : c.Title!).StartsWith(
-                            value,
-                            StringComparison.CurrentCultureIgnoreCase))),
+                        (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower().StartsWith(value))),
+                CriteriaValueOperator.NotEndsWithString => query.Where(s =>
+                    value == null ||
+                    s.MetadataContainer == null ||
+                    !s.MetadataContainer.Contributions.Any(c =>
+                        (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
+                        (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower().EndsWith(value))),
                 CriteriaValueOperator.EndsWithString => query.Where(s =>
                     value != null &&
                     s.MetadataContainer != null &&
                     s.MetadataContainer.Contributions.Any(c =>
                         (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
                         (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower()
-                            .EndsWith(value, StringComparison.Ordinal))),
+                            .EndsWith(value))),
                 CriteriaValueOperator.Equals => query.Where(s =>
                     value != null &&
                     s.MetadataContainer != null &&
@@ -330,6 +354,14 @@ internal sealed class SubjectRepository(
                     !s.MetadataContainer.Contributions.Any(c =>
                         (isOriginalTitle ? c.OriginalTitle : c.Title) != null &&
                         (isOriginalTitle ? c.OriginalTitle! : c.Title!).ToLower() == value)),
+                CriteriaValueOperator.IsNull => query.Where(s =>
+                    s.MetadataContainer == null ||
+                    !s.MetadataContainer.Contributions.Any(c =>
+                        (isOriginalTitle ? c.OriginalTitle : c.Title) != null)),
+                CriteriaValueOperator.IsNotNull => query.Where(s =>
+                    s.MetadataContainer != null &&
+                    s.MetadataContainer.Contributions.Any(c =>
+                        (isOriginalTitle ? c.OriginalTitle : c.Title) != null)),
                 var op => throw new NotSupportedException($"Operator {op} is not supported for metadata Title")
             };
         }
@@ -585,8 +617,8 @@ internal sealed class SubjectRepository(
                 where c2.MetadataContainerId == c.MetadataContainerId
                 where e.Source != null
                     ? e2.Source != null && e2.Source.ToLower() == e.Source.ToLower()
-                    : e2.Value.ToLower() == e.Value.ToLower()
-                orderby c2.Ordinal
+                    : e2.Source == null && e2.Value.ToLower() == e.Value.ToLower()
+                orderby c2.Ordinal, c2.Id
                 select c2.Id).FirstOrDefault()
             orderby c.Ordinal, e.Ordinal
             select e;
@@ -630,18 +662,14 @@ internal sealed class SubjectRepository(
             .Distinct();
     }
 
-    private IQueryable<Guid> RelatedCandidateContainerIds(MetadataRelationshipScope scope)
+    private IQueryable<Guid> RelatedCandidateContainerIds(Guid pivotContainerId)
     {
-        return scope.Direction switch
-        {
-            MetadataRelationshipDirection.PivotIsSource => (
-                from c in context.MetadataContributions.AsNoTracking()
-                where c.MetadataContainerId == scope.PivotContainerId
-                join r in context.Relationships.AsNoTracking() on c.Id equals r.MetadataContributionId
-                where r.RelatedMetadataContainerId != null
-                select r.RelatedMetadataContainerId!.Value).Distinct(),
-            _ => throw new ArgumentOutOfRangeException(nameof(scope))
-        };
+        return (
+            from c in context.MetadataContributions.AsNoTracking()
+            where c.MetadataContainerId == pivotContainerId
+            join r in context.Relationships.AsNoTracking() on c.Id equals r.MetadataContributionId
+            where r.RelatedMetadataContainerId != null
+            select r.RelatedMetadataContainerId!.Value).Distinct();
     }
 
     public async Task<Subject> CreateAsync(Subject model, Guid? createdByUserId, CancellationToken cancellationToken)
@@ -708,6 +736,25 @@ internal sealed class SubjectRepository(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
+                    var current = await context.Subjects.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    var changedFields = new List<string>();
+                    if (!Equals(current.Kind, model.Kind))
+                    {
+                        changedFields.Add("kind");
+                    }
+
+                    if (!Equals(current.DateLastRefreshed, model.DateLastRefreshed))
+                    {
+                        changedFields.Add("dateLastRefreshed");
+                    }
+
                     var updated = await context.Subjects
                         .Where(s => s.Id == model.Id)
                         .ExecuteUpdateAsync(
@@ -731,6 +778,14 @@ internal sealed class SubjectRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                SubjectEventBuilder.BuildSubjectUpdatedEvent(model.Id, changedFields), token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -805,10 +860,77 @@ internal sealed class SubjectRepository(
         }
     }
 
-    public async Task<bool> PatchAsync(TagsPatch patch, Guid? modifiedByUserId, CancellationToken cancellationToken)
+    public async Task<int> DeleteWhereAsync(SubjectQuery query, CancellationToken cancellationToken = default)
     {
         try
         {
+            var filtered = await BuildFilteredAsync(query, cancellationToken).ConfigureAwait(false);
+            var targets = await filtered
+                .Select(subject => new { subject.Id, subject.Kind })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (targets.Count == 0)
+            {
+                return 0;
+            }
+
+            var deleted = await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
+                {
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var removed = 0;
+                    foreach (var batch in targets.Chunk(ParameterBatchSize))
+                    {
+                        var ids = batch.Select(target => target.Id).ToArray();
+                        removed += await context.Subjects
+                            .Where(subject => ids.Contains(subject.Id))
+                            .ExecuteDeleteAsync(ct)
+                            .ConfigureAwait(false);
+
+                        foreach (var target in batch)
+                        {
+                            await auditRecordRepository.CreateAsync(
+                                new()
+                                {
+                                    Category = AuditCategories.System,
+                                    Operation = "Delete",
+                                    EntityId = target.Id.ToString(),
+                                    EntityType = nameof(Subject),
+                                    Detail = $"Deleted subject of kind {target.Kind}",
+                                    Timestamp = now
+                                },
+                                ct).ConfigureAwait(false);
+                        }
+                    }
+
+                    return removed;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var target in targets)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(SubjectEventBuilder.BuildSubjectDeletedEvent(target.Id), token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return deleted;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The subject repository failed to delete subjects by query.");
+            throw;
+        }
+    }
+
+    public async Task<bool> PatchAsync(
+        SubjectRowPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var changedFields = new List<string>();
             var patched = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
@@ -821,6 +943,13 @@ internal sealed class SubjectRepository(
                     if (model is null || model.MetadataContainer is null)
                     {
                         return false;
+                    }
+
+                    if (patch.DateLastRefreshed is not null &&
+                        model.DateLastRefreshed != patch.DateLastRefreshed.Value)
+                    {
+                        model.DateLastRefreshed = patch.DateLastRefreshed.Value;
+                        changedFields.Add("dateLastRefreshed");
                     }
 
                     var tagsAdded = new List<string>();
@@ -866,6 +995,11 @@ internal sealed class SubjectRepository(
                                 }
                             }
                         }
+                    }
+
+                    if (!tagsAdded.ToHashSet(StringComparer.Ordinal).SetEquals(tagsRemoved))
+                    {
+                        changedFields.Add("tags");
                     }
 
                     model.ModifiedAt = now;
@@ -926,8 +1060,9 @@ internal sealed class SubjectRepository(
 
             if (patched)
             {
-                await eventBus.PublishAsync(
-                    SubjectEventBuilder.BuildSubjectUpdatedEvent(patch.Id, ["tags"]),
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        SubjectEventBuilder.BuildSubjectUpdatedEvent(patch.Id, changedFields), token),
                     cancellationToken)
                     .ConfigureAwait(false);
             }

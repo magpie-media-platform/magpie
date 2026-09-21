@@ -3,12 +3,25 @@ using System.Collections.Generic;
 using System.Globalization;
 
 using Magpie.Models;
+using Magpie.Models.Enums;
 using Magpie.Sdk.Events;
 
 namespace Magpie.Core.Events;
 
 internal static class ContentEventBuilder
 {
+    public static MagpieEvent BuildContentFulfillmentChangedEvent(
+        ContentEventImpact impact,
+        FulfillmentStatus from,
+        FulfillmentStatus to)
+    {
+        var context = impact.ToContext();
+        context[MagpieEvents.Keys.ContentFulfillmentFrom] = from.ToString();
+        context[MagpieEvents.Keys.ContentFulfillmentTo] = to.ToString();
+
+        return new(Guid.Empty, MagpieEvents.Names.ContentFulfillmentChanged, context, default, default, null);
+    }
+
     public static MagpieEvent BuildContentHierarchyItemCreatedEvent(ContentEventImpact impact)
     {
         return new(

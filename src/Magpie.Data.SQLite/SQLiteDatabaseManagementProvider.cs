@@ -23,10 +23,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Data.SQLite;
 
-/// <summary>
-/// The SQLite implementation of the database management provider.
-/// </summary>
-public sealed class SQLiteDatabaseManagementProvider(
+internal sealed class SQLiteDatabaseManagementProvider(
     MagpieDbContext context,
     MagpieHostEnvironment hostEnvironment,
     ISettingsRepository settingsRepository,
@@ -70,16 +67,13 @@ public sealed class SQLiteDatabaseManagementProvider(
     private const string WalSuffix = "-wal";
     private const string ShmSuffix = "-shm";
 
-    /// <inheritdoc />
     public string Provider => "SQLite";
 
-    /// <inheritdoc />
     public async Task<bool> CanConnectAsync(CancellationToken cancellationToken = default)
     {
         return await context.Database.CanConnectAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <inheritdoc />
     public async Task<DatabaseStartupValidationResult> ValidateStartupAsync(
         CancellationToken cancellationToken = default)
     {
@@ -120,7 +114,7 @@ public sealed class SQLiteDatabaseManagementProvider(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The provider failed to validate the SQLite database lock. The validation will fail.");
+            logger.LogError(ex, "The provider failed to validate the SQLite database lock.");
 
             return new(false, $"The SQLite database failed to initialize: {ex.Message}");
         }
@@ -133,7 +127,6 @@ public sealed class SQLiteDatabaseManagementProvider(
         }
     }
 
-    /// <inheritdoc />
     public async Task<IReadOnlyCollection<string>> GetAppliedMigrationsAsync(
         CancellationToken cancellationToken = default)
     {
@@ -255,6 +248,7 @@ public sealed class SQLiteDatabaseManagementProvider(
         };
         using var connection = new SqliteConnection(connectionString.ConnectionString);
         connection.Open();
+        SqliteUnicodeLower.Register(connection);
 
         using var existsCommand = connection.CreateCommand();
         existsCommand.CommandText =
@@ -298,8 +292,7 @@ public sealed class SQLiteDatabaseManagementProvider(
             if (File.Exists(sidecar))
             {
                 throw new InvalidOperationException(
-                    $"The database at {databasePath} has an unexpected sidecar {sidecar}. Staged " +
-                    "restore databases must be sidecar-free before being opened directly.");
+                    $"The database at {databasePath} has an unexpected sidecar {sidecar}.");
             }
         }
     }
@@ -474,7 +467,6 @@ public sealed class SQLiteDatabaseManagementProvider(
         }
     }
 
-    /// <inheritdoc />
     public async Task<string> BackupAsync(BackupCreateOptions options, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -534,7 +526,6 @@ public sealed class SQLiteDatabaseManagementProvider(
         return backupId;
     }
 
-    /// <inheritdoc />
     public async Task<bool> StageRestoreAsync(string backupId, CancellationToken cancellationToken)
     {
         ValidateBackupId(backupId, nameof(backupId));
@@ -561,20 +552,17 @@ public sealed class SQLiteDatabaseManagementProvider(
             {
                 logger.LogError(
                     ex,
-                    "The provider failed to delete the restore staging directory {StagingDirectory}. " +
-                    "The delete operation raised an I/O error, so the provider stopped the restore request.",
+                    "The provider failed to delete the restore staging directory {StagingDirectory}.",
                     stagingDirectory);
                 throw new InvalidOperationException(
-                    "The provider failed to clear the restore staging directory. A file can be locked. " +
-                    "Release the file lock, and then retry the restore.",
+                    "The provider failed to clear the restore staging directory.",
                     ex);
             }
             catch (UnauthorizedAccessException ex)
             {
                 logger.LogError(
                     ex,
-                    "The provider failed to delete the restore staging directory {StagingDirectory}. " +
-                    "The operating system denied access, so the provider stopped the restore request.",
+                    "The provider failed to delete the restore staging directory {StagingDirectory}.",
                     stagingDirectory);
                 throw new InvalidOperationException(
                     "The restore staging directory could not be cleared due to an access error.",
@@ -593,7 +581,6 @@ public sealed class SQLiteDatabaseManagementProvider(
             StagedFilePath = stagedFilePath,
             BackupId = backupId,
             RequestedAtUtc = timeProvider.GetUtcNow().UtcDateTime,
-            RequestedBy = null,
             Attempt = 0
         };
 
@@ -604,7 +591,6 @@ public sealed class SQLiteDatabaseManagementProvider(
         return true;
     }
 
-    /// <inheritdoc />
     public async Task<bool> ApplyPendingRestoreAsync(CancellationToken cancellationToken)
     {
         var liveDatabasePath = GetLiveDatabasePath();
@@ -621,7 +607,7 @@ public sealed class SQLiteDatabaseManagementProvider(
         {
             logger.LogError(
                 "The restore marker at {MarkerPath} was not usable, so the provider stopped the " +
-                "restore and deleted the marker. No retry will happen.",
+                "restore and deleted the marker.",
                 markerPath);
             await RecordRestoreFailedAsync(
                 dataDirectory,
@@ -641,8 +627,8 @@ public sealed class SQLiteDatabaseManagementProvider(
         if (attempted.Attempt > MaxRestoreAttempts)
         {
             logger.LogError(
-                "The restore of backup {BackupId} exceeded {MaxAttempts} attempts. " +
-                "The host will start with the original database.",
+                "The restore of backup {BackupId} exceeded {MaxAttempts} attempts, so the host " +
+                "starts with the original database.",
                 attempted.BackupId,
                 MaxRestoreAttempts);
 
@@ -663,8 +649,8 @@ public sealed class SQLiteDatabaseManagementProvider(
         if (!attempted.SwapCommitted && !File.Exists(attempted.StagedFilePath))
         {
             logger.LogError(
-                "The staged database {StagedPath} for the restore of backup {BackupId} does not exist. " +
-                "The restore will stop.",
+                "The staged database {StagedPath} for the restore of backup {BackupId} does not exist, " +
+                "so the restore stops.",
                 attempted.StagedFilePath,
                 attempted.BackupId);
             await RecordRestoreFailedAsync(
@@ -678,7 +664,7 @@ public sealed class SQLiteDatabaseManagementProvider(
 
         if (!attempted.SwapCommitted)
         {
-            logger.LogWarning(
+            logger.LogInformation(
                 "The provider will apply the restore of backup {BackupId} (attempt {Attempt}) and will " +
                 "swap the database.",
                 attempted.BackupId,
@@ -692,9 +678,9 @@ public sealed class SQLiteDatabaseManagementProvider(
         }
         else
         {
-            logger.LogWarning(
-                "The provider will continue the restore of backup {BackupId} (attempt {Attempt}). The " +
-                "database swap is already complete, so the provider will validate the live database.",
+            logger.LogInformation(
+                "The provider will continue the restore of backup {BackupId} (attempt {Attempt}) " +
+                "because the database swap is already complete.",
                 attempted.BackupId,
                 attempted.Attempt);
         }
@@ -718,7 +704,7 @@ public sealed class SQLiteDatabaseManagementProvider(
         {
             logger.LogError(
                 ex,
-                "The restore of backup {BackupId} failed validation. The provider will roll back to the " +
+                "The restore of backup {BackupId} failed validation, so the provider rolls back to the " +
                 "original database.",
                 attempted.BackupId);
 
@@ -736,7 +722,6 @@ public sealed class SQLiteDatabaseManagementProvider(
         }
     }
 
-    /// <inheritdoc />
     public async Task<IEnumerable<BackupInfo>> ListBackupsAsync(CancellationToken cancellationToken)
     {
         var backupDirectory = await GetBackupDirectoryAsync(cancellationToken).ConfigureAwait(false);
@@ -755,7 +740,6 @@ public sealed class SQLiteDatabaseManagementProvider(
         return backups;
     }
 
-    /// <inheritdoc />
     public async Task<bool> DeleteBackupAsync(string backupId, CancellationToken cancellationToken)
     {
         ValidateBackupId(backupId, nameof(backupId));
@@ -774,7 +758,6 @@ public sealed class SQLiteDatabaseManagementProvider(
         return true;
     }
 
-    /// <inheritdoc />
     public async Task<string?> GetBackupFilePathAsync(string backupId, CancellationToken cancellationToken)
     {
         ValidateBackupId(backupId, nameof(backupId));
@@ -784,7 +767,6 @@ public sealed class SQLiteDatabaseManagementProvider(
         return ResolveBackupPath(backupDirectory, backupId);
     }
 
-    /// <inheritdoc />
     public async Task<DateTime?> GetLastOptimizedAsync(CancellationToken cancellationToken)
     {
         var dataDirectory = GetDataDirectory(GetLiveDatabasePath());
@@ -800,7 +782,7 @@ public sealed class SQLiteDatabaseManagementProvider(
             var marker = JsonSerializer.Deserialize<OptimizationMarker>(json, MarkerJsonOptions);
             return marker is null || marker.OptimizedAtUtc == default ? null : marker.OptimizedAtUtc;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (JsonException ex)
         {
             logger.LogWarning(ex, "The provider failed to read the optimization marker {MarkerPath}, " +
                 "so the provider reported no optimization date.", markerPath);
@@ -808,15 +790,14 @@ public sealed class SQLiteDatabaseManagementProvider(
         }
     }
 
-    /// <inheritdoc />
     public async Task OptimizeAsync(CancellationToken cancellationToken)
     {
         var liveDatabasePath = GetLiveDatabasePath();
         var connectionString = CreatePoolingDisabledConnectionString();
 
         using var connection = new SqliteConnection(connectionString);
-
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        SqliteUnicodeLower.Register(connection);
         using var command = connection.CreateCommand();
         command.CommandText = "VACUUM; PRAGMA wal_checkpoint(TRUNCATE);";
 
@@ -880,7 +861,7 @@ public sealed class SQLiteDatabaseManagementProvider(
         }
         catch (JsonException ex)
         {
-            logger.LogError(ex, "The provider failed to parse the restore marker at {MarkerPath}.", markerPath);
+            logger.LogError(ex, "The provider failed to read the restore marker at {MarkerPath}.", markerPath);
             return null;
         }
     }
@@ -895,7 +876,7 @@ public sealed class SQLiteDatabaseManagementProvider(
         if (!File.Exists(liveDatabasePath))
         {
             logger.LogInformation(
-                "No database exists at {LiveDatabasePath}. The restore will continue without a rollback copy.",
+                "No database exists at {LiveDatabasePath}, so the restore continues without a rollback copy.",
                 liveDatabasePath);
             return;
         }
@@ -932,8 +913,7 @@ public sealed class SQLiteDatabaseManagementProvider(
         if (unknown.Length > 0)
         {
             throw new InvalidOperationException(
-                $"The restored database contains unknown migrations: {string.Join(", ", unknown)}. " +
-                "The database requires a newer Magpie version.");
+                $"The restored database contains unknown migrations: {string.Join(", ", unknown)}.");
         }
     }
 
@@ -1015,7 +995,7 @@ public sealed class SQLiteDatabaseManagementProvider(
                 metadata.CreatedAtUtc == default)
             {
                 logger.LogWarning(
-                    "The backup metadata {MetadataPath} is invalid. The provider will mark backup " +
+                    "The backup metadata {MetadataPath} is invalid, so the provider marks backup " +
                     "{BackupId} as manual.",
                     metadataPath,
                     backupId);
@@ -1027,12 +1007,12 @@ public sealed class SQLiteDatabaseManagementProvider(
                 Kind = NormalizeBackupKind(metadata.Kind)
             };
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (JsonException ex)
         {
             logger.LogWarning(
                 ex,
-                "The provider cannot read the backup metadata {MetadataPath}. The provider will mark " +
-                "backup {BackupId} as manual.",
+                "The provider cannot read the backup metadata {MetadataPath}, so it marks backup " +
+                "{BackupId} as manual.",
                 metadataPath,
                 backupId);
             return CreateFallbackBackupMetadata(backupId, fallbackCreatedAtUtc);
@@ -1070,9 +1050,6 @@ public sealed class SQLiteDatabaseManagementProvider(
 
         [JsonPropertyName("requestedAtUtc")]
         public required DateTime RequestedAtUtc { get; init; }
-
-        [JsonPropertyName("requestedBy")]
-        public Guid? RequestedBy { get; init; }
 
         [JsonPropertyName("attempt")]
         public int Attempt { get; init; }

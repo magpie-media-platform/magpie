@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
+import type { ScalarPatch } from '@/types/patch';
+
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
@@ -32,11 +34,11 @@ interface RemotePathMappingCreate {
 }
 
 interface RemotePathMappingPatch {
-    host?: string;
+    host?: ScalarPatch<string>;
 
-    remotePath?: string;
+    remotePath?: ScalarPatch<string>;
 
-    localPath?: string;
+    localPath?: ScalarPatch<string>;
 }
 
 interface RemotePathMappingLocalPathTestRequest {
@@ -50,9 +52,7 @@ interface RemotePathMappingLocalPathTestResult {
 }
 
 export const remotePathMappingQueryKeys = {
-    all: ['remote-path-mappings'] as const,
     list: () => ['remote-path-mappings', 'list'] as const,
-    detail: (id: string) => ['remote-path-mappings', 'detail', id] as const,
 };
 
 async function fetchRemotePathMappings(): Promise<ApiRemotePathMapping[]> {

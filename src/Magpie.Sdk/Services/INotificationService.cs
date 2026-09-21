@@ -27,7 +27,7 @@ public interface INotificationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a notification rule by id when the caller can see it.
+    /// A notification rule by id when the caller can see it.
     /// </summary>
     /// <param name="id">The id of the notification rule to return</param>
     /// <param name="callerUserId">The id of the user that makes the request</param>

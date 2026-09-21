@@ -285,6 +285,19 @@
         background-color: var(--dot-color, var(--status-unknown));
     }
 
+    .library-gallery-tile__unmonitored {
+        display: inline-flex;
+        align-items: center;
+        flex-shrink: 0;
+        margin-top: 0.15em;
+        color: var(--text-muted);
+
+        & svg {
+            width: 0.875rem;
+            height: 0.875rem;
+        }
+    }
+
     .library-gallery-tile__title {
         display: -webkit-box;
         -webkit-box-orient: vertical;
@@ -366,12 +379,6 @@
         }
 
         .library-page__mobile-selection-actions .bulk-actions-toolbar__btn-label {
-            display: none;
-        }
-    }
-
-    @media (max-width: 1023px) {
-        .library-page__desktop-bulk-toolbar {
             display: none;
         }
     }

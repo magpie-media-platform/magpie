@@ -25,7 +25,7 @@ public sealed class MagpieCoreApiExtension : IExtension
     public string Name => "Magpie API";
 
     /// <inheritdoc />
-    public string? TargetABI => "[0,1)";
+    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)

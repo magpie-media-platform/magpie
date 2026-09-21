@@ -1,4 +1,7 @@
+using System;
+
 using Magpie.Models.Data;
+using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
@@ -8,17 +11,22 @@ namespace Magpie.Models.Arguments;
 public sealed record RemotePathMappingPatch
 {
     /// <summary>
+    /// The id of the remote path mapping to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
     /// The patch for the download client host.
     /// </summary>
-    public string? Host { get; init; }
+    public ScalarPatch<string>? Host { get; init; }
 
     /// <summary>
     /// The patch for the remote path.
     /// </summary>
-    public string? RemotePath { get; init; }
+    public ScalarPatch<string>? RemotePath { get; init; }
 
     /// <summary>
     /// The patch for the local path.
     /// </summary>
-    public string? LocalPath { get; init; }
+    public ScalarPatch<string>? LocalPath { get; init; }
 }

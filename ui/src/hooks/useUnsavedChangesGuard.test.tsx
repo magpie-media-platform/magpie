@@ -111,8 +111,6 @@ describe('UnsavedChangesBlocker', () => {
     });
 
     it('blocks in-app navigation when dirty and the user cancels', async () => {
-        confirmSpy.mockReturnValue(false);
-
         function GuardedPage() {
             useUnsavedChangesGuard(true);
             return (
@@ -145,15 +143,13 @@ describe('UnsavedChangesBlocker', () => {
 
         fireEvent.click(screen.getByRole('link', { name: 'Go elsewhere' }));
 
-        await waitFor(() => {
-            expect(confirmSpy).toHaveBeenCalledOnce();
-        });
+        fireEvent.click(await screen.findByRole('button', { name: 'Keep Editing' }));
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(confirmSpy).not.toHaveBeenCalled();
         expect(screen.getByRole('heading', { name: 'Form' })).toBeInTheDocument();
     });
 
     it('proceeds with in-app navigation when dirty and the user confirms', async () => {
-        confirmSpy.mockReturnValue(true);
-
         function GuardedPage() {
             useUnsavedChangesGuard(true);
             return (
@@ -186,15 +182,15 @@ describe('UnsavedChangesBlocker', () => {
 
         fireEvent.click(screen.getByRole('link', { name: 'Go elsewhere' }));
 
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard Changes' }));
+
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: 'Other' })).toBeInTheDocument();
         });
-        expect(confirmSpy).toHaveBeenCalledOnce();
+        expect(confirmSpy).not.toHaveBeenCalled();
     });
 
     it('does not prompt or block navigation when nothing is dirty', async () => {
-        confirmSpy.mockReturnValue(false);
-
         function GuardedPage() {
             useUnsavedChangesGuard(false);
             return (
@@ -234,8 +230,6 @@ describe('UnsavedChangesBlocker', () => {
     });
 
     it('blocks browser back navigation when dirty and the user cancels', async () => {
-        confirmSpy.mockReturnValue(false);
-
         function GuardedPage() {
             useUnsavedChangesGuard(true);
             return <h1>Form</h1>;
@@ -265,15 +259,13 @@ describe('UnsavedChangesBlocker', () => {
             await router.navigate(-1);
         });
 
-        await waitFor(() => {
-            expect(confirmSpy).toHaveBeenCalledOnce();
-        });
+        fireEvent.click(await screen.findByRole('button', { name: 'Keep Editing' }));
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(confirmSpy).not.toHaveBeenCalled();
         expect(screen.getByRole('heading', { name: 'Form' })).toBeInTheDocument();
     });
 
     it('allows browser forward navigation when dirty and the user confirms', async () => {
-        confirmSpy.mockReturnValue(true);
-
         function GuardedPage() {
             useUnsavedChangesGuard(true);
             return <h1>Form</h1>;
@@ -303,9 +295,11 @@ describe('UnsavedChangesBlocker', () => {
             await router.navigate(1);
         });
 
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard Changes' }));
+
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: 'Other' })).toBeInTheDocument();
         });
-        expect(confirmSpy).toHaveBeenCalledOnce();
+        expect(confirmSpy).not.toHaveBeenCalled();
     });
 });

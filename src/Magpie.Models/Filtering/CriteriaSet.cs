@@ -11,5 +11,5 @@ public record CriteriaSet<TCriteria>
     /// <summary>
     /// The criteria that must all be true.
     /// </summary>
-    public IEnumerable<TCriteria> And { get; init; } = [];
+    public IEnumerable<TCriteria> And { get; set; } = [];
 }

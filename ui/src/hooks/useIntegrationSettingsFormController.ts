@@ -83,6 +83,8 @@ interface IntegrationSettingsFormController<TValues extends IntegrationSettingsF
     handleSubmit: (e: SubmitEvent | null, validateRequiredFields: () => boolean) => Promise<boolean>;
 }
 
+const closedForm = Symbol('closed form');
+
 function withStringSettings<TValues extends IntegrationSettingsFormValues>(
     values: TValues,
     settings: Record<string, string> = toStringSettings(values.settings),
@@ -122,7 +124,7 @@ export function useIntegrationSettingsFormController<TValues extends Integration
     const cleanSettingsRef = useRef<Record<string, string>>(initialCleanSettings);
     const submitInFlightRef = useRef(false);
     const seededProviderRef = useRef<string | null>(null);
-    const resetKeyRef = useRef<TValues | null | undefined>(undefined);
+    const resetKeyRef = useRef<TValues | null | undefined | typeof closedForm>(closedForm);
     const valuesRef = useRef(values);
     const settingsRef = useRef(settings);
     valuesRef.current = values;
@@ -133,19 +135,22 @@ export function useIntegrationSettingsFormController<TValues extends Integration
 
     useEffect(() => {
         if (!open) {
-            resetKeyRef.current = undefined;
+            resetKeyRef.current = closedForm;
             return;
         }
-        if (resetKeyRef.current === initialValues) {
+        const reopened = resetKeyRef.current === closedForm;
+        if (!reopened && resetKeyRef.current === initialValues) {
             return;
         }
         resetKeyRef.current = initialValues;
-        const currentDirty = !deepEqual(
-            getDirtySnapshot(valuesRef.current, settingsRef.current),
-            getDirtySnapshot(cleanValuesRef.current, cleanSettingsRef.current),
-        );
-        if (currentDirty && cleanValuesRef.current.id === initialValues?.id) {
-            return;
+        if (!reopened) {
+            const currentDirty = !deepEqual(
+                getDirtySnapshot(valuesRef.current, settingsRef.current),
+                getDirtySnapshot(cleanValuesRef.current, cleanSettingsRef.current),
+            );
+            if (currentDirty && cleanValuesRef.current.id === initialValues?.id) {
+                return;
+            }
         }
         const baseValues = initialValues ?? emptyValues;
         const cleanSettings = toStringSettings(baseValues.settings);

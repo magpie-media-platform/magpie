@@ -20,6 +20,8 @@ public static class MagpieSeedingExtensions
 {
     private static readonly Guid SystemUserId = new("11111111-1111-1111-1111-111111111111");
 
+    private static readonly Guid NuGetPackageSourceId = new("5d9a2b5f-5c59-4a1f-8c70-8011a8b4e0b1");
+
     private static readonly Guid AnyQualityTierListId = new("5e467568-37b5-4cb9-a272-80f508d86db8");
 
     private static readonly Guid AnyQualityTierId = new("bbfcfb85-70dd-481c-815b-d5973e2a22a8");
@@ -116,7 +118,7 @@ public static class MagpieSeedingExtensions
                 context.SeedAsync(scheduleTriggers, eventTriggers, cancellationToken));
     }
 
-    public static async Task SeedAsync(
+    private static async Task SeedAsync(
         this DbContext context,
         IReadOnlyList<ScheduleTrigger> scheduleTriggers,
         IReadOnlyList<EventTrigger> eventTriggers,
@@ -211,6 +213,28 @@ public static class MagpieSeedingExtensions
                 new() { Id = Guid.NewGuid(), Pattern = ".vbe", CreatedAt = now },
                 new() { Id = Guid.NewGuid(), Pattern = ".vbs", CreatedAt = now },
                 new() { Id = Guid.NewGuid(), Pattern = ".wsf", CreatedAt = now });
+        }
+
+        if (!await context.Set<ExtensionPackageSource>()
+            .AnyAsync(source => source.Id == NuGetPackageSourceId, cancellationToken).ConfigureAwait(false))
+        {
+            context.Set<ExtensionPackageSource>().Add(new()
+            {
+                Id = NuGetPackageSourceId,
+                Name = "nuget.org",
+                SourceUrl = "https://api.nuget.org/v3/index.json",
+                Enabled = true,
+                SearchFilterKind = ExtensionPackageSourceSearchFilterKind.Tag,
+                SearchFilterValue = "magpie",
+                CredentialKind = ExtensionPackageSourceCredentialKind.None,
+                CreatedAt = DateTime.UnixEpoch
+            });
+        }
+
+        if (!await context.Set<ExtensionActivationState>()
+            .AnyAsync(state => state.Id == 1, cancellationToken).ConfigureAwait(false))
+        {
+            context.Set<ExtensionActivationState>().Add(new() { Id = 1, Generation = 0 });
         }
 
         await SeedQualityTierCatalogAsync(context, cancellationToken).ConfigureAwait(false);

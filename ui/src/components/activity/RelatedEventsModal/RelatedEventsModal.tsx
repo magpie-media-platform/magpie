@@ -54,13 +54,13 @@ export function RelatedEventsModal({
             <DialogContent className="related-events" data-component="related-events-modal">
                 <DialogHeader>
                     <DialogTitle>Activity detail</DialogTitle>
-                    <DialogDescription>Review this activity or its trace context.</DialogDescription>
+                    <DialogDescription>Review this activity or the activity related to it.</DialogDescription>
                 </DialogHeader>
 
                 <Tabs value={view} onValueChange={setView} className="related-events__tabs">
                     <TabsList className="related-events__tabs-list">
                         <TabsTrigger value="details">Details</TabsTrigger>
-                        <TabsTrigger value="trace">Trace context</TabsTrigger>
+                        <TabsTrigger value="trace">Related activity</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="details" asChild>

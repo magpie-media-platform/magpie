@@ -1,3 +1,5 @@
+export type SortDirectionName = 'Ascending' | 'Descending';
+
 export interface PagedList<T> {
     items: T[];
     pageNumber: number | null;

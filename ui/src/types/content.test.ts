@@ -5,6 +5,7 @@ import {
     getFulfillmentBadge,
     mapFulfillmentStatus,
     mapToContentDetailItem,
+    mapToContentListItem,
     type ApiContentHierarchyItem,
 } from './content';
 
@@ -120,5 +121,37 @@ describe('mapToContentDetailItem', () => {
         );
 
         expect(result.previews).toEqual([{ kind: 'trailer', url: 'https://example.com/trailer' }]);
+    });
+});
+
+describe('mapToContentListItem', () => {
+    it('carries the preview clips the list response already contains', () => {
+        const result = mapToContentListItem(
+            makeItem({
+                metadataContainer: {
+                    id: 'metadata-1',
+                    contributions: [
+                        {
+                            ordinal: 0,
+                            previews: [
+                                { ordinal: 1, kind: 'clip', url: 'https://example.com/second' },
+                                { ordinal: 0, kind: 'trailer', url: 'https://example.com/first' },
+                            ],
+                        },
+                    ],
+                },
+            }),
+        );
+
+        expect(result.previews).toEqual([
+            { kind: 'trailer', url: 'https://example.com/first' },
+            { kind: 'clip', url: 'https://example.com/second' },
+        ]);
+    });
+
+    it('carries no preview clips when metadata provides none', () => {
+        const result = mapToContentListItem(makeItem());
+
+        expect(result.previews).toEqual([]);
     });
 });

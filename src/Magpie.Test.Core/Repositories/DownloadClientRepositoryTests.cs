@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Core;
@@ -19,6 +20,7 @@ using Magpie.Sdk.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -27,7 +29,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class DownloadClientRepositoryTests
+public sealed class DownloadClientRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private string _dataRoot = null!;
@@ -72,11 +74,8 @@ public class DownloadClientRepositoryTests
             ConfigRoot: _dataRoot,
             DataRoot: _dataRoot,
             StartedAt: DateTime.UtcNow);
-        var keyStore = new AtomicFileKeyStore(
-            hostEnvironment,
-            loggerFactory.CreateLogger<AtomicFileKeyStore>());
         var dataProtectionProvider = new DefaultDataProtectionProvider(
-            keyStore,
+            hostEnvironment,
             loggerFactory.CreateLogger<DefaultDataProtectionProvider>());
         var encryptionProtector = new DataProtectionService(dataProtectionProvider);
 
@@ -84,7 +83,9 @@ public class DownloadClientRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
@@ -102,7 +103,8 @@ public class DownloadClientRepositoryTests
             transactionManager,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<DownloadClientRepository>(),
-            protector.Object);
+            protector.Object,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         _encryptedSubject = new DownloadClientRepository(
             _context,
@@ -110,7 +112,8 @@ public class DownloadClientRepositoryTests
             transactionManager,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<DownloadClientRepository>(),
-            encryptionProtector);
+            encryptionProtector,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -118,10 +121,7 @@ public class DownloadClientRepositoryTests
     {
         _context.Database.CloseConnection();
         _context.Dispose();
-        if (Directory.Exists(_dataRoot))
-        {
-            Directory.Delete(_dataRoot, recursive: true);
-        }
+        Directory.Delete(_dataRoot, recursive: true);
     }
 
     [Test]
@@ -298,6 +298,20 @@ public class DownloadClientRepositoryTests
         _context.DownloadClients.Add(client);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
+        var extension = new Extension
+        {
+            PackageId = "test-extension",
+            AssemblyName = "Test.Extension",
+            Name = "Extension",
+            Version = "1.0.0",
+            FilePath = "/extensions/test"
+        };
+        _context.Extensions.Add(extension);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        client.ExtensionId = extension.Id;
+        client.LastError = "Connection failed.";
+        client.ConsecutiveFailures = 3;
         client.Name = "UpdatedClient";
         client.Enabled = false;
         client.Status = IntegrationHealthStatus.Healthy;
@@ -311,6 +325,9 @@ public class DownloadClientRepositoryTests
         var updated = await _subject.GetByIdAsync(client.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(updated!.ExtensionId, Is.EqualTo(extension.Id));
+            Assert.That(updated.LastError, Is.EqualTo("Connection failed."));
+            Assert.That(updated.ConsecutiveFailures, Is.EqualTo(3));
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedClient"));
             Assert.That(updated, Has.Property(nameof(updated.Enabled)).False);
             Assert.That(updated, Has.Property(nameof(updated.Status)).EqualTo(IntegrationHealthStatus.Healthy));
@@ -624,6 +641,49 @@ public class DownloadClientRepositoryTests
             Assert.That(storedSettings.Values.Any(v => v.Contains("hunter2", StringComparison.Ordinal)), Is.False);
             Assert.That(roundTripped!.Settings["password"], Is.EqualTo("hunter2"));
             Assert.That(roundTripped.Settings["host"], Is.EqualTo("http://x"));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_AddsUpdatesAndRemovesSettings_WhenTheSettingsPatchNamesEachOperation()
+    {
+        // Arrange
+        var client = new DownloadClient
+        {
+            Name = "SettingsPatch",
+            ProviderType = "downloadclient-a",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Unknown,
+            Settings = new Dictionary<string, string> { ["host"] = "old", ["stale"] = "drop" },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.DownloadClients.Add(client);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        var patch = new DownloadClientPatch
+        {
+            Id = client.Id,
+            Settings = new()
+            {
+                Add = new() { ["port"] = "8080" },
+                Update = new() { ["host"] = "new", ["absent"] = "ignored" },
+                Remove = ["stale"]
+            }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        var patched = await _subject.GetByIdAsync(client.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(patched!.Settings["port"], Is.EqualTo("8080"));
+            Assert.That(patched.Settings["host"], Is.EqualTo("new"));
+            Assert.That(patched.Settings.ContainsKey("stale"), Is.False);
+            Assert.That(patched.Settings.ContainsKey("absent"), Is.False);
         }
     }
 }

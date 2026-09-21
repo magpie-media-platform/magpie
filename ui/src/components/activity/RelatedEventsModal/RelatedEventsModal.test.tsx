@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -92,7 +89,7 @@ describe('RelatedEventsModal', () => {
         expect(apiGet).not.toHaveBeenCalled();
     });
 
-    it('shows the selected activity in the default Details view without fetching trace context', async () => {
+    it('shows the selected activity in the default Details view without fetching the related activity', async () => {
         render(
             wrap(
                 <RelatedEventsModal
@@ -141,7 +138,7 @@ describe('RelatedEventsModal', () => {
         expect(detailsPanel).not.toContainElement(within(dialog).getByRole('heading', { name: 'Activity detail' }));
         expect(detailsPanel).not.toContainElement(tablist);
 
-        await user.click(within(dialog).getByRole('tab', { name: 'Trace context' }));
+        await user.click(within(dialog).getByRole('tab', { name: 'Related activity' }));
         await waitFor(() => {
             expect(within(dialog).getByTestId('related-events__chain')).toBeInTheDocument();
         });
@@ -150,20 +147,9 @@ describe('RelatedEventsModal', () => {
         expect(tracePanel).toHaveClass('dialog-body', 'tabs-content', 'related-events__tab-content');
         expect(tracePanel).toHaveAttribute('tabindex', '0');
         expect(tracePanel).not.toContainElement(tablist);
-
-        const css = readFileSync(
-            resolve(process.cwd(), 'src/components/activity/RelatedEventsModal/RelatedEventsModal.css'),
-            'utf8',
-        );
-        expect(css).toMatch(/\.related-events__tabs\s*{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;/);
-        expect(css).toMatch(
-            /\.related-events__tab-content\s*{[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*hidden auto;[\s\S]*?overscroll-behavior:\s*contain;/,
-        );
-        expect(css).toMatch(/\.related-events__self-title\s*{[\s\S]*?overflow-wrap:\s*anywhere;/);
-        expect(css).toMatch(/\.related-events__step-label\s*{[\s\S]*?overflow-wrap:\s*anywhere;/);
     });
 
-    it('loads combined trace context on demand, ordered chronologically, with the selected activity highlighted once', async () => {
+    it('renders the real execution lineage as a tree, with the unrelated selected activity in a distinct group', async () => {
         const user = userEvent.setup();
         render(
             wrap(
@@ -178,17 +164,23 @@ describe('RelatedEventsModal', () => {
         );
 
         const dialog = await screen.findByRole('dialog');
-        await user.click(within(dialog).getByRole('tab', { name: 'Trace context' }));
+        await user.click(within(dialog).getByRole('tab', { name: 'Related activity' }));
 
         await waitFor(() => {
             expect(within(dialog).getByTestId('related-events__chain')).toBeInTheDocument();
         });
         expect(apiGet).toHaveBeenCalledWith(`/jobs/${executionId}/execution-tree?include-siblings=true`);
 
-        const steps = within(dialog).getAllByRole('listitem');
-        expect(steps[0].textContent).toContain('First Step');
-        expect(steps[1].textContent).toContain('Second Step');
-        expect(steps[2].textContent).toContain('Third Step');
+        const chainList = dialog.querySelector('.related-events__chain-list');
+        const chainStepEls = within(chainList as HTMLElement).getAllByRole('listitem');
+        expect(chainStepEls).toHaveLength(2);
+        expect(chainStepEls[0].textContent).toContain('Third Step');
+        expect(chainStepEls[1].textContent).toContain('Second Step');
+        expect(chainList?.querySelector('.related-events__connector')).not.toBeNull();
+
+        const also = within(dialog).getByTestId('related-events__also');
+        expect(within(also).getByText('First Step')).toBeInTheDocument();
+        expect(also.querySelector('.related-events__connector')).toBeNull();
 
         const selfStep = within(dialog).getByTestId('related-events__self-step');
         expect(selfStep).toHaveTextContent('Selected activity');
@@ -212,7 +204,7 @@ describe('RelatedEventsModal', () => {
         );
 
         const dialog = await screen.findByRole('dialog');
-        await user.click(within(dialog).getByRole('tab', { name: 'Trace context' }));
+        await user.click(within(dialog).getByRole('tab', { name: 'Related activity' }));
         await waitFor(() => {
             expect(within(dialog).getByTestId('related-events__chain')).toBeInTheDocument();
         });

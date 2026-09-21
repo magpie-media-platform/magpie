@@ -1,20 +1,10 @@
-function titleCaseSlug(slug: string): string {
-    return slug
-        .split(/[-_]/)
-        .filter((part) => part.length > 0)
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
-}
-
-export function formatSubjectKindLabel(kind: string, displayName?: string | null): string {
-    return displayName?.trim() || titleCaseSlug(kind);
-}
+import { humanizeSlug } from '@/lib/contentTypeDisplay';
 
 export function resolveSubjectKindLabel(kind: string | undefined, displayName?: string | null): string {
     if (!kind) {
         return 'Subject';
     }
-    return displayName?.trim() || titleCaseSlug(kind);
+    return displayName?.trim() || humanizeSlug(kind);
 }
 
 export function resolveSubjectKindPluralLabel(
@@ -25,5 +15,5 @@ export function resolveSubjectKindPluralLabel(
     if (!kind) {
         return 'Subjects';
     }
-    return pluralDisplayName?.trim() || displayName?.trim() || titleCaseSlug(kind);
+    return pluralDisplayName?.trim() || displayName?.trim() || humanizeSlug(kind);
 }

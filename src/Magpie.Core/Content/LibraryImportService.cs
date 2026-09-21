@@ -20,6 +20,8 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Import;
 using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
+using Magpie.Models.Patch;
+using Magpie.Sdk.Content;
 using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
 
@@ -33,16 +35,27 @@ internal sealed class LibraryImportService(
     IContentFileService contentFileService,
     IContentTypeRegistry contentTypeRegistry,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
-    IRootFolderRepository rootFolderRepository,
     IFileSystem fileSystem,
     ITransactionManager transactionManager,
     IAuditRecordRepository auditRecordRepository,
     IJobManager jobManager,
     IEventBus eventBus,
     IReleaseEvaluationService releaseEvaluationService,
+    IEnumerable<IContentHierarchyMetadataProvider> metadataProviders,
     TimeProvider timeProvider,
     ILogger<LibraryImportService> logger) : ILibraryImportService
 {
+    private static string ExceptionMessages(Exception exception) =>
+        string.Join(" -> ", GenerateExceptionMessages(exception));
+
+    private static IEnumerable<string> GenerateExceptionMessages(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            yield return current.Message;
+        }
+    }
+
     public async Task<PagedList<LibraryImportCandidate>> QueryCandidatesAsync(
         LibraryImportCandidateQuery query,
         PagingParameter paging,
@@ -53,8 +66,136 @@ internal sealed class LibraryImportService(
             .ConfigureAwait(false);
     }
 
+    public async Task<PagedList<LibraryImportCandidateGroup>> QueryCandidateGroupsAsync(
+        LibraryImportCandidateQuery query,
+        PagingParameter paging,
+        CancellationToken cancellationToken = default)
+    {
+        var page = await libraryImportCandidateRepository.QueryGroupsAsync(query, paging, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new PagedList<LibraryImportCandidateGroup>
+        {
+            Items = [.. page.Items.Select(summary => BuildGroup(
+                summary.GroupKey,
+                summary.Representative,
+                summary.StatusCounts))],
+            PageNumber = page.PageNumber,
+            PageSize = page.PageSize,
+            TotalItems = page.TotalItems
+        };
+    }
+
+    private static string? ResolveRepresentativeTitle(LibraryImportCandidate candidate)
+    {
+        return FirstNonEmptySignal(candidate.ParsedSignals, ParsedFileSignalKeys.RootTitle)
+            ?? FirstNonEmptySignal(candidate.ParsedSignals, ParsedFileSignalKeys.TitleToken)
+            ?? FirstNonEmptySignal(candidate.ParsedSignals, ParsedFileSignalKeys.Title)
+            ?? Path.GetFileNameWithoutExtension(candidate.FilePath);
+    }
+
+    private static string? FirstNonEmptySignal(Dictionary<string, List<string>> signals, string key) =>
+        signals.TryGetValue(key, out var values)
+            ? values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
+            : null;
+
+    private async Task<IReadOnlyList<LibraryImportCandidate>> LoadAllCandidatesAsync(
+        LibraryImportCandidateQuery query,
+        CancellationToken cancellationToken)
+    {
+        return await libraryImportCandidateRepository.QueryAllAsync(
+            query,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<List<Guid>> LoadCandidateIdsAsync(
+        LibraryImportCandidateQuery query,
+        CancellationToken cancellationToken)
+    {
+        const int pageSize = 500;
+        var ids = new List<Guid>();
+        for (var pageNumber = 1; ; pageNumber++)
+        {
+            var page = await libraryImportCandidateRepository.QueryIdsAsync(
+                query,
+                new() { PageNumber = pageNumber, PageSize = pageSize },
+                cancellationToken).ConfigureAwait(false);
+            var pageItems = page.Items.ToList();
+            ids.AddRange(pageItems);
+            if (pageNumber * pageSize >= page.TotalItems || pageItems.Count == 0)
+            {
+                return ids;
+            }
+        }
+    }
+
+    private LibraryImportCandidateGroup BuildGroup(
+        string groupKey,
+        LibraryImportCandidate representative,
+        IReadOnlyDictionary<LibraryImportCandidateStatus, int> statusCounts)
+    {
+        var match = representative.Matches.Count == 1 ? representative.Matches[0] : null;
+        var title = representative.LayoutKey is { } layoutKey
+            ? Path.GetFileName(layoutKey)
+            : match?.Title ?? ResolveRepresentativeTitle(representative) ?? groupKey;
+        var (topLevelSlug, leafLevelSlug, leafLevelDisplayName, childLevelSlug, childLevelDisplayName) =
+            ResolveLeafLevel(representative.ContentType, match?.LevelSlug);
+
+        return new LibraryImportCandidateGroup
+        {
+            GroupKey = groupKey,
+            Title = title,
+            ContentType = representative.ContentType,
+            Subtitle = match?.Subtitle,
+            Match = match,
+            LeafCount = statusCounts.Values.Sum(),
+            TopLevelSlug = topLevelSlug,
+            LeafLevelSlug = leafLevelSlug,
+            LeafLevelDisplayName = leafLevelDisplayName,
+            ChildLevelSlug = childLevelSlug,
+            ChildLevelDisplayName = childLevelDisplayName,
+            StatusCounts = statusCounts
+        };
+    }
+
+    private (
+        string TopLevelSlug,
+        string LeafLevelSlug,
+        string LeafLevelDisplayName,
+        string? ChildLevelSlug,
+        string? ChildLevelDisplayName) ResolveLeafLevel(string contentType, string? knownLevelSlug)
+    {
+        var topSlug = knownLevelSlug ?? contentTypeRegistry.GetRootLevels(contentType).FirstOrDefault()?.Slug
+            ?? contentType;
+
+        var topChildren = contentTypeRegistry.GetChildLevels(contentType, topSlug);
+        var childSlug = topChildren.Count == 1 ? topChildren[0].Slug : null;
+
+        var leafSlug = topSlug;
+        while (true)
+        {
+            var children = contentTypeRegistry.GetChildLevels(contentType, leafSlug);
+            if (children.Count != 1)
+            {
+                break;
+            }
+
+            leafSlug = children[0].Slug;
+        }
+
+        var levelDefinitions = contentTypeRegistry.GetDefinitionFor(contentType)?.LevelDefinitions;
+        var leafDisplayName = levelDefinitions?.FirstOrDefault(level => level.Slug == leafSlug)?.DisplayName
+            ?? leafSlug;
+        var childDisplayName = childSlug is null
+            ? null
+            : levelDefinitions?.FirstOrDefault(level => level.Slug == childSlug)?.DisplayName ?? childSlug;
+
+        return (topSlug, leafSlug, leafDisplayName, childSlug, childDisplayName);
+    }
+
     public async Task<LibraryImportSubmissionResult> SubmitImportAsync(
         BulkAction<LibraryImportCandidateQuery> action,
+        LibraryImportMonitoringMode monitoringMode,
         Guid? actingUserId,
         Guid? correlationId,
         CancellationToken cancellationToken = default)
@@ -71,40 +212,19 @@ internal sealed class LibraryImportService(
 
         if (action.Filter is not null)
         {
-            const int pageSize = 500;
-            var pageNumber = 1;
-            while (true)
+            var claimable = action.Filter with
             {
-                var page = await libraryImportCandidateRepository.QueryAsync(
-                    new()
-                    {
-                        RootFolderId = action.Filter.RootFolderId,
-                        Status = LibraryImportCandidateStatus.Pending,
-                        HasMatches = true,
-                        ExcludeIds = action.Filter.ExcludeIds
-                    },
-                    new() { PageNumber = pageNumber, PageSize = pageSize },
-                    new()
-                    {
-                        PropertyName = nameof(LibraryImportCandidate.Id),
-                        Direction = SortDirection.Ascending
-                    },
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                foreach (var candidate in pageItems)
+                Status = null,
+                Statuses = [LibraryImportCandidateStatus.Pending, LibraryImportCandidateStatus.Failed],
+                HasMatches = true
+            };
+            foreach (var candidateId in await LoadCandidateIdsAsync(claimable, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (seen.Add(candidateId))
                 {
-                    if (seen.Add(candidate.Id))
-                    {
-                        ids.Add(candidate.Id);
-                    }
+                    ids.Add(candidateId);
                 }
-
-                if (pageItems.Count < pageSize)
-                {
-                    break;
-                }
-
-                pageNumber++;
             }
         }
 
@@ -113,15 +233,32 @@ internal sealed class LibraryImportService(
 
         foreach (var id in ids)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var candidate = await libraryImportCandidateRepository
+                .GetByIdAsync(id, cancellationToken)
+                .ConfigureAwait(false);
+            if (candidate is null || candidate.Matches.Count == 0)
+            {
+                skipped.Add(new()
+                {
+                    CandidateId = id,
+                    Reason = candidate is null
+                        ? "Candidate no longer exists."
+                        : "Candidate has no match. Match it before you import it."
+                });
+                continue;
+            }
+
             var claimed = await libraryImportCandidateRepository
-                .TryClaimForImportAsync(id, actingUserId, CancellationToken.None)
+                .TryClaimForImportAsync(id, actingUserId, cancellationToken)
                 .ConfigureAwait(false);
             if (!claimed)
             {
                 skipped.Add(new()
                 {
                     CandidateId = id,
-                    Reason = "Candidate is not pending, or was already claimed by another request."
+                    Reason = "Candidate is not pending or failed, or was already claimed by another request."
                 });
                 continue;
             }
@@ -134,7 +271,8 @@ internal sealed class LibraryImportService(
                         JobType = MagpieJobs.Types.RootFolderContentImportItem,
                         Parameters = new Dictionary<string, string>
                         {
-                            [MagpieJobs.Parameters.CandidateId] = id.ToString("D")
+                            [MagpieJobs.Parameters.CandidateId] = id.ToString("D"),
+                            [MagpieJobs.Parameters.MonitoringMode] = monitoringMode.ToString()
                         },
                         Mode = JobExecutionMode.Queue,
                         UserId = actingUserId,
@@ -163,8 +301,8 @@ internal sealed class LibraryImportService(
         }
 
         logger.LogInformation(
-            "The library import submission queued {Queued} candidates. The submission skipped or " +
-            "failed {Skipped} of {Total} candidates",
+            "The library import submission queued {Queued} candidates and skipped or failed {Skipped} " +
+            "of {Total}",
             queued.Count,
             skipped.Count,
             ids.Count);
@@ -172,9 +310,119 @@ internal sealed class LibraryImportService(
         return new() { Queued = queued, Skipped = skipped };
     }
 
+    public async Task<LibraryImportSubmissionResult?> AcceptGroupAsync(
+        LibraryImportCandidateQuery query,
+        string groupKey,
+        LibraryImportMonitoringMode monitoringMode,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        var members = await LoadCandidateIdsAsync(query with { GroupKey = groupKey }, cancellationToken)
+            .ConfigureAwait(false);
+        if (members.Count == 0)
+        {
+            return null;
+        }
+
+        return await SubmitImportAsync(
+            new BulkAction<LibraryImportCandidateQuery> { Ids = members },
+            monitoringMode,
+            actingUserId,
+            correlationId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<LibraryImportSubmissionResult> AcceptGroupsAsync(
+        BulkAction<LibraryImportCandidateQuery> action,
+        LibraryImportMonitoringMode monitoringMode,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        return await SubmitImportAsync(
+            action,
+            monitoringMode,
+            actingUserId,
+            correlationId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<LibraryImportCandidateGroup?> MatchGroupAsync(
+        LibraryImportCandidateQuery query,
+        string groupKey,
+        string providerType,
+        string externalIdKey,
+        string externalId,
+        string title,
+        string? subtitle,
+        string? imageUrl,
+        string? levelSlug,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        var members = await LoadAllCandidatesAsync(query with { GroupKey = groupKey }, cancellationToken)
+            .ConfigureAwait(false);
+        if (members.Count == 0)
+        {
+            return null;
+        }
+
+        var match = new LibraryImportMatch
+        {
+            Confidence = 1.0,
+            ProviderType = providerType,
+            ExternalIdKey = externalIdKey,
+            ExternalId = externalId,
+            Title = title,
+            Subtitle = subtitle,
+            ImageUrl = imageUrl,
+            LevelSlug = levelSlug
+        };
+        var patched = await libraryImportCandidateRepository.BulkPatchAsync(
+            new BulkPatch<LibraryImportCandidateQuery, LibraryImportCandidatePatch>
+            {
+                Ids = [.. members.Select(member => member.Id)],
+                Patch = new() { Matches = new() { Value = [match] } }
+            },
+            actingUserId,
+            cancellationToken).ConfigureAwait(false);
+        if (patched.Count == 0)
+        {
+            return null;
+        }
+
+        await TryWriteAuditAsync(
+            operation: "FileMatched",
+            entityType: nameof(LibraryImportCandidate),
+            entityId: groupKey,
+            detail: $"Manually matched {patched.Count} files of group {groupKey} to " +
+                $"{match.ExternalIdKey}={match.ExternalId}.",
+            actingUserId,
+            correlationId,
+            cancellationToken).ConfigureAwait(false);
+
+        var representative = await libraryImportCandidateRepository
+            .GetByIdAsync(members[0].Id, cancellationToken)
+            .ConfigureAwait(false);
+        if (representative is null)
+        {
+            return null;
+        }
+
+        return BuildGroup(
+            representative.GroupKey ?? groupKey,
+            representative,
+            members
+                .GroupBy(member => member.Status)
+                .ToDictionary(group => group.Key, group => group.Count()));
+    }
+
     public async Task<LibraryImportCompletionResult> ImportCandidateAsync(
         Guid candidateId,
         int matchIndex,
+        LibraryImportMonitoringMode monitoringMode,
         Guid? actingUserId,
         Guid? correlationId,
         CancellationToken cancellationToken = default)
@@ -223,7 +471,13 @@ internal sealed class LibraryImportService(
         (Guid HierarchyItemId, Guid ContentItemId)? completion;
         try
         {
-            completion = await CompleteImportAsync(candidate, match, actingUserId, correlationId, cancellationToken)
+            completion = await CompleteImportAsync(
+                candidate,
+                match,
+                monitoringMode,
+                actingUserId,
+                correlationId,
+                cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -232,7 +486,7 @@ internal sealed class LibraryImportService(
         }
         catch (Exception ex)
         {
-            var reason = $"Import failed: {ex.Message}";
+            var reason = $"Import failed: {ExceptionMessages(ex)}";
             logger.LogWarning(
                 ex,
                 "The import failed for library import candidate {LibraryImportCandidateId} ({FilePath})",
@@ -246,11 +500,34 @@ internal sealed class LibraryImportService(
 
         if (completion is not { } result)
         {
-            var reason = $"The provider found no match for {match.ExternalIdKey}={match.ExternalId}. " +
-                "No content was created.";
-            await libraryImportCandidateRepository
+            var providerAnswered = metadataProviders.Any(provider =>
+                provider.ProviderType == match.ProviderType &&
+                provider.SupportedContentTypes.Any(
+                    supported => supported == "*" || supported == candidate.ContentType));
+            var reason = providerAnswered
+                ? $"The provider found no match for {match.ExternalIdKey}={match.ExternalId}. " +
+                    "The match was removed. Match the file again before you import it."
+                : $"No {match.ProviderType} metadata provider is available for content type " +
+                    $"{candidate.ContentType}. The match was kept. Import the file again when the provider " +
+                    "is available.";
+            var failed = await libraryImportCandidateRepository
                 .MarkImportFailedAsync(candidateId, reason, actingUserId, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (failed && providerAnswered)
+            {
+                await libraryImportCandidateRepository
+                    .BulkPatchAsync(
+                        new BulkPatch<LibraryImportCandidateQuery, LibraryImportCandidatePatch>
+                        {
+                            Ids = [candidateId],
+                            Patch = new() { Matches = new() { Value = [] } }
+                        },
+                        actingUserId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             return Failed(reason);
         }
 
@@ -314,15 +591,18 @@ internal sealed class LibraryImportService(
             LevelSlug = levelSlug
         };
 
-        var updated = candidate with
+        var patched = await libraryImportCandidateRepository.BulkPatchAsync(
+            new BulkPatch<LibraryImportCandidateQuery, LibraryImportCandidatePatch>
+            {
+                Ids = [candidate.Id],
+                Patch = new() { Matches = new() { Value = [match] } }
+            },
+            actingUserId,
+            cancellationToken).ConfigureAwait(false);
+        if (patched.Count == 0)
         {
-            Matches = [match],
-            MatchCount = 1,
-            ModifiedAt = timeProvider.GetUtcNow().UtcDateTime,
-            ModifiedByUserId = actingUserId
-        };
-        await libraryImportCandidateRepository.UpdateAsync(updated, actingUserId, cancellationToken)
-            .ConfigureAwait(false);
+            return null;
+        }
 
         await TryWriteAuditAsync(
             operation: "FileMatched",
@@ -334,7 +614,9 @@ internal sealed class LibraryImportService(
             correlationId,
             cancellationToken).ConfigureAwait(false);
 
-        return updated;
+        return await libraryImportCandidateRepository
+            .GetByIdAsync(candidate.Id, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<bool> UpdateFulfillmentFromFilesAsync(
@@ -345,32 +627,6 @@ internal sealed class LibraryImportService(
         return await contentFileService
             .UpdateFulfillmentAsync(contentHierarchyItemId, actingUserId, cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    private async Task<Guid?> ResolveFileLeafAsync(
-        Guid containerHierarchyItemId,
-        string filePath,
-        CancellationToken cancellationToken = default)
-    {
-        var assignments = await AssignFilesToLeavesAsync(containerHierarchyItemId, [filePath], cancellationToken)
-            .ConfigureAwait(false);
-        if (assignments.Count == 0)
-        {
-            logger.LogDebug(
-                "The content service resolved no leaf for file {FilePath} under container " +
-                "{ContainerContentHierarchyItemId}. The file stays on the container",
-                filePath,
-                containerHierarchyItemId);
-            return null;
-        }
-
-        logger.LogInformation(
-            "The content service matched file {FilePath} to leaf hierarchy item {LeafContentHierarchyItemId} " +
-            "under container {ContainerContentHierarchyItemId}",
-            filePath,
-            assignments[0].LeafId,
-            containerHierarchyItemId);
-        return assignments[0].LeafId;
     }
 
     public async Task<bool> DeleteMediaFileAsync(
@@ -393,101 +649,86 @@ internal sealed class LibraryImportService(
         return operation.Deleted;
     }
 
-    private IReadOnlyList<string> ResolveTerminalLevelSlugs(ContentTypeDefinition definition)
+    private static ContentHierarchyItem? ResolveByTitleSignal(
+        IReadOnlyList<ContentHierarchyItem> children,
+        string? parsedTitle)
     {
-        var parentSlugs = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var level in definition.LevelDefinitions)
+        if (string.IsNullOrWhiteSpace(parsedTitle))
         {
-            if (level.ParentSlug is { } parentSlug)
-            {
-                parentSlugs.Add(parentSlug);
-            }
+            return null;
         }
 
-        return
-        [.. definition.LevelDefinitions.Select(level => level.Slug).Where(slug => !parentSlugs.Contains(slug))];
+        var matches = children
+            .Where(child => string.Equals(child.Name.Trim(), parsedTitle.Trim(), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return matches.Count == 1 ? matches[0] : null;
     }
 
-    private async Task<IReadOnlyList<(string FilePath, Guid LeafId)>> AssignFilesToLeavesAsync(
-        Guid containerHierarchyItemId,
-        IReadOnlyList<string> filePaths,
+    private async Task<FileRouteResult> RouteFileAsync(
+        ContentHierarchyItem root,
+        LibraryImportCandidate candidate,
         CancellationToken cancellationToken)
     {
-        if (filePaths.Count == 0)
-        {
-            return [];
-        }
+        var current = root;
+        var parsedTitle = FirstNonEmptySignal(candidate.ParsedSignals, ParsedFileSignalKeys.Title);
+        var release = new Release { Protocol = "file", Title = Path.GetFileName(candidate.FilePath) };
+        var fileRef = new ReleaseFileRef(candidate.FilePath, Path.GetFileName(candidate.FilePath));
 
-        var container = await contentHierarchyItemRepository
-            .GetByIdAsync(containerHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
-        if (container is null ||
-            contentTypeRegistry.GetDefinitionFor(container.ContentType) is not { } definition)
-        {
-            return [];
-        }
-
-        var leafLevelSlugs = ResolveTerminalLevelSlugs(definition)
-            .Where(slug => !string.Equals(slug, container.Level, StringComparison.Ordinal))
-            .ToArray();
-        if (leafLevelSlugs.Length == 0)
-        {
-            return [];
-        }
-
-        const int pageSize = 500;
-        var leaves = new List<ContentHierarchyItem>();
-        var pageNumber = 1;
         while (true)
         {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new ContentHierarchyItemCriteria
-                {
-                    AncestorId = containerHierarchyItemId,
-                    LeafOnly = true,
-                    Level = new CriteriaSet<PropertyCriterion<string>>
-                    {
-                        And =
-                        [
-                            new PropertyCriterion<string>
-                            {
-                                Operator = CriteriaValueOperator.In,
-                                Values = leafLevelSlugs,
-                            },
-                        ],
-                    },
-                },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            leaves.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
+            var children = await ListDirectChildrenAsync(current.Id, cancellationToken).ConfigureAwait(false);
+            if (children.Count == 0)
             {
-                break;
+                var childLevels = contentTypeRegistry.GetChildLevels(current.ContentType, current.Level);
+                if (childLevels.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"The target {string.Join(", ", childLevels.Select(level => level.Slug))} level does not " +
+                        $"exist yet below {current.Level}.");
+                }
+
+                return new(current, StoppedEarly: false);
             }
 
-            pageNumber++;
-        }
+            var next = await ResolveFileMatchAsync(release, current, children, fileRef, cancellationToken)
+                    .ConfigureAwait(false)
+                ?? ResolveByTitleSignal(children, parsedTitle);
+            if (next is null)
+            {
+                return new(current, StoppedEarly: true);
+            }
 
-        if (leaves.Count == 0)
-        {
-            return [];
+            current = next;
         }
+    }
 
-        var release = new Release { Protocol = "file", Title = Path.GetFileName(filePaths[0]) };
-        IReadOnlyList<ReleaseFileRef> files =
-            [.. filePaths.Select(path => new ReleaseFileRef(path, Path.GetFileName(path)))];
+    private async Task<ContentHierarchyItem?> ResolveFileMatchAsync(
+        Release release,
+        ContentHierarchyItem parent,
+        IReadOnlyList<ContentHierarchyItem> children,
+        ReleaseFileRef fileRef,
+        CancellationToken cancellationToken)
+    {
         var assignments = await releaseEvaluationService
-            .AssignFilesToLeavesAsync(release, container, leaves, files, cancellationToken)
+            .AssignFilesToLeavesAsync(release, parent, children, [fileRef], cancellationToken)
             .ConfigureAwait(false);
+        var leafId = assignments.FirstOrDefault()?.LeafContentHierarchyItemId;
+        return leafId is { } id ? children.FirstOrDefault(child => child.Id == id) : null;
+    }
 
-        var leafIds = leaves.Select(leaf => leaf.Id).ToHashSet();
-        return
-        [..
-            from assignment in assignments
-            where assignment.LeafContentHierarchyItemId is { } leafId && leafIds.Contains(leafId)
-            select (assignment.FileKey, assignment.LeafContentHierarchyItemId!.Value)];
+    private async Task<IReadOnlyList<ContentHierarchyItem>> ListDirectChildrenAsync(
+        Guid parentId,
+        CancellationToken cancellationToken)
+    {
+        return await contentHierarchyItemRepository.QueryAllAsync(
+            new ContentHierarchyItemCriteria
+            {
+                ParentId = new CriteriaSet<PropertyCriterion<Guid>>
+                {
+                    And = [new() { Operator = CriteriaValueOperator.Equals, Value = parentId }]
+                }
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private LibraryImportCompletionResult Skipped(string message) =>
@@ -499,18 +740,25 @@ internal sealed class LibraryImportService(
     private async Task<(Guid HierarchyItemId, Guid ContentItemId)?> CompleteImportAsync(
         LibraryImportCandidate candidate,
         LibraryImportMatch match,
+        LibraryImportMonitoringMode monitoringMode,
         Guid? actingUserId,
         Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        var hydrated = await contentService.HydrateFromExternalIdAsync(
+        var hydrated = await contentService.HydrateWithDescendantsFromExternalIdAsync(
             match.ProviderType,
             match.ExternalIdKey,
             match.ExternalId,
             candidate.ContentType,
             match.LevelSlug,
             candidate.RootFolderId,
-            monitoring: null,
+            monitoring: monitoringMode switch
+            {
+                LibraryImportMonitoringMode.Monitored => true,
+                LibraryImportMonitoringMode.Unmonitored => false,
+                LibraryImportMonitoringMode.Future => false,
+                _ => null,
+            },
             qualityTierListId: null,
             requestedViaWishlistId: null,
             tags: null,
@@ -522,23 +770,29 @@ internal sealed class LibraryImportService(
             return null;
         }
 
-        var containerHierarchyItemId = hydrated.Id;
-        var hierarchyItemId = containerHierarchyItemId;
-        var contentItemId = Guid.Empty;
-        await transactionManager.ExecuteWithTransactionAsync(
+        await ApplyImportMonitoringAsync(
+            hydrated.Value.Root,
+            hydrated.Value.CreatedHierarchyItemIds,
+            monitoringMode,
+            actingUserId,
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        var root = hydrated.Value.Root;
+        var routed = await RouteFileAsync(root, candidate, cancellationToken).ConfigureAwait(false);
+        var hierarchyItemId = routed.Node.Id;
+        var fallbackNote = routed.StoppedEarly
+            ? $" The file could not be aligned below level {routed.Node.Level}; it was attached there."
+            : string.Empty;
+
+        var discoveredPath = await ResolveDiscoveredPathAsync(
+            hierarchyItemId,
+            candidate.FilePath,
+            cancellationToken).ConfigureAwait(false);
+
+        var contentItemId = await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
-                var leafHierarchyItemId = await ResolveFileLeafAsync(
-                    containerHierarchyItemId,
-                    candidate.FilePath,
-                    ct)
-                    .ConfigureAwait(false);
-                hierarchyItemId = leafHierarchyItemId ?? containerHierarchyItemId;
-
-                var discoveredPath = await ResolveDiscoveredPathAsync(
-                    hierarchyItemId,
-                    candidate.FilePath,
-                    ct).ConfigureAwait(false);
                 var now = timeProvider.GetUtcNow().UtcDateTime;
                 if (discoveredPath is not null)
                 {
@@ -563,10 +817,22 @@ internal sealed class LibraryImportService(
                             "changed during discovery.");
                     }
 
-                    pathOwner.Path = discoveredPath.AbsolutePath;
-                    pathOwner.Settings["content.path.origin"] = "Generated";
                     var pathUpdated = await contentHierarchyItemRepository
-                        .UpdateAsync(pathOwner, actingUserId, ct)
+                        .PatchAsync(
+                            new ContentHierarchyItemPatch
+                            {
+                                Id = pathOwner.Id,
+                                Path = new() { Value = discoveredPath.AbsolutePath },
+                                Settings = new()
+                                {
+                                    Add = new Dictionary<string, string>
+                                    {
+                                        ["content.path.origin"] = "Generated"
+                                    }
+                                }
+                            },
+                            actingUserId,
+                            ct)
                         .ConfigureAwait(false);
                     if (!pathUpdated)
                     {
@@ -578,7 +844,7 @@ internal sealed class LibraryImportService(
                 var attachment = await contentFileService
                     .AttachImportedAsync(hierarchyItemId, candidate.FilePath, actingUserId, ct)
                     .ConfigureAwait(false);
-                contentItemId = attachment.Result?.MediaFile.ContentItemId
+                var attachedContentItemId = attachment.Result?.MediaFile.ContentItemId
                     ?? throw new KeyNotFoundException(
                         $"Content hierarchy item {hierarchyItemId} no longer exists.");
 
@@ -598,16 +864,108 @@ internal sealed class LibraryImportService(
                         EntityType = nameof(ContentHierarchyItem),
                         EntityId = hierarchyItemId.ToString(),
                         Detail = $"Imported {Path.GetFileName(candidate.FilePath)} using external ID " +
-                            $"{match.ExternalIdKey}={match.ExternalId}.",
+                            $"{match.ExternalIdKey}={match.ExternalId}.{fallbackNote}",
                         Timestamp = now,
                         UserId = actingUserId,
                         CorrelationId = correlationId
                     },
                     ct).ConfigureAwait(false);
+                return attachedContentItemId;
             },
         cancellationToken).ConfigureAwait(false);
 
         return (hierarchyItemId, contentItemId);
+    }
+
+    private async Task ApplyImportMonitoringAsync(
+        ContentHierarchyItem root,
+        IReadOnlyCollection<Guid> createdHierarchyItemIds,
+        LibraryImportMonitoringMode mode,
+        Guid? actingUserId,
+        CancellationToken cancellationToken)
+    {
+        if (createdHierarchyItemIds.Count == 0)
+        {
+            return;
+        }
+
+        if (mode != LibraryImportMonitoringMode.Future)
+        {
+            return;
+        }
+
+        if (createdHierarchyItemIds.Contains(root.Id))
+        {
+            await contentHierarchyItemRepository.BulkPatchAsync(
+                new BulkPatch<ContentHierarchyItemCriteria, ContentHierarchyItemPatch>
+                {
+                    Ids = [root.Id],
+                    Patch = new() { Monitoring = new ScalarPatch<bool?> { Value = true } },
+                },
+                actingUserId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var leafLevelSlug = ResolveLeafLevel(root.ContentType, root.Level).LeafLevelSlug;
+        var createdDescendantIds = createdHierarchyItemIds.Where(id => id != root.Id).ToArray();
+        if (createdDescendantIds.Length > 0)
+        {
+            await contentHierarchyItemRepository.BulkPatchAsync(
+                new BulkPatch<ContentHierarchyItemCriteria, ContentHierarchyItemPatch>
+                {
+                    Filter = new()
+                    {
+                        Ids = createdDescendantIds,
+                        Level = new()
+                        {
+                            And = [new() { Operator = CriteriaValueOperator.NotEquals, Value = leafLevelSlug }],
+                        },
+                    },
+                    Patch = new() { Monitoring = new ScalarPatch<bool?> { Value = null } },
+                },
+                actingUserId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        await contentHierarchyItemRepository.BulkPatchAsync(
+            new BulkPatch<ContentHierarchyItemCriteria, ContentHierarchyItemPatch>
+            {
+                Filter = new()
+                {
+                    Ids = [.. createdHierarchyItemIds],
+                    Level = new()
+                    {
+                        And = [new() { Value = leafLevelSlug }],
+                    },
+                    Metadata = new()
+                    {
+                        And =
+                        [
+                            new MetadataCriteria
+                            {
+                                PublishDate = new()
+                                {
+                                    And =
+                                    [
+                                        new PropertyCriterion<TemporalValue>
+                                        {
+                                            Operator = CriteriaValueOperator.GreaterThan,
+                                            Value = new()
+                                            {
+                                                Value = timeProvider.GetUtcNow().UtcDateTime,
+                                                Precision = TemporalPrecision.Instant,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                Patch = new() { Monitoring = new ScalarPatch<bool?> { Value = true } },
+            },
+            actingUserId,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<DiscoveredPath?> ResolveDiscoveredPathAsync(
@@ -621,39 +979,13 @@ internal sealed class LibraryImportService(
         var lineage = await contentHierarchyItemRepository
             .GetLineageAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
-        var rootFolder = lineage.Count == 0
-            ? null
-            : await rootFolderRepository
-                .GetByIdAsync(lineage[0].EffectiveRootFolderId, cancellationToken)
-                .ConfigureAwait(false);
-        string? effectivePath = null;
-        if (rootFolder is not null && lineage.Count > 0)
-        {
-            var root = lineage[^1];
-            var subfolder = contentTypeRegistry.GetDefinitionFor(root.ContentType)?.LevelDefinitions
-                .FirstOrDefault(level => level.Slug == root.Level)?.Subfolder;
-            effectivePath = fileSystem.GetFullPath(string.IsNullOrWhiteSpace(subfolder)
-                ? rootFolder.Path.Trim()
-                : Path.Combine(rootFolder.Path.Trim(), subfolder));
-            for (var index = lineage.Count - 1; index >= 0; index--)
-            {
-                var itemPath = lineage[index].Path;
-                if (itemPath is null)
-                {
-                    continue;
-                }
 
-                var normalized = itemPath.Trim().Replace('\\', Path.DirectorySeparatorChar)
-                    .Replace('/', Path.DirectorySeparatorChar);
-                effectivePath = Path.IsPathFullyQualified(normalized)
-                    ? fileSystem.GetFullPath(normalized)
-                    : fileSystem.GetFullPath(Path.Combine(effectivePath, normalized));
-            }
-        }
-
+        var effectivePath = await contentFileService
+            .GetEffectivePathAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
         var fileDirectory = Path.GetDirectoryName(fileSystem.GetFullPath(filePath));
         if (item is null ||
-            effectivePath is null ||
+            string.IsNullOrEmpty(effectivePath) ||
             string.IsNullOrEmpty(fileDirectory) ||
             fileSystem.PathsEqual(effectivePath, fileDirectory))
         {
@@ -723,4 +1055,6 @@ internal sealed class LibraryImportService(
         string? OriginalPath,
         DateTime? OriginalModifiedAt,
         string AbsolutePath);
+
+    private sealed record FileRouteResult(ContentHierarchyItem Node, bool StoppedEarly);
 }

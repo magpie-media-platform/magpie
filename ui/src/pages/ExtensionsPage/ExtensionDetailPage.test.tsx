@@ -1,12 +1,13 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { RestartRequiredProvider } from '@/components/ui/RestartRequiredBanner';
+import * as extensionHooks from '@/hooks/useExtensionManagement';
 import type { ApiExtension } from '@/hooks/useExtensionManagement';
 
 import { ExtensionDetailPage } from './ExtensionDetailPage';
@@ -58,7 +59,9 @@ vi.mock('@/lib/api', () => ({
     apiPost: vi.fn().mockResolvedValue({}),
     apiPatch: vi.fn().mockResolvedValue(undefined),
     apiFetchResponse: vi.fn().mockResolvedValue(new Response(null, { status: 204 })),
-    isApiError: vi.fn(() => false),
+    isApiError: vi.fn(
+        (value: unknown) => typeof value === 'object' && value !== null && 'status' in value && 'message' in value,
+    ),
     buildUrl: vi.fn((path: string) => path),
 }));
 
@@ -223,6 +226,10 @@ function createWrapper(initialPath: string = '/admin/extensions/ext-downloadclie
 }
 
 describe('ExtensionDetailPage', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(apiGet).mockImplementation((url: string) => {
@@ -387,6 +394,16 @@ describe('ExtensionDetailPage', () => {
         expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
     });
 
+    it('shows the version history loading state while versions are pending', async () => {
+        vi.spyOn(extensionHooks, 'useExtensionVersions').mockReturnValue({ versions: [], isLoading: true });
+
+        render(<ExtensionDetailPage />, { wrapper: createWrapper() });
+
+        expect(await screen.findByText('Loading version history...')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Version History' })).toBeInTheDocument();
+        expect(screen.queryByText('This is the only installed version.')).not.toBeInTheDocument();
+    });
+
     it('shows version history section when older versions exist', async () => {
         render(<ExtensionDetailPage />, { wrapper: createWrapper() });
 
@@ -548,10 +565,13 @@ describe('ExtensionDetailPage interactions', () => {
         expect(screen.getByTestId('extension-toggle-hint')).toHaveTextContent(/takes effect after restart/i);
     });
 
-    it('shows error message when toggle fails', async () => {
+    it.each([
+        [new Error('Server error'), 'Server error'],
+        [{ status: 500, message: 'Request failed with status 500' }, 'The server request failed. Try again later.'],
+    ])('shows error message when toggle fails (%s)', async (error, message) => {
         const user = userEvent.setup();
 
-        vi.mocked(apiPost).mockRejectedValue(new Error('Server error'));
+        vi.mocked(apiPost).mockRejectedValue(error);
 
         render(<ExtensionDetailPage />, { wrapper: createWrapper() });
 
@@ -563,7 +583,7 @@ describe('ExtensionDetailPage interactions', () => {
         await user.click(toggle);
 
         await waitFor(() => {
-            expect(screen.getByText('Server error')).toBeInTheDocument();
+            expect(screen.getByText(message)).toBeInTheDocument();
         });
     });
 
@@ -652,6 +672,7 @@ describe('ExtensionDetailPage extension settings UI', () => {
 
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+            expect(screen.getByLabelText('FlareSolverr URL')).toBeInTheDocument();
         });
 
         expect(screen.getByText('FlareSolverr URL')).toBeInTheDocument();
@@ -665,6 +686,7 @@ describe('ExtensionDetailPage extension settings UI', () => {
 
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+            expect(screen.getByLabelText('FlareSolverr URL')).toBeInTheDocument();
         });
 
         const urlField = document.querySelector('[data-field="base-url"]') as HTMLInputElement;
@@ -692,6 +714,7 @@ describe('ExtensionDetailPage extension settings UI', () => {
 
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+            expect(screen.getByLabelText('FlareSolverr URL')).toBeInTheDocument();
         });
 
         await user.click(screen.getByRole('button', { name: /test/i }));
@@ -720,6 +743,7 @@ describe('ExtensionDetailPage extension settings UI', () => {
 
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+            expect(screen.getByLabelText('FlareSolverr URL')).toBeInTheDocument();
         });
 
         expect(screen.queryByRole('button', { name: /test/i })).not.toBeInTheDocument();

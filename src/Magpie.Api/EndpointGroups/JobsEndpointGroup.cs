@@ -24,6 +24,8 @@ namespace Magpie.Api.EndpointGroups;
 [MagpieCommandGroup("jobs", "jobs", "Manage and run jobs")]
 internal sealed class JobsEndpointGroup : IApiEndpointGroup
 {
+    private const int DefaultExecutionTreeNodes = 500;
+
     public string Name => "jobs";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
@@ -31,6 +33,7 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
         builder.MapGet("", QueryJobExecutionsAsync)
             .WithName(nameof(QueryJobExecutionsAsync))
             .Produces<PagedList<JobExecution>>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireViewer();
 
         builder.MapGet("specs", GetJobSpecs)
@@ -47,6 +50,7 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
         builder.MapGet("{id:guid}/execution-tree", GetJobExecutionTreeAsync)
             .WithName(nameof(GetJobExecutionTreeAsync))
             .Produces<JobExecutionTree>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
@@ -77,6 +81,7 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
         Guid? extensionId,
         Guid? scheduleTriggerId,
         Guid? eventTriggerId,
+        Guid? correlationId,
         string[]? status,
         bool? mine,
         bool? rootsOnly,
@@ -100,6 +105,12 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
                 {
                     parsedStatuses.Add(parsed);
                 }
+                else
+                {
+                    return Results.Problem(
+                        "A status filter value is not a known status.",
+                        statusCode: StatusCodes.Status400BadRequest);
+                }
             }
         }
 
@@ -111,6 +122,7 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
             ExtensionId = extensionId,
             ScheduleTriggerId = scheduleTriggerId,
             EventTriggerId = eventTriggerId,
+            CorrelationId = correlationId,
             Statuses = statuses is { Length: > 0 } ? statuses : null,
             Pending = pending ? true : null,
             CreatedByUserId = mine == true ? user.Id : null,
@@ -159,9 +171,22 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
         [FromServices] IJobManager jobManager,
         Guid id,
         [FromQuery(Name = "include-siblings")] bool? includeSiblings,
+        [FromQuery(Name = "max-nodes")] int? maxNodes,
         CancellationToken cancellationToken)
     {
-        var tree = await jobManager.GetExecutionTreeAsync(id, includeSiblings ?? false, cancellationToken)
+        if (maxNodes < 1)
+        {
+            return Results.Problem(
+                "The maximum node count must be 1 or more.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var tree = await jobManager
+            .GetExecutionTreeAsync(
+                id,
+                includeSiblings ?? false,
+                maxNodes ?? DefaultExecutionTreeNodes,
+                cancellationToken)
             .ConfigureAwait(false);
 
         return tree is null ? Results.NotFound() : Results.Ok(tree);
@@ -188,7 +213,7 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
             cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Accepted($"api/{Name}/{executionId}", executionId);
+        return Results.Accepted($"/api/{Name}/{executionId}", executionId);
     }
 
     [MagpieCommand("run", "POST", "execute-immediate", "Run a job immediately")]

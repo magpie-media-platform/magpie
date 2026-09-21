@@ -24,6 +24,8 @@ internal sealed class ApiKeyService(
     private const int KeyLength = 32;
     private const int PrefixDisplayLength = 8;
 
+    private static readonly TimeSpan LastUsedWriteInterval = TimeSpan.FromMinutes(1);
+
     private static string GenerateKey()
     {
         var encoded = Convert.ToBase64String(RandomNumberGenerator.GetBytes(KeyLength))
@@ -39,25 +41,9 @@ internal sealed class ApiKeyService(
         bool? expired,
         CancellationToken cancellationToken = default)
     {
-        const int pageSize = 500;
-        var items = new List<ApiKey>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await apiKeys.QueryAsync(
-                new ApiKeyQuery { Enabled = enabled, Expired = expired },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            items.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var items = await apiKeys.QueryAllAsync(
+            new ApiKeyQuery { Enabled = enabled, Expired = expired },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return items;
     }
@@ -75,25 +61,9 @@ internal sealed class ApiKeyService(
         bool? expired,
         CancellationToken cancellationToken = default)
     {
-        const int pageSize = 500;
-        var items = new List<ApiKey>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await apiKeys.QueryAsync(
-                new ApiKeyQuery { UserId = userId, Enabled = enabled, Expired = expired },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            items.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var items = await apiKeys.QueryAllAsync(
+            new ApiKeyQuery { UserId = userId, Enabled = enabled, Expired = expired },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return items;
     }
@@ -178,6 +148,8 @@ internal sealed class ApiKeyService(
         Guid callerUserId,
         CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(create.Name);
+
         var plaintextKey = GenerateKey();
         var keyPrefix = plaintextKey[..PrefixDisplayLength];
         var keyHash = await passwordHasher.HashPasswordUnsaltedAsync(plaintextKey, cancellationToken)
@@ -241,6 +213,7 @@ internal sealed class ApiKeyService(
 
         var keyHash = await passwordHasher.HashPasswordUnsaltedAsync(apiKey, cancellationToken)
             .ConfigureAwait(false);
+        var now = timeProvider.GetUtcNow().UtcDateTime;
         var key = (await apiKeys.QueryAsync(
             new ApiKeyQuery { KeyHash = keyHash },
             new() { PageNumber = 1, PageSize = 2 },
@@ -248,9 +221,15 @@ internal sealed class ApiKeyService(
             cancellationToken).ConfigureAwait(false)).Items.SingleOrDefault();
         if (key is null ||
             !key.Enabled ||
-            key.ExpiresAt is { } expiresAt && expiresAt < timeProvider.GetUtcNow().UtcDateTime)
+            key.ExpiresAt is { } expiresAt && expiresAt < now)
         {
             return null;
+        }
+
+        if (key.LastUsedAt is not { } lastUsedAt || now - lastUsedAt >= LastUsedWriteInterval)
+        {
+            key.LastUsedAt = now;
+            await apiKeys.UpdateLastUsedAsync(key.Id, now, cancellationToken).ConfigureAwait(false);
         }
 
         return key;

@@ -102,14 +102,8 @@ function LevelChip({ level, leaf }: { level: LibraryLevelDefinition; leaf: boole
     );
 }
 
-function HierarchyChain({
-    levels,
-    supportedLevels = levels,
-}: {
-    levels: LibraryLevelDefinition[];
-    supportedLevels?: LibraryLevelDefinition[];
-}) {
-    const paths = buildContentLevelPaths(levels, supportedLevels);
+function HierarchyChain({ levels }: { levels: LibraryLevelDefinition[] }) {
+    const paths = buildContentLevelPaths(levels);
 
     return (
         <div className="content-types__chain" data-testid="content-types__chain">

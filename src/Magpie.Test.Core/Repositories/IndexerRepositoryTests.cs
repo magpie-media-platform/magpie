@@ -2,23 +2,29 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class IndexerRepositoryTests
+public sealed class IndexerRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IIndexerRepository _subject = null!;
@@ -52,9 +58,11 @@ public class IndexerRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
@@ -62,8 +70,9 @@ public class IndexerRepositoryTests
             _context,
             auditRecordRepository,
             transactionManager,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
-            loggerFactory.CreateLogger<IndexerRepository>());
+            Mock.Of<IEventBus>(),
+            loggerFactory.CreateLogger<IndexerRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -337,13 +346,18 @@ public class IndexerRepositoryTests
     }
 
     [Test]
-    public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
+    public async Task DeleteAsync_ReturnsFalseAndWritesNoAuditRecord_WhenNotExists()
     {
         // Act
         var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result, Is.False);
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            Assert.That(auditRecords, Is.Empty);
+        }
     }
 
     [Test]
@@ -372,17 +386,6 @@ public class IndexerRepositoryTests
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("Indexer"));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
         }
-    }
-
-    [Test]
-    public async Task DeleteAsync_DoesNotCreateAuditRecord_WhenNotExists()
-    {
-        // Act
-        await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
-        Assert.That(auditRecords, Is.Empty);
     }
 
     [Test]
@@ -522,5 +525,68 @@ public class IndexerRepositoryTests
         // Assert
         var updated = await _subject.GetByIdAsync(indexer.Id).ConfigureAwait(false);
         Assert.That(updated!.Languages, Is.EqualTo(newLanguages));
+    }
+
+    [Test]
+    public async Task PatchAsync_ClearsDescription_WhenThePatchCarriesANullValue()
+    {
+        // Arrange
+        var indexer = new Indexer
+        {
+            ProviderType = "newznab",
+            Name = "DescribedIndexer",
+            Description = "A described indexer",
+            Availability = IndexerAvailability.Public,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Indexers.Add(indexer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var patched = await _subject
+            .PatchAsync(new IndexerPatch { Id = indexer.Id, Description = new() { Value = null } }, _userId)
+            .ConfigureAwait(false);
+
+        // Assert
+        var updated = await _subject.GetByIdAsync(indexer.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(patched, Is.True);
+            Assert.That(updated!.Description, Is.Null);
+            Assert.That(updated.Name, Is.EqualTo("DescribedIndexer"));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_KeepsUnnamedFields_WhenThePatchNamesOneField()
+    {
+        // Arrange
+        var indexer = new Indexer
+        {
+            ProviderType = "newznab",
+            Name = "OriginalName",
+            Description = "Original description",
+            Availability = IndexerAvailability.Public,
+            Categories = ["type-a"],
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Indexers.Add(indexer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        await _subject
+            .PatchAsync(new IndexerPatch { Id = indexer.Id, Name = new() { Value = "RenamedIndexer" } }, _userId)
+            .ConfigureAwait(false);
+
+        // Assert
+        var updated = await _subject.GetByIdAsync(indexer.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(updated!.Name, Is.EqualTo("RenamedIndexer"));
+            Assert.That(updated.Description, Is.EqualTo("Original description"));
+            Assert.That(updated.Categories, Is.EqualTo(["type-a"]));
+        }
     }
 }

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
 using Magpie.Models.Data;
+using Magpie.Models.Paging;
 
 namespace Magpie.Abstractions.Repositories;
 
@@ -26,6 +27,30 @@ public interface IContentHierarchyItemRepository :
     /// <returns>The line from the item to the root, or an empty list when the item does not exist</returns>
     Task<IReadOnlyList<ContentHierarchyItem>> GetLineageAsync(
         Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Queries one page of the ids of the items that match, without the read model of the items.
+    /// </summary>
+    /// <param name="query">The criteria that an item must match</param>
+    /// <param name="paging">The page number and page size</param>
+    /// <param name="sort">The field and the direction of the sort, or null for the default order</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The ids of the items on the page</returns>
+    Task<IReadOnlyList<Guid>> QueryIdsAsync(
+        ContentHierarchyItemCriteria query,
+        PagingParameter paging,
+        SortParameter? sort,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the parent and the effective monitoring of the items and of every ancestor above them.
+    /// </summary>
+    /// <param name="contentHierarchyItemIds">The ids of the items to start from</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The ancestry of each item, keyed by item id</returns>
+    Task<IReadOnlyDictionary<Guid, ContentHierarchyItemAncestry>> GetAncestryAsync(
+        IReadOnlyCollection<Guid> contentHierarchyItemIds,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -55,13 +80,25 @@ public interface IContentHierarchyItemRepository :
     Task<ContentStats> GetStatsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Deletes every item that the bulk selection matches.
+    /// Deletes an item with its subtree and reports the ids that the delete removed.
+    /// </summary>
+    /// <param name="id">The id of the item at the top of the subtree</param>
+    /// <param name="deletedByUserId">The id of the user that deletes the records</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The ids of the rows the delete removed, empty when the item does not exist</returns>
+    Task<IReadOnlyList<Guid>> DeleteSubtreeAsync(
+        Guid id,
+        Guid? deletedByUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes every item that the bulk selection matches, with the subtree of each.
     /// </summary>
     /// <param name="action">The selection of items to delete</param>
     /// <param name="deletedByUserId">The id of the user that deletes the records</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>The outcome of the bulk deletion</returns>
-    Task<BulkResult> BulkDeleteAsync(
+    /// <returns>The outcome of the bulk deletion and the ids of the rows the delete removed</returns>
+    Task<(BulkResult Result, IReadOnlyList<Guid> DeletedIds)> BulkDeleteAsync(
         BulkAction<ContentHierarchyItemCriteria> action,
         Guid? deletedByUserId,
         CancellationToken cancellationToken = default);

@@ -26,9 +26,9 @@ internal sealed class ApiKeyRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<ApiKeyRepository> logger,
-    TimeProvider? timeProvider = null) : IApiKeyRepository
+    TimeProvider timeProvider) : IApiKeyRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     private static List<string> ChangedFields(ApiKey current, ApiKey model)
     {
@@ -144,6 +144,24 @@ internal sealed class ApiKeyRepository(
         catch (Exception ex)
         {
             logger.LogError(ex, "The API key repository failed to create API key {ApiKeyName}.", model.Name);
+            throw;
+        }
+    }
+
+    public async Task UpdateLastUsedAsync(Guid id, DateTime lastUsedAt, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await context.ApiKeys
+                .Where(key => key.Id == id && (key.LastUsedAt == null || key.LastUsedAt < lastUsedAt))
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(key => key.LastUsedAt, lastUsedAt), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The API key repository failed to update the last use time for API key {ApiKeyId}.",
+                id);
             throw;
         }
     }
@@ -392,14 +410,20 @@ internal sealed class ApiKeyRepository(
 
             var totalCount = await keys.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(ApiKey).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(ApiKey.Id), nameof(ApiKey.UserId), nameof(ApiKey.Name),
+                nameof(ApiKey.KeyPrefix), nameof(ApiKey.Enabled), nameof(ApiKey.ExpiresAt),
+                nameof(ApiKey.LastUsedAt), nameof(ApiKey.CreatedAt), nameof(ApiKey.CreatedByUserId),
+                nameof(ApiKey.ModifiedAt), nameof(ApiKey.ModifiedByUserId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 keys = sort.Direction == SortDirection.Ascending
-                    ? keys.OrderBy(k => EF.Property<ApiKey>(k, sortProperty)).ThenBy(k => k.Id)
-                    : keys.OrderByDescending(k => EF.Property<ApiKey>(k, sortProperty)).ThenBy(k => k.Id);
+                    ? keys.OrderBy(k => EF.Property<object>(k, sortProperty)).ThenBy(k => k.Id)
+                    : keys.OrderByDescending(k => EF.Property<object>(k, sortProperty)).ThenBy(k => k.Id);
             }
             else
             {

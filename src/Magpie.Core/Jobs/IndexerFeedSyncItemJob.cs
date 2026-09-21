@@ -27,11 +27,11 @@ internal sealed class IndexerFeedSyncItemJob(
     ITransactionManager transactionManager,
     TimeProvider timeProvider,
     ILogger<IndexerFeedSyncItemJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "IndexerFeedSyncItem",
+        JobType = MagpieJobs.Types.IndexerFeedSyncItem,
         DisplayName = "Indexer feed sync item",
         Description = "Refreshes indexer definitions from one enabled feed.",
         Category = "Integrations",
@@ -73,8 +73,7 @@ internal sealed class IndexerFeedSyncItemJob(
 
     private async Task SyncFeedAsync(Guid feedId, Guid? userId, CancellationToken cancellationToken)
     {
-        var progress = progressReporter;
-        progress?.Report(0, "The sync will load the indexer feed.");
+        progressReporter.Report(0, "The sync will load the indexer feed.");
 
         var feed = await indexerFeedRepository.GetByIdAsync(feedId, cancellationToken).ConfigureAwait(false);
         if (feed is null)
@@ -84,8 +83,8 @@ internal sealed class IndexerFeedSyncItemJob(
 
         if (!feed.Enabled)
         {
-            logger.LogDebug("Indexer feed {FeedName} is disabled. The job skipped the sync", feed.Name);
-            progress?.Report(1, "The sync stopped because the indexer feed is disabled.");
+            logger.LogDebug("Indexer feed {FeedName} is disabled, so the job skipped the sync", feed.Name);
+            progressReporter.Report(1, "The sync stopped because the indexer feed is disabled.");
             return;
         }
 
@@ -96,11 +95,11 @@ internal sealed class IndexerFeedSyncItemJob(
                 "No indexer feed provider exists for provider type {ProviderType} (feed {FeedName})",
                 feed.ProviderType,
                 feed.Name);
-            progress?.Report(1, "The sync stopped because the indexer feed has no provider.");
+            progressReporter.Report(1, "The sync stopped because the indexer feed has no provider.");
             return;
         }
 
-        progress?.Report(0, $"The sync will process indexer feed {feed.Name}.");
+        progressReporter.Report(0, $"The sync will process indexer feed {feed.Name}.");
 
         var discovered = await provider.SyncAsync(feed, cancellationToken).ConfigureAwait(false);
         var indexers = discovered?.ToArray() ?? [];
@@ -133,7 +132,7 @@ internal sealed class IndexerFeedSyncItemJob(
             feed.ProviderType,
             indexers.Length);
 
-        progress?.Report(1, "The indexer-feed sync completed.");
+        progressReporter.Report(1, "The indexer-feed sync completed.");
     }
 
     private async Task SyncIndexersAsync(
@@ -176,19 +175,18 @@ internal sealed class IndexerFeedSyncItemJob(
 
     private Dictionary<string, IIndexerIntegration> BuildIntegrationMap()
     {
-        var map = new Dictionary<string, IIndexerIntegration>();
+        var map = new Dictionary<string, IIndexerIntegration>(StringComparer.Ordinal);
         foreach (var group in indexerIntegrations
             .Where(integration => !string.IsNullOrWhiteSpace(integration.ProviderType))
-            .GroupBy(integration => integration.ProviderType))
+            .GroupBy(integration => integration.ProviderType, StringComparer.Ordinal))
         {
             var members = group.ToList();
             var winner = members[^1];
             if (members.Count > 1)
             {
                 logger.LogWarning(
-                    "Multiple {ItemLabel} declared {KeyLabel} {Key}. The job will use {Winner} and ignore {Displaced}",
-                    "indexer integrations",
-                    "ProviderType",
+                    "Multiple indexer integrations declared provider type {ProviderType}, so the job will use " +
+                    "{Winner} and ignore {Displaced}",
                     group.Key,
                     winner.GetType().FullName,
                     string.Join(", ", members.Take(members.Count - 1).Select(member => member.GetType().FullName)));
@@ -202,19 +200,18 @@ internal sealed class IndexerFeedSyncItemJob(
 
     private Dictionary<string, IIndexerFeedProvider> BuildProviderMap()
     {
-        var map = new Dictionary<string, IIndexerFeedProvider>();
+        var map = new Dictionary<string, IIndexerFeedProvider>(StringComparer.Ordinal);
         foreach (var group in indexerFeedProviders
             .Where(provider => !string.IsNullOrWhiteSpace(provider.ProviderType))
-            .GroupBy(provider => provider.ProviderType))
+            .GroupBy(provider => provider.ProviderType, StringComparer.Ordinal))
         {
             var members = group.ToList();
             var winner = members[^1];
             if (members.Count > 1)
             {
                 logger.LogWarning(
-                    "Multiple {ItemLabel} declared {KeyLabel} {Key}. The job will use {Winner} and ignore {Displaced}",
-                    "indexer feed providers",
-                    "ProviderType",
+                    "Multiple indexer feed providers declared provider type {ProviderType}, so the job will use " +
+                    "{Winner} and ignore {Displaced}",
                     group.Key,
                     winner.GetType().FullName,
                     string.Join(", ", members.Take(members.Count - 1).Select(member => member.GetType().FullName)));

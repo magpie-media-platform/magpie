@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 using Magpie.Models.Data;
 using Magpie.Models.Patch;
@@ -25,4 +26,10 @@ public sealed record MetadataContainerPatch : MetadataContributionPatch
     /// Every provider contribution id of the container, in precedence order.
     /// </summary>
     public IReadOnlyList<Guid>? ContributionIds { get; init; }
+
+    /// <summary>
+    /// The patch for <see cref="MetadataContainer.DateLastRefreshed"/>.
+    /// </summary>
+    [JsonIgnore]
+    public ScalarPatch<DateTime?>? DateLastRefreshed { get; init; }
 }

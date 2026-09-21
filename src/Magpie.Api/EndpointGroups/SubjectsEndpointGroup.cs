@@ -17,7 +17,6 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-[MagpieCommandGroup("subjects", "subjects", "Manage subject metadata")]
 internal sealed class SubjectsEndpointGroup : IApiEndpointGroup
 {
     public string Name => "subjects";
@@ -92,7 +91,15 @@ internal sealed class SubjectsEndpointGroup : IApiEndpointGroup
             var parseResult = filterService.ParseSubjectCriteria(filter);
             if (!parseResult.IsSuccess)
             {
-                return Results.BadRequest(parseResult.Error);
+                var error = parseResult.Error!;
+                return Results.Problem(
+                    detail: error.Message,
+                    statusCode: StatusCodes.Status400BadRequest,
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["position"] = error.Position,
+                        ["expected"] = error.Expected,
+                    });
             }
 
             criteria = parseResult.Value;

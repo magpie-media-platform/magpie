@@ -24,14 +24,13 @@ internal sealed class ReleaseAutoGrabScanJob(
     IJobManager jobManager,
     IJobExecutionRepository jobExecutionRepository,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
-    IContentRepository contentRepository,
     TimeProvider timeProvider,
     ILogger<ReleaseAutoGrabScanJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "ReleaseAutoGrabScan",
+        JobType = MagpieJobs.Types.ReleaseAutoGrabScan,
         DisplayName = "Release auto-grab scan",
         Description = "Queues an automatic release grab for every monitored item that is ready to download.",
         Category = "Content",
@@ -51,7 +50,7 @@ internal sealed class ReleaseAutoGrabScanJob(
                 false,
                 MagpieJobs.ParameterValues.DefaultRetryCooldownHours.ToString(CultureInfo.InvariantCulture)),
             new(
-                BackpressureThresholdParameter,
+                MagpieJobs.Parameters.BackpressureThreshold,
                 "Maximum queued or running downstream ReleaseDownloadItem executions before the sweep skips.",
                 DataType.Number,
                 false,
@@ -62,14 +61,11 @@ internal sealed class ReleaseAutoGrabScanJob(
     private const int PageSize = 500;
 
     private const int DefaultBackpressureThreshold = 50;
-    private const string BackpressureThresholdParameter = "backpressureThreshold";
 
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
         var userId = context.ManualTriggerUserId;
         var correlationId = context.CorrelationId;
-        var progress = progressReporter;
-        var now = timeProvider.GetUtcNow().UtcDateTime;
         var retryCooldownHours = ReadIntParameter(
             context.Parameters,
             MagpieJobs.Parameters.RetryCooldownHours,
@@ -78,37 +74,38 @@ internal sealed class ReleaseAutoGrabScanJob(
         var retryCooldown = TimeSpan.FromHours(retryCooldownHours);
         var backpressureThreshold = ReadIntParameter(
             context.Parameters,
-            BackpressureThresholdParameter,
+            MagpieJobs.Parameters.BackpressureThreshold,
             DefaultBackpressureThreshold);
 
-        var activeAcquisitions = (await jobExecutionRepository
+        var activeAcquisitions = await jobExecutionRepository
             .QueryAsync(
                 new JobExecutionQuery
                 {
                     JobType = MagpieJobs.Types.ReleaseDownloadItem,
-                    Timestamp = new Range<DateTime>(now.AddHours(-1), null),
                     Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
                 },
                 new()
                 {
                     PageNumber = 1,
-                    PageSize = backpressureThreshold == int.MaxValue ? int.MaxValue : backpressureThreshold + 1,
+                    PageSize = 1,
                 },
                 sort: null,
                 cancellationToken)
-            .ConfigureAwait(false)).Items.ToList();
-        if (activeAcquisitions.Count > backpressureThreshold)
+            .ConfigureAwait(false);
+        if (activeAcquisitions.TotalItems > backpressureThreshold)
         {
-            logger.LogWarning(
-                "{ActiveCount} ReleaseDownloadItem executions are active (threshold {Threshold})." +
-                " The auto-grab scan skipped this run",
-                activeAcquisitions.Count,
+            logger.LogInformation(
+                "{ActiveCount} ReleaseDownloadItem executions are active (threshold {Threshold}), so the" +
+                " auto-grab scan skipped this run",
+                activeAcquisitions.TotalItems,
                 backpressureThreshold);
-            progress?.Report(1, "The scan stopped because the ReleaseDownloadItem queue is not empty.");
+            progressReporter.Report(
+                1,
+                "The scan stopped because the ReleaseDownloadItem queue is above its backpressure threshold.");
             return;
         }
 
-        progress?.Report(0, "The scan will load the monitored content.");
+        progressReporter.Report(0, "The scan will load the monitored content.");
 
         var processable = new List<ContentItem>();
         var candidates = await GetAcquisitionCandidatesAsync(cancellationToken).ConfigureAwait(false);
@@ -138,7 +135,7 @@ internal sealed class ReleaseAutoGrabScanJob(
         foreach (var candidate in eligible)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.ReportFraction(completedItems, totalItems);
+            progressReporter.ReportFraction(completedItems, totalItems);
 
             try
             {
@@ -163,7 +160,7 @@ internal sealed class ReleaseAutoGrabScanJob(
             completedItems++;
         }
 
-        progress?.Report(1, "The release auto-grab scan completed.");
+        progressReporter.Report(1, "The release auto-grab scan completed.");
     }
 
     private async Task<List<ContentItem>> FilterToCooldownEligibleAsync(
@@ -181,7 +178,7 @@ internal sealed class ReleaseAutoGrabScanJob(
         var partitionByItem = candidates.ToDictionary(
             c => c.Id,
             c => jobManager.ResolveLockPartition(
-                ReleaseAutoGrabItemJob.Spec.JobType,
+                MagpieJobs.Types.ReleaseAutoGrabItem,
                 new Dictionary<string, string?>
                 {
                     [MagpieJobs.Parameters.ContentItemId] = c.Id.ToString()
@@ -192,7 +189,7 @@ internal sealed class ReleaseAutoGrabScanJob(
         {
             lastAttempts = await jobExecutionRepository
                 .GetLastAttemptTimesByLockPartitionAsync(
-                    ReleaseAutoGrabItemJob.Spec.JobType,
+                    MagpieJobs.Types.ReleaseAutoGrabItem,
                     [.. partitionByItem.Values],
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -218,8 +215,8 @@ internal sealed class ReleaseAutoGrabScanJob(
             if (lastAttempts.TryGetValue(partition, out var lastAttempt) && lastAttempt > cutoff)
             {
                 logger.LogDebug(
-                    "The auto-grab scan skipped content item {ContentItemId}." +
-                    " The last attempt {LastAttempt:O} is after the cooldown cutoff {Cutoff:O}",
+                    "The auto-grab scan skipped content item {ContentItemId} because the last attempt" +
+                    " {LastAttempt:O} is after the cooldown cutoff {Cutoff:O}",
                     candidate.Id,
                     lastAttempt,
                     cutoff);
@@ -241,7 +238,7 @@ internal sealed class ReleaseAutoGrabScanJob(
         await jobManager.ExecuteAsync(
             new JobEnqueueRequest
             {
-                JobType = ReleaseAutoGrabItemJob.Spec.JobType,
+                JobType = MagpieJobs.Types.ReleaseAutoGrabItem,
                 Parameters = new Dictionary<string, string>
                 {
                     [MagpieJobs.Parameters.ContentItemId] = contentItemId.ToString()
@@ -252,7 +249,7 @@ internal sealed class ReleaseAutoGrabScanJob(
             },
             cancellationToken).ConfigureAwait(false);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "The auto-grab scan enqueued ReleaseAutoGrabItem for content item {ContentItemId}",
             contentItemId);
     }
@@ -308,13 +305,7 @@ internal sealed class ReleaseAutoGrabScanJob(
 
                 foreach (var item in page.Items)
                 {
-                    var contentItem = item.ContentItem ?? (await contentRepository.QueryAsync(
-                        new ContentItemQuery { ContentHierarchyItemId = item.Id },
-                        new() { PageNumber = 1, PageSize = 2 },
-                        null,
-                        cancellationToken).ConfigureAwait(false)).Items.SingleOrDefault();
-
-                    if (contentItem is not null)
+                    if (item.ContentItem is { } contentItem)
                     {
                         candidates.Add(contentItem with { ContentHierarchyItemId = item.Id });
                     }
@@ -350,7 +341,7 @@ internal sealed class ReleaseAutoGrabScanJob(
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Raw} is not an integer of at least {Minimum}. The job will use the " +
+            "Parameter {Parameter} value {Raw} is not an integer of at least {Minimum}, so the job will use the " +
             "default {Default}",
             parameterName,
             raw,

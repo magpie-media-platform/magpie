@@ -24,15 +24,3 @@ export interface TagOption {
     id: string;
     name: string;
 }
-
-export interface WishlistFormValues {
-    id?: string;
-    name: string;
-    filterId: string | null;
-    contentType: string;
-    criteria: ContentFilterCriteria;
-    qualityTierListId: string | null;
-    rootFolderId: string | null;
-    monitored: boolean;
-    tagIds: string[];
-}

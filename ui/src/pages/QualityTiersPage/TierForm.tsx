@@ -15,7 +15,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import { CriteriaEditor, type Criterion, type CriterionOperator } from './CriteriaEditor';
-import { isBlankCriterion } from './criteriaEditorUtils';
+import { hasBlankField, isBlankCriterion } from './criteriaEditorUtils';
 import { ExclusionsEditor, type ExclusionDraft } from './RulesEditor';
 import { normalizeExclusions } from './rulesEditorUtils';
 
@@ -153,10 +153,12 @@ export function TierForm({
 
     const handleCriteriaChange = useCallback((criteria: Criterion[]) => {
         setValues((prev) => ({ ...prev, criteria }));
+        setErrors((prev) => ({ ...prev, criteria: '' }));
     }, []);
 
     const handleExclusionsChange = useCallback((exclusions: ExclusionDraft[]) => {
         setValues((prev) => ({ ...prev, exclusions }));
+        setErrors((prev) => ({ ...prev, exclusions: '' }));
     }, []);
 
     const validate = useCallback((): boolean => {
@@ -164,6 +166,14 @@ export function TierForm({
 
         if (!values.name.trim()) {
             newErrors.name = 'Name is required';
+        }
+
+        if (values.criteria.some(hasBlankField)) {
+            newErrors.criteria = 'Every criterion needs a field name';
+        }
+
+        if ((values.exclusions ?? []).some((exclusion) => exclusion.criteria.some(hasBlankField))) {
+            newErrors.exclusions = 'Every exclusion criterion needs a field name';
         }
 
         setErrors(newErrors);
@@ -277,6 +287,11 @@ export function TierForm({
                                 onChange={handleCriteriaChange}
                                 disabled={isSubmitting}
                             />
+                            {errors.criteria && (
+                                <p className="tier-form__error" role="alert">
+                                    {errors.criteria}
+                                </p>
+                            )}
                         </div>
 
                         <div className="tier-form__field">
@@ -286,6 +301,11 @@ export function TierForm({
                                 scopeLabel="this tier"
                                 disabled={isSubmitting}
                             />
+                            {errors.exclusions && (
+                                <p className="tier-form__error" role="alert">
+                                    {errors.exclusions}
+                                </p>
+                            )}
                         </div>
                     </div>
 

@@ -1,18 +1,9 @@
-import {
-    useState,
-    useCallback,
-    useMemo,
-    type ChangeEvent,
-    type SubmitEvent,
-    type ReactNode,
-    type RefObject,
-} from 'react';
-import { FloppyDiskIcon, XIcon, FlaskIcon } from '@phosphor-icons/react';
+import { useState, useCallback, type ChangeEvent, type SubmitEvent, type ReactNode, type RefObject } from 'react';
+import { FloppyDiskIcon, XIcon } from '@phosphor-icons/react';
 
 import { useIntegrationSettingsFormController } from '@/hooks/useIntegrationSettingsFormController';
-import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import { useIndexerProviderTypes } from '@/hooks/useProviderTypes';
-import { secretsConfiguredForEdit, useIndexerSchema } from '@/hooks/useProviderSchema';
+import { useIndexerSchema } from '@/hooks/useProviderSchema';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -21,12 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { IntegrationSettingsForm } from '@/components/integrations/IntegrationSettingsForm';
-import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 
 import './IndexerForm.css';
 
 export interface IndexerFormValues {
-    id?: string;
     name: string;
     providerType: string;
     description?: string;
@@ -38,15 +27,9 @@ interface IndexerFormProps {
 
     onOpenChange: (open: boolean) => void;
 
-    initialValues?: IndexerFormValues | null;
-
     onSubmit: (values: IndexerFormValues) => void | Promise<void>;
 
     isSubmitting?: boolean;
-
-    onTest?: () => void;
-
-    isTesting?: boolean;
 
     returnFocusRef?: RefObject<HTMLElement | null>;
 }
@@ -62,30 +45,12 @@ const emptyValues: IndexerSettingsFormValues = {
 export function IndexerForm({
     open,
     onOpenChange,
-    initialValues,
     onSubmit,
     isSubmitting = false,
-    onTest,
-    isTesting = false,
     returnFocusRef,
 }: IndexerFormProps): ReactNode {
     const [errors, setErrors] = useState<Record<string, string>>({});
-    const [showStaleSaveDialog, setShowStaleSaveDialog] = useState(false);
     const { types: providerTypes, isLoading: isLoadingProviderTypes } = useIndexerProviderTypes();
-
-    const controllerInitialValues = useMemo<IndexerSettingsFormValues | null | undefined>(
-        () =>
-            initialValues
-                ? {
-                      id: initialValues.id,
-                      name: initialValues.name,
-                      provider: initialValues.providerType,
-                      description: initialValues.description,
-                      settings: initialValues.settings,
-                  }
-                : initialValues,
-        [initialValues],
-    );
 
     const submitIndexer = useCallback(
         (submittedValues: IndexerSettingsFormValues) => {
@@ -97,7 +62,6 @@ export function IndexerForm({
 
     const resetForm = useCallback(() => {
         setErrors({});
-        setShowStaleSaveDialog(false);
     }, []);
 
     const {
@@ -107,7 +71,6 @@ export function IndexerForm({
         schema,
         combinedIssues,
         liveValidationFailed,
-        isDirty,
         showUnsavedDialog,
         handleOpenChange,
         handleDiscard,
@@ -119,27 +82,10 @@ export function IndexerForm({
     } = useIntegrationSettingsFormController<IndexerSettingsFormValues>({
         open,
         onOpenChange,
-        initialValues: controllerInitialValues,
         emptyValues,
         onSubmit: submitIndexer,
         useSchema: useIndexerSchema,
         onReset: resetForm,
-    });
-
-    const isEditing = !!values.id;
-    const secretsConfigured = useMemo(() => secretsConfiguredForEdit(schema, isEditing), [schema, isEditing]);
-
-    const {
-        state: conflictState,
-        beginOwnSave,
-        endOwnSave,
-    } = useExternalChangeConflict({
-        dirty: isDirty,
-        entityId: initialValues?.id,
-        eventNames: ['indexer.updated', 'indexer.deleted'],
-        deletedEventNames: ['indexer.deleted'],
-        contextKeys: ['indexer.id'],
-        enabled: open,
     });
 
     const handleCancel = useCallback(() => {
@@ -184,34 +130,15 @@ export function IndexerForm({
         return Object.keys(newErrors).length === 0;
     }, [values]);
 
-    const save = useCallback(
-        async (e: SubmitEvent | null) => {
-            beginOwnSave();
-            const saved = await submitIntegrationForm(e, validateRequiredFields);
-            endOwnSave(saved);
-            if (saved) {
-                setShowStaleSaveDialog(false);
-            }
-        },
-        [beginOwnSave, endOwnSave, submitIntegrationForm, validateRequiredFields],
-    );
-
     const handleSubmit = useCallback(
         (e: SubmitEvent) => {
-            e.preventDefault();
-            if (conflictState === 'stale') {
-                if (validateRequiredFields()) {
-                    setShowStaleSaveDialog(true);
-                }
-                return;
-            }
-            void save(e);
+            void submitIntegrationForm(e, validateRequiredFields);
         },
-        [conflictState, save, validateRequiredFields],
+        [submitIntegrationForm, validateRequiredFields],
     );
 
     const noProvidersAvailable = !isLoadingProviderTypes && providerTypes.length === 0;
-    const saveDisabled = isSubmitting || isTesting || liveValidationFailed || conflictState === 'deleted';
+    const saveDisabled = isSubmitting || liveValidationFailed;
 
     return (
         <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -227,23 +154,12 @@ export function IndexerForm({
                 }}
             >
                 <SheetHeader>
-                    <SheetTitle>{isEditing ? 'Edit Indexer' : 'Add Indexer'}</SheetTitle>
-                    <SheetDescription>
-                        {isEditing
-                            ? 'Update the indexer configuration.'
-                            : 'Configure a new indexer to search for content.'}
-                    </SheetDescription>
+                    <SheetTitle>Add Indexer</SheetTitle>
+                    <SheetDescription>Configure a new indexer to search for content.</SheetDescription>
                 </SheetHeader>
 
                 <form onSubmit={handleSubmit} className="indexer-form">
                     <div className="indexer-form__body">
-                        {conflictState && (
-                            <ExternalChangeConflictWarning
-                                state={conflictState}
-                                entityLabel="Indexer"
-                                id="indexer-external-change"
-                            />
-                        )}
                         <div className="indexer-form__field">
                             <Label htmlFor="indexer-name" error={!!errors.name} required>
                                 Name
@@ -264,52 +180,42 @@ export function IndexerForm({
                             <Label htmlFor="indexer-provider-type" error={!!errors.providerType} required>
                                 Integration
                             </Label>
-                            {isEditing ? (
-                                <Input
+                            <Select
+                                value={values.provider || undefined}
+                                onValueChange={handleProviderTypeChange}
+                                disabled={isSubmitting || noProvidersAvailable}
+                            >
+                                <SelectTrigger
                                     id="indexer-provider-type"
-                                    value={values.provider}
-                                    readOnly
-                                    disabled
+                                    error={!!errors.providerType}
+                                    aria-label="Integration"
                                     data-field="providerType"
-                                />
-                            ) : (
-                                <Select
-                                    value={values.provider || undefined}
-                                    onValueChange={handleProviderTypeChange}
-                                    disabled={isSubmitting || noProvidersAvailable}
                                 >
-                                    <SelectTrigger
-                                        id="indexer-provider-type"
-                                        error={!!errors.providerType}
-                                        aria-label="Integration"
-                                        data-field="providerType"
-                                    >
-                                        <SelectValue
-                                            placeholder={
-                                                isLoadingProviderTypes
-                                                    ? 'Loading...'
-                                                    : noProvidersAvailable
-                                                      ? 'No integrations available'
-                                                      : 'Select an indexer integration'
-                                            }
-                                        />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {providerTypes.map((type) => (
-                                            <SelectItem key={type} value={type}>
-                                                {type}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
+                                    <SelectValue
+                                        placeholder={
+                                            isLoadingProviderTypes
+                                                ? 'Loading...'
+                                                : noProvidersAvailable
+                                                  ? 'No integrations available'
+                                                  : 'Select an indexer integration'
+                                        }
+                                    />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {providerTypes.map((type) => (
+                                        <SelectItem key={type} value={type}>
+                                            {type}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                             {errors.providerType && (
                                 <p className="indexer-form__help" role="alert">
                                     {errors.providerType}
                                 </p>
                             )}
                             <p className="indexer-form__help">
-                                {noProvidersAvailable && !isEditing
+                                {noProvidersAvailable
                                     ? 'No indexer integrations are available. Install an extension that provides one.'
                                     : 'The indexer protocol, such as Newznab or Torznab.'}
                             </p>
@@ -334,7 +240,6 @@ export function IndexerForm({
                                     schema={schema}
                                     values={settings}
                                     onChange={handleSettingChange}
-                                    secretsConfigured={secretsConfigured}
                                     issues={combinedIssues}
                                     disabled={isSubmitting}
                                     idPrefix="indexer-setting"
@@ -348,26 +253,13 @@ export function IndexerForm({
                         <Button
                             type="button"
                             variant="ghost"
-                            disabled={isSubmitting || isTesting}
+                            disabled={isSubmitting}
                             onClick={handleCancel}
                             data-action="cancel"
                         >
                             <XIcon weight="bold" aria-hidden="true" />
                             Cancel
                         </Button>
-                        {isEditing && onTest && (
-                            <Button
-                                type="button"
-                                variant="outline"
-                                disabled={isSubmitting || isTesting}
-                                loading={isTesting}
-                                onClick={onTest}
-                                data-action="test"
-                            >
-                                <FlaskIcon weight="bold" aria-hidden="true" />
-                                Test
-                            </Button>
-                        )}
                         <Button
                             type="submit"
                             variant="primary"
@@ -383,13 +275,6 @@ export function IndexerForm({
             </SheetContent>
 
             <UnsavedChangesDialog open={showUnsavedDialog} onDiscard={handleDiscard} onCancel={handleKeepEditing} />
-            <StaleSaveConfirmationDialog
-                open={showStaleSaveDialog}
-                entityLabel="Indexer"
-                saving={isSubmitting}
-                onCancel={() => setShowStaleSaveDialog(false)}
-                onConfirm={() => void save(null)}
-            />
         </Sheet>
     );
 }

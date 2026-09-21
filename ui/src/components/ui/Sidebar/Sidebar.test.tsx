@@ -12,6 +12,7 @@ import {
     SidebarItem,
     SidebarSubMenu,
     SidebarSeparator,
+    useSidebarContext,
 } from './Sidebar';
 
 function renderWithRouter(ui: React.ReactElement) {
@@ -451,21 +452,24 @@ describe('SidebarSubMenu', () => {
         expect(trigger).toHaveAttribute('aria-expanded', 'true');
     });
 
-    it('shows only icon when sidebar is collapsed but preserves accessible name', () => {
+    it('opens a collapsed submenu without a destination from the keyboard', async () => {
+        const user = userEvent.setup();
         renderWithRouter(
             <Sidebar collapsed>
                 <SidebarContent>
-                    <SidebarSubMenu label="Settings" icon={<GearIcon data-testid="gear-icon" />}>
+                    <SidebarSubMenu label="Settings">
                         <SidebarItem to="/settings/general">General</SidebarItem>
                     </SidebarSubMenu>
                 </SidebarContent>
             </Sidebar>,
         );
 
-        expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
-        expect(screen.getByTestId('gear-icon')).toBeInTheDocument();
-        const trigger = document.querySelector('.sidebar-submenu-trigger--collapsed');
-        expect(trigger).toHaveAttribute('aria-label', 'Settings');
+        const trigger = screen.getByRole('button', { name: 'Settings' });
+        expect(trigger).toHaveTextContent('Settings');
+        trigger.focus();
+        await user.keyboard('{Enter}');
+        expect(trigger).toHaveAttribute('aria-expanded', 'true');
+        expect(screen.getByRole('link', { name: 'General' })).toHaveAttribute('href', '/settings/general');
     });
 
     it('renders collapsed submenu as a link when collapsedTo is provided', () => {
@@ -617,4 +621,44 @@ describe('Sidebar Integration', () => {
         expect(ref).toHaveBeenCalled();
         expect(ref.mock.calls[0][0]).toBeInstanceOf(HTMLAnchorElement);
     });
+});
+
+it('does not change internal sidebar state while controlled', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    function Toggle() {
+        const { setCollapsed } = useSidebarContext();
+        return <button onClick={() => setCollapsed(true)}>Collapse</button>;
+    }
+    const { rerender } = render(
+        <Sidebar collapsed={false} onCollapsedChange={onChange}>
+            <Toggle />
+        </Sidebar>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Collapse' }));
+    expect(onChange).toHaveBeenCalledWith(true);
+    rerender(
+        <Sidebar>
+            <Toggle />
+        </Sidebar>,
+    );
+    expect(screen.getByRole('complementary')).toHaveAttribute('data-collapsed', 'false');
+});
+
+it('does not change internal group state while controlled', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { rerender } = render(
+        <SidebarGroup label="Group" defaultOpen={false} open={false} onOpenChange={onChange}>
+            Child
+        </SidebarGroup>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Group' }));
+    expect(onChange).toHaveBeenCalledWith(true);
+    rerender(
+        <SidebarGroup label="Group" defaultOpen={false}>
+            Child
+        </SidebarGroup>,
+    );
+    expect(screen.getByRole('button', { name: 'Group' })).toHaveAttribute('aria-expanded', 'false');
 });

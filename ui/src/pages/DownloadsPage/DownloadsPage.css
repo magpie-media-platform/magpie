@@ -60,12 +60,6 @@
         font-size: var(--text-lg);
     }
 
-    .downloads-page__select-cell {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
     .downloads-page__title-link {
         color: var(--text-primary);
         text-decoration: none;
@@ -271,6 +265,10 @@
     .downloads-page__skeleton {
         height: 3.5rem;
         border-radius: var(--radius-md);
+    }
+
+    .downloads-page__mobile-toolbar {
+        margin-bottom: var(--space-sm);
     }
 
     .downloads-page__mobile-list {

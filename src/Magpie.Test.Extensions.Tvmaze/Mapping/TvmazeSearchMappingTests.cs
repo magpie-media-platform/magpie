@@ -100,7 +100,7 @@ public class TvmazeSearchMappingTests
     {
         // Arrange
         var cast = Enumerable.Range(1, 31)
-            .Select(index => new GuestCastEntryDto
+            .Select(index => new CastEntryDto
             {
                 Person = new PersonDto { Id = index, Name = "Cast " + index },
                 Character = new CharacterDto { Id = index, Name = "Character " + index }
@@ -133,6 +133,60 @@ public class TvmazeSearchMappingTests
             Assert.That(
                 relationships.Skip(30).Select(relationship => relationship.RelationshipKind),
                 Is.All.EqualTo("director"));
+        }
+    }
+
+    [TestCase("javascript:alert(1)")]
+    [TestCase("file:///image.jpg")]
+    [TestCase("ftp://example.com/image.jpg")]
+    [TestCase("/image.jpg")]
+    public void ToMetadataSearchCandidate_OmitsUnsafeUrls_WhenProviderSuppliesNonWebUrls(string url)
+    {
+        // Arrange
+        var show = new ShowDto
+        {
+            Id = 82,
+            Name = "Show",
+            Url = url,
+            OfficialSite = url,
+            Image = new ImageReferenceDto { Original = url, Medium = url }
+        };
+
+        // Act
+        var references = show.ToReferences();
+        var poster = show.Image.ToPoster(0);
+        var profile = show.Image.ToProfileImage();
+        var candidate = show.ToMetadataSearchCandidate();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(references, Is.Empty);
+            Assert.That(poster, Is.Null);
+            Assert.That(profile, Is.Null);
+            Assert.That(candidate!.ThumbnailUrl, Is.Null);
+        }
+    }
+
+    [TestCase(" http://example.com/image.jpg ", "http://example.com/image.jpg")]
+    [TestCase(" https://example.com/image.jpg ", "https://example.com/image.jpg")]
+    public void ToReferences_PreservesWebUrls_WhenProviderSuppliesHttpOrHttps(string url, string expectedUrl)
+    {
+        // Arrange
+        var show = new ShowDto { Id = 82, Name = "Show", Url = url, OfficialSite = url };
+        var image = new ImageReferenceDto { Original = url };
+
+        // Act
+        var references = show.ToReferences();
+        var poster = image.ToPoster(0);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(references, Has.Count.EqualTo(2));
+            Assert.That(references[0].Url.AbsoluteUri, Is.EqualTo(expectedUrl));
+            Assert.That(references[1].Url.AbsoluteUri, Is.EqualTo(expectedUrl));
+            Assert.That(poster!.Url.AbsoluteUri, Is.EqualTo(expectedUrl));
         }
     }
 }

@@ -98,7 +98,7 @@ internal sealed class DownloadClientsEndpointGroup : IApiEndpointGroup
         var schema = await downloadClientService.GetSettingsSchemaAsync(created.ProviderType, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", RedactSecrets(created, schema));
+        return Results.Created($"/api/{Name}/{created.Id}", RedactSecrets(created, schema));
     }
 
     [MagpieCommand("test-settings", "POST", "test", "Test download client settings")]
@@ -180,9 +180,7 @@ internal sealed class DownloadClientsEndpointGroup : IApiEndpointGroup
     {
         return client with
         {
-            Settings = schema is { Count: 0 }
-                ? []
-                : client.Settings.RedactSecrets(schema)
+            Settings = client.Settings.RedactSecrets(schema)
         };
     }
 }

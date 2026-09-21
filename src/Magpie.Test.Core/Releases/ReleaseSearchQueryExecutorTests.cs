@@ -10,18 +10,22 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Caching;
+using Magpie.Core.Config;
 using Magpie.Core.Observability;
 using Magpie.Core.Releases;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Releases;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -35,7 +39,7 @@ public sealed class ReleaseSearchQueryExecutorTests
 {
     private Mock<IIndexerRepository> _indexers = null!;
     private Mock<IIndexerConnectionRepository> _indexerConnections = null!;
-    private Mock<IIndexerService> _indexerService = null!;
+    private Mock<IEventBus> _eventBus = null!;
     private Mock<IIndexerIntegration> _indexerIntegration = null!;
     private Mock<IReleaseEvaluationService> _releaseEvaluation = null!;
     private ReleaseSearchQueryExecutor _subject = null!;
@@ -50,7 +54,7 @@ public sealed class ReleaseSearchQueryExecutorTests
         _connectionId = Guid.NewGuid();
         _issuedRequests = [];
 
-        _indexers = new Mock<IIndexerRepository>();
+        _indexers = new Mock<IIndexerRepository> { CallBase = true };
         _indexers
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(
@@ -64,7 +68,7 @@ public sealed class ReleaseSearchQueryExecutorTests
                 },
             ]);
 
-        _indexerConnections = new Mock<IIndexerConnectionRepository>();
+        _indexerConnections = new Mock<IIndexerConnectionRepository> { CallBase = true };
         _indexerConnections
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(
@@ -79,12 +83,10 @@ public sealed class ReleaseSearchQueryExecutorTests
                 },
             ]);
 
-        _indexerService = new Mock<IIndexerService>();
-        _indexerService
-            .Setup(service => service.PatchConnectionAsync(
-                It.IsAny<Guid>(),
-                It.IsAny<Guid>(),
-                It.IsAny<Magpie.Models.Arguments.IndexerConnectionPatch>(),
+        _eventBus = new Mock<IEventBus>();
+        _indexerConnections
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<IndexerConnectionPatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
@@ -118,16 +120,25 @@ public sealed class ReleaseSearchQueryExecutorTests
                 It.IsAny<IReadOnlyList<ContentFact>>(),
                 It.IsAny<ReleaseEvaluationContext>()))
             .Returns(new ReleaseAssessment { MatchResult = ReleaseMatchResult.Confident });
+        _releaseEvaluation
+            .Setup(service => service.EffectiveQualityRank(
+                It.IsAny<ReleaseAssessment>(),
+                It.IsAny<ReleaseEvaluationContext>()))
+            .Returns((ReleaseAssessment assessment, ReleaseEvaluationContext _) =>
+                assessment.MatchedRankOrdinal ?? int.MaxValue);
 
         _subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
-            _releaseEvaluation.Object);
+            _releaseEvaluation.Object,
+            cacheFactory: Mock.Of<ICacheFactory>(),
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
     }
 
     [Test]
@@ -222,6 +233,42 @@ public sealed class ReleaseSearchQueryExecutorTests
             Assert.That(_issuedRequests, Is.Empty);
             Assert.That(result[0].ConnectionsAttempted, Is.Zero);
             Assert.That(result[0].ConnectionsSucceeded, Is.Zero);
+            _indexerIntegration.Verify(
+                integration => integration.SearchAsync(
+                    It.IsAny<ReleaseSearchRequest>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_SkipsConnection_WhenTheFacetSetOmitsTheKeywordSpelling()
+    {
+        // Arrange
+        _indexerIntegration
+            .SetupGet(integration => integration.SearchFacets)
+            .Returns([new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "season" },]);
+        var phases = new[]
+        {
+            new ReleaseSearchPhase
+            {
+                Request = new ReleaseSearchRequest
+                {
+                    Title = "pilot",
+                    Criteria = new Dictionary<string, IReadOnlyList<string>> { ["season"] = ["1"] },
+                },
+                ReleaseFacts = [new ContentFact { Value = "pilot" }],
+            },
+        };
+
+        // Act
+        var result = await _subject.ExecuteAsync(phases, [], new HashSet<Guid> { _indexerId }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result[0].ConnectionsAttempted, Is.Zero);
             _indexerIntegration.Verify(
                 integration => integration.SearchAsync(
                     It.IsAny<ReleaseSearchRequest>(),
@@ -494,11 +541,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         _subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object, healthyIndexerIntegration.Object],
             [],
             TimeProvider.System,
-            NullLogger<ReleaseSearchQueryExecutor>.Instance);
+            NullLogger<ReleaseSearchQueryExecutor>.Instance,
+            releaseEvaluationService: Mock.Of<IReleaseEvaluationService>(),
+            cacheFactory: Mock.Of<ICacheFactory>(),
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var phases = new[]
         {
             new ReleaseSearchPhase
@@ -696,7 +747,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public async Task ExecutePlanAsync_StopsConnectionAfterUsefulExternalIdResult()
+    public async Task ExecutePlanAsync_StopsConnection_WhenAnExternalIdResultIsUseful()
     {
         // Arrange
         var routes = new[]
@@ -898,7 +949,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public async Task ExecutePlanAsync_DoesNotChargeKeywordDuplicateOfWeakId_AgainstBranchTarget()
+    public async Task ExecutePlanAsync_DoesNotChargeKeywordDuplicateOfWeakId_WhenAKeywordResultDuplicatesAWeakId()
     {
         // Arrange
         var routes = new[]
@@ -988,7 +1039,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public async Task ExecutePlanAsync_ReassessesIdDuplicateWithoutUsingAnotherFulfillmentSlot()
+    public async Task ExecutePlanAsync_ReassessesDuplicateWithoutAnotherSlot_WhenIdentityMatches()
     {
         // Arrange
         var routes = new[]
@@ -1065,7 +1116,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public async Task ExecutePlanAsync_ReturnsAllEvaluatedResultsBeforeAutomaticFiltering()
+    public async Task ExecutePlanAsync_ReturnsAllEvaluatedResults_WhenAutomaticFilteringHasNotRun()
     {
         // Arrange
         var routes = new[]
@@ -1476,7 +1527,7 @@ public sealed class ReleaseSearchQueryExecutorTests
                     },
                     new IndexerConnection
                     {
-                        Id = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                        Id = Guid.NewGuid(),
                         IndexerId = _indexerId,
                         Name = "B Connection",
                         Enabled = true,
@@ -1523,13 +1574,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            cacheFactory);
+            cacheFactory,
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var routes = new[]
         {
             new ReleaseSearchPhase
@@ -1545,9 +1598,9 @@ public sealed class ReleaseSearchQueryExecutorTests
             new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() },
             automatic: false,
             maximumResults: 20).ConfigureAwait(false);
-        first.Results.Single().Release.Id = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
+        first.Results.Single().Release.Id = Guid.NewGuid();
         first.Results.Single().Release.Sources.First().Id =
-            Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd");
+            Guid.NewGuid();
         includeSecondConnection = false;
 
         // Act
@@ -1597,13 +1650,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            cacheFactory);
+            cacheFactory,
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var routes = new[]
         {
             new ReleaseSearchPhase
@@ -1637,6 +1692,69 @@ public sealed class ReleaseSearchQueryExecutorTests
             Assert.That(calls, Is.EqualTo(2));
             Assert.That(result.Results.Single().Release.ExternalId, Is.EqualTo("fresh"));
         }
+    }
+
+    [TestCase(2, 2)]
+    [TestCase(900, 1)]
+    public async Task ExecutePlanAsync_QueriesTheIndexerAgain_WhenTheCoalescingWindowElapsed(
+        int coalescingWindowSeconds,
+        int expectedQueries)
+    {
+        // Arrange
+        var calls = 0;
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                calls++;
+                return [];
+            });
+        var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        using var cacheStore = new MemoryCacheStore(timeProvider);
+        using var cacheFactory = new MemoryCacheFactory(cacheStore);
+        var subject = new ReleaseSearchQueryExecutor(
+            _indexers.Object,
+            _indexerConnections.Object,
+            _eventBus.Object,
+            [_indexerIntegration.Object],
+            [],
+            timeProvider,
+            NullLogger<ReleaseSearchQueryExecutor>.Instance,
+            _releaseEvaluation.Object,
+            cacheFactory,
+            [],
+            new SearchOptions { CoalescingWindow = TimeSpan.FromSeconds(coalescingWindowSeconds) });
+        var routes = new[]
+        {
+            new ReleaseSearchPhase
+            {
+                Request = new ReleaseSearchRequest { Title = "Dune" },
+                ReleaseFacts = [new ContentFact { Value = "Dune" }],
+            },
+        };
+        await subject.ExecutePlanAsync(
+            routes,
+            [],
+            new HashSet<Guid> { _indexerId },
+            new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() },
+            automatic: false,
+            maximumResults: 20).ConfigureAwait(false);
+        timeProvider.Advance(TimeSpan.FromSeconds(5));
+
+        // Act
+        await subject.ExecutePlanAsync(
+            routes,
+            [],
+            new HashSet<Guid> { _indexerId },
+            new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() },
+            automatic: false,
+            maximumResults: 20).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(calls, Is.EqualTo(expectedQueries));
     }
 
     [Test]
@@ -1679,14 +1797,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            null,
-            [comparer.Object]);
+            Mock.Of<ICacheFactory>(),
+            [comparer.Object],
+            searchOptions: new SearchOptions());
         var routes = new[]
         {
             new ReleaseSearchPhase
@@ -1784,13 +1903,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            cacheFactory);
+            cacheFactory,
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var routes = new[]
         {
             new ReleaseSearchPhase
@@ -1840,13 +1961,9 @@ public sealed class ReleaseSearchQueryExecutorTests
         };
         meterListener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
         {
-            foreach (var tag in tags)
+            if (tags.ToArray().Any(tag => tag.Key == "cache" && Equals(tag.Value, "release-query")))
             {
-                if (tag.Key == "cache" && Equals(tag.Value, "release-query"))
-                {
-                    refreshMeasurements.Add(value);
-                    break;
-                }
+                refreshMeasurements.Add(value);
             }
         });
         meterListener.Start();
@@ -1879,13 +1996,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            cacheFactory);
+            cacheFactory,
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var routes = new[]
         {
             new ReleaseSearchPhase
@@ -1963,13 +2082,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            cacheFactory);
+            cacheFactory,
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var routes = new[]
         {
             new ReleaseSearchPhase
@@ -2018,7 +2139,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public async Task ExecutePlanAsync_ReusesSparseCachedResults_ForSameTargetAfterLargerRefresh()
+    public async Task ExecutePlanAsync_ReusesSparseCachedResults_WhenTheTargetAlreadyHasCachedResults()
     {
         // Arrange
         _indexerIntegration
@@ -2040,13 +2161,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            cacheFactory);
+            cacheFactory,
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var routes = new[]
         {
             new ReleaseSearchPhase
@@ -2127,13 +2250,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            cacheFactory);
+            cacheFactory,
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var firstRoute = new[]
         {
             new ReleaseSearchPhase
@@ -2275,7 +2400,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public async Task ExecutePlanAsync_EvaluatesCrossChildDuplicateOnce_BeforeBranchTargetIsReached()
+    public async Task ExecutePlanAsync_EvaluatesCrossChildDuplicateOnce_WhenBranchesShareAResult()
     {
         // Arrange
         var routes = new[]
@@ -2350,7 +2475,7 @@ public sealed class ReleaseSearchQueryExecutorTests
 
     [TestCase("weak", "strong")]
     [TestCase("strong", "weak")]
-    public async Task ExecutePlanAsync_EvaluatesDuplicateOnce_WithAllRouteFacts(
+    public async Task ExecutePlanAsync_EvaluatesDuplicateOnce_WhenRoutesShareAResult(
         string first,
         string second)
     {
@@ -2480,7 +2605,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public async Task ExecutePlanAsync_DoesNotChargeDuplicateObservationAgainstEvaluationTarget()
+    public async Task ExecutePlanAsync_PreservesEvaluationCapacity_WhenAnObservationIsDuplicated()
     {
         // Arrange
         _indexerIntegration
@@ -2542,7 +2667,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public async Task ExecutePlanAsync_CollapsesTransitiveIdentityBridge()
+    public async Task ExecutePlanAsync_CollapsesResults_WhenIdentityMatchesFormATransitiveBridge()
     {
         // Arrange
         _indexerIntegration
@@ -2685,12 +2810,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             testLogger.Object,
-            _releaseEvaluation.Object);
+            _releaseEvaluation.Object,
+            cacheFactory: Mock.Of<ICacheFactory>(),
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         _indexerIntegration
             .Setup(integration => integration.SearchAsync(
                 It.IsAny<ReleaseSearchRequest>(),
@@ -2727,10 +2855,9 @@ public sealed class ReleaseSearchQueryExecutorTests
         {
             Assert.That(traceText, Does.Not.Contain("secret-value").And.Not.Contain("tracker.example"));
             Assert.That(logText, Does.Not.Contain("secret-value").And.Not.Contain("tracker.example"));
-            _indexerService.Verify(service => service.PatchConnectionAsync(
-                _indexerId,
-                _connectionId,
-                It.Is<Magpie.Models.Arguments.IndexerConnectionPatch>(patch =>
+            _indexerConnections.Verify(repository => repository.PatchAsync(
+                It.Is<IndexerConnectionPatch>(patch =>
+                    patch.Id == _connectionId &&
                     patch.LastError != null &&
                     patch.LastError.Value == "provider-error:InvalidOperationException"),
                 It.IsAny<Guid?>(),
@@ -2873,12 +3000,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object, unavailableIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
-            _releaseEvaluation.Object);
+            _releaseEvaluation.Object,
+            cacheFactory: Mock.Of<ICacheFactory>(),
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var activities = new List<Activity>();
         using var listener = new ActivityListener
         {
@@ -3221,8 +3351,10 @@ public sealed class ReleaseSearchQueryExecutorTests
             Assert.That(coalesce.Events.Where(activityEvent => activityEvent.Name == "node.skipped")
                 .All(activityEvent => activityEvent.Tags.Any(tag =>
                     tag.Key == "magpie.query.node.reason" && Equals(tag.Value, "coalesce-satisfied"))), Is.True);
-            Assert.That(activities.Count(activity => activity.OperationName == "magpie.release-query.request"),
-                Is.EqualTo(1));
+            Assert.That(
+                activities,
+                Has.Exactly(1).Matches<Activity>(
+                    activity => activity.OperationName == "magpie.release-query.request"));
         }
     }
 
@@ -3243,13 +3375,15 @@ public sealed class ReleaseSearchQueryExecutorTests
         var subject = new ReleaseSearchQueryExecutor(
             _indexers.Object,
             _indexerConnections.Object,
-            _indexerService.Object,
+            _eventBus.Object,
             [_indexerIntegration.Object],
             [],
             TimeProvider.System,
             NullLogger<ReleaseSearchQueryExecutor>.Instance,
             _releaseEvaluation.Object,
-            cacheFactory);
+            cacheFactory,
+            releaseComparers: [],
+            searchOptions: new SearchOptions());
         var routes = new[]
         {
             new ReleaseSearchPhase
@@ -3295,6 +3429,48 @@ public sealed class ReleaseSearchQueryExecutorTests
                 request.GetTagItem("magpie.cache.level"), "memory")), Is.True);
             Assert.That(requests.SelectMany(request => request.TagObjects)
                 .Any(tag => Equals(tag.Value, "sensitive title")), Is.False);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_SkipsTheConnectionInLaterPhases_WhenItFailedInAnEarlierPhase()
+    {
+        // Arrange
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("indexer unreachable"));
+        var phases = new[]
+        {
+            new ReleaseSearchPhase
+            {
+                Request = new ReleaseSearchRequest { Title = "pilot" },
+                ReleaseFacts = [new ContentFact { Value = "pilot" }],
+            },
+            new ReleaseSearchPhase
+            {
+                Request = new ReleaseSearchRequest { Title = "pilot 2019" },
+                ReleaseFacts = [new ContentFact { Value = "pilot 2019" }],
+            },
+        };
+
+        // Act
+        var result = await _subject.ExecuteAsync(phases, [], new HashSet<Guid> { _indexerId }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(2));
+            Assert.That(result[1].ConnectionsAttempted, Is.Zero);
+            Assert.That(result[1].Connections.Single().SkippedReason, Is.EqualTo("failed-earlier-phase"));
+            _indexerIntegration.Verify(
+                integration => integration.SearchAsync(
+                    It.IsAny<ReleaseSearchRequest>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
         }
     }
 }

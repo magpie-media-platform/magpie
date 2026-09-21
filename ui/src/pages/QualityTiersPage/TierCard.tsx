@@ -1,13 +1,13 @@
-import {
-    TrashIcon,
-    PencilSimpleIcon,
-    CopyIcon,
-    CheckFatIcon,
-    DotsSixVerticalIcon,
-    CircleNotchIcon,
-} from '@phosphor-icons/react';
+import { type DragEvent, type TouchEvent } from 'react';
+import { TrashIcon, PencilSimpleIcon, CopyIcon, CheckFatIcon, CircleNotchIcon } from '@phosphor-icons/react';
 
 import { Badge } from '@/components/ui/Badge';
+import {
+    SortableListControls,
+    sortableListItemClassNames,
+    type SortableDropPosition,
+    type SortableMoveDirection,
+} from '@/components/ui/SortableList';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 import { formatOperator, type TierWithCriteria } from './tierListDetailMappers';
@@ -19,18 +19,27 @@ interface TierCardProps {
     isDeleting: boolean;
     isCloning: boolean;
     canManage: boolean;
+    isMoving: boolean;
+    isReorderDisabled: boolean;
     isDragging: boolean;
     isDropTarget: boolean;
-    dropPosition: 'before' | 'after' | null;
+    dropPosition: SortableDropPosition | null;
+    focusDirection: SortableMoveDirection | null;
     onEdit: (tierId: string) => void;
     onClone: (tierId: string) => void;
     onDelete: (tierId: string, tierName: string) => void;
     onToggleCutoff: (tierId: string) => void;
-    onDragStart: (tierId: string, event: React.DragEvent) => void;
+    onDragStart: (tier: TierWithCriteria, event: DragEvent) => void;
     onDragEnd: () => void;
-    onDragOver: (tierId: string, event: React.DragEvent) => void;
+    onDragOver: (tierId: string, event: DragEvent) => void;
     onDragLeave: () => void;
-    onDrop: (tierId: string, event: React.DragEvent) => void;
+    onDrop: (tierId: string, event: DragEvent) => void;
+    onTouchStart: (tier: TierWithCriteria, event: TouchEvent) => void;
+    onTouchMove: (event: TouchEvent) => void;
+    onTouchEnd: () => void;
+    onTouchCancel: () => void;
+    onMove: (tier: TierWithCriteria, direction: SortableMoveDirection) => void;
+    onFocusRestored: () => void;
 }
 
 export function TierCard({
@@ -40,9 +49,12 @@ export function TierCard({
     isDeleting,
     isCloning,
     canManage,
+    isMoving,
+    isReorderDisabled,
     isDragging,
     isDropTarget,
     dropPosition,
+    focusDirection,
     onEdit,
     onClone,
     onDelete,
@@ -52,14 +64,17 @@ export function TierCard({
     onDragOver,
     onDragLeave,
     onDrop,
+    onTouchStart,
+    onTouchMove,
+    onTouchEnd,
+    onTouchCancel,
+    onMove,
+    onFocusRestored,
 }: TierCardProps) {
     const tierClasses = [
         'tier-list-detail-page__tier',
+        sortableListItemClassNames(isDragging, isDropTarget, dropPosition),
         tier.isCutoff && 'tier-list-detail-page__tier--cutoff',
-        isDragging && 'tier-list-detail-page__tier--dragging',
-        isDropTarget && 'tier-list-detail-page__tier--drop-target',
-        isDropTarget && dropPosition === 'before' && 'tier-list-detail-page__tier--drop-before',
-        isDropTarget && dropPosition === 'after' && 'tier-list-detail-page__tier--drop-after',
     ]
         .filter(Boolean)
         .join(' ');
@@ -69,25 +84,35 @@ export function TierCard({
             className={tierClasses}
             role="listitem"
             data-tier-id={tier.id}
+            data-sortable-list-item-id={tier.id}
             data-cutoff={tier.isCutoff || undefined}
             data-deleting={isDeleting || undefined}
             data-dragging={isDragging || undefined}
-            draggable={canManage}
-            onDragStart={(e) => onDragStart(tier.id, e)}
-            onDragEnd={onDragEnd}
             onDragOver={(e) => onDragOver(tier.id, e)}
             onDragLeave={onDragLeave}
             onDrop={(e) => onDrop(tier.id, e)}
         >
             <div className="tier-list-detail-page__tier-header">
                 {canManage && (
-                    <div
-                        className="tier-list-detail-page__drag-handle"
-                        data-testid="tier-list-detail-page__drag-handle"
-                        aria-hidden="true"
-                    >
-                        <DotsSixVerticalIcon weight="bold" />
-                    </div>
+                    <SortableListControls
+                        label={tier.name}
+                        position={priority - 1}
+                        itemCount={totalTiers}
+                        moving={isMoving}
+                        disabled={isReorderDisabled}
+                        focusDirection={focusDirection}
+                        dragHandleClassName="tier-list-detail-page__drag-handle"
+                        dragHandleTestId="tier-list-detail-page__drag-handle"
+                        actionName="tier"
+                        onDragStart={(event) => onDragStart(tier, event)}
+                        onDragEnd={onDragEnd}
+                        onTouchStart={(event) => onTouchStart(tier, event)}
+                        onTouchMove={onTouchMove}
+                        onTouchEnd={onTouchEnd}
+                        onTouchCancel={onTouchCancel}
+                        onMove={(direction) => onMove(tier, direction)}
+                        onFocusRestored={onFocusRestored}
+                    />
                 )}
                 <div className="tier-list-detail-page__tier-priority">
                     <span className="tier-list-detail-page__priority-number">{priority}</span>

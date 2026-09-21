@@ -269,7 +269,7 @@ describe('useDashboard hooks', () => {
                 'queued',
             ]);
             expect(mockApiGet).toHaveBeenCalledWith(
-                '/downloads?statuses=Grabbed&statuses=Queued&statuses=Downloading&statuses=Paused&statuses=Stalled&pageNumber=1&pageSize=10&sortBy=CreatedAt&sortDirection=2',
+                '/downloads?statuses=Grabbed&statuses=Queued&statuses=Downloading&statuses=Paused&statuses=Stalled&pageNumber=1&pageSize=10&sortBy=CreatedAt&sortDirection=Descending',
             );
         });
 

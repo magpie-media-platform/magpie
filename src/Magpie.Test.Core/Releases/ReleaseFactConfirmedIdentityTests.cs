@@ -109,7 +109,7 @@ public sealed class ReleaseFactConfirmedIdentityTests
     [TestCase("tt-episode", ReleaseMatchResult.Identity)]
     [TestCase("tt-show", ReleaseMatchResult.Indeterminate)]
     [TestCase("tt-someone-elses-problem", ReleaseMatchResult.Indeterminate)]
-    public void AssessMatch_Result_WhenStandaloneIdentifierFactIsEvaluated(
+    public void AssessMatch_ReturnsTheExpectedIdentityStrength_WhenStandaloneIdentifierFactIsEvaluated(
         string identifier,
         ReleaseMatchResult expected)
     {
@@ -154,7 +154,7 @@ public sealed class ReleaseFactConfirmedIdentityTests
     [TestCase("Rollercoaster", ReleaseMatchResult.NoMatch, ReleaseMatchResult.Confident)]
     [TestCase("Someone Else's Rollercoaster", ReleaseMatchResult.NoMatch, ReleaseMatchResult.NoMatch)]
     [TestCase("Someone Else's Rollercoaster", ReleaseMatchResult.Confident, ReleaseMatchResult.Confident)]
-    public void AssessMatch_Result_WhenGenericAndProviderMatchesAreCombined(
+    public void AssessMatch_ReturnsTheExpectedIdentityStrength_WhenGenericAndProviderMatchesAreCombined(
         string releaseTitle,
         ReleaseMatchResult providerMatch,
         ReleaseMatchResult expected)

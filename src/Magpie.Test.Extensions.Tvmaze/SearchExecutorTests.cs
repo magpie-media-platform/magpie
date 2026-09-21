@@ -69,8 +69,10 @@ internal sealed class SearchExecutorTests
     public void SetUp()
     {
         _client = new Mock<IClient>();
-        _client.Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>())).ReturnsAsync(GameOfThrones);
-        _client.Setup(client => client.GetShowByIdAsync(83, It.IsAny<CancellationToken>())).ReturnsAsync(GameOn);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+            82, Array.Empty<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(GameOfThrones);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+            83, Array.Empty<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(GameOn);
         _executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
     }
 
@@ -417,7 +419,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
 
@@ -455,19 +456,18 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(GameOfThrones with { Embedded = new ShowEmbeddedDto { Akas = RussianAka } });
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 83,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(GameOn with { Embedded = new ShowEmbeddedDto { Akas = [] } });
 
@@ -643,10 +643,10 @@ internal sealed class SearchExecutorTests
                 ],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
-        _client.Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>())).ReturnsAsync(show);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+            82, Array.Empty<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(show);
 
         // Act
         var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
@@ -656,7 +656,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 It.IsAny<int>(),
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -793,7 +793,6 @@ internal sealed class SearchExecutorTests
                 ],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         var unmarkedPlan = plan with
@@ -813,11 +812,12 @@ internal sealed class SearchExecutorTests
                 ]
             }
         };
-        _client.Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>())).ReturnsAsync(show);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+            82, Array.Empty<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(show);
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(show);
 
@@ -913,14 +913,14 @@ internal sealed class SearchExecutorTests
                 ],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
-        _client.Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>())).ReturnsAsync(show);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+            82, Array.Empty<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(show);
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(show);
 
@@ -999,14 +999,14 @@ internal sealed class SearchExecutorTests
                 ],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
-        _client.Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>())).ReturnsAsync(show);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+            82, Array.Empty<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(show);
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(show);
 
@@ -1054,7 +1054,6 @@ internal sealed class SearchExecutorTests
                             ImageCriteriaResidual.EvaluationKind.Presence)])
                 ]
             },
-            Warnings = [],
             Dispositions = []
         };
         var exclusionPlan = presencePlan with
@@ -1071,7 +1070,8 @@ internal sealed class SearchExecutorTests
                 ]
             }
         };
-        _client.Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>())).ReturnsAsync(show);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+            82, Array.Empty<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(show);
 
         // Act
         var presenceResult = await _executor.ExecuteAsync(presencePlan, default).ConfigureAwait(false);
@@ -1087,7 +1087,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 It.IsAny<int>(),
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -1189,16 +1189,15 @@ internal sealed class SearchExecutorTests
                             ImageCriteriaResidual.EvaluationKind.Gallery)])
                 ]
             },
-            Warnings = [],
             Dispositions = []
         };
         _client
-            .Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>()))
+            .Setup(client => client.GetShowWithEmbedsAsync(82, Array.Empty<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto { Id = 82, Name = "Lost" });
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -1233,7 +1232,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -1280,16 +1279,15 @@ internal sealed class SearchExecutorTests
                             ImageCriteriaResidual.EvaluationKind.Gallery)])
                 ]
             },
-            Warnings = [],
             Dispositions = []
         };
         _client
-            .Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>()))
+            .Setup(client => client.GetShowWithEmbedsAsync(82, Array.Empty<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto { Id = 82, Name = "Lost" });
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -1382,7 +1380,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 2,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -1439,7 +1436,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -1491,7 +1487,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -1525,7 +1520,7 @@ internal sealed class SearchExecutorTests
         ]);
         _client.Setup(client => client.GetShowWithEmbedsAsync(
             1,
-            It.IsAny<IReadOnlyList<string>>(),
+            It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
             It.IsAny<CancellationToken>()))
             .ReturnsAsync((ShowDto?)null);
         var coalesce = new CoalescePlanNode
@@ -1574,7 +1569,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -1604,7 +1598,7 @@ internal sealed class SearchExecutorTests
         ]);
         _client.Setup(client => client.GetShowWithEmbedsAsync(
             1,
-            It.IsAny<IReadOnlyList<string>>(),
+            It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
             It.IsAny<CancellationToken>()))
             .ReturnsAsync((ShowDto?)null);
         var coalesce = new CoalescePlanNode
@@ -1653,7 +1647,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -1719,7 +1712,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -1834,7 +1826,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -1902,7 +1893,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -1974,7 +1964,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 1,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -2045,7 +2034,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 2,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -2113,7 +2101,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -2168,7 +2155,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -2182,10 +2168,10 @@ internal sealed class SearchExecutorTests
     }
 
     [Test]
-    public async Task ExecuteAsync_ReportsFailedFetch_WhenNativeIdResultIsUnavailable()
+    public void ExecuteAsync_Throws_WhenTheOnlyFetchFails()
     {
         // Arrange
-        _client.Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>()))
+        _client.Setup(client => client.GetShowWithEmbedsAsync(82, Array.Empty<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("corrupt payload"));
         var root = new FilterPlanNode
         {
@@ -2210,22 +2196,15 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var execute = () => executor.ExecuteAsync(plan, default);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Matches, Is.Empty);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.One.Contains("results may be incomplete"));
-        }
+        Assert.That(execute, Throws.TypeOf<InvalidOperationException>());
     }
 
     [Test]
@@ -2323,7 +2302,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -2336,11 +2314,12 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 1,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _client.Verify(
-            client => client.GetShowWithCreditsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            client => client.GetShowWithEmbedsAsync(
+                It.IsAny<int>(), new[] { "cast", "crew" }, It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -2354,7 +2333,7 @@ internal sealed class SearchExecutorTests
         ]);
         _client.Setup(client => client.GetShowWithEmbedsAsync(
             1,
-            It.IsAny<IReadOnlyList<string>>(),
+            It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
             It.IsAny<CancellationToken>()))
             .ReturnsAsync((ShowDto?)null);
         var fetch = new FetchPlanNode
@@ -2397,7 +2376,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -2416,12 +2394,13 @@ internal sealed class SearchExecutorTests
         }
 
         _client.Verify(
-            client => client.GetShowWithCreditsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+            client => client.GetShowWithEmbedsAsync(
+                It.IsAny<int>(), new[] { "cast", "crew" }, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
-    public async Task ExecuteAsync_OmitsCandidate_WhenAkaVerificationFails()
+    public void ExecuteAsync_Throws_WhenAkaVerificationFailsForEveryCandidate()
     {
         // Arrange
         _client.Setup(client => client.SearchShowsAsync("show", It.IsAny<CancellationToken>())).ReturnsAsync(
@@ -2430,7 +2409,7 @@ internal sealed class SearchExecutorTests
         ]);
         _client.Setup(client => client.GetShowWithEmbedsAsync(
             1,
-            It.IsAny<IReadOnlyList<string>>(),
+            It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
             It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("failed"));
         var fetch = new FetchPlanNode
@@ -2464,23 +2443,15 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = 10,
             Root = root,
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var execute = () => executor.ExecuteAsync(plan, default);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Matches, Is.Empty);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.One.Contains("candidate was omitted"));
-            Assert.That(result.PageInfo.HasMore, Is.False);
-        }
+        Assert.That(execute, Throws.TypeOf<InvalidOperationException>());
     }
 
     [Test]
@@ -2543,7 +2514,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -2632,7 +2602,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -2711,7 +2680,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         _client
@@ -2808,7 +2776,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         _client
@@ -2862,11 +2829,10 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         _client
-            .Setup(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>()))
+            .Setup(client => client.GetShowWithEmbedsAsync(82, Array.Empty<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto { Id = 82, Name = "Lost" });
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
@@ -2875,7 +2841,8 @@ internal sealed class SearchExecutorTests
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
-        _client.Verify(client => client.GetShowByIdAsync(82, It.IsAny<CancellationToken>()), Times.Once);
+        _client.Verify(client => client.GetShowWithEmbedsAsync(
+            82, Array.Empty<string>(), It.IsAny<CancellationToken>()), Times.Once);
         _client.Verify(
             client => client.LookupShowAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
@@ -2913,7 +2880,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.AkaSearchApproximate],
             Dispositions = []
         };
         _client
@@ -2928,7 +2894,7 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -2948,15 +2914,13 @@ internal sealed class SearchExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("alternate-title search is fuzzy"));
+            Assert.That(result.Warnings, Is.Empty);
         }
 
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -3006,7 +2970,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -3033,7 +2996,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 It.IsAny<int>(),
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -3118,7 +3081,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -3219,7 +3181,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -3324,7 +3285,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -3410,7 +3370,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         var hits = Enumerable
@@ -3523,7 +3482,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -3622,7 +3580,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -3656,9 +3613,7 @@ internal sealed class SearchExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Matches.Select(match => match.Title), Is.EqualTo(["Breaking Bad"]));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("person-name search is fuzzy"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -3709,7 +3664,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -3811,7 +3765,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [],
             Dispositions = []
         };
         _client
@@ -3843,7 +3796,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 It.IsAny<int>(),
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -3889,7 +3842,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -3966,7 +3918,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4004,7 +3955,7 @@ internal sealed class SearchExecutorTests
     }
 
     [Test]
-    public async Task ExecuteAsync_ReturnsEveryShow_FromFixedFuzzySearchSet()
+    public async Task ExecuteAsync_ReturnsEveryShow_WhenTheFuzzySearchSetIsFixed()
     {
         // Arrange
         var plan = new QueryPlan
@@ -4035,7 +3986,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         var hits = Enumerable
@@ -4087,7 +4037,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client.Setup(client => client.SearchShowsAsync("Missing", It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -4169,7 +4118,6 @@ internal sealed class SearchExecutorTests
                 ],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4196,7 +4144,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 It.IsAny<int>(),
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -4242,7 +4190,6 @@ internal sealed class SearchExecutorTests
                 RelationshipResiduals = [],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.PersonSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4276,7 +4223,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 It.IsAny<int>(),
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -4348,7 +4295,6 @@ internal sealed class SearchExecutorTests
                 ],
                 ImageResiduals = []
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4363,7 +4309,7 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
                 new ShowDto
@@ -4393,7 +4339,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -4440,7 +4386,6 @@ internal sealed class SearchExecutorTests
                         ])
                 ]
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4467,13 +4412,13 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 It.IsAny<int>(),
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
     [Test]
-    public async Task ExecuteAsync_FetchesGalleryForNullPrimary_OnlyAfterHitFiltering()
+    public async Task ExecuteAsync_FetchesTheNullPrimaryGalleryOnlyForSurvivors_WhenHitFilteringRemovesACandidate()
     {
         // Arrange
         var plan = new QueryPlan
@@ -4514,7 +4459,6 @@ internal sealed class SearchExecutorTests
                         ])
                 ]
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4533,7 +4477,7 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -4568,13 +4512,13 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 83,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -4654,7 +4598,6 @@ internal sealed class SearchExecutorTests
                         ])
                 ]
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4674,7 +4617,7 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -4709,7 +4652,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -4756,7 +4699,6 @@ internal sealed class SearchExecutorTests
                         ])
                 ]
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4774,7 +4716,7 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -4801,7 +4743,7 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 83,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -4819,13 +4761,13 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 83,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -4905,7 +4847,6 @@ internal sealed class SearchExecutorTests
                         ])
                 ]
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -4920,7 +4861,7 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -4954,7 +4895,7 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -5014,7 +4955,6 @@ internal sealed class SearchExecutorTests
                         ])
                 ]
             },
-            Warnings = [SearchWarnings.TitleSearchApproximate],
             Dispositions = []
         };
         _client
@@ -5023,7 +4963,7 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto
             {
@@ -5049,13 +4989,13 @@ internal sealed class SearchExecutorTests
         _client.Verify(
             client => client.GetShowWithEmbedsAsync(
                 82,
-                It.IsAny<IReadOnlyList<string>>(),
+                It.Is<IReadOnlyList<string>>(embeds => embeds.Count > 0),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Test]
-    public async Task ExecuteAsync_SurfacesPlanWarnings_WhenPlanIsKnownEmpty()
+    public async Task ExecuteAsync_NoWarnings_WhenPlanDiagnosticIsKnownEmpty()
     {
         // Arrange
         var plan = new QueryPlan
@@ -5064,7 +5004,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = int.MaxValue,
             Root = new UnionPlanNode { Id = 1, Contributes = "known-empty show candidates", Children = [] },
-            Warnings = [SearchWarnings.Unbounded],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -5078,7 +5017,7 @@ internal sealed class SearchExecutorTests
             Assert.That(result.Supported, Is.True);
             Assert.That(result.Matches, Is.Empty);
             Assert.That(result.PageInfo.HasMore, Is.False);
-            Assert.That(result.Warnings, Is.EqualTo([SearchWarnings.Unbounded]));
+            Assert.That(result.Warnings, Is.Empty);
         }
 
         _client.VerifyNoOtherCalls();
@@ -5094,7 +5033,6 @@ internal sealed class SearchExecutorTests
             Metadata = new MetadataCriteria(),
             MaximumResults = int.MaxValue,
             Root = new UnionPlanNode { Id = 1, Contributes = "known-empty show candidates", Children = [] },
-            Warnings = [],
             Dispositions = []
         };
         var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
@@ -5111,5 +5049,94 @@ internal sealed class SearchExecutorTests
         }
 
         _client.VerifyNoOtherCalls();
+    }
+
+    [Test]
+    public async Task ExecuteAsync_StopsAtPageBudget_WhenBrowseHasNoSurvivors()
+    {
+        // Arrange
+        _client.Setup(client => client.GetShowsPageAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new ShowDto { Id = 1, Name = "Show", Language = "English" }]);
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria>
+            {
+                And =
+                [
+                    new MetadataCriteria
+                    {
+                        Language = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Value = "Japanese" }]
+                        }
+                    }
+                ]
+            }
+        };
+        var plan = new SearchPlanner(NullLogger<SearchPlanner>.Instance).Plan(query, 25);
+        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
+
+        // Act
+        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Matches, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+            Assert.That(result.PageInfo.HasMore, Is.False);
+        }
+
+        _client.Verify(client => client.GetShowsPageAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(4));
+        _client.Verify(client => client.GetShowsPageAsync(4, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ExecuteAsync_PreservesCandidatesWithoutWarnings_WhenMetadataOperatorIsUnsupported(bool negate)
+    {
+        // Arrange
+        _client.Setup(client => client.SearchShowsAsync("Game of Thrones", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new SearchHitDto { Show = GameOfThrones }]);
+        var criterion = new PropertyCriterion<string>
+        {
+            Operator = CriteriaValueOperator.Regex,
+            Value = "English",
+            Negate = negate
+        };
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria>
+            {
+                And =
+                [
+                    new MetadataCriteria
+                    {
+                        Title = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Value = "Game of Thrones" }]
+                        },
+                        Language = new CriteriaSet<PropertyCriterion<string>> { And = [criterion] }
+                    }
+                ]
+            }
+        };
+        var plan = new SearchPlanner(NullLogger<SearchPlanner>.Instance).Plan(query, 25);
+        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
+
+        // Act
+        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
+            Assert.That(result.Warnings, Is.Empty);
+            Assert.That(plan.Query, Is.SameAs(query));
+            Assert.That(plan.Dispositions.Any(disposition =>
+                ReferenceEquals(disposition.OperatorsAndValues, criterion) &&
+                disposition.Disposition == "pass-through-residual"), Is.True);
+        }
     }
 }

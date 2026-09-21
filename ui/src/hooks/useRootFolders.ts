@@ -1,3 +1,4 @@
+import type { ScalarPatch } from '@/types/patch';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
@@ -58,27 +59,25 @@ interface RootFolderCreate {
 }
 
 interface RootFolderPatch {
-    name?: string;
+    name?: ScalarPatch<string>;
 
-    path?: string;
+    path?: ScalarPatch<string>;
 
-    contentType?: string;
+    contentType?: ScalarPatch<string>;
 
-    isDefault?: boolean;
+    isDefault?: ScalarPatch<boolean>;
 
-    defaultMonitoring?: { value: boolean | null };
+    defaultMonitoring?: ScalarPatch<boolean | null>;
 
-    renameTemplate?: { value: string | null };
+    renameTemplate?: ScalarPatch<string | null>;
 
-    upgradeFileHandling?: UpgradeFileHandling;
+    upgradeFileHandling?: ScalarPatch<UpgradeFileHandling>;
 
-    defaults?: Record<string, RootFolderDefault>;
+    defaults?: ScalarPatch<Record<string, RootFolderDefault>>;
 }
 
 export const rootFolderQueryKeys = {
-    all: ['root-folders'] as const,
     list: () => ['root-folders', 'list'] as const,
-    detail: (id: string) => ['root-folders', 'detail', id] as const,
 };
 
 export async function fetchRootFolders(): Promise<ApiRootFolder[]> {

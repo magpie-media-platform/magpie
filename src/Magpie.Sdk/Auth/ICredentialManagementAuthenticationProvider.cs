@@ -15,7 +15,7 @@ public interface ICredentialManagementAuthenticationProvider : ICredentialAuthen
     /// <param name="userId">The id of the user whose password is being reset</param>
     /// <param name="newPassword">The new password</param>
     /// <param name="requestingUserId">The id of the user requesting the reset</param>
-    /// <param name="cancellationToken">The cancellation token</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>
     /// <see langword="true"/> when the password was reset, otherwise <see langword="false"/>.
     /// </returns>

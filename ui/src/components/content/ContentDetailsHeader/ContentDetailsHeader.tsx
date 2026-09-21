@@ -1,7 +1,8 @@
 import { forwardRef, type ComponentPropsWithoutRef, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
-import { ImageBrokenIcon, CaretLeftIcon, DotsThreeVerticalIcon } from '@phosphor-icons/react';
+import { CaretLeftIcon, DotsThreeVerticalIcon } from '@phosphor-icons/react';
 
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
 import { Badge } from '@/components/ui/Badge';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
@@ -123,20 +124,19 @@ export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeader
                             className="content-details-header__poster content-details-header__poster--image"
                             style={{ '--hero-image': `url(${JSON.stringify(content.posterUrl)})` } as CSSProperties}
                         >
-                            <img
-                                src={content.posterUrl}
+                            <ContentPoster
+                                posterUrl={content.posterUrl}
+                                placeholderClassName="content-details-header__poster--placeholder"
                                 alt={`${content.title} artwork`}
                                 className="content-details-header__poster-img"
                                 loading="eager"
                             />
                         </div>
                     ) : (
-                        <div
-                            className="content-details-header__poster content-details-header__poster--placeholder"
-                            data-testid="content-details-header__poster--placeholder"
-                        >
-                            <ImageBrokenIcon weight="thin" aria-hidden="true" />
-                        </div>
+                        <ContentPoster
+                            className="content-details-header__poster"
+                            placeholderClassName="content-details-header__poster--placeholder"
+                        />
                     )}
                 </div>
 

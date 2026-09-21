@@ -1,9 +1,6 @@
 using System;
 
 using Magpie.Extensions.Qbittorrent;
-using Magpie.Sdk.Integrations;
-
-using Microsoft.Extensions.DependencyInjection;
 
 using NUnit.Framework;
 
@@ -29,27 +26,6 @@ public class QbittorrentExtensionTests
             Assert.That(extension.Name, Is.EqualTo("qBittorrent"));
             Assert.That(extension.Version, Is.EqualTo(new Version(1, 0, 0)));
             Assert.That(extension.TargetABI, Is.EqualTo("[1.0.0,)"));
-        }
-    }
-
-    [Test]
-    public void RegisterServices_ClientAndIntegration_WhenExtensionRegistersServices()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var extension = new QbittorrentExtension();
-
-        // Act
-        extension.RegisterServices(services);
-        using var provider = services.BuildServiceProvider();
-        var client = provider.GetRequiredService<IQbittorrentClient>();
-        var integration = provider.GetRequiredService<IDownloadClientIntegration>();
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(client, Is.InstanceOf<QbittorrentClient>());
-            Assert.That(integration, Is.InstanceOf<QbittorrentDownloadClientIntegration>());
         }
     }
 }

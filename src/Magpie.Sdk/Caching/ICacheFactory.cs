@@ -8,7 +8,7 @@ namespace Magpie.Sdk.Caching;
 public interface ICacheFactory
 {
     /// <summary>
-    /// Gets one named cache that is shared across dependency-injection scopes.
+    /// One named cache that is shared across dependency-injection scopes.
     /// </summary>
     /// <param name="name">The stable cache name</param>
     /// <param name="createPolicy">The policy factory to use when the named cache does not exist</param>

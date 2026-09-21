@@ -16,12 +16,6 @@ internal interface IClient
 
     Task<PersonDto?> GetPersonByIdAsync(long personId, CancellationToken cancellationToken);
 
-    Task<ShowDto?> GetShowByIdAsync(int showId, CancellationToken cancellationToken);
-
-    Task<ShowDto?> GetShowAsync(int showId, CancellationToken cancellationToken);
-
-    Task<ShowDto?> GetShowWithCreditsAsync(int showId, CancellationToken cancellationToken);
-
     Task<ShowDto?> GetShowWithEmbedsAsync(
         int showId,
         IReadOnlyList<string> embeds,
@@ -35,7 +29,7 @@ internal interface IClient
 
     Task<IReadOnlyList<CrewCreditDto>> GetPersonCrewCreditsAsync(long personId, CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<GuestCastEntryDto>> GetEpisodeGuestCastAsync(
+    Task<IReadOnlyList<CastEntryDto>> GetEpisodeGuestCastAsync(
         long episodeId,
         CancellationToken cancellationToken);
 

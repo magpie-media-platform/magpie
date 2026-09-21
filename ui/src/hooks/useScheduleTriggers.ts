@@ -1,3 +1,4 @@
+import type { ScalarPatch, DictionaryPatch } from '@/types/patch';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
@@ -54,16 +55,6 @@ export interface ScheduleTriggerCreate {
     enabled?: boolean;
 
     parameters?: Record<string, string>;
-}
-
-export interface ScalarPatch<T> {
-    value: T;
-}
-
-export interface DictionaryPatch<K extends string, V> {
-    add?: Record<K, V>;
-    remove?: K[];
-    update?: Record<K, V>;
 }
 
 export interface ScheduleTriggerPatch {

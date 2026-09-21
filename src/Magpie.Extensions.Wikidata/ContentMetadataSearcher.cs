@@ -23,9 +23,6 @@ internal sealed class ContentMetadataSearcher(
     TimeProvider timeProvider,
     ILogger<ContentMetadataSearcher> logger) : IContentHierarchyMetadataAdvancedSearcher
 {
-    private static readonly string ShowLevelWarning
-        = "Wikidata advanced search searches for shows only. It does not search for seasons or episodes.";
-
     public string ProviderType => Constants.ProviderType;
 
     public IEnumerable<string> SupportedContentTypes =>
@@ -94,12 +91,6 @@ internal sealed class ContentMetadataSearcher(
             return EmptySupported();
         }
 
-        var searchesUnsupportedTvLevel = contentType == Constants.TvContentType &&
-            levelCriteria.Length > 0 &&
-            (EvaluateScope(levelCriteria, Constants.SeasonLevel) == CriteriaMatchResult.Matched ||
-                EvaluateScope(levelCriteria, Constants.EpisodeLevel) == CriteriaMatchResult.Matched);
-        var scopeWarnings = searchesUnsupportedTvLevel ? new[] { ShowLevelWarning } : [];
-
         var context = await settingsResolver.ResolveAsync(defaultLanguagePreference, cancellationToken)
             .ConfigureAwait(false);
         var result = await queryEngine.SearchAsync(
@@ -119,7 +110,7 @@ internal sealed class ContentMetadataSearcher(
                 Supported = false,
                 Matches = [],
                 PageInfo = ProviderSearchPageInfo.Unsupported,
-                Warnings = [.. scopeWarnings, .. result.Warnings]
+                Warnings = [.. result.Warnings]
             };
         }
 
@@ -128,7 +119,7 @@ internal sealed class ContentMetadataSearcher(
             Supported = true,
             Matches = [.. result.Hits.Select(hit => hit.ToMetadataSearchCandidate(kind, level))],
             PageInfo = result.PageInfo,
-            Warnings = [.. scopeWarnings, .. result.Warnings]
+            Warnings = [.. result.Warnings]
         };
     }
 
@@ -139,7 +130,7 @@ internal sealed class ContentMetadataSearcher(
     {
         if (candidate.ProviderType != ProviderType ||
             !TrySearchKind(candidate.Level, out var kind) ||
-            !TryQid(candidate.ExternalId, out var qid))
+            !candidate.ExternalId.TryNormalizeQid(out var qid))
         {
             return null;
         }
@@ -165,18 +156,16 @@ internal sealed class ContentMetadataSearcher(
 
     private static bool TrySearchKind(string? level, out EntityKind kind)
     {
-        kind = level switch
+        var resolved = level switch
         {
             Constants.MovieLevel => EntityKind.Movie,
             Constants.ShowLevel => EntityKind.Show,
             Constants.SeasonLevel => EntityKind.Season,
             Constants.EpisodeLevel => EntityKind.Episode,
-            _ => default
+            _ => (EntityKind?)null
         };
-        return level is Constants.MovieLevel
-            or Constants.ShowLevel
-            or Constants.SeasonLevel
-            or Constants.EpisodeLevel;
+        kind = resolved.GetValueOrDefault();
+        return resolved.HasValue;
     }
 
     private static MetadataSearchPage EmptySupported()
@@ -206,27 +195,6 @@ internal sealed class ContentMetadataSearcher(
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value.Trim()));
         return [.. values.Distinct(StringComparer.OrdinalIgnoreCase)];
-    }
-
-    private static bool TryQid(string? value, out string? qid)
-    {
-        qid = null;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var trimmed = value!.Trim();
-        if (trimmed.Length < 2 ||
-            char.ToUpperInvariant(trimmed[0]) != 'Q' ||
-            trimmed[1] == '0' ||
-            !trimmed.Substring(1).All(char.IsDigit))
-        {
-            return false;
-        }
-
-        qid = "Q" + trimmed.Substring(1);
-        return true;
     }
 
     private static CriteriaMatchResult EvaluateScope(

@@ -84,7 +84,7 @@ export default tseslint.config(
                     policies: [
                         {
                             from: { element: { types: ['lib', 'types'] } },
-                            disallow: { to: { element: { types: ['hooks', 'components', 'page'] } } },
+                            disallow: { to: { element: { types: ['hooks', 'ui', 'components', 'page'] } } },
                             message: 'Foundational modules cannot depend on React hooks, components, or pages.',
                         },
                         {
@@ -159,6 +159,15 @@ export default tseslint.config(
         files: ['src/components/ui/Button/Button.tsx'],
         rules: {
             'react/button-has-type': 'off',
+        },
+    },
+    {
+        extends: [js.configs.recommended],
+        files: ['src/test/sw.test.js'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'module',
+            globals: { ...globals.browser, ...globals.serviceworker, ...globals.node },
         },
     },
     {

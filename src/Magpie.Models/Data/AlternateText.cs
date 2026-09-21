@@ -23,7 +23,7 @@ public record AlternateText
     public int Ordinal { get; set; }
 
     /// <summary>
-    /// The kind of text, for example a title or a description.
+    /// The kind of text.
     /// </summary>
     public required string Kind { get; set; }
 

@@ -1,25 +1,17 @@
 import { type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import { CheckSquareIcon, SquareIcon, XIcon } from '@phosphor-icons/react';
 
+import type { BulkSelectionState } from '@/types/bulkSelection';
 import { SelectAllBanner } from '../SelectAllBanner';
 
 import './MobileSelectionBar.css';
 
-export interface MobileSelectionState {
-    allPages: boolean;
-    hasSelection: boolean;
-    headerChecked: boolean | 'indeterminate';
-    selectedCount: number;
-    showAcrossPagesPrompt: boolean;
-    clear: () => void;
-    selectAllAcrossPages: () => void;
-    toggleHeader: (checked: boolean) => void;
-}
+export type MobileSelectionState = BulkSelectionState;
 
 export interface MobileSelectionBarProps extends ComponentPropsWithoutRef<'div'> {
     selection: MobileSelectionState;
-    pageSelectedCount: number;
-    totalCount: number;
+    pageSelectedCount?: number;
+    totalCount?: number;
     displaySelectedCount?: number;
     onClear?: () => void;
     itemNounPlural: string;
@@ -29,8 +21,8 @@ export interface MobileSelectionBarProps extends ComponentPropsWithoutRef<'div'>
 
 export function MobileSelectionBar({
     selection,
-    pageSelectedCount,
-    totalCount,
+    pageSelectedCount = selection.pageSelectedCount,
+    totalCount = selection.totalCount,
     displaySelectedCount = selection.selectedCount,
     onClear = selection.clear,
     itemNounPlural,

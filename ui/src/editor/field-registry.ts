@@ -40,10 +40,6 @@ export const contentFieldRegistry: FieldRegistry = {
         { name: 'publishDate', type: 'date', description: 'Publish/release date' },
         { name: 'duration', type: 'timespan', description: 'Duration: "1h30m" or "02:00:00"' },
         { name: 'productionStatus', type: 'string', description: 'Production status' },
-        { name: 'fileKind', type: 'string', description: 'Media file kind' },
-        { name: 'mimeType', type: 'string', description: 'File MIME type' },
-        { name: 'filePath', type: 'string', description: 'Media file path' },
-        { name: 'fileSize', type: 'long', description: 'File size in bytes' },
     ],
     collectionFields: [
         {

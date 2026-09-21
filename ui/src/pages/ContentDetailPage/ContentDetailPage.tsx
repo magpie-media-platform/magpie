@@ -1,6 +1,5 @@
-import { useMemo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMemo, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import {
     ArrowLeftIcon,
     ArrowClockwiseIcon,
@@ -68,13 +67,10 @@ import {
     useContentHierarchy,
     useContentAncestors,
     useContentList,
-    useAcquisitionStatus,
-    usePendingRefresh,
     useRefreshContent,
     useSearchContentReleases,
     useRescanContentMediaInfo,
     useMetadataInspector,
-    contentQueryKeys,
 } from '@/hooks/useContent';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useGrabRelease } from '@/hooks/useReleases';
@@ -89,8 +85,8 @@ import {
 import { useRemoveContent } from '@/hooks/useRemoveContent';
 import { useLatestDownloadForRelease } from '@/hooks/useDownloads';
 import { getRootLevels, getStandardMetadataField, useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
-import { buildUrl, isApiError } from '@/lib/api';
-import { getErrorMessage, isNoDownloadClientError, isNotFoundError } from '@/lib/errors';
+import { buildUrl } from '@/lib/api';
+import { getErrorMessage, isNotFoundError } from '@/lib/errors';
 import { formatShortDate } from '@/lib/dateFormatting';
 import { humanizeSlug, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
 import { isInternalSource } from '@/lib/metadata';
@@ -113,7 +109,6 @@ import { MonitoringControl } from './MonitoringControl';
 import { PathControl } from './PathControl';
 import { RefreshStatusBadge } from './RefreshStatusBadge';
 import { TagsChipStrip } from './TagsChipStrip';
-import { deriveFileQuality } from './deriveFileQuality';
 import { useContentDetailParams } from './useContentDetailParams';
 import './ContentDetailPage.css';
 import '../DetailPageStates.css';
@@ -129,21 +124,14 @@ interface TabDef {
 }
 
 function pluralizeLevelLabel(label: string): string {
-    const trimmed = label.trim();
-    if (!trimmed) {
-        return trimmed;
+    const name = label.trim();
+    if (!name) {
+        return 'Items';
     }
-    if (trimmed.length <= 4 && trimmed === trimmed.toUpperCase()) {
-        return trimmed;
+    if (/[^aeiou]y$/i.test(name)) {
+        return `${name.slice(0, -1)}ies`;
     }
-    if (trimmed.toLowerCase().endsWith('s')) {
-        return trimmed;
-    }
-    return `${trimmed}s`;
-}
-
-function isUnresolvableContentError(error: unknown): boolean {
-    return isApiError(error) && error.message.startsWith('Expected JSON response');
+    return /s$/i.test(name) ? name : `${name}s`;
 }
 
 export function ContentDetailPage() {
@@ -194,12 +182,9 @@ export function ContentDetailPage() {
     const hasRelationships = (metadata?.relationships?.length ?? 0) > 0;
     const defaultTab = showChildrenTab ? CHILDREN_TAB : hasRelationships ? RELATED_TAB : 'details';
 
-    const { activeTab, setActiveTab, navigate, childrenBasePath } = useContentDetailParams(defaultTab);
-    const [searchParams] = useSearchParams();
-    const rawTab = searchParams.get('tab');
+    const { activeTab, setActiveTab, navigate, childrenBasePath, rawTab } = useContentDetailParams(defaultTab);
 
     const { toast } = useToast();
-    const queryClient = useQueryClient();
     const { hasPermission } = useAuth();
     const canEditContent = hasPermission('content.edit');
     const canRequestContent = hasPermission('content.request');
@@ -234,33 +219,12 @@ export function ContentDetailPage() {
     const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
     const [removeDeleteFiles, setRemoveDeleteFiles] = useState(false);
 
-    const { data: pendingRefresh } = usePendingRefresh(activeContentId, { enabled: !!activeContentId });
-    const refreshWasInFlightRef = useRef(false);
-    useEffect(() => {
-        const state = pendingRefresh?.state;
-        const inFlight = state === 'Queued' || state === 'Running';
-        if (inFlight) {
-            refreshWasInFlightRef.current = true;
-            return;
-        }
-        if (refreshWasInFlightRef.current && activeContentId) {
-            refreshWasInFlightRef.current = false;
-            void queryClient.invalidateQueries({ queryKey: contentQueryKeys.detail(activeContentId) });
-        }
-    }, [pendingRefresh?.state, activeContentId, queryClient]);
-
     const releasesQuery = useContentReleases(activeContentId, { enabled: !!activeContentId });
 
     const [detailsRelease, setDetailsRelease] = useState<ReleaseRow | null>(null);
     const { download: detailsDownload, isLoading: detailsDownloadLoading } = useLatestDownloadForRelease(
         detailsRelease?.acquisitionStatus ? detailsRelease.id : undefined,
     );
-
-    const { data: acquisitionStatus } = useAcquisitionStatus(activeContentId, { enabled: !!activeContentId });
-    const acquisitionBlockReason =
-        acquisitionStatus && !acquisitionStatus.canAutoGrab
-            ? (acquisitionStatus.blockReasonDetail ?? 'This item cannot be auto-grabbed.')
-            : null;
 
     const content: ContentDetailItem | null = useMemo(() => {
         if (!contentData) {
@@ -520,7 +484,6 @@ export function ContentDetailPage() {
                 fileName: lastSep >= 0 ? f.filePath.slice(lastSep + 1) : f.filePath,
                 size: f.fileSize,
                 dateAdded: f.createdAt,
-                quality: deriveFileQuality(f.mediaInfo),
                 mediaInfo: f.mediaInfo ?? undefined,
             };
         });
@@ -564,34 +527,12 @@ export function ContentDetailPage() {
         }));
     }, [releasesQuery.rows, succeededReleaseIds]);
 
-    const childrenTabLabel = useMemo(() => {
-        const currentLevel = contentData?.level;
-        const currentContentType = contentData?.contentType;
-        if (currentLevel && currentContentType) {
-            const typeDef = contentTypes.find((t) => t.slug === currentContentType);
-            const childLevel = typeDef?.levels.find((l) => l.parentSlug === currentLevel);
-            const childLevelDisplayName = childLevel?.displayName?.trim();
-            if (childLevelDisplayName) {
-                return pluralizeLevelLabel(childLevelDisplayName);
-            }
-        }
-        return 'Items';
-    }, [contentData?.level, contentData?.contentType, contentTypes]);
-
-    const childrenDateHeader = useMemo(() => {
-        const currentLevel = contentData?.level;
-        const currentContentType = contentData?.contentType;
-        if (currentLevel && currentContentType) {
-            const typeDef = contentTypes.find((t) => t.slug === currentContentType);
-            const childLevel = typeDef?.levels.find((l) => l.parentSlug === currentLevel);
-            const dateField = childLevel?.standardFactFields?.find((f) => f.dataType?.toLowerCase() === 'date');
-            const dateFieldLabel = dateField?.displayName?.trim();
-            if (dateFieldLabel) {
-                return dateFieldLabel;
-            }
-        }
-        return 'Date';
-    }, [contentData?.level, contentData?.contentType, contentTypes]);
+    const childLevel = typeDef?.levels.find((level) => level.parentSlug === contentData?.level);
+    const childrenTabLabel = pluralizeLevelLabel(childLevel?.displayName ?? '');
+    const childrenDateHeader =
+        childLevel?.standardFactFields
+            ?.find((field) => field.dataType?.toLowerCase() === 'date')
+            ?.displayName?.trim() || 'Date';
 
     const tabDefs: TabDef[] = useMemo(() => {
         const defs: TabDef[] = [];
@@ -732,10 +673,10 @@ export function ContentDetailPage() {
         searchMutation.mutate(
             { id: activeContentId },
             {
-                onSuccess: () => {
+                onSuccess: (disposition) => {
                     toast({
                         title: 'Search complete',
-                        description: 'Release search complete.',
+                        description: disposition.statusMessage ?? 'Release search complete.',
                         variant: 'success',
                     });
                 },
@@ -803,17 +744,9 @@ export function ContentDetailPage() {
                     },
                     onError: (error) => {
                         markGrabFailed(release.id);
-                        if (isNoDownloadClientError(error)) {
-                            toast({
-                                title: 'No download client configured',
-                                description: 'Add a download client on the Download Clients page to download releases.',
-                                variant: 'warning',
-                            });
-                            return;
-                        }
                         toast({
                             title: 'Grab failed',
-                            description: 'Failed to queue release acquisition. Please try again.',
+                            description: getErrorMessage(error, 'Failed to queue release acquisition.'),
                             variant: 'error',
                         });
                     },
@@ -922,12 +855,10 @@ export function ContentDetailPage() {
         deleteFileMutation.mutate(
             { contentHierarchyItemId: activeContentId, mediaFileId: file.id },
             {
-                onSuccess: (result) => {
+                onSuccess: () => {
                     toast({
                         title: 'File deleted',
-                        description: result.fileWasMissingOnDisk
-                            ? `Removed "${file.fileName}" (the file was already missing on disk).`
-                            : `Deleted "${file.fileName}" from disk.`,
+                        description: `Deleted "${file.fileName}".`,
                         variant: 'success',
                     });
                     setFilePendingDelete(null);
@@ -1070,7 +1001,7 @@ export function ContentDetailPage() {
     }
 
     if (contentError || !content) {
-        const notFound = !contentError || isNotFoundError(contentError) || isUnresolvableContentError(contentError);
+        const notFound = !contentError || isNotFoundError(contentError);
         return (
             <div className="content-detail-page" data-page="content-detail">
                 <div className="content-detail-page__not-found">
@@ -1231,7 +1162,6 @@ export function ContentDetailPage() {
                         contentHierarchyItemId={activeContentId}
                         contentType={contentData.contentType}
                         level={contentData.level}
-                        fulfillment={content.fulfillment}
                         canEdit={canEditContent}
                     />
                     <TagsChipStrip contentId={activeContentId} canEdit={canEditContent} />
@@ -1317,6 +1247,11 @@ export function ContentDetailPage() {
 
                 {showChildrenTab && (
                     <TabsContent value="children">
+                        {childrenResult && childrenResult.items.length < childrenResult.totalItems && (
+                            <Alert variant="info" title="Child list limited">
+                                This tab shows {childrenResult.items.length} of {childrenResult.totalItems} items.
+                            </Alert>
+                        )}
                         <ErrorBoundary>
                             <ChildrenTab
                                 items={childrenData}
@@ -1340,7 +1275,6 @@ export function ContentDetailPage() {
                             canGrab={canRequestContent}
                             onGrab={handleGrabRelease}
                             onTitleClick={setDetailsRelease}
-                            acquisitionBlockReason={acquisitionBlockReason}
                         />
                     </ErrorBoundary>
                 </TabsContent>

@@ -19,6 +19,10 @@ internal sealed class MusicContentTypeDefinitionProvider :
     IPathResolutionContentTypeDefinitionProvider,
     IReleaseMatchContentTypeDefinitionProvider
 {
+    private static readonly Regex SamplePattern = new(
+        @"(?:^|[._-])sample(?:$|[._-])|\[sample\]",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly Regex TrackPattern = new(
         @"(?<![A-Za-z0-9])(?:track|trk|t)[\s._-]*0*(?<track>\d{1,3})(?![A-Za-z0-9])",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -101,6 +105,8 @@ internal sealed class MusicContentTypeDefinitionProvider :
 
     private const string ArtistSignal = "artist";
 
+    private const string AlbumSignal = "album";
+
     private const MetadataField ArtistMetadataFields =
         MetadataField.Title |
         MetadataField.SortTitle |
@@ -165,12 +171,12 @@ internal sealed class MusicContentTypeDefinitionProvider :
         var hadCompleteAlternative = false;
         foreach (var factSet in contentFacts)
         {
-            var values =
+            var values = (
                 from fact in factSet
                 where !string.IsNullOrWhiteSpace(fact.Value)
                 let value = fact.Value?.NormalizeMediaFilename()
                 where value.Length > 0
-                select value;
+                select value).ToArray();
             if (!values.Any() || factSet.Any(fact => fact.Facets.Count > 0))
             {
                 continue;
@@ -192,13 +198,13 @@ internal sealed class MusicContentTypeDefinitionProvider :
             TrackSlug => target.Lineage.Where(static item => item.Level is ArtistSlug or TrackSlug),
             _ => [],
         };
-        var requiredTitles =
+        var requiredTitles = (
             from item in requiredItems
             let title = target.Metadata.TryGetValue(item.Id, out var metadata)
                 ? metadata.Title
                 : item.Name
             where !string.IsNullOrWhiteSpace(title)
-            select title.NormalizeMediaFilename();
+            select title.NormalizeMediaFilename()).ToArray();
         if (!requiredTitles.Any())
         {
             return hadCompleteAlternative ? ReleaseMatchResult.NoMatch : ReleaseMatchResult.Indeterminate;
@@ -214,9 +220,7 @@ internal sealed class MusicContentTypeDefinitionProvider :
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? Parse(string filePath, out string? levelSlug)
     {
         levelSlug = null;
-        if (Path.GetFileNameWithoutExtension(filePath)
-            .Split(['.', ' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries)
-            .Contains("sample", StringComparer.OrdinalIgnoreCase))
+        if (SamplePattern.IsMatch(Path.GetFileNameWithoutExtension(filePath)))
         {
             return null;
         }
@@ -232,11 +236,25 @@ internal sealed class MusicContentTypeDefinitionProvider :
                 .AddValue(ParsedFileSignalKeys.Title, parsed.Album)
                 .AddValue(ParsedFileSignalKeys.Year, parsed.Year)
                 .AddValue(ArtistSignal, parsed.Artist)
+                .AddValue(AlbumSignal, parsed.Album)
                 .AddValue(ParsedFileSignalKeys.TitleToken, parsed.Album)
+                .AddValue(ParsedFileSignalKeys.RootTitle, parsed.Artist)
                 .Build();
     }
 
     public string? BuildPath(
+        IReadOnlyList<ContentHierarchyItem> ancestors,
+        IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>> relationshipsByNode,
+        string originalFileName,
+        string extension)
+    {
+        var plan = BuildPathPlan(ancestors, relationshipsByNode, originalFileName, extension);
+        return plan is null
+            ? null
+            : string.Join("/", plan.Directories.Select(directory => directory.Name).Append(plan.FileName));
+    }
+
+    public ContentPathPlan? BuildPathPlan(
         IReadOnlyList<ContentHierarchyItem> ancestors,
         IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>> relationshipsByNode,
         string originalFileName,
@@ -275,7 +293,15 @@ internal sealed class MusicContentTypeDefinitionProvider :
             }
         }
 
-        return artistFolder + "/" + albumFolder + "/" + WithExtension(fileName, extension);
+        return new ContentPathPlan
+        {
+            Directories =
+            [
+                new ContentPathPlanDirectory { LevelSlug = ArtistSlug, Name = artistFolder },
+                new ContentPathPlanDirectory { LevelSlug = AlbumSlug, Name = albumFolder }
+            ],
+            FileName = WithExtension(fileName, extension)
+        };
     }
 
     private static string WithExtension(string name, string extension) =>

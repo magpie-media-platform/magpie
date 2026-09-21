@@ -75,12 +75,12 @@ const JELLYFIN_SCHEMA: IntegrationSettingDefinition[] = [
 
 const READY_EXTENSION_CONTEXT: ExtensionContextValue = {
     state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+    retriesExhausted: false,
     context: {
         apiBaseUrl: '/api',
         userId: 'user-1',
         username: 'admin',
         role: 'Admin',
-        theme: null,
     },
     getExtensionsForSlot: () => [],
     retry: () => Promise.resolve(),

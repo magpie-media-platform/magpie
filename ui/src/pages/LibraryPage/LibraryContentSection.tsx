@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import type { PaginationState, RowSelectionState, SortingState, Updater } from '@tanstack/react-table';
+import type { PaginationState, SortingState, Updater } from '@tanstack/react-table';
 import { FilmSlateIcon, FunnelIcon, MagnifyingGlassIcon, PlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import {
@@ -26,6 +26,7 @@ const LIBRARY_SORT_OPTIONS: MobileListSortOption[] = [
     { id: 'title', label: 'Title' },
     { id: 'publishDate', label: 'Published', initialDirection: 'desc' },
     { id: 'dateAdded', label: 'Date Added', initialDirection: 'desc' },
+    { id: 'fulfilledDate', label: 'Fulfilled', initialDirection: 'desc' },
 ];
 
 interface LibraryContentSectionProps {
@@ -45,7 +46,6 @@ interface LibraryContentSectionProps {
     headerFilterHandlers: ContentHeaderFilterHandlers;
     hasBulkActions: boolean;
     selection: BulkSelection;
-    onRowSelectionChange: (updater: RowSelectionState | ((prev: RowSelectionState) => RowSelectionState)) => void;
     selectionMode: boolean;
     onEnterSelectionMode: () => void;
     onExitSelectionMode: () => void;
@@ -77,7 +77,6 @@ export function LibraryContentSection({
     headerFilterHandlers,
     hasBulkActions,
     selection,
-    onRowSelectionChange,
     selectionMode,
     onEnterSelectionMode,
     onExitSelectionMode,
@@ -221,9 +220,7 @@ export function LibraryContentSection({
                             onPaginationChange={onPaginationChange}
                             rowCount={totalItems}
                             pageSize={PAGE_SIZE}
-                            enableSelection={hasBulkActions}
-                            rowSelection={selection.rowSelection}
-                            onRowSelectionChange={onRowSelectionChange}
+                            selection={hasBulkActions ? selection : undefined}
                             headerFilters={headerFilters}
                             headerFilterHandlers={headerFilterHandlers}
                             emptyState={emptyState}

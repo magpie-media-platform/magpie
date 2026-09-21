@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -26,7 +27,17 @@ internal sealed class LocalPasswordHasher(IKeyStore keyStore) : IPasswordHasher
         var exists = await keyStore.KeyExistsAsync(ApiKeyHmacKeyName).ConfigureAwait(false);
         if (!exists)
         {
-            await keyStore.CreateHmacKeyAsync(ApiKeyHmacKeyName).ConfigureAwait(false);
+            try
+            {
+                await keyStore.CreateHmacKeyAsync(ApiKeyHmacKeyName).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException)
+            {
+                if (!await keyStore.KeyExistsAsync(ApiKeyHmacKeyName).ConfigureAwait(false))
+                {
+                    throw;
+                }
+            }
         }
     });
 

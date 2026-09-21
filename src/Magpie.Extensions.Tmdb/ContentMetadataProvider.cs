@@ -142,6 +142,7 @@ internal sealed class ContentMetadataProvider(
         MetadataRelationshipRequest request,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var item = request.Item;
         var existingMetadata = request.ExistingMetadata;
         var ancestorMetadata = request.AncestorMetadata;
@@ -171,8 +172,6 @@ internal sealed class ContentMetadataProvider(
             client,
             logger,
             cancellationToken).ConfigureAwait(false);
-        var utcNow = timeProvider.GetUtcNow().UtcDateTime;
-
         CreditsDto? credits;
         IReadOnlyList<ProductionCompanyDto>? productionCompanies = null;
         IReadOnlyList<ProductionCompanyDto>? networks = null;
@@ -210,6 +209,16 @@ internal sealed class ContentMetadataProvider(
                 cancellationToken).ConfigureAwait(false);
         }
 
+        return BuildRelationships(imageBase, credits, productionCompanies, networks);
+    }
+
+    private IReadOnlyList<SubjectRelationshipDefinition> BuildRelationships(
+        string imageBase,
+        CreditsDto? credits,
+        IReadOnlyList<ProductionCompanyDto>? productionCompanies,
+        IReadOnlyList<ProductionCompanyDto>? networks)
+    {
+        var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         var relationships = new List<SubjectRelationshipDefinition>();
         relationships.AddRange(credits.ToSubjectRelationships(imageBase, utcNow));
         relationships.AddRange(productionCompanies.ToSubjectRelationships(imageBase, relationships.Count, utcNow));

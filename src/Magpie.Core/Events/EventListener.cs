@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -16,7 +16,7 @@ internal sealed class EventListener : IEventListener
 {
     internal const string UnlabelledCallSite = "other";
 
-    private static readonly ConcurrentDictionary<EventListener, string> CallSites = new();
+    private static readonly ConditionalWeakTable<EventListener, string> CallSites = new();
 
     private readonly Channel<MagpieEvent> _channel;
     private readonly IDisposable _subscription;
@@ -29,7 +29,7 @@ internal sealed class EventListener : IEventListener
     {
         _channel = Channel.CreateUnbounded<MagpieEvent>();
         _subscription = events.Subscribe(new FilteredObserver(_channel, eventName, localNodeId));
-        CallSites[this] = callSite ?? UnlabelledCallSite;
+        CallSites.Add(this, callSite ?? UnlabelledCallSite);
     }
 
     internal static IEnumerable<Measurement<long>> MeasureChannelDepths()
@@ -59,7 +59,7 @@ internal sealed class EventListener : IEventListener
 
     public void Dispose()
     {
-        CallSites.TryRemove(this, out _);
+        CallSites.Remove(this);
         _subscription.Dispose();
         _channel.Writer.TryComplete();
     }
@@ -70,8 +70,8 @@ internal sealed class EventListener : IEventListener
         return ValueTask.CompletedTask;
     }
 
-    private sealed class FilteredObserver(Channel<MagpieEvent> channel, string? eventName, string? localNodeId)
-        : IObserver<MagpieEvent>
+    private sealed class FilteredObserver(
+        Channel<MagpieEvent> channel, string? eventName, string? localNodeId) : IObserver<MagpieEvent>
     {
         public void OnNext(MagpieEvent value)
         {

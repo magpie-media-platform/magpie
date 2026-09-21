@@ -1,38 +1,107 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Config;
 using Magpie.Sdk.Jobs;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Jobs.Runtime;
 
 internal sealed class ProgressReporter(
     IJobExecutionScopeFactory jobExecutionScopes,
-    IJobExecutionRepository executions,
-    ILogger<ProgressReporter> logger) : IProgressReporter
+    IServiceScopeFactory scopeFactory,
+    ILogger<ProgressReporter> logger,
+    JobRuntimeOptions options) : IProgressReporter, IAsyncDisposable
 {
+    private readonly Lock _gate = new();
+
+    private readonly TimeSpan _flushTimeout = options.ProgressFlushTimeout;
+
+    private Task _writes = Task.CompletedTask;
+
+    private (Guid ExecutionId, double? Percentage, string? Message)? _pending;
+
+    private bool _draining;
+
     public void Report(double? percentage, string? message)
     {
-        _ = UpdateProgressAsync(percentage, message);
-    }
-
-    private async Task UpdateProgressAsync(double? percentage, string? message)
-    {
-        var executionId = jobExecutionScopes.CurrentExecutionId;
-        if (executionId is null)
+        if (jobExecutionScopes.CurrentExecutionId is not { } executionId)
         {
             return;
         }
 
+        lock (_gate)
+        {
+            _pending = (executionId, percentage, message);
+            if (_draining)
+            {
+                return;
+            }
+
+            _draining = true;
+            _writes = DrainAsync();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Task writes;
+        lock (_gate)
+        {
+            writes = _writes;
+        }
+
         try
         {
-            await executions.UpdateProgressAsync(
-                executionId.Value,
-                percentage.HasValue ? percentage.Value * 100 : null,
-                message).ConfigureAwait(false);
+            await writes.WaitAsync(_flushTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger.LogWarning(
+                "The reporter stopped waiting for the progress writes after {FlushTimeout}",
+                _flushTimeout);
+        }
+    }
+
+    private async Task DrainAsync()
+    {
+        while (true)
+        {
+            (Guid ExecutionId, double? Percentage, string? Message) next;
+            lock (_gate)
+            {
+                if (_pending is not { } pending)
+                {
+                    _draining = false;
+                    return;
+                }
+
+                next = pending;
+                _pending = null;
+            }
+
+            await WriteAsync(next.ExecutionId, next.Percentage, next.Message).ConfigureAwait(false);
+        }
+    }
+
+    private async Task WriteAsync(Guid executionId, double? percentage, string? message)
+    {
+        try
+        {
+            var scope = scopeFactory.CreateAsyncScope();
+            await using var scopeHandle = scope.ConfigureAwait(false);
+
+            await scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>()
+                .UpdateProgressAsync(
+                    executionId,
+                    percentage.HasValue ? percentage.Value * 100 : null,
+                    message)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Config;
 using Magpie.Core.Events;
 using Magpie.Core.Jobs;
 using Magpie.Core.Observability;
@@ -25,7 +26,6 @@ using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Releases;
@@ -40,7 +40,7 @@ internal sealed class ReleaseSearchService(
     IEnumerable<IRuntimeIndexerIntegrationFactory> runtimeIndexerIntegrationFactories,
     IReleaseRepository releaseRepository,
     IReleaseScopeRepository releaseScopeRepository,
-    IDownloadRepository downloadRepository,
+    ReleaseBlockList releaseBlockList,
     IDownloadClientRepository downloadClientRepository,
     IContentTypeRegistry contentTypeRegistry,
     IRootFolderService rootFolderService,
@@ -49,27 +49,19 @@ internal sealed class ReleaseSearchService(
     IJobManager jobManager,
     ITransactionManager transactionManager,
     IEventBus eventBus,
-    IConfiguration configuration,
     IReleaseSearchQueryExecutor queryExecutor,
-    IReleaseService releaseService,
     IReleaseEvaluationService releaseEvaluationService,
     IEnumerable<IReleaseComparer> releaseComparers,
+    JobRuntimeOptions jobRuntimeOptions,
+    SearchOptions searchOptions,
     TimeProvider timeProvider,
     ILogger<ReleaseSearchService> logger) : IReleaseSearchService
 {
-    private static readonly TimeSpan LeafImportSuppressionWindow = TimeSpan.FromHours(12);
-
-    private const string AutoGrabContentItemIdParameter = "contentItemId";
-
-    private const string AutoGrabJobType = "ReleaseAutoGrabItem";
-
-    private static readonly TimeSpan DefaultSearchCoalescingWindow = TimeSpan.FromMinutes(15);
-
-    private static readonly TimeSpan DefaultMinimumSearchAge = TimeSpan.FromHours(24);
-
-    private const int DefaultBackpressureThreshold = 50;
-
     private const int PageSize = 200;
+
+    private const int InteractiveIndexerResultBudget = 200;
+
+    private const int AutomaticIndexerResultBudget = 20;
 
     private enum SearchSkipReason
     {
@@ -77,55 +69,75 @@ internal sealed class ReleaseSearchService(
         RecentlyCompleted
     }
 
-    private TimeSpan SearchCoalescingWindow
+    private static string StableKey(Release release)
     {
-        get
-        {
-            var raw = configuration["Magpie:Search:CoalescingWindowSeconds"];
-            return int.TryParse(raw, out var seconds) && seconds > 0
-                ? TimeSpan.FromSeconds(seconds)
-                : DefaultSearchCoalescingWindow;
-        }
+        var identity = release.IdentityKeys
+            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
+            .OrderBy(key => key.Authority, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(key => key.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(key => $"{key.Authority!.Trim().ToUpperInvariant()}:{key.Value!.Trim().ToUpperInvariant()}")
+            .FirstOrDefault();
+        return identity ?? $"{release.IndexerId:D}:{release.ExternalId}:{release.Title}";
     }
 
-    private TimeSpan MinimumSearchAge
+    private static bool RefersToSameRelease(Release left, Release right)
     {
-        get
+        var leftKeys = NormalizedIdentityKeys(left);
+        var rightKeys = NormalizedIdentityKeys(right);
+        var leftImmutableKeys = ImmutableIdentityKeys(leftKeys);
+        var rightImmutableKeys = ImmutableIdentityKeys(rightKeys);
+        if (leftImmutableKeys.Count > 0 && rightImmutableKeys.Count > 0)
         {
-            var raw = configuration["Magpie:Search:MinimumSearchAgeHours"];
-            return int.TryParse(raw, out var hours) && hours > 0
-                ? TimeSpan.FromHours(hours)
-                : DefaultMinimumSearchAge;
+            return leftImmutableKeys.Overlaps(rightImmutableKeys);
         }
+
+        return leftKeys.Overlaps(rightKeys) || SourceIdentities(left).Overlaps(SourceIdentities(right));
     }
 
-    private int BackpressureThreshold
+    private static HashSet<(string Authority, string Value)> NormalizedIdentityKeys(Release release) =>
+        release.IdentityKeys
+            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
+            .Select(key => (
+                key.Authority.Trim().ToLowerInvariant(),
+                key.Value.Trim().ToLowerInvariant()))
+            .ToHashSet();
+
+    private static HashSet<(string Authority, string Value)> ImmutableIdentityKeys(
+        HashSet<(string Authority, string Value)> keys) =>
+        keys.Where(key => key.Authority != "fallback" &&
+            !key.Authority.StartsWith("indexer:", StringComparison.Ordinal)).ToHashSet();
+
+    private static HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> SourceIdentities(Release release)
     {
-        get
+        var identities = new HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)>();
+        foreach (var source in release.Sources)
         {
-            var raw = configuration["Magpie:Search:BackpressureThreshold"];
-            return int.TryParse(raw, out var threshold) && threshold > 0
-                ? threshold
-                : DefaultBackpressureThreshold;
+            AddSourceIdentity(identities, source.IndexerId, source.ExternalId, source.InfoUrl);
         }
+
+        AddSourceIdentity(identities, release.IndexerId, release.ExternalId, release.InfoUrl);
+        return identities;
     }
 
-    private static bool IsAcceptableUpgradeOverCurrentFile(
-        Release release,
-        ReleaseAssessment assessment,
-        ReleaseEvaluationContext context)
+    private static void AddSourceIdentity(
+        HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> identities,
+        Guid? indexerId,
+        string? externalId,
+        Uri? infoUrl)
     {
-        if (context.CurrentFileQualityRank is not { } floor)
+        if (indexerId is not { } value)
         {
-            return true;
+            return;
         }
 
-        var parsedTitle = new ParsedReleaseTitle(release.Title);
-        return assessment.MatchedRankOrdinal is { } ordinal && ordinal < floor ||
-            assessment.MatchedRankOrdinal == floor &&
-            context.CurrentFileRevision is { } importedRevision &&
-            parsedTitle.Revision.Version > importedRevision.Version &&
-            string.Equals(parsedTitle.Group, context.CurrentFileGroup, StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(externalId))
+        {
+            identities.Add((value, externalId, null));
+        }
+        else if (infoUrl is not null)
+        {
+            identities.Add((value, null, infoUrl));
+        }
     }
 
     private static Dictionary<Guid, string> IndexerNamesById(IEnumerable<Indexer> indexers) =>
@@ -362,9 +374,6 @@ internal sealed class ReleaseSearchService(
         return !rightEnumerator.MoveNext();
     }
 
-    private bool IsDuplicateCandidate(Release release, Release candidate)
-        => release.RefersToSameRelease(candidate);
-
     public async Task<IReadOnlyList<InteractiveSearchCandidate>?> SearchInteractiveAsync(
         Guid contentHierarchyItemId,
         CancellationToken cancellationToken = default)
@@ -413,7 +422,7 @@ internal sealed class ReleaseSearchService(
             RecordTurn("no_plan");
             logger.LogInformation(
                 "The interactive search built no query plan for content hierarchy item " +
-                "{ContentHierarchyItemId}. No indexer accepted the search terms of this item",
+                "{ContentHierarchyItemId} because no indexer accepted its search terms",
                 contentHierarchyItemId);
             return [];
         }
@@ -445,78 +454,18 @@ internal sealed class ReleaseSearchService(
 
         var coalesced =
             new List<(Release Release, IReadOnlyList<ContentFact> ReleaseFacts, ReleaseAssessment Assessment)>();
-        IReadOnlyList<ReleaseSearchPhase> executedPhases;
-        if (queryExecutor is ReleaseSearchQueryExecutor { CanExecutePlan: true } engine)
-        {
-            var execution = await engine.ExecutePlanAsync(
-                plan,
-                categories,
-                applicableIndexerIds,
-                context,
-                automatic: false,
-                maximumResults: PageSize,
-                cancellationToken: cancellationToken,
-                useCache: false).ConfigureAwait(false);
-            executedPhases = execution.ExecutedRoutes;
-            coalesced.AddRange(execution.Results.Select(result =>
-                (result.Release, result.ReleaseFacts, result.Assessment)));
-        }
-        else
-        {
-            executedPhases = await queryExecutor.ExecuteAsync(
-                plan,
-                categories,
-                applicableIndexerIds,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-            foreach (var phase in executedPhases)
-            {
-                foreach (var release in phase.Releases)
-                {
-                    ReleaseAssessment assessment;
-                    try
-                    {
-                        assessment = releaseEvaluationService.AssessMatch(release, phase.ReleaseFacts, context);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Evaluation of interactive release {ReleaseTitle} failed", release.Title);
-                        assessment = new ReleaseAssessment { MatchResult = ReleaseMatchResult.NoMatch };
-                    }
-
-                    var existingIndex = coalesced.FindIndex(
-                        existing => IsDuplicateCandidate(release, existing.Release));
-                    var disposition = "added";
-                    if (existingIndex < 0)
-                    {
-                        coalesced.Add((release, phase.ReleaseFacts, assessment));
-                    }
-                    else if (assessment.MatchResult > coalesced[existingIndex].Assessment.MatchResult)
-                    {
-                        coalesced[existingIndex] = (release, phase.ReleaseFacts, assessment);
-                        disposition = "replaced";
-                    }
-                    else
-                    {
-                        disposition = "duplicate-weaker";
-                    }
-
-                    if (logger.IsEnabled(LogLevel.Trace))
-                    {
-                        logger.LogTrace(
-                            "EVAL ReleaseSearch {EvaluationJson}",
-                            JsonSerializer.Serialize(new
-                            {
-                                Mode = "Interactive",
-                                ContentHierarchyItemId = contentHierarchyItemId,
-                                PlanNodeId = (string?)null,
-                                phase.ReleaseFacts,
-                                MatchResult = assessment.MatchResult.ToString(),
-                                Disposition = disposition,
-                            }));
-                    }
-                }
-            }
-        }
+        var execution = await queryExecutor.ExecutePlanAsync(
+            plan,
+            categories,
+            applicableIndexerIds,
+            context,
+            automatic: false,
+            maximumResults: InteractiveIndexerResultBudget,
+            cancellationToken: cancellationToken,
+            useCache: false).ConfigureAwait(false);
+        var executedPhases = execution.ExecutedRoutes;
+        coalesced.AddRange(execution.Results.Select(result =>
+            (result.Release, result.ReleaseFacts, result.Assessment)));
 
         var candidates = new List<(InteractiveSearchCandidate Candidate, int EffectiveQualityRank)>();
         foreach (var result in coalesced)
@@ -528,7 +477,7 @@ internal sealed class ReleaseSearchService(
                 release,
                 result.Assessment.MatchResult,
                 ToScore(result.Assessment, release, context.QualityTierListId));
-            candidates.Add((candidate, EffectiveQualityRankFor(result.Assessment, context)));
+            candidates.Add((candidate, releaseEvaluationService.EffectiveQualityRank(result.Assessment, context)));
         }
 
         var orderedCandidates = Rank(candidates);
@@ -554,7 +503,6 @@ internal sealed class ReleaseSearchService(
         var skipReason = await ResolveRecentSearchSkipReasonAsync(
             contentHierarchyItemId,
             currentExecutionId,
-            immediateOverride,
             cancellationToken).ConfigureAwait(false);
         if (skipReason is not null)
         {
@@ -571,8 +519,8 @@ internal sealed class ReleaseSearchService(
             progress?.Report(
                 1,
                 skipReason is SearchSkipReason.Active
-                    ? "The search stopped because a recent search for this item is queued or active."
-                    : "The search stopped because a recent search completed during the coalescing period.");
+                    ? "Skipped: a recent search for this item is queued or active."
+                    : "Skipped: a recent search for this item completed inside the coalescing window.");
             return;
         }
 
@@ -581,8 +529,8 @@ internal sealed class ReleaseSearchService(
         if (item is null)
         {
             logger.LogInformation(
-                "The release search skipped content hierarchy item {ContentHierarchyItemId}. This item " +
-                "does not exist any more",
+                "The release search skipped content hierarchy item {ContentHierarchyItemId} because it " +
+                "no longer exists",
                 contentHierarchyItemId);
             progress?.Report(1, "The search stopped because the content item does not exist.");
             return;
@@ -594,15 +542,14 @@ internal sealed class ReleaseSearchService(
         if (childCounts.TryGetValue(item.Id, out var childCount) && childCount > 0)
         {
             var subtree = await LoadSubtreeAsync(item.Id, cancellationToken).ConfigureAwait(false);
-            var selfEnqueuedChildIds = await FanOutNodeAsync(item, subtree, userId, correlationId, cancellationToken)
+            var fanOut = await FanOutNodeAsync(item, subtree, userId, correlationId, cancellationToken)
                 .ConfigureAwait(false);
-            if (await CanEscalateAsync(item, subtree, selfEnqueuedChildIds, cancellationToken).ConfigureAwait(false))
+            if (await CanEscalateAsync(item, subtree, fanOut.ChildNodeIds, cancellationToken).ConfigureAwait(false))
             {
                 await RunSearchTurnAsync(
                     item,
                     userId,
                     correlationId,
-                    immediateOverride,
                     progress,
                     escalationTurn: true,
                     cancellationToken)
@@ -610,7 +557,14 @@ internal sealed class ReleaseSearchService(
             }
             else
             {
-                progress?.Report(1, "The search queued the child searches.");
+                progress?.Report(
+                    1,
+                    fanOut.QueuedCount switch
+                    {
+                        0 => "The search did not queue any child searches.",
+                        1 => "The search queued 1 child search.",
+                        _ => $"The search queued {fanOut.QueuedCount} child searches."
+                    });
             }
 
             return;
@@ -619,7 +573,7 @@ internal sealed class ReleaseSearchService(
         if (!immediateOverride && !NeedsAcquisition(item))
         {
             logger.LogInformation(
-                "The release search skipped content hierarchy item {ContentHierarchyItemId}. This item " +
+                "The release search skipped content hierarchy item {ContentHierarchyItemId} because it " +
                 "does not need acquisition",
                 item.Id);
             progress?.Report(1, "The search stopped because the content item does not need an acquisition.");
@@ -630,7 +584,6 @@ internal sealed class ReleaseSearchService(
             item,
             userId,
             correlationId,
-            immediateOverride,
             progress,
             escalationTurn: false,
             cancellationToken)
@@ -640,23 +593,27 @@ internal sealed class ReleaseSearchService(
     private static bool NeedsAcquisition(ContentHierarchyItem item) =>
         item.EffectiveMonitoring && IsUnfulfilledLeaf(item);
 
-    private int EffectiveQualityRankFor(ReleaseAssessment result, ReleaseEvaluationContext context)
+    private IIndexerIntegration? ResolveIntegration(Indexer? indexer)
     {
-        var actual = result.MatchedRankOrdinal ?? int.MaxValue;
-        var cutoffs = context.QualityTierList?.QualityTierRanks
-            .Where(rank => rank.IsCutoff)
-            .Select(rank => rank.Ordinal)
-            .ToList() ?? [];
-        var rankOrdinal = actual;
-        if (cutoffs.Count > 0)
+        if (indexer is null)
         {
-            var ceiling = context.CurrentFileQualityRank is { } current
-                ? cutoffs.Where(cutoff => cutoff < current).DefaultIfEmpty(cutoffs.Min()).Max()
-                : cutoffs.Max();
-            rankOrdinal = Math.Max(actual, ceiling);
+            return null;
         }
 
-        return rankOrdinal;
+        var native = indexerIntegrations.LastOrDefault(integration =>
+            string.Equals(integration.ProviderType, indexer.ProviderType, StringComparison.Ordinal));
+        if (native is not null)
+        {
+            return native;
+        }
+
+        if (string.IsNullOrWhiteSpace(indexer.DefinitionType) || string.IsNullOrWhiteSpace(indexer.SchemaData))
+        {
+            return null;
+        }
+
+        return runtimeIndexerIntegrationFactories.LastOrDefault(factory =>
+            string.Equals(factory.DefinitionType, indexer.DefinitionType, StringComparison.Ordinal))?.Create(indexer);
     }
 
     private IReadOnlyList<InteractiveSearchCandidate> Rank(
@@ -764,8 +721,8 @@ internal sealed class ReleaseSearchService(
                     return comparison != 0
                         ? comparison
                         : string.CompareOrdinal(
-                            StableReleaseKey(left.Candidate.Release),
-                            StableReleaseKey(right.Candidate.Release));
+                            StableKey(left.Candidate.Release),
+                            StableKey(right.Candidate.Release));
                 });
                 ranked.AddRange(tieGroup);
             }
@@ -809,22 +766,10 @@ internal sealed class ReleaseSearchService(
         return [.. ranked.Select(candidate => candidate.Candidate)];
     }
 
-    private string StableReleaseKey(Release release)
-    {
-        var identity = release.IdentityKeys
-            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
-            .OrderBy(key => key.Authority, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(key => key.Value, StringComparer.OrdinalIgnoreCase)
-            .Select(key => $"{key.Authority!.Trim().ToUpperInvariant()}:{key.Value!.Trim().ToUpperInvariant()}")
-            .FirstOrDefault();
-        return identity ?? $"{release.IndexerId:D}:{release.ExternalId}:{release.Title}";
-    }
-
     private async Task RunSearchTurnAsync(
         ContentHierarchyItem item,
         Guid? userId,
         Guid? correlationId,
-        bool immediateOverride,
         IProgressReporter? progress,
         bool escalationTurn,
         CancellationToken cancellationToken)
@@ -865,7 +810,7 @@ internal sealed class ReleaseSearchService(
         {
             RecordTurn("no_target");
             logger.LogInformation(
-                "The release search skipped content hierarchy item {ContentHierarchyItemId}. The search " +
+                "The release search skipped content hierarchy item {ContentHierarchyItemId} because it " +
                 "resolved no target",
                 item.Id);
             progress?.Report(1, "The search stopped because the content item has no search target.");
@@ -877,8 +822,8 @@ internal sealed class ReleaseSearchService(
         {
             RecordTurn("no_plan");
             logger.LogInformation(
-                "The release search skipped content hierarchy item {ContentHierarchyItemId}. The search " +
-                "resolved no terms",
+                "The release search skipped content hierarchy item {ContentHierarchyItemId} because it " +
+                "resolved no search terms",
                 item.Id);
             progress?.Report(1, "The search stopped because the content item has no search terms.");
             return;
@@ -896,8 +841,8 @@ internal sealed class ReleaseSearchService(
         {
             RecordTurn("no_plan");
             logger.LogInformation(
-                "The release search skipped content hierarchy item {ContentHierarchyItemId}. The search " +
-                "built no query plan, because no indexer accepted the terms of this item",
+                "The release search skipped content hierarchy item {ContentHierarchyItemId} because no " +
+                "indexer accepted its search terms",
                 item.Id);
             progress?.Report(1, "The search stopped because the content item has no search terms.");
             return;
@@ -941,50 +886,33 @@ internal sealed class ReleaseSearchService(
 
         var retainedReleaseIds = new HashSet<Guid>();
         var rejectedReleaseIds = new HashSet<Guid>();
-        var autoGrabHierarchyItemIds = new HashSet<Guid>();
-        ReleaseQueryExecution? engineExecution = null;
-        IReadOnlyList<ReleaseSearchPhase> result;
-        if (queryExecutor is ReleaseSearchQueryExecutor { CanExecutePlan: true } engine)
+        var actionableHierarchyItemIds = new HashSet<Guid>();
+        var engineExecution = await queryExecutor.ExecutePlanAsync(
+            plan,
+            categories,
+            applicableIndexerIds,
+            context,
+            automatic: true,
+            maximumResults: AutomaticIndexerResultBudget,
+            (phaseIndex, name) => progress?.ReportFraction(
+                phaseIndex,
+                Math.Max(plan.Count, 1),
+                $"The search will query indexer {name}."),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var result = engineExecution.ExecutedRoutes;
+        if (engineExecution.ConnectionsAttempted == 0)
         {
-            engineExecution = await engine.ExecutePlanAsync(
-                plan,
-                categories,
-                applicableIndexerIds,
-                context,
-                automatic: true,
-                maximumResults: 20,
-                (phaseIndex, name) => progress?.ReportFraction(
-                    phaseIndex,
-                    Math.Max(plan.Count, 1),
-                    $"The search will query indexer {name}."),
-                cancellationToken).ConfigureAwait(false);
-            result = engineExecution.ExecutedRoutes;
-            if (engineExecution.ConnectionsAttempted == 0)
-            {
-                activity?.SetTag("terminal_reason", engineExecution.Warning ?? "no-execution");
-                RecordTurn("completed");
-                logger.LogInformation(
-                    "The release search for {ContentHierarchyItemId} issued no queries ({Reason})",
-                    item.Id,
-                    engineExecution.Warning ?? "no-execution");
-                progress?.Report(1, "The search completed without changing saved results because no query executed.");
-                return;
-            }
-        }
-        else
-        {
-            result = await queryExecutor.ExecuteAsync(
-                plan,
-                categories,
-                applicableIndexerIds,
-                (phaseIndex, name) => progress?.ReportFraction(
-                    phaseIndex,
-                    plan.Count,
-                    $"The search will query indexer {name}."),
-                cancellationToken).ConfigureAwait(false);
+            activity?.SetTag("terminal_reason", engineExecution.Warning ?? "no-execution");
+            RecordTurn("completed");
+            logger.LogInformation(
+                "The release search for {ContentHierarchyItemId} issued no queries ({Reason})",
+                item.Id,
+                engineExecution.Warning ?? "no-execution");
+            progress?.Report(1, "The search completed without changing saved results because no query executed.");
+            return;
         }
 
-        var releaseCount = engineExecution?.Results.Count ?? result.Sum(phase => phase.Releases.Count);
+        var releaseCount = engineExecution.Results.Count;
         activity?.SetTag("release_count", releaseCount);
 
         using (var persistActivity = ReleaseTelemetry.Source.StartActivity("PersistResults"))
@@ -996,18 +924,16 @@ internal sealed class ReleaseSearchService(
                 context,
                 retainedReleaseIds,
                 rejectedReleaseIds,
-                autoGrabHierarchyItemIds,
+                actionableHierarchyItemIds,
                 userId,
-                engineExecution?.Results,
+                engineExecution.Results,
                 cancellationToken).ConfigureAwait(false);
             persistActivity?.SetTag("retained_count", retainedReleaseIds.Count);
             persistActivity?.SetTag("rejected_count", rejectedReleaseIds.Count);
         }
 
-        var searchCompleted = engineExecution is not null
-            ? engineExecution.ConnectionsSucceeded > 0
-            : result.All(phase => phase.ConnectionsAttempted == 0 || phase.ConnectionsSucceeded > 0) &&
-                result.Sum(phase => phase.ConnectionsSucceeded) > 0;
+        var searchCompleted = engineExecution.ConnectionsSucceeded > 0;
+        var searchPartial = engineExecution.Partial;
         if (!searchCompleted)
         {
             var connectionsAttempted = result.Sum(phase => phase.ConnectionsAttempted);
@@ -1020,7 +946,7 @@ internal sealed class ReleaseSearchService(
 
             RecordTurn("completed");
             logger.LogInformation(
-                "The release search for {ContentHierarchyItemId} issued no queries. The search is complete",
+                "The release search for {ContentHierarchyItemId} completed with no queries issued",
                 item.Id);
             progress?.Report(1, "The search completed without a query because no indexer was applicable.");
             return;
@@ -1029,32 +955,18 @@ internal sealed class ReleaseSearchService(
         cancellationToken.ThrowIfCancellationRequested();
         progress?.Report(null, "The search will save the results.");
 
-        var autoGrabTargets = escalationTurn ? new HashSet<Guid>() : autoGrabHierarchyItemIds;
+        var actionableTargets = escalationTurn ? new HashSet<Guid>() : actionableHierarchyItemIds;
         await transactionManager.ExecuteWithTransactionAsync(
             async _ =>
             {
-                var scopedReleases = new List<ReleaseScope>();
-                var pageNumber = 1;
-                while (true)
-                {
-                    var page = await releaseScopeRepository.QueryAsync(
-                        new ReleaseScopeQuery { ContentHierarchyItemId = item.Id },
-                        new() { PageNumber = pageNumber, PageSize = PageSize },
-                        null,
-                        cancellationToken).ConfigureAwait(false);
-                    var pageItems = page.Items.ToList();
-                    scopedReleases.AddRange(pageItems);
-                    if (pageItems.Count < PageSize)
-                    {
-                        break;
-                    }
-
-                    pageNumber++;
-                }
+                var scopedReleases = await releaseScopeRepository.QueryAllAsync(
+                    new ReleaseScopeQuery { ContentHierarchyItemId = item.Id },
+                    sort: null,
+                    cancellationToken).ConfigureAwait(false);
 
                 foreach (var scope in scopedReleases.Where(scope =>
                     rejectedReleaseIds.Contains(scope.ReleaseId) ||
-                    !retainedReleaseIds.Contains(scope.ReleaseId)))
+                    (!searchPartial && !retainedReleaseIds.Contains(scope.ReleaseId))))
                 {
                     await releaseScopeRepository.DeleteAsync(scope.Id, null, cancellationToken)
                         .ConfigureAwait(false);
@@ -1067,11 +979,9 @@ internal sealed class ReleaseSearchService(
                     postCommitCancellationToken => FinalizeSearchAsync(
                         item,
                         contentItemId,
-                        autoGrabTargets,
+                        actionableTargets,
                         releaseCount,
-                        userId,
                         correlationId,
-                        immediateOverride,
                         postCommitCancellationToken),
                     cancellationToken).ConfigureAwait(false);
             },
@@ -1081,7 +991,7 @@ internal sealed class ReleaseSearchService(
         progress?.Report(1, "The release search completed.");
     }
 
-    private async Task<HashSet<Guid>> FanOutNodeAsync(
+    private async Task<(HashSet<Guid> ChildNodeIds, int QueuedCount)> FanOutNodeAsync(
         ContentHierarchyItem node,
         IReadOnlyList<ContentHierarchyItem> subtree,
         Guid? userId,
@@ -1089,7 +999,7 @@ internal sealed class ReleaseSearchService(
         CancellationToken cancellationToken)
     {
         var leafSearchVolume = await CountActiveLeafSearchesAsync(cancellationToken).ConfigureAwait(false);
-        var underLeafBudget = leafSearchVolume <= BackpressureThreshold;
+        var underLeafBudget = leafSearchVolume <= searchOptions.BackpressureThreshold;
 
         var parentById = subtree.ToDictionary(item => item.Id, item => item.ParentId);
         var parentIds = subtree
@@ -1128,15 +1038,16 @@ internal sealed class ReleaseSearchService(
         if (!underLeafBudget)
         {
             logger.LogWarning(
-                "The fan-out for content hierarchy item {ContentHierarchyItemId} deferred the leaf searches. " +
-                "The downstream leaf search volume {LeafSearchVolume} is more than threshold {Threshold}",
+                "The fan-out for content hierarchy item {ContentHierarchyItemId} deferred leaf searches " +
+                "because volume {LeafSearchVolume} exceeds threshold {Threshold}",
                 node.Id,
                 leafSearchVolume,
-                BackpressureThreshold);
-            return residualChildIds;
+                searchOptions.BackpressureThreshold);
+            return (residualChildIds, residualChildIds.Count);
         }
 
-        var searchedBefore = timeProvider.GetUtcNow().UtcDateTime - MinimumSearchAge;
+        var queuedCount = residualChildIds.Count;
+        var searchedBefore = timeProvider.GetUtcNow().UtcDateTime - searchOptions.MinimumSearchAge;
         var leafChildren = await LoadUnfulfilledLeafChildrenAsync(node.Id, cancellationToken).ConfigureAwait(false);
         foreach (var leaf in leafChildren)
         {
@@ -1151,86 +1062,59 @@ internal sealed class ReleaseSearchService(
                     correlationId,
                     cancellationToken)
                     .ConfigureAwait(false);
+                queuedCount++;
             }
         }
 
-        return residualChildIds;
+        return (residualChildIds, queuedCount);
     }
 
     private async Task<int> CountActiveLeafSearchesAsync(CancellationToken cancellationToken)
     {
-        var since = timeProvider.GetUtcNow().UtcDateTime.AddHours(-1);
-        var count = 0;
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await jobExecutionRepository.QueryAsync(
-                new JobExecutionQuery
-                {
-                    JobType = MagpieJobs.Types.ReleaseSearchItem,
-                    Timestamp = new Range<DateTime>(since, null),
-                    Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
-                },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            count += pageItems.Count(execution =>
-                !(execution.Parameters.TryGetValue(MagpieJobs.Parameters.SearchKind, out var kind) &&
-                    kind == MagpieJobs.ParameterValues.NodeSearchKind));
-            if (pageItems.Count < PageSize)
+        var liveSince = timeProvider.GetUtcNow().UtcDateTime - jobRuntimeOptions.RunningStaleCutoff;
+        var executions = await jobExecutionRepository.QueryAllAsync(
+            new JobExecutionQuery
             {
-                break;
-            }
+                JobType = MagpieJobs.Types.ReleaseSearchItem,
+                Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
+            },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
-            pageNumber++;
-        }
-
-        return count;
+        return executions.Count(execution =>
+            !(execution.Parameters.TryGetValue(MagpieJobs.Parameters.SearchKind, out var kind) &&
+                kind == MagpieJobs.ParameterValues.NodeSearchKind) &&
+            (execution.Status != JobExecutionStatus.Running || execution.LastHeartbeat >= liveSince));
     }
 
     private async Task<IReadOnlyList<ContentHierarchyItem>> LoadUnfulfilledLeafChildrenAsync(
         Guid nodeId,
         CancellationToken cancellationToken)
     {
-        var items = new List<ContentHierarchyItem>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new()
-                {
-                    ParentId = new()
-                    {
-                        And = [new()
-                        {
-                            Operator = CriteriaValueOperator.Equals,
-                            Value = nodeId
-                        }],
-                    },
-                    LeafOnly = true,
-                    EffectiveMonitoring = true,
-                    Fulfillment = new()
-                    {
-                        And = [new()
-                        {
-                            Operator = CriteriaValueOperator.In,
-                            Values = [FulfillmentStatus.Missing, FulfillmentStatus.Upgradable],
-                        }],
-                    },
-                },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            items.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
+        var items = await contentHierarchyItemRepository.QueryAllAsync(
+            new()
             {
-                break;
-            }
-
-            pageNumber++;
-        }
+                ParentId = new()
+                {
+                    And = [new()
+                    {
+                        Operator = CriteriaValueOperator.Equals,
+                        Value = nodeId
+                    }],
+                },
+                LeafOnly = true,
+                EffectiveMonitoring = true,
+                Fulfillment = new()
+                {
+                    And = [new()
+                    {
+                        Operator = CriteriaValueOperator.In,
+                        Values = [FulfillmentStatus.Missing, FulfillmentStatus.Upgradable],
+                    }],
+                },
+            },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         return items;
     }
@@ -1281,7 +1165,7 @@ internal sealed class ReleaseSearchService(
         IReadOnlySet<Guid> selfEnqueuedChildIds,
         CancellationToken cancellationToken)
     {
-        var searchedBefore = timeProvider.GetUtcNow().UtcDateTime - MinimumSearchAge;
+        var searchedBefore = timeProvider.GetUtcNow().UtcDateTime - searchOptions.MinimumSearchAge;
         if (node.ContentItem?.DateLastSearched is { } nodeLastSearched && nodeLastSearched >= searchedBefore)
         {
             return false;
@@ -1332,8 +1216,8 @@ internal sealed class ReleaseSearchService(
         }
 
         var autoGrabTargets = await LoadJobTargetIdsAsync(
-            AutoGrabJobType,
-            AutoGrabContentItemIdParameter,
+            MagpieJobs.Types.ReleaseAutoGrabItem,
+            MagpieJobs.Parameters.ContentItemId,
             cancellationToken)
             .ConfigureAwait(false);
         var downloadTargets = await LoadJobTargetIdsAsync(
@@ -1414,24 +1298,10 @@ internal sealed class ReleaseSearchService(
         Guid nodeId,
         CancellationToken cancellationToken)
     {
-        var items = new List<ContentHierarchyItem>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new() { AncestorId = nodeId },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            items.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var items = await contentHierarchyItemRepository.QueryAllAsync(
+            new() { AncestorId = nodeId },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         return items;
     }
@@ -1441,34 +1311,22 @@ internal sealed class ReleaseSearchService(
         string parameterName,
         CancellationToken cancellationToken)
     {
+        var executions = await jobExecutionRepository.QueryAllAsync(
+            new JobExecutionQuery
+            {
+                JobType = jobType,
+                Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
+            },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+
         var ids = new HashSet<Guid>();
-        var pageNumber = 1;
-        while (true)
+        foreach (var execution in executions)
         {
-            var page = await jobExecutionRepository.QueryAsync(
-                new JobExecutionQuery
-                {
-                    JobType = jobType,
-                    Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
-                },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            foreach (var execution in pageItems)
+            if (execution.Parameters.TryGetValue(parameterName, out var raw) && Guid.TryParse(raw, out var id))
             {
-                if (execution.Parameters.TryGetValue(parameterName, out var raw) && Guid.TryParse(raw, out var id))
-                {
-                    ids.Add(id);
-                }
+                ids.Add(id);
             }
-
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
         }
 
         return ids;
@@ -1501,7 +1359,7 @@ internal sealed class ReleaseSearchService(
             logger.LogWarning(
                 ex,
                 "The release search service failed to evaluate stored release exhaustion for " +
-                "{ContentHierarchyItemId}. The recent-search age gate will apply",
+                "{ContentHierarchyItemId} and falls back to the recent-search age gate",
                 leaf.Id);
             return false;
         }
@@ -1549,26 +1407,17 @@ internal sealed class ReleaseSearchService(
                 InteractiveReleaseGrabResult.InvalidRelease,
                 null,
                 $"Root folder '{rootFolderName}' has no quality tier list configured for level " +
-                $"'{hierarchyItem.Level}'. Configure a default quality tier list for this level in the root folder " +
-                "settings.");
+                $"'{hierarchyItem.Level}'.");
         }
 
-        var contentItem = hierarchyItem.ContentItem;
-        if (contentItem is null)
-        {
-            var now = timeProvider.GetUtcNow().UtcDateTime;
-            contentItem = await contentRepository.CreateAsync(
-                new ContentItem
-                {
-                    Id = Guid.NewGuid(),
-                    ContentHierarchyItemId = contentHierarchyItemId,
-                    Fulfillment = FulfillmentStatus.Missing,
-                    CreatedAt = now,
-                    CreatedByUserId = actingUserId
-                },
-                actingUserId,
-                cancellationToken).ConfigureAwait(false);
-        }
+        var contentItem = hierarchyItem.ContentItem ??
+            await contentService
+                .GetOrCreateContentItemAsync(
+                    contentHierarchyItemId,
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    actingUserId,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
 
         var clients = await downloadClientRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
         if (!clients.Any(client => client.Enabled))
@@ -1600,60 +1449,76 @@ internal sealed class ReleaseSearchService(
             },
             cancellationToken).ConfigureAwait(false);
 
-        try
+        var releaseIdParameter = persisted.Id.ToString();
+        var activeAcquisitions = await jobExecutionRepository.QueryAllAsync(
+            new()
+            {
+                JobType = MagpieJobs.Types.ReleaseDownloadItem,
+                Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
+            },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+        if (activeAcquisitions.Any(execution =>
+            execution.Parameters.TryGetValue(MagpieJobs.Parameters.ReleaseId, out var activeReleaseId) &&
+            string.Equals(activeReleaseId, releaseIdParameter, StringComparison.OrdinalIgnoreCase)))
         {
-            await releaseService.AcquireAsync(
-                persisted.Id,
-                actingUserId,
-                ignoreFailedTaint: true,
-                grabTargetContentHierarchyItemId: contentHierarchyItemId,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "The interactive grab of {ReleaseId} for {ContentHierarchyItemId} failed",
-                persisted.Id,
-                contentHierarchyItemId);
+            ReleaseTelemetry.Grabs.Add(
+                1,
+                new KeyValuePair<string, object?>("mode", "interactive"),
+                new KeyValuePair<string, object?>("outcome", "already_in_progress"));
+            return new InteractiveReleaseGrabOutcome(
+                InteractiveReleaseGrabResult.AlreadyInProgress,
+                null,
+                $"Release {persisted.Id} is already being acquired.");
         }
 
-        return new InteractiveReleaseGrabOutcome(InteractiveReleaseGrabResult.Accepted, null, null);
+        var correlationId = Guid.NewGuid();
+        var executionId = await jobManager.ExecuteAsync(
+            new JobEnqueueRequest
+            {
+                JobType = MagpieJobs.Types.ReleaseDownloadItem,
+                Parameters = new Dictionary<string, string>
+                {
+                    [MagpieJobs.Parameters.ReleaseId] = releaseIdParameter,
+                    [MagpieJobs.Parameters.ContentHierarchyItemId] = contentHierarchyItemId.ToString(),
+                    [MagpieJobs.Parameters.IgnoreFailedTaint] = bool.TrueString,
+                },
+                Mode = JobExecutionMode.Queue,
+                UserId = actingUserId,
+                CorrelationId = correlationId,
+            },
+            cancellationToken).ConfigureAwait(false);
+        var execution = await jobExecutionRepository.GetByIdAsync(executionId, cancellationToken).ConfigureAwait(false);
+        if (execution is not null && execution.CorrelationId != correlationId)
+        {
+            ReleaseTelemetry.Grabs.Add(
+                1,
+                new KeyValuePair<string, object?>("mode", "interactive"),
+                new KeyValuePair<string, object?>("outcome", "already_in_progress"));
+            return new InteractiveReleaseGrabOutcome(
+                InteractiveReleaseGrabResult.AlreadyInProgress,
+                executionId,
+                $"Release {persisted.Id} is already being acquired.");
+        }
+
+        return new InteractiveReleaseGrabOutcome(InteractiveReleaseGrabResult.Accepted, executionId, null);
     }
 
     private async Task<bool> HasExhaustedStoredReleaseCandidatesAsync(
         ContentItem candidate,
         CancellationToken cancellationToken = default)
     {
-        var releases = new List<Release>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await releaseRepository.QueryAsync(
-                new ReleaseQuery { ContentHierarchyItemId = candidate.ContentHierarchyItemId },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            releases.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var releases = await releaseRepository.QueryAllAsync(
+            new ReleaseQuery { ContentHierarchyItemId = candidate.ContentHierarchyItemId },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         if (releases.Count == 0)
         {
             return false;
         }
 
-        var blockedReleaseIds = await ResolveBlockedReleaseIdsAsync(
+        var blockedReleaseIds = await releaseBlockList.ResolveAsync(
             releases,
             candidate.ContentHierarchyItemId,
             cancellationToken).ConfigureAwait(false);
@@ -1676,54 +1541,16 @@ internal sealed class ReleaseSearchService(
             if (assessment.MatchResult is ReleaseMatchResult.Identity or ReleaseMatchResult.Confident &&
                 assessment.IsAcceptable == true &&
                 (candidate.Fulfillment != FulfillmentStatus.Upgradable ||
-                    IsAcceptableUpgradeOverCurrentFile(release, assessment, evaluationContext)))
+                    releaseEvaluationService.IsAcceptableUpgradeOverCurrentFile(
+                        assessment,
+                        release,
+                        evaluationContext)))
             {
                 return false;
             }
         }
 
         return true;
-    }
-
-    private async Task<HashSet<Guid>> ResolveBlockedReleaseIdsAsync(
-        IReadOnlyList<Release> releases,
-        Guid leafContentHierarchyItemId,
-        CancellationToken cancellationToken)
-    {
-        var blockedReleaseIds = new HashSet<Guid>();
-        foreach (var release in releases)
-        {
-            var taints = await downloadRepository
-                .ListFailedByReleaseIdentitiesAsync([.. release.IdentityKeys], null, cancellationToken)
-                .ConfigureAwait(false);
-            if (taints.Count > 0)
-            {
-                blockedReleaseIds.Add(release.Id);
-            }
-        }
-
-        var suppressions = await downloadRepository.ListImportedByContentHierarchyItemAsync(
-            leafContentHierarchyItemId,
-            timeProvider.GetUtcNow().UtcDateTime - LeafImportSuppressionWindow,
-            cancellationToken).ConfigureAwait(false);
-        var suppressedKeys = suppressions
-            .SelectMany(download => download.ReleaseIdentityKeys)
-            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
-            .Select(key => (Authority: key.Authority.Trim(), Value: key.Value.Trim()))
-            .ToHashSet();
-
-        foreach (var release in releases.Where(release => !blockedReleaseIds.Contains(release.Id)))
-        {
-            if (release.IdentityKeys.Any(key =>
-                !string.IsNullOrWhiteSpace(key.Authority) &&
-                !string.IsNullOrWhiteSpace(key.Value) &&
-                suppressedKeys.Contains((key.Authority.Trim(), key.Value.Trim()))))
-            {
-                blockedReleaseIds.Add(release.Id);
-            }
-        }
-
-        return blockedReleaseIds;
     }
 
     private async Task EnqueueChildSearchAsync(
@@ -1776,7 +1603,7 @@ internal sealed class ReleaseSearchService(
         ReleaseEvaluationContext evaluationContext,
         HashSet<Guid> retainedReleaseIds,
         HashSet<Guid> rejectedReleaseIds,
-        HashSet<Guid> autoGrabHierarchyItemIds,
+        HashSet<Guid> actionableHierarchyItemIds,
         Guid? userId,
         IReadOnlyList<EvaluatedRelease>? evaluatedResults,
         CancellationToken cancellationToken)
@@ -1813,7 +1640,8 @@ internal sealed class ReleaseSearchService(
                             {
                                 logger.LogWarning(
                                     ex,
-                                    "The evaluation of release {ReleaseTitle} failed, so the search dropped this release",
+                                    "The evaluation of release {ReleaseTitle} failed, " +
+                                    "so the search dropped this release",
                                     release.Title);
                                 if (logger.IsEnabled(LogLevel.Trace))
                                 {
@@ -1840,7 +1668,7 @@ internal sealed class ReleaseSearchService(
                             }
 
                             var existingIndex = resolved.FindIndex(existing =>
-                                IsDuplicateCandidate(release, existing.Release));
+                                RefersToSameRelease(release, existing.Release));
                             var disposition = "held";
                             if (existingIndex < 0)
                             {
@@ -1951,7 +1779,7 @@ internal sealed class ReleaseSearchService(
 
                     foreach (var scopedHierarchyItemId in upsert.ActionableNodeIds)
                     {
-                        autoGrabHierarchyItemIds.Add(scopedHierarchyItemId);
+                        actionableHierarchyItemIds.Add(scopedHierarchyItemId);
                     }
 
                     if (logger.IsEnabled(LogLevel.Trace))
@@ -1995,67 +1823,59 @@ internal sealed class ReleaseSearchService(
     private async Task FinalizeSearchAsync(
         ContentHierarchyItem item,
         Guid contentItemId,
-        HashSet<Guid> autoGrabHierarchyItemIds,
+        HashSet<Guid> actionableHierarchyItemIds,
         int releaseCount,
-        Guid? userId,
         Guid? correlationId,
-        bool immediateOverride,
         CancellationToken cancellationToken)
     {
-        foreach (var hierarchyItemId in autoGrabHierarchyItemIds)
+        var impact = new ContentEventImpact
         {
-            if (!await IsAutoGrabMonitoredAsync(hierarchyItemId, cancellationToken).ConfigureAwait(false))
-            {
-                continue;
-            }
-
-            var contentItem = hierarchyItemId == item.Id
-                ? (await contentRepository.QueryAsync(
-                    new ContentItemQuery { ContentHierarchyItemId = hierarchyItemId },
-                    new() { PageNumber = 1, PageSize = 2 },
-                    null,
-                    cancellationToken).ConfigureAwait(false)).Items.SingleOrDefault()
-                : await contentService
-                    .GetOrCreateContentItemAsync(
-                        hierarchyItemId,
-                        timeProvider.GetUtcNow().UtcDateTime,
-                        userId,
-                        cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-            if (contentItem is null)
-            {
-                continue;
-            }
-
-            await EnqueueAutoGrabAsync(
-                contentItem.Id,
-                userId,
-                correlationId,
-                immediateOverride,
-                cancellationToken).ConfigureAwait(false);
-        }
+            HierarchyItemId = item.Id,
+            ItemId = contentItemId,
+            MetadataContainerId = item.MetadataContainerId,
+            ParentId = item.ParentId,
+            ContentType = item.ContentType,
+            Level = item.Level,
+            TopLevel = item.ParentId is null,
+            RootFolderId = item.RootFolderId,
+            QualityTierListId = item.QualityTierListId,
+            Monitoring = item.EffectiveMonitoring
+        };
+        var scopeHierarchyItemIds = actionableHierarchyItemIds
+            .Where(hierarchyItemId => hierarchyItemId != item.Id)
+            .ToList();
 
         try
         {
             await eventBus
                 .PublishAsync(
-                    ReleaseEventBuilder.BuildReleaseSearchCompletedEvent(
-                        new ContentEventImpact
-                        {
-                            HierarchyItemId = item.Id,
-                            ItemId = contentItemId,
-                            MetadataContainerId = item.MetadataContainerId,
-                            ParentId = item.ParentId,
-                            ContentType = item.ContentType,
-                            Level = item.Level,
-                            TopLevel = item.ParentId is null,
-                            RootFolderId = item.RootFolderId,
-                            QualityTierListId = item.QualityTierListId,
-                            Monitoring = item.EffectiveMonitoring
-                        },
-                        releaseCount),
+                    ReleaseEventBuilder.BuildReleaseSearchCompletedEvent(impact, releaseCount),
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            if (actionableHierarchyItemIds.Contains(item.Id))
+            {
+                await eventBus
+                    .PublishAsync(
+                        ReleaseEventBuilder.BuildReleaseMatchedEvent(impact) with
+                        {
+                            CorrelationId = correlationId
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (scopeHierarchyItemIds.Count > 0)
+            {
+                await eventBus
+                    .PublishAsync(
+                        ReleaseEventBuilder.BuildReleaseScopeMatchedEvent(scopeHierarchyItemIds) with
+                        {
+                            CorrelationId = correlationId
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2065,7 +1885,7 @@ internal sealed class ReleaseSearchService(
         {
             logger.LogWarning(
                 ex,
-                "The release search failed to publish the releaseSearch.completed event for content " +
+                "The release search failed to publish its completion events for content " +
                 "hierarchy item {ContentHierarchyItemId}",
                 item.Id);
         }
@@ -2106,7 +1926,7 @@ internal sealed class ReleaseSearchService(
                 continue;
             }
 
-            var integration = ResolveIndexerIntegration(indexer);
+            var integration = ResolveIntegration(indexer);
             if (integration is null)
             {
                 continue;
@@ -2127,25 +1947,6 @@ internal sealed class ReleaseSearchService(
         }
 
         return (distinctFacetSets, supportsKeywordSearch, connectionCount);
-    }
-
-    private IIndexerIntegration? ResolveIndexerIntegration(Indexer indexer)
-    {
-        var native = indexerIntegrations.LastOrDefault(integration =>
-            string.Equals(integration.ProviderType, indexer.ProviderType, StringComparison.Ordinal));
-        if (native is not null)
-        {
-            return native;
-        }
-
-        if (string.IsNullOrWhiteSpace(indexer.DefinitionType) || string.IsNullOrWhiteSpace(indexer.SchemaData))
-        {
-            return null;
-        }
-
-        return runtimeIndexerIntegrationFactories.LastOrDefault(factory =>
-            string.Equals(factory.DefinitionType, indexer.DefinitionType, StringComparison.Ordinal))
-            ?.Create(indexer);
     }
 
     private async Task<IReadOnlyList<InteractiveSearchCandidate>> EnrichInteractiveCandidatesAsync(
@@ -2179,51 +1980,6 @@ internal sealed class ReleaseSearchService(
         }
 
         return enriched;
-    }
-
-    private async Task EnqueueAutoGrabAsync(
-        Guid contentItemId,
-        Guid? userId,
-        Guid? correlationId,
-        bool immediateOverride,
-        CancellationToken cancellationToken)
-    {
-        await jobManager.ExecuteAsync(
-            new JobEnqueueRequest
-            {
-                JobType = AutoGrabJobType,
-                Parameters = new Dictionary<string, string>
-                {
-                    [AutoGrabContentItemIdParameter] = contentItemId.ToString()
-                },
-                CorrelationId = correlationId,
-                UserId = userId,
-                Mode = JobExecutionMode.Queue,
-                ClearDeferralOnCoalesce = immediateOverride,
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        logger.LogInformation(
-            "The automatic release search enqueued a follow-on auto-grab for content item {ContentItemId}",
-            contentItemId);
-    }
-
-    private async Task<bool> IsAutoGrabMonitoredAsync(Guid contentHierarchyItemId, CancellationToken cancellationToken)
-    {
-        var item = await contentService
-            .GetAsync(contentHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
-        if (item?.EffectiveMonitoring == true)
-        {
-            return true;
-        }
-
-        logger.LogInformation(
-            "The release search skipped the auto-grab for {ContentHierarchyItemId}. This item does not " +
-            "exist, or its monitoring value [{Monitoring}] is not Active",
-            contentHierarchyItemId,
-            item?.EffectiveMonitoring);
-        return false;
     }
 
     private async Task<ReleaseUpsertResult> UpsertReleaseAsync(
@@ -2266,24 +2022,10 @@ internal sealed class ReleaseSearchService(
                 : await releaseEvaluationService
                     .ResolveScopeAsync(release, releaseFacts, searchedHierarchyItemId, cancellationToken)
                     .ConfigureAwait(false);
-        var existingScopes = new List<ReleaseScope>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await releaseScopeRepository.QueryAsync(
-                new ReleaseScopeQuery { ReleaseId = release.Id },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            existingScopes.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var existingScopes = await releaseScopeRepository.QueryAllAsync(
+            new ReleaseScopeQuery { ReleaseId = release.Id },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         var existingScopeNodeIds = existingScopes.Select(scope => scope.ContentHierarchyItemId).ToList();
         if (!releaseScope.ScopeNodeIds.Contains(searchedHierarchyItemId))
@@ -2345,37 +2087,19 @@ internal sealed class ReleaseSearchService(
     private async Task<SearchSkipReason?> ResolveRecentSearchSkipReasonAsync(
         Guid contentHierarchyItemId,
         Guid? currentExecutionId,
-        bool immediateOverride,
         CancellationToken cancellationToken)
     {
-        var since = timeProvider.GetUtcNow().UtcDateTime - SearchCoalescingWindow;
-        var includeStatuses = immediateOverride
-            ? new[] { JobExecutionStatus.Queued, JobExecutionStatus.Running }
-            : [JobExecutionStatus.Queued, JobExecutionStatus.Running, JobExecutionStatus.Completed];
+        var since = timeProvider.GetUtcNow().UtcDateTime - searchOptions.CoalescingWindow;
 
-        var recent = new List<JobExecution>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await jobExecutionRepository.QueryAsync(
-                new()
-                {
-                    JobType = MagpieJobs.Types.ReleaseSearchItem,
-                    Timestamp = new(since, null),
-                    Statuses = includeStatuses,
-                },
-                new() { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            recent.AddRange(pageItems);
-            if (pageItems.Count < PageSize)
+        var recent = await jobExecutionRepository.QueryAllAsync(
+            new()
             {
-                break;
-            }
-
-            pageNumber++;
-        }
+                JobType = MagpieJobs.Types.ReleaseSearchItem,
+                Timestamp = new(since, null),
+                Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running, JobExecutionStatus.Completed],
+            },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
 
         var self = currentExecutionId is { } selfId
             ? recent.FirstOrDefault(e => e.Id == selfId)
@@ -2413,13 +2137,14 @@ internal sealed class ReleaseSearchService(
             }
 
             logger.LogInformation(
-                "The release search skipped ReleaseSearchItem for content hierarchy item {ContentHierarchyItemId}. " +
-                "Execution {ExecutionId} ({Status}, created {CreatedAt:o}) is active, or it completed within {Window}",
+                "The release search skipped ReleaseSearchItem for content hierarchy item " +
+                "{ContentHierarchyItemId} because execution {ExecutionId} ({Status}, created {CreatedAt:o}) " +
+                "is active or completed within {Window}",
                 contentHierarchyItemId,
                 execution.Id,
                 execution.Status,
                 execution.CreatedAt,
-                SearchCoalescingWindow);
+                searchOptions.CoalescingWindow);
             return execution.Status == JobExecutionStatus.Completed
                 ? SearchSkipReason.RecentlyCompleted
                 : SearchSkipReason.Active;

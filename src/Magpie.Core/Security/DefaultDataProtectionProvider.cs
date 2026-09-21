@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 
+using Magpie.Models;
 using Magpie.Sdk.Security;
 
 using Microsoft.Extensions.Logging;
@@ -18,17 +19,17 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
     private const string KeyFileName = "integration-secret.key";
     private const string FormatPrefix = "v1";
 
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     private readonly Dictionary<string, ProtectionKey> _keysById = [];
     private readonly ILogger<DefaultDataProtectionProvider> _logger;
 
     public DefaultDataProtectionProvider(
-        IKeyStore keyStore,
+        MagpieHostEnvironment hostEnvironment,
         ILogger<DefaultDataProtectionProvider> logger)
     {
         _logger = logger;
-        var atomicKeyStore = keyStore as IAtomicKeyStore
-            ?? throw new InvalidOperationException("The default data protection provider requires atomic key storage.");
-        var keyFilePath = Path.Combine(atomicKeyStore.KeysDirectory, KeyFileName);
+        var keyFilePath = Path.Combine(hostEnvironment.DataRoot, "keys", KeyFileName);
 
         var environmentValue = Environment.GetEnvironmentVariable(EnvironmentVariableName);
         ProtectionKey? environmentKey = null;
@@ -40,7 +41,7 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
 
         if (environmentKey is null)
         {
-            var fileKey = CreateKey(LoadOrCreateFileMaterial(atomicKeyStore, keyFilePath));
+            var fileKey = CreateKey(LoadOrCreateFileMaterial(keyFilePath));
             Register(fileKey);
             ActiveKeyId = fileKey.Id;
             _logger.LogInformation(
@@ -52,7 +53,7 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
             ActiveKeyId = environmentKey.Id;
             if (File.Exists(keyFilePath))
             {
-                Register(CreateKey(ReadFileMaterial(atomicKeyStore, keyFilePath)));
+                Register(CreateKey(ReadFileMaterial(keyFilePath)));
             }
 
             _logger.LogInformation(
@@ -64,6 +65,39 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
     }
 
     public string ActiveKeyId { get; }
+
+    private static void CreateKeyFile(string path, string contents)
+    {
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new ArgumentException("Key path must include a directory.", nameof(path));
+        if (OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(directory);
+        }
+        else
+        {
+            Directory.CreateDirectory(
+                directory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        var options = new FileStreamOptions
+        {
+            Access = FileAccess.Write,
+            Mode = FileMode.CreateNew,
+            Options = FileOptions.WriteThrough,
+            Share = FileShare.None
+        };
+
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        using var stream = new FileStream(path, options);
+        stream.Write(Utf8NoBom.GetBytes(contents));
+        stream.Flush(flushToDisk: true);
+    }
 
     private static byte[] ParseEnvironmentKey(string value)
     {
@@ -84,40 +118,6 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
             throw new InvalidOperationException(
                 $"Environment variable {EnvironmentVariableName} must decode to {KeySizeBytes} bytes " +
                 $"but decoded to {material.Length}.");
-        }
-
-        return material;
-    }
-
-    private static byte[] LoadOrCreateFileMaterial(IAtomicKeyStore keyStore, string keyFilePath)
-    {
-        if (File.Exists(keyFilePath))
-        {
-            return ReadFileMaterial(keyStore, keyFilePath);
-        }
-
-        var material = RandomNumberGenerator.GetBytes(KeySizeBytes);
-        keyStore.WriteKeyFileAtomically(keyFilePath, Convert.ToBase64String(material));
-        return material;
-    }
-
-    private static byte[] ReadFileMaterial(IAtomicKeyStore keyStore, string keyFilePath)
-    {
-        byte[] material;
-        try
-        {
-            keyStore.RestrictExistingKeyFile(keyFilePath);
-            material = Convert.FromBase64String(File.ReadAllText(keyFilePath).Trim());
-        }
-        catch (FormatException ex)
-        {
-            throw new InvalidOperationException($"Data protection key file {keyFilePath} is corrupt.", ex);
-        }
-
-        if (material.Length != KeySizeBytes)
-        {
-            throw new InvalidOperationException(
-                $"Data protection key file {keyFilePath} must contain a {KeySizeBytes}-byte key.");
         }
 
         return material;
@@ -152,6 +152,48 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
 
         keyId = parts[1];
         return true;
+    }
+
+    private byte[] LoadOrCreateFileMaterial(string keyFilePath)
+    {
+        if (File.Exists(keyFilePath))
+        {
+            return ReadFileMaterial(keyFilePath);
+        }
+
+        var material = RandomNumberGenerator.GetBytes(KeySizeBytes);
+        try
+        {
+            CreateKeyFile(keyFilePath, Convert.ToBase64String(material));
+            RestrictKeyFile(keyFilePath);
+            return material;
+        }
+        catch (IOException) when (File.Exists(keyFilePath))
+        {
+            return ReadFileMaterial(keyFilePath);
+        }
+    }
+
+    private byte[] ReadFileMaterial(string keyFilePath)
+    {
+        byte[] material;
+        try
+        {
+            RestrictKeyFile(keyFilePath);
+            material = Convert.FromBase64String(File.ReadAllText(keyFilePath).Trim());
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidOperationException($"Data protection key file {keyFilePath} is corrupt.", ex);
+        }
+
+        if (material.Length != KeySizeBytes)
+        {
+            throw new InvalidOperationException(
+                $"Data protection key file {keyFilePath} must contain a {KeySizeBytes}-byte key.");
+        }
+
+        return material;
     }
 
     public string Protect(string value)
@@ -215,6 +257,23 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
     public bool TryGetKeyId(string protectedValue, out string keyId)
     {
         return TryReadEnvelope(protectedValue, out keyId, out _);
+    }
+
+    private void RestrictKeyFile(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            _logger.LogWarning(ex, "The data protection provider failed to restrict key file {FilePath}", path);
+        }
     }
 
     private void Register(ProtectionKey key)

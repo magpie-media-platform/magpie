@@ -8,5 +8,5 @@ public sealed record SystemHealth
     /// <summary>
     /// The health status text.
     /// </summary>
-    public required string Status { get; set; }
+    public required string Status { get; init; }
 }

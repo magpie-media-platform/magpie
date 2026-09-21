@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -13,6 +14,7 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Models.Patch;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -26,9 +28,65 @@ internal sealed class EventTriggerRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<EventTriggerRepository> logger,
-    TimeProvider? timeProvider = null) : IEventTriggerRepository
+    TimeProvider timeProvider) : IEventTriggerRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private static readonly (string Name, Func<EventTrigger, EventTrigger, bool> Changed)[] UpdateFields =
+    [
+        ("extensionId", (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
+        ("jobType", (current, model) => !Equals(current.JobType, model.JobType)),
+        ("scope", (current, model) => !Equals(current.Scope, model.Scope)),
+        ("eventFilter", (current, model) => !string.Equals(
+            JsonSerializer.Serialize(current.EventFilter, JsonSerializerOptions.Default),
+            JsonSerializer.Serialize(model.EventFilter, JsonSerializerOptions.Default),
+            StringComparison.Ordinal)),
+        ("name", (current, model) => !Equals(current.Name, model.Name)),
+        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
+        ("delaySeconds", (current, model) => !Equals(current.DelaySeconds, model.DelaySeconds)),
+        ("parameters", (current, model) => !ParametersEqual(current.Parameters, model.Parameters)),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
+
+    private static bool ParametersEqual(
+        IReadOnlyDictionary<string, string> current,
+        IReadOnlyDictionary<string, string> model)
+    {
+        return current.Count == model.Count &&
+            current.All(pair => model.TryGetValue(pair.Key, out var value) &&
+                string.Equals(pair.Value, value, StringComparison.Ordinal));
+    }
+
+    private static void ApplyPatch(
+        IDictionary<string, string> values,
+        DictionaryPatch<string, string, string> patch)
+    {
+        if (patch.Add is not null)
+        {
+            foreach (var (key, value) in patch.Add)
+            {
+                values[key] = value ?? string.Empty;
+            }
+        }
+
+        if (patch.Update is not null)
+        {
+            foreach (var (key, value) in patch.Update)
+            {
+                if (values.ContainsKey(key))
+                {
+                    values[key] = value ?? string.Empty;
+                }
+            }
+        }
+
+        if (patch.Remove is not null)
+        {
+            foreach (var key in patch.Remove)
+            {
+                values.Remove(key);
+            }
+        }
+    }
 
     private static void ValidateDelaySeconds(int delaySeconds)
     {
@@ -128,14 +186,17 @@ internal sealed class EventTriggerRepository(
 
             var totalCount = await triggers.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(EventTrigger).GetProperties()
+            var sortProperty = context.Model.FindEntityType(typeof(EventTrigger))!.GetProperties()
+                .Where(property => !property.IsShadowProperty() &&
+                    (property.ClrType.IsValueType || property.ClrType == typeof(string) ||
+                        property.ClrType == typeof(Uri)))
                 .Select(property => property.Name)
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 triggers = sort.Direction == SortDirection.Ascending
-                    ? triggers.OrderBy(t => EF.Property<EventTrigger>(t, sortProperty)).ThenBy(t => t.Id)
-                    : triggers.OrderByDescending(t => EF.Property<EventTrigger>(t, sortProperty)).ThenBy(t => t.Id);
+                    ? triggers.OrderBy(t => EF.Property<object>(t, sortProperty)).ThenBy(t => t.Id)
+                    : triggers.OrderByDescending(t => EF.Property<object>(t, sortProperty)).ThenBy(t => t.Id);
             }
             else
             {
@@ -217,10 +278,27 @@ internal sealed class EventTriggerRepository(
 
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(
+            var changedFields = new List<string>();
+            var applied = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
+
+                    var current = await context.EventTriggers.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    foreach (var (name, changed) in UpdateFields)
+                    {
+                        if (changed(current, model))
+                        {
+                            changedFields.Add(name);
+                        }
+                    }
 
                     var updated = await context.EventTriggers
                         .Where(t => t.Id == model.Id)
@@ -258,6 +336,16 @@ internal sealed class EventTriggerRepository(
                     return updated > 0;
                 },
                 cancellationToken).ConfigureAwait(false);
+
+            if (applied && changedFields.Count > 0)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        TriggerEventBuilder.BuildEventTriggerUpdatedEvent(model.Id, changedFields), token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return applied;
         }
         catch (Exception ex)
         {
@@ -365,32 +453,7 @@ internal sealed class EventTriggerRepository(
 
                     if (patch.Parameters is not null)
                     {
-                        if (patch.Parameters.Remove is not null)
-                        {
-                            foreach (var key in patch.Parameters.Remove)
-                            {
-                                parameters.Remove(key);
-                            }
-                        }
-
-                        if (patch.Parameters.Add is not null)
-                        {
-                            foreach (var (key, value) in patch.Parameters.Add)
-                            {
-                                parameters[key] = value;
-                            }
-                        }
-
-                        if (patch.Parameters.Update is not null)
-                        {
-                            foreach (var (key, value) in patch.Parameters.Update)
-                            {
-                                if (parameters.ContainsKey(key))
-                                {
-                                    parameters[key] = value;
-                                }
-                            }
-                        }
+                        ApplyPatch(parameters, patch.Parameters);
                     }
 
                     var updated = await context.EventTriggers

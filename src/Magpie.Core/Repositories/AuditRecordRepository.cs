@@ -1,18 +1,18 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -25,9 +25,10 @@ internal sealed class AuditRecordRepository(
     IEventBus eventBus,
     ILogger<AuditRecordRepository> logger,
     ITransactionManager transactionManager,
-    TimeProvider? timeProvider = null) : IAuditRecordRepository
+    IJobExecutionScopeFactory jobExecutionScopes,
+    TimeProvider timeProvider) : IAuditRecordRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     public async Task<IEnumerable<AuditRecord>> ListAllAsync(CancellationToken cancellationToken)
     {
@@ -62,6 +63,71 @@ internal sealed class AuditRecordRepository(
         }
     }
 
+    private static IQueryable<AuditRecord> ApplyQuery(IQueryable<AuditRecord> auditRecords, AuditRecordQuery query)
+    {
+        if (query.EntityId is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.EntityId == query.EntityId);
+        }
+
+        if (query.ParentEntityId is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.ParentEntityId == query.ParentEntityId);
+        }
+
+        if (query.EntityType is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.EntityType == query.EntityType);
+        }
+
+        if (query.Category is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.Category == query.Category);
+        }
+
+        if (query.Operation is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.Operation == query.Operation);
+        }
+
+        if (query.Detail is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.Detail != null && r.Detail.Contains(query.Detail));
+        }
+
+        if (query.Timestamp?.Min is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.Timestamp >= query.Timestamp.Min);
+        }
+
+        if (query.Timestamp?.Max is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.Timestamp <= query.Timestamp.Max);
+        }
+
+        if (query.TimestampBefore is { } timestampBefore)
+        {
+            auditRecords = auditRecords.Where(record => record.Timestamp < timestampBefore);
+        }
+
+        if (query.UserId is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.UserId == query.UserId);
+        }
+
+        if (query.CorrelationId is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.CorrelationId == query.CorrelationId);
+        }
+
+        if (query.JobExecutionId is not null)
+        {
+            auditRecords = auditRecords.Where(r => r.JobExecutionId == query.JobExecutionId);
+        }
+
+        return auditRecords;
+    }
+
     public async Task<PagedList<AuditRecord>> QueryAsync(
         AuditRecordQuery query,
         PagingParameter page,
@@ -70,72 +136,24 @@ internal sealed class AuditRecordRepository(
     {
         try
         {
-            var auditRecords = context.AuditRecords.AsNoTracking().AsQueryable();
-            if (query.EntityId is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.EntityId == query.EntityId);
-            }
-
-            if (query.ParentEntityId is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.ParentEntityId == query.ParentEntityId);
-            }
-
-            if (query.EntityType is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.EntityType == query.EntityType);
-            }
-
-            if (query.Category is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.Category == query.Category);
-            }
-
-            if (query.Operation is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.Operation == query.Operation);
-            }
-
-            if (query.Detail is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.Detail != null && r.Detail.Contains(query.Detail));
-            }
-
-            if (query.Timestamp?.Min is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.Timestamp >= query.Timestamp.Min);
-            }
-
-            if (query.Timestamp?.Max is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.Timestamp <= query.Timestamp.Max);
-            }
-
-            if (query.TimestampBefore is { } timestampBefore)
-            {
-                auditRecords = auditRecords.Where(record => record.Timestamp < timestampBefore);
-            }
-
-            if (query.UserId is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.UserId == query.UserId);
-            }
-
-            if (query.CorrelationId is not null)
-            {
-                auditRecords = auditRecords.Where(r => r.CorrelationId == query.CorrelationId);
-            }
+            var auditRecords = ApplyQuery(context.AuditRecords.AsNoTracking(), query);
 
             var totalCount = await auditRecords.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(AuditRecord).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(AuditRecord.Id), nameof(AuditRecord.EntityId), nameof(AuditRecord.ParentEntityId),
+                nameof(AuditRecord.EntityType), nameof(AuditRecord.Category), nameof(AuditRecord.Operation),
+                nameof(AuditRecord.Detail), nameof(AuditRecord.Timestamp), nameof(AuditRecord.UserId),
+                nameof(AuditRecord.CorrelationId), nameof(AuditRecord.JobExecutionId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 auditRecords = sort.Direction == SortDirection.Ascending
-                    ? auditRecords.OrderBy(r => EF.Property<AuditRecord>(r, sortProperty)).ThenBy(r => r.Id)
-                    : auditRecords.OrderByDescending(r => EF.Property<AuditRecord>(r, sortProperty)).ThenBy(r => r.Id);
+                    ? auditRecords.OrderBy(r => EF.Property<object>(r, sortProperty)).ThenBy(r => r.Id)
+                    : auditRecords.OrderByDescending(r => EF.Property<object>(r, sortProperty)).ThenBy(r => r.Id);
             }
             else
             {
@@ -170,23 +188,27 @@ internal sealed class AuditRecordRepository(
                 auditRecord.Timestamp = _time.GetUtcNow().UtcDateTime;
             }
 
+            if (auditRecord.JobExecutionId is null && !SubjectIsJobExecution(auditRecord))
+            {
+                auditRecord.JobExecutionId = jobExecutionScopes.CurrentExecutionId;
+            }
+
+            auditRecord.CorrelationId ??= jobExecutionScopes.CurrentCorrelationId;
+
             context.AuditRecords.Add(auditRecord);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transactionManager.OnCommittedAsync(
-                token => eventBus.PublishAsync(AuditRecordCreated(auditRecord.Id), token),
+                token => eventBus.PublishAsync(
+                    AuditRecordEventBuilder.BuildAuditRecordCreatedEvent(auditRecord.Id), token),
                 cancellationToken).ConfigureAwait(false);
 
             logger.LogDebug(
                 "The audit record repository recorded {AuditCategory} {AuditOperation} on {EntityType} " +
-                "with parent {ParentEntityId} and entity {EntityId} by user {UserId}. " +
-                "The detail is {AuditDetail}.",
+                "{EntityId}",
                 auditRecord.Category,
                 auditRecord.Operation,
                 auditRecord.EntityType ?? "",
-                auditRecord.ParentEntityId ?? "",
-                auditRecord.EntityId ?? "",
-                auditRecord.UserId?.ToString() ?? "System",
-                auditRecord.Detail ?? "");
+                auditRecord.EntityId ?? "");
 
             return auditRecord;
         }
@@ -207,11 +229,12 @@ internal sealed class AuditRecordRepository(
     {
         try
         {
-            var records = context.AuditRecords.AsQueryable();
-            if (query.TimestampBefore is { } timestampBefore)
+            if (query == new AuditRecordQuery())
             {
-                records = records.Where(record => record.Timestamp < timestampBefore);
+                return 0;
             }
+
+            var records = ApplyQuery(context.AuditRecords, query);
 
             return await records.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -222,13 +245,6 @@ internal sealed class AuditRecordRepository(
         }
     }
 
-    private static Models.MagpieEvent AuditRecordCreated(Guid auditRecordId)
-    {
-        var context = new Dictionary<string, string>
-        {
-            [MagpieEvents.Keys.AuditRecordId] = auditRecordId.ToString("D", CultureInfo.InvariantCulture),
-        };
-
-        return new(Guid.Empty, MagpieEvents.Names.AuditRecordCreated, context, default, default, null);
-    }
+    private static bool SubjectIsJobExecution(AuditRecord auditRecord)
+        => string.Equals(auditRecord.EntityType, nameof(JobExecution), StringComparison.Ordinal);
 }

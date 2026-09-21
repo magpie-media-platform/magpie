@@ -84,6 +84,10 @@
         animation: spin var(--duration-spinner) linear infinite;
     }
 
+    .card-actions__toggle-label {
+        display: none;
+    }
+
     @media (min-width: 900px) and (pointer: fine) {
         .card-actions__btn {
             width: 36px;

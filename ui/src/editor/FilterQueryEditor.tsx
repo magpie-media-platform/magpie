@@ -43,6 +43,9 @@ export function FilterQueryEditor({
     context = 'content',
     onErrorChange,
     className,
+    'aria-label': ariaLabel = 'Filter query',
+    'aria-labelledby': ariaLabelledBy,
+    'aria-describedby': ariaDescribedBy,
     ...props
 }: FilterQueryEditorProps) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -51,6 +54,8 @@ export function FilterQueryEditor({
     onChangeRef.current = onChange;
     const valueRef = useRef(value);
     valueRef.current = value;
+    const ariaRef = useRef({ ariaLabel, ariaLabelledBy, ariaDescribedBy });
+    ariaRef.current = { ariaLabel, ariaLabelledBy, ariaDescribedBy };
 
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const errorRef = useRef<string | null>(null);
@@ -101,6 +106,20 @@ export function FilterQueryEditor({
                     syncDiagnostics(update.view);
                 }),
                 EditorView.editable.of(!readOnly),
+                EditorView.contentAttributes.of((view) => {
+                    const { ariaLabel, ariaLabelledBy, ariaDescribedBy } = ariaRef.current;
+                    let invalid = false;
+                    forEachDiagnostic(view.state, (diagnostic) => {
+                        invalid ||= diagnostic.severity === 'error';
+                    });
+                    return {
+                        'aria-label': ariaLabel,
+                        ...(ariaLabelledBy ? { 'aria-labelledby': ariaLabelledBy } : {}),
+                        ...(ariaDescribedBy ? { 'aria-describedby': ariaDescribedBy } : {}),
+                        ...(invalid ? { 'aria-invalid': 'true' } : {}),
+                        ...(readOnly ? { 'aria-readonly': 'true' } : {}),
+                    };
+                }),
                 EditorView.theme({
                     '&': {
                         fontSize: 'var(--text-sm, 0.85rem)',
@@ -160,6 +179,11 @@ export function FilterQueryEditor({
     }, [createEditor]);
 
     useEffect(() => {
+        // An empty transaction is the only way to make CodeMirror recompute contentAttributes.
+        viewRef.current?.dispatch({});
+    }, [ariaLabel, ariaLabelledBy, ariaDescribedBy]);
+
+    useEffect(() => {
         const view = viewRef.current;
         if (!view) {
             return;
@@ -193,10 +217,6 @@ export function FilterQueryEditor({
             <div
                 ref={containerRef}
                 className={classes}
-                role="textbox"
-                aria-label="Filter query"
-                aria-invalid={errorMessage ? true : undefined}
-                aria-readonly={readOnly || undefined}
                 data-readonly={readOnly || undefined}
                 data-invalid={errorMessage ? true : undefined}
                 {...props}

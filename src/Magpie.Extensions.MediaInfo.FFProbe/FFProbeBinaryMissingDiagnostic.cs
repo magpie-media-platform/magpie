@@ -15,20 +15,6 @@ internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
     private static readonly string[] CandidateNames = ["ffprobe", "ffprobe.exe"];
     public const string Id = "ffprobe.config.binary-missing";
 
-    private readonly IReadOnlyList<string> _searchDirectories;
-    private readonly Func<string, bool> _fileExists;
-
-    public FFProbeBinaryMissingDiagnostic()
-        : this(DefaultSearchDirectories(), File.Exists)
-    {
-    }
-
-    internal FFProbeBinaryMissingDiagnostic(IReadOnlyList<string> searchDirectories, Func<string, bool> fileExists)
-    {
-        _searchDirectories = searchDirectories;
-        _fileExists = fileExists;
-    }
-
     public string DiagnosticCheckId => Id;
 
     public string Category => "Media Info";
@@ -79,7 +65,7 @@ internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
 
     private bool BinaryIsResolvable()
     {
-        foreach (var directory in _searchDirectories)
+        foreach (var directory in DefaultSearchDirectories())
         {
             if (string.IsNullOrWhiteSpace(directory))
             {
@@ -88,7 +74,7 @@ internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
 
             foreach (var name in CandidateNames)
             {
-                if (_fileExists(Path.Combine(directory, name)))
+                if (File.Exists(Path.Combine(directory, name)))
                 {
                     return true;
                 }

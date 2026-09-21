@@ -17,7 +17,7 @@ import type { ContentListItem } from '@/types';
 import { type SubjectContentController } from './useSubjectContent';
 import './SubjectContentTab.css';
 
-const CONTENT_COLUMN_VISIBILITY = { monitoring: false, dateAdded: false };
+const CONTENT_COLUMN_VISIBILITY = { monitoring: false, dateAdded: false, fulfilledDate: false };
 const CONTENT_HEADER_FILTER_COLUMNS = ['title', 'contentType', 'fulfillment'] as const;
 const CONTENT_SORT_OPTIONS: MobileListSortOption[] = [
     { id: 'publishDate', label: 'Published', initialDirection: 'desc' },

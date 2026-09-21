@@ -8,15 +8,15 @@ public sealed record SettingSchemaOption
     /// <summary>
     /// The value that the option stores.
     /// </summary>
-    public required string Value { get; init; }
+    public required string Value { get; set; }
 
     /// <summary>
     /// The label that the UI shows for the option.
     /// </summary>
-    public required string Label { get; init; }
+    public required string Label { get; set; }
 
     /// <summary>
     /// The description of the option.
     /// </summary>
-    public string? Description { get; init; }
+    public string? Description { get; set; }
 }

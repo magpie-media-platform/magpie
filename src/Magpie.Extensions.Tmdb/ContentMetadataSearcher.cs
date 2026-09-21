@@ -26,10 +26,6 @@ internal sealed class ContentMetadataSearcher(
     ILogger<ContentMetadataSearcher> logger)
     : IContentHierarchyMetadataAdvancedSearcher
 {
-    private static readonly string UnsupportedTvLevelWarning =
-        "TMDb advanced search cannot search individual TV seasons or episodes; those matching levels were " +
-            "omitted.";
-
     private readonly ICache _hydrationCache = cacheFactory.GetOrCreate(
         "tmdb-hydration",
         () => new CachePolicy
@@ -92,15 +88,11 @@ internal sealed class ContentMetadataSearcher(
             return MetadataSearchPage.NotSupported;
         }
 
-        var route = contentType.ResolveAdvancedSearchRoute(query, out var unsupportedTvLevelsSelected);
+        var route = contentType.ResolveAdvancedSearchRoute(query);
         if (route is null)
         {
             return EmptySearchPage();
         }
-
-        string[] scopeWarnings = unsupportedTvLevelsSelected
-            ? [UnsupportedTvLevelWarning]
-            : [];
 
         var result = await SearchMaximumAsync(
             route.Value,
@@ -112,7 +104,7 @@ internal sealed class ContentMetadataSearcher(
         {
             Supported = result.Supported,
             Matches = [.. result.Hits.Select(hit => hit.ToMetadataSearchCandidate())],
-            Warnings = [.. scopeWarnings.Concat(result.Warnings).Distinct()],
+            Warnings = [.. result.Warnings.Distinct()],
             PageInfo = result.PageInfo
         };
     }

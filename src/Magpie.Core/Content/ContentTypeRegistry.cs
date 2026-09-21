@@ -12,17 +12,15 @@ namespace Magpie.Core.Content;
 
 internal sealed class ContentTypeRegistry : IContentTypeRegistry
 {
-    private readonly Dictionary<string, ContentTypeDefinition> _bySlug;
+    private readonly Dictionary<string, Contribution> _bySlug;
     private readonly ILogger<ContentTypeRegistry> _logger;
-    private readonly IReadOnlyList<IContentTypeDefinitionProvider> _providers;
 
     public ContentTypeRegistry(
         IEnumerable<IContentTypeDefinitionProvider> providers,
         ILogger<ContentTypeRegistry> logger)
     {
         _logger = logger;
-        var registeredProviders = new List<IContentTypeDefinitionProvider>();
-        var contributions = new List<(string Slug, ContentTypeDefinition Definition, Type ProviderType)>();
+        var contributions = new List<Contribution>();
         foreach (var provider in providers)
         {
             ContentTypeDefinition definition;
@@ -44,41 +42,48 @@ internal sealed class ContentTypeRegistry : IContentTypeRegistry
                 continue;
             }
 
-            contributions.Add((definition.Slug, definition, provider.GetType()));
-            registeredProviders.Add(provider);
+            var slugs = definition.LevelDefinitions.Select(level => level.Slug).Prepend(definition.Slug);
+            if (slugs.FirstOrDefault(slug => slug != slug.ToLowerInvariant()) is { } mixedCase)
+            {
+                logger.LogError(
+                    "The content type registry ignored the definition from provider {Provider} because " +
+                    "slug {Slug} is not lowercase",
+                    provider.GetType().FullName,
+                    mixedCase);
+                continue;
+            }
+
+            contributions.Add(new Contribution(definition.Slug, definition, provider));
         }
 
-        _providers = registeredProviders;
-        var winners = BuildProviderMap(contributions, logger);
-        _bySlug = winners.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Definition);
+        _bySlug = BuildProviderMap(contributions, logger);
 
-        Definitions = [.. _bySlug.Values];
+        Definitions = [.. _bySlug.Values.Select(contribution => contribution.Definition)];
     }
 
     public IReadOnlyList<ContentTypeDefinition> Definitions { get; }
 
-    private static Dictionary<string, (string Slug, ContentTypeDefinition Definition, Type ProviderType)>
-        BuildProviderMap(
-            IEnumerable<(string Slug, ContentTypeDefinition Definition, Type ProviderType)> contributions,
-            ILogger logger)
+    private static Dictionary<string, Contribution> BuildProviderMap(
+        IEnumerable<Contribution> contributions,
+        ILogger logger)
     {
-        var map = new Dictionary<string, (string Slug, ContentTypeDefinition Definition, Type ProviderType)>();
+        var map = new Dictionary<string, Contribution>(StringComparer.Ordinal);
         foreach (var group in contributions
             .Where(contribution => !string.IsNullOrWhiteSpace(contribution.Slug))
-            .GroupBy(contribution => contribution.Slug))
+            .GroupBy(contribution => contribution.Slug, StringComparer.Ordinal))
         {
             var members = group.ToList();
             var winner = members[^1];
             if (members.Count > 1)
             {
                 logger.LogWarning(
-                    "Multiple {ItemLabel} declared {KeyLabel} {Key}. The registry used {Winner} and " +
-                    "ignored {Displaced}",
-                    "content type definition providers",
-                    "slug",
+                    "Multiple content type definition providers declared slug {Slug}; the registry used " +
+                    "{Winner} and ignored {Displaced}",
                     group.Key,
-                    winner.ProviderType.FullName,
-                    string.Join(", ", members.Take(members.Count - 1).Select(member => member.ProviderType.FullName)));
+                    winner.Provider.GetType().FullName,
+                    string.Join(
+                        ", ",
+                        members.Take(members.Count - 1).Select(member => member.Provider.GetType().FullName)));
             }
 
             map[group.Key] = winner;
@@ -87,27 +92,24 @@ internal sealed class ContentTypeRegistry : IContentTypeRegistry
         return map;
     }
 
-    public ContentTypeDefinition? GetDefinitionFor(string levelSlug)
+    public ContentTypeDefinition? GetDefinitionFor(string contentType)
     {
-        if (string.IsNullOrWhiteSpace(levelSlug))
+        if (string.IsNullOrWhiteSpace(contentType))
         {
             return null;
         }
 
-        return _bySlug.TryGetValue(levelSlug, out var definition) ? definition : null;
+        return _bySlug.TryGetValue(contentType, out var contribution) ? contribution.Definition : null;
     }
 
     public IContentTypeDefinitionProvider? FindProviderFor(string contentType)
     {
-        foreach (var provider in _providers)
+        if (string.IsNullOrWhiteSpace(contentType))
         {
-            if (provider.Definition.Slug == contentType)
-            {
-                return provider;
-            }
+            return null;
         }
 
-        return null;
+        return _bySlug.TryGetValue(contentType, out var contribution) ? contribution.Provider : null;
     }
 
     public string GetRootLevelSlug(string contentType, string? levelSlug)
@@ -119,8 +121,7 @@ internal sealed class ContentTypeRegistry : IContentTypeRegistry
                 ? contentType
                 : levelSlug;
             _logger.LogWarning(
-                "Content type {ContentType} has no definition. The registry will use the slug-only root level " +
-                "{LevelSlug}",
+                "Content type {ContentType} has no definition; using slug-only root level {LevelSlug}",
                 contentType,
                 fallbackSlug);
             return fallbackSlug;
@@ -176,30 +177,17 @@ internal sealed class ContentTypeRegistry : IContentTypeRegistry
         return [.. levels.Where(level => level.ParentSlug is { } parent && parent == levelSlug)];
     }
 
-    public bool Exists(string levelSlug) => !string.IsNullOrWhiteSpace(levelSlug) && _bySlug.ContainsKey(levelSlug);
+    public bool Exists(string contentType) =>
+        !string.IsNullOrWhiteSpace(contentType) && _bySlug.ContainsKey(contentType);
 
     private static void EnsureUniqueSlugs(IReadOnlyList<ContentHierarchyLevelDefinition> levels)
     {
         _ = BuildBySlug(levels);
     }
 
-    private static (
-        Dictionary<string, ContentHierarchyLevelDefinition> BySlug,
-        HashSet<string> ReferencedAsParent) BuildLookup(IReadOnlyList<ContentHierarchyLevelDefinition> levels)
-    {
-        var bySlug = BuildBySlug(levels);
-        var referencedAsParent = (
-            from level in levels
-            where level.ParentSlug is not null
-            select level.ParentSlug!).ToHashSet();
-        return (bySlug, referencedAsParent);
-    }
-
     private static Dictionary<string, ContentHierarchyLevelDefinition> BuildBySlug(
         IReadOnlyList<ContentHierarchyLevelDefinition> levels)
     {
-        ArgumentNullException.ThrowIfNull(levels);
-
         var bySlug = new Dictionary<string, ContentHierarchyLevelDefinition>();
         foreach (var level in levels)
         {
@@ -222,4 +210,9 @@ internal sealed class ContentTypeRegistry : IContentTypeRegistry
     {
         return [.. GetDefinedLevels(contentType).Where(level => level.ParentSlug is null)];
     }
+
+    private readonly record struct Contribution(
+        string Slug,
+        ContentTypeDefinition Definition,
+        IContentTypeDefinitionProvider Provider);
 }

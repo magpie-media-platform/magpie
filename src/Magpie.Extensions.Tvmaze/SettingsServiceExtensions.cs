@@ -41,25 +41,7 @@ internal static class SettingsServiceExtensions
 
     private static ProviderSettings ToProviderSettings(this IReadOnlyDictionary<string, string> settings)
     {
-        var contact = settings.Value(ProviderSettings.ContactKey);
+        settings.TryGetValue(ProviderSettings.ContactKey, out var contact);
         return new ProviderSettings { Contact = string.IsNullOrWhiteSpace(contact) ? null : contact!.Trim() };
-    }
-
-    private static string? Value(this IReadOnlyDictionary<string, string> settings, string key)
-    {
-        if (settings.TryGetValue(key, out var direct))
-        {
-            return direct;
-        }
-
-        foreach (var pair in settings)
-        {
-            if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase))
-            {
-                return pair.Value;
-            }
-        }
-
-        return null;
     }
 }

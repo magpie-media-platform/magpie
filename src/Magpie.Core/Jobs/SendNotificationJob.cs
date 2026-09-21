@@ -25,7 +25,7 @@ internal sealed class SendNotificationJob(
 
     public static readonly JobSpec Spec = new()
     {
-        JobType = "SendNotification",
+        JobType = MagpieJobs.Types.SendNotification,
         DisplayName = "Send notification",
         Description = "Sends one matching notification through its configured provider.",
         Category = "System",
@@ -98,7 +98,8 @@ internal sealed class SendNotificationJob(
         if (rule is null)
         {
             logger.LogInformation(
-                "Notification rule {RuleId} no longer exists. The job skipped the delivery for event {EventName}",
+                "Notification rule {RuleId} no longer exists, so the job skipped the delivery for event" +
+                " {EventName}",
                 ruleId,
                 magpieEvent.Name);
             return;
@@ -111,8 +112,8 @@ internal sealed class SendNotificationJob(
         if (provider is null)
         {
             logger.LogWarning(
-                "Notification rule {RuleName} ({RuleId}) references unknown provider {ProviderType}. " +
-                "The job skipped the delivery for event {EventName}",
+                "Notification rule {RuleName} ({RuleId}) references unknown provider {ProviderType}, so the " +
+                "job skipped the delivery for event {EventName}",
                 rule.Name,
                 rule.Id,
                 rule.ProviderType,

@@ -16,7 +16,7 @@ namespace Magpie.Core.Extensions;
 internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
 {
     private static readonly Version CurrentAbiVersion =
-        (Assembly.GetEntryAssembly()?.GetName().Version ?? new Version(1, 0)).Normalize();
+        typeof(IExtension).Assembly.GetName().Version!.Normalize();
 
     private static Type ResolveExtensionType(Assembly assembly)
     {
@@ -98,7 +98,7 @@ internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
 
         var assemblyPath = Path.GetFullPath(extension.FilePath);
         var context = new ExtensionAssemblyLoadContext(assemblyPath);
-        var assembly = context.LoadFromAssemblyPath(assemblyPath);
+        var assembly = context.LoadWithoutLockingFile(assemblyPath);
 
         var extensionType = ResolveExtensionType(assembly);
         var instance = (IExtension?)Activator.CreateInstance(extensionType)
@@ -116,7 +116,7 @@ internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
         if (!skipAbiCheck && !CurrentAbiVersion.IsCompatibleWith(instance.TargetABI))
         {
             throw new InvalidOperationException(
-                $"Extension {instance.TargetABI} is not compatible with host ABI {CurrentAbiVersion.Format()}.");
+                $"Extension {instance.Name} is not compatible with host ABI {CurrentAbiVersion.Format()}.");
         }
 
         instance.RegisterServices(services);
@@ -130,11 +130,26 @@ internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
         return instance;
     }
 
-    private sealed class ExtensionAssemblyLoadContext(string mainAssemblyPath) :
+    internal sealed class ExtensionAssemblyLoadContext(string mainAssemblyPath) :
         AssemblyLoadContext(isCollectible: false)
     {
         private readonly AssemblyDependencyResolver _resolver = new(mainAssemblyPath);
         private readonly string _extensionDirectory = Path.GetDirectoryName(mainAssemblyPath)!;
+
+        public string MainAssemblyPath { get; } = mainAssemblyPath;
+
+        public Assembly LoadWithoutLockingFile(string assemblyPath)
+        {
+            using var assemblyStream = new MemoryStream(File.ReadAllBytes(assemblyPath));
+            var symbolPath = Path.ChangeExtension(assemblyPath, ".pdb");
+            if (!File.Exists(symbolPath))
+            {
+                return LoadFromStream(assemblyStream);
+            }
+
+            using var symbolStream = new MemoryStream(File.ReadAllBytes(symbolPath));
+            return LoadFromStream(assemblyStream, symbolStream);
+        }
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
@@ -152,7 +167,7 @@ internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
             var resolved = _resolver.ResolveAssemblyToPath(assemblyName);
             if (resolved is not null)
             {
-                return LoadFromAssemblyPath(resolved);
+                return LoadWithoutLockingFile(resolved);
             }
 
             if (assemblyName.Name is { } simpleName)
@@ -160,7 +175,7 @@ internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
                 var probe = Path.Combine(_extensionDirectory, simpleName + ".dll");
                 if (File.Exists(probe))
                 {
-                    return LoadFromAssemblyPath(probe);
+                    return LoadWithoutLockingFile(probe);
                 }
             }
 

@@ -12,12 +12,12 @@ public sealed record TemporalValue
     /// <summary>
     /// The start instant of the period, in UTC.
     /// </summary>
-    public required DateTime Value { get; init; }
+    public required DateTime Value { get; set; }
 
     /// <summary>
     /// The calendar period of this value.
     /// </summary>
-    public required TemporalPrecision Precision { get; init; }
+    public required TemporalPrecision Precision { get; set; }
 
     /// <summary>
     /// Parses an unambiguous temporal text form into a value with its calendar period.
@@ -106,10 +106,13 @@ public sealed record TemporalValue
             separator = s.IndexOf(' ');
         }
 
-        var tail = separator >= 0 ? s[(separator + 1)..] : s;
-        return tail.EndsWith('Z') ||
-            tail.EndsWith('z') ||
-            tail.Contains('+') ||
-            tail.Contains('-');
+        if (separator < 0)
+        {
+            return false;
+        }
+
+        var tail = s[(separator + 1)..];
+        var offset = tail.IndexOfAny(['Z', 'z', '+', '-']);
+        return offset > 0 && tail[..offset].Contains(':');
     }
 }

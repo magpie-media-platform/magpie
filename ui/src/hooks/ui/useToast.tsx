@@ -125,5 +125,3 @@ export function useToast(): UseToastReturn {
 
     return context;
 }
-
-export default useToast;

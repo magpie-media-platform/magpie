@@ -7,11 +7,9 @@ import type { ReactNode } from 'react';
 import { QualityTierControl } from './QualityTierControl';
 import type { ApiQualityTierList } from '@/hooks/useQualityTierLists';
 import type { EffectiveQualityTierList } from '@/types';
-import { QualityStatusState } from '@/hooks/useQualityStatus';
 
 const mockUseEffectiveQualityTierList = vi.fn();
 const mockUseQualityTierLists = vi.fn();
-const mockUseQualityStatus = vi.fn();
 const mockMutateAsync = vi.fn();
 const mockToast = vi.fn();
 
@@ -23,11 +21,6 @@ vi.mock('@/hooks/useContent', () => ({
 vi.mock('@/hooks/useQualityTierLists', () => ({
     useQualityTierLists: (options: unknown) => mockUseQualityTierLists(options),
 }));
-
-vi.mock('@/hooks/useQualityStatus', async () => {
-    const actual = await vi.importActual<typeof import('@/hooks/useQualityStatus')>('@/hooks/useQualityStatus');
-    return { ...actual, useQualityStatus: () => mockUseQualityStatus() };
-});
 
 vi.mock('@/components/ui/Toast', async () => {
     const actual = await vi.importActual<typeof import('@/components/ui/Toast')>('@/components/ui/Toast');
@@ -67,8 +60,6 @@ describe('QualityTierControl', () => {
     beforeEach(() => {
         mockUseEffectiveQualityTierList.mockReset();
         mockUseQualityTierLists.mockReset();
-        mockUseQualityStatus.mockReset();
-        mockUseQualityStatus.mockReturnValue({ data: undefined, isLoading: false });
         mockMutateAsync.mockReset();
         mockToast.mockReset();
     });
@@ -152,33 +143,14 @@ describe('QualityTierControl', () => {
         expect(screen.queryByRole('option', { name: 'Audio Tiers - audio/*' })).not.toBeInTheDocument();
     });
 
-    it('shows the cutoff-status badge alongside the tier value', () => {
+    it('renders no cutoff badge next to the tier value', () => {
         mockUseEffectiveQualityTierList.mockReturnValue({ data: makeEffective(), isLoading: false });
         mockUseQualityTierLists.mockReturnValue({ tierLists: [makeList()], isLoading: false });
-        mockUseQualityStatus.mockReturnValue({
-            data: { status: QualityStatusState.MetCutoff, cutoffScore: 1, bestScore: 2 },
-            isLoading: false,
-        });
-
-        render(<QualityTierControl contentHierarchyItemId="c-1" />, { wrapper: Wrap });
-
-        const cutoff = screen.getByTestId('quality-tier-control__cutoff');
-        expect(cutoff).toHaveAttribute('data-status', 'met-cutoff');
-        expect(cutoff).toHaveTextContent('Met cutoff');
-        expect(screen.getByTestId('quality-tier-control__label').textContent).toContain('HD Tiers');
-    });
-
-    it('omits the cutoff badge when the endpoint reports no tier list', () => {
-        mockUseEffectiveQualityTierList.mockReturnValue({ data: makeEffective(), isLoading: false });
-        mockUseQualityTierLists.mockReturnValue({ tierLists: [makeList()], isLoading: false });
-        mockUseQualityStatus.mockReturnValue({
-            data: { status: QualityStatusState.NoTierList },
-            isLoading: false,
-        });
 
         render(<QualityTierControl contentHierarchyItemId="c-1" />, { wrapper: Wrap });
 
         expect(screen.queryByTestId('quality-tier-control__cutoff')).not.toBeInTheDocument();
+        expect(screen.getByTestId('quality-tier-control__label').textContent).toContain('HD Tiers');
     });
 
     it('omits the inherited source and resolving ancestor name', () => {

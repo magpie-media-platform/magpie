@@ -32,14 +32,6 @@ export interface UserUpdate {
     enabled?: boolean;
 }
 
-export interface UserExternalCreate {
-    username: string;
-    providerType: string;
-    externalId: string;
-    role: Role;
-    email?: string | null;
-}
-
 export interface ApiKeyItem {
     id: string;
     userId: string;

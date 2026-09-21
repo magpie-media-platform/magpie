@@ -247,3 +247,18 @@ describe('ErrorFallback', () => {
         expect(screen.getByRole('alert')).toHaveAttribute('data-component', 'error-boundary');
     });
 });
+
+it.each([null, undefined, false, 0, ''])('shows a fallback for the thrown value %s', (value) => {
+    const onError = vi.fn();
+    function Broken(): never {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- Tests non-Error throws.
+        throw value;
+    }
+    render(
+        <ErrorBoundary onError={onError}>
+            <Broken />
+        </ErrorBoundary>,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed to render page');
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), expect.anything());
+});

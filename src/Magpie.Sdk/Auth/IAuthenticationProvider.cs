@@ -11,7 +11,7 @@ namespace Magpie.Sdk.Auth;
 public interface IAuthenticationProvider
 {
     /// <summary>
-    /// The provider type.
+    /// The provider type slug.
     /// </summary>
     string ProviderType { get; }
 
@@ -19,7 +19,7 @@ public interface IAuthenticationProvider
     /// Attempts to authenticate the request.
     /// </summary>
     /// <param name="context">The HTTP context</param>
-    /// <param name="cancellationToken">The cancellation token</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<AuthenticationAttempt> TryAuthenticateAsync(
         HttpContext context,
         CancellationToken cancellationToken = default);
@@ -28,6 +28,6 @@ public interface IAuthenticationProvider
     /// Adds challenge information to the response.
     /// </summary>
     /// <param name="context">The HTTP context</param>
-    /// <param name="cancellationToken">The cancellation token</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     Task ChallengeAsync(HttpContext context, CancellationToken cancellationToken = default);
 }

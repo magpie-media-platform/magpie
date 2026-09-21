@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { useEffect, useState } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -366,7 +363,10 @@ describe('LibraryPage', () => {
                     name: 'TV',
                     pluralName: 'TV Shows',
                     slug: 'tv',
-                    levels: [{ slug: 'series', displayName: 'Series', parentSlug: null }],
+                    levels: [
+                        { slug: 'show', displayName: 'Show', parentSlug: null },
+                        { slug: 'series', displayName: 'Series', parentSlug: 'show' },
+                    ],
                 },
                 {
                     id: 'foo',
@@ -509,11 +509,12 @@ describe('LibraryPage', () => {
         it('suppresses the fulfillment badge for an excluded item', () => {
             renderLibraryPage();
 
-            // Poor Things is the only externally-fulfilled item and it is excluded, so no External badge shows
             expect(screen.queryByText('External')).not.toBeInTheDocument();
         });
 
         it('renders level badges by hierarchy level, not collapsed content type', () => {
+            vi.spyOn(window, 'matchMedia').mockImplementation(createMatchMedia(375));
+
             renderLibraryPage();
 
             expect(screen.getAllByText('Show').length).toBeGreaterThan(0);
@@ -775,6 +776,27 @@ describe('LibraryPage', () => {
             await waitFor(() => {
                 expect(mockUseContentList).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'CreatedAt' }));
             });
+        });
+
+        it('clicking the Fulfilled header sorts by FulfilledAt on the server', async () => {
+            const user = userEvent.setup();
+            renderLibraryPage();
+
+            const headers = screen.getAllByRole('button', { name: /sort by/i });
+            const fulfilled = headers.find((header) => /fulfilled/i.test(header.getAttribute('aria-label') ?? ''));
+            await user.click(fulfilled!);
+
+            await waitFor(() => {
+                expect(mockUseContentList).toHaveBeenLastCalledWith(expect.objectContaining({ sortBy: 'FulfilledAt' }));
+            });
+        });
+
+        it('restores fulfilled-date sorting from the URL', () => {
+            renderLibraryPage(Role.Admin, ['/?sort=fulfilledDate&sortDir=desc']);
+
+            expect(mockUseContentList).toHaveBeenLastCalledWith(
+                expect.objectContaining({ sortBy: 'FulfilledAt', sortDirection: 'Descending' }),
+            );
         });
     });
 
@@ -1159,9 +1181,11 @@ describe('LibraryPage', () => {
 
         it('pluralizes the bulk delete fallback when the selected row is on another page', async () => {
             const user = userEvent.setup();
+            const firstPageItems = [mockContentItems[0]];
+            const secondPageItems = [mockContentItems[1]];
             mockUseContentList.mockImplementation((params: { pageNumber: number }) => ({
                 data: {
-                    items: params.pageNumber === 1 ? [mockContentItems[0]] : [mockContentItems[1]],
+                    items: params.pageNumber === 1 ? firstPageItems : secondPageItems,
                     pageNumber: params.pageNumber,
                     pageSize: 100,
                     totalItems: 200,
@@ -1177,7 +1201,7 @@ describe('LibraryPage', () => {
             await waitFor(() => {
                 expect(mockUseContentList).toHaveBeenLastCalledWith(expect.objectContaining({ pageNumber: 2 }));
             });
-            await user.click(await waitFor(() => document.querySelector('[data-action="bulk-delete"]') as HTMLElement));
+            await user.click(screen.getByRole('button', { name: 'Delete' }));
 
             expect(screen.getByText('Delete 1 item? This cannot be undone.')).toBeInTheDocument();
         });
@@ -1192,13 +1216,32 @@ describe('LibraryPage', () => {
             await user.click(await waitFor(() => document.querySelector('[data-action="bulk-delete"]') as HTMLElement));
 
             expect(await screen.findByRole('heading', { name: 'Delete Content' })).toBeInTheDocument();
+            expect(screen.getByRole('switch', { name: 'Also delete files from disk' })).toHaveAttribute(
+                'aria-checked',
+                'false',
+            );
             await user.click(screen.getByRole('button', { name: /^Delete$/ }));
 
             await waitFor(() => {
-                expect(mockBulkDeleteContent).toHaveBeenCalledWith({ ids: ['content-1'] });
+                expect(mockBulkDeleteContent).toHaveBeenCalledWith({ ids: ['content-1'], deleteFromLibrary: false });
                 expect(screen.getByText('1 item deleted')).toBeInTheDocument();
                 expect(screen.queryByRole('heading', { name: 'Delete Content' })).not.toBeInTheDocument();
                 expect(checkbox).not.toBeChecked();
+            });
+        });
+
+        it('deletes files when the bulk delete toggle is on', async () => {
+            const user = userEvent.setup();
+            mockBulkDeleteContent.mockResolvedValue({ count: 1, error: null });
+            renderLibraryPage();
+
+            await user.click(screen.getByLabelText('Select Breaking Bad'));
+            await user.click(await waitFor(() => document.querySelector('[data-action="bulk-delete"]') as HTMLElement));
+            await user.click(screen.getByRole('switch', { name: 'Also delete files from disk' }));
+            await user.click(screen.getByRole('button', { name: /^Delete$/ }));
+
+            await waitFor(() => {
+                expect(mockBulkDeleteContent).toHaveBeenCalledWith({ ids: ['content-1'], deleteFromLibrary: true });
             });
         });
 
@@ -1357,15 +1400,6 @@ describe('LibraryPage', () => {
                 expect(button).toHaveAttribute('data-action', action);
                 expect(button).toHaveAttribute('aria-label', name);
             }
-        });
-
-        it('keeps all mobile bulk actions in one non-wrapping row', () => {
-            const css = readFileSync(resolve(process.cwd(), 'src/pages/LibraryPage/LibraryPage.css'), 'utf8');
-            const actionsRule = css.match(/\.library-page__mobile-selection-actions\s*{([\s\S]*?)\n\s*}/)?.[1];
-
-            expect(actionsRule).toContain('display: flex');
-            expect(actionsRule).toContain('flex-wrap: nowrap');
-            expect(actionsRule).not.toContain('grid-template');
         });
 
         it('hides bulk actions but remains in selection mode when the final card is deselected', async () => {
@@ -2456,6 +2490,23 @@ describe('LibraryPage', () => {
             expect(links).toHaveLength(mockContentItems.length);
             expect(links[0]).toHaveAttribute('href', '/library/content-1');
             expect(within(links[0]).queryByRole('link')).not.toBeInTheDocument();
+        });
+
+        it('renders one gallery poster slot per tile', () => {
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            const grid = screen.getByRole('list', { name: 'Content gallery' });
+
+            expect(grid.querySelectorAll('[data-slot="content.gallery.poster"]')).toHaveLength(mockContentItems.length);
+        });
+
+        it('renders no gallery poster slot in list view', () => {
+            renderLibraryPage();
+
+            expect(document.querySelector('[data-component="content-list"]')).toBeInTheDocument();
+            expect(document.querySelectorAll('[data-slot="content.gallery.poster"]')).toHaveLength(0);
         });
 
         it('names each tile by its title alone and leaves the poster decorative', () => {

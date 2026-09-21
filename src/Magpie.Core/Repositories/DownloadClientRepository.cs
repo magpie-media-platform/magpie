@@ -12,6 +12,7 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Patch;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -26,9 +27,63 @@ internal sealed class DownloadClientRepository(
     IEventBus eventBus,
     ILogger<DownloadClientRepository> logger,
     IDataProtectionService protector,
-    TimeProvider? timeProvider = null) : IDownloadClientRepository
+    TimeProvider timeProvider) : IDownloadClientRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private static readonly (string Name, Func<DownloadClient, DownloadClient, bool> Changed)[] UpdateFields =
+    [
+        ("name", (current, model) => !Equals(current.Name, model.Name)),
+        ("providerType", (current, model) => !Equals(current.ProviderType, model.ProviderType)),
+        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
+        ("priority", (current, model) => !Equals(current.Priority, model.Priority)),
+        ("status", (current, model) => !Equals(current.Status, model.Status)),
+        ("lastChecked", (current, model) => !Equals(current.LastChecked, model.LastChecked)),
+        ("cleanupDeleteFiles", (current, model) => !Equals(current.CleanupDeleteFiles, model.CleanupDeleteFiles)),
+        ("keepFailedOnClient", (current, model) => !Equals(current.KeepFailedOnClient, model.KeepFailedOnClient)),
+        ("settings", (current, model) => !SettingsEqual(current.Settings, model.Settings)),
+    ];
+
+    private readonly TimeProvider _time = timeProvider;
+
+    private static bool SettingsEqual(
+        IReadOnlyDictionary<string, string> current,
+        IReadOnlyDictionary<string, string> model)
+    {
+        return current.Count == model.Count &&
+            current.All(pair => model.TryGetValue(pair.Key, out var value) &&
+                string.Equals(pair.Value, value, StringComparison.Ordinal));
+    }
+
+    private static void ApplyPatch(
+        IDictionary<string, string> values,
+        DictionaryPatch<string, string, string> patch)
+    {
+        if (patch.Add is not null)
+        {
+            foreach (var (key, value) in patch.Add)
+            {
+                values[key] = value ?? string.Empty;
+            }
+        }
+
+        if (patch.Update is not null)
+        {
+            foreach (var (key, value) in patch.Update)
+            {
+                if (values.ContainsKey(key))
+                {
+                    values[key] = value ?? string.Empty;
+                }
+            }
+        }
+
+        if (patch.Remove is not null)
+        {
+            foreach (var key in patch.Remove)
+            {
+                values.Remove(key);
+            }
+        }
+    }
 
     private static IReadOnlyCollection<string> ChangedFields(DownloadClientPatch patch)
     {
@@ -204,16 +259,37 @@ internal sealed class DownloadClientRepository(
                     var now = _time.GetUtcNow().UtcDateTime;
                     var encryptedSettings = protector.Protect(model.Settings);
 
+                    var current = await context.DownloadClients.AsNoTracking()
+                        .FirstOrDefaultAsync(entity => entity.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    current.Settings = protector.Unprotect(current.Settings);
+                    var changedFields = new List<string>();
+                    foreach (var (name, changed) in UpdateFields)
+                    {
+                        if (changed(current, model))
+                        {
+                            changedFields.Add(name);
+                        }
+                    }
+
                     var updated = await context.DownloadClients
                         .Where(c => c.Id == model.Id)
                         .ExecuteUpdateAsync(
                             s => s
                                 .SetProperty(c => c.Name, model.Name)
                                 .SetProperty(c => c.ProviderType, model.ProviderType)
+                                .SetProperty(c => c.ExtensionId, model.ExtensionId)
                                 .SetProperty(c => c.Enabled, model.Enabled)
                                 .SetProperty(c => c.Priority, model.Priority)
                                 .SetProperty(c => c.Status, model.Status)
                                 .SetProperty(c => c.LastChecked, model.LastChecked)
+                                .SetProperty(c => c.LastError, model.LastError)
+                                .SetProperty(c => c.ConsecutiveFailures, model.ConsecutiveFailures)
                                 .SetProperty(c => c.CleanupDeleteFiles, model.CleanupDeleteFiles)
                                 .SetProperty(c => c.KeepFailedOnClient, model.KeepFailedOnClient)
                                 .SetProperty(c => c.Settings, encryptedSettings)
@@ -235,6 +311,14 @@ internal sealed class DownloadClientRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                DownloadEventBuilder.BuildDownloadClientUpdatedEvent(model.Id, changedFields), token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -380,32 +464,7 @@ internal sealed class DownloadClientRepository(
                     if (patch.Settings is not null)
                     {
                         var settings = protector.Unprotect(model.Settings);
-                        if (patch.Settings.Add is not null)
-                        {
-                            foreach (var (key, value) in patch.Settings.Add)
-                            {
-                                settings[key] = value ?? string.Empty;
-                            }
-                        }
-
-                        if (patch.Settings.Update is not null)
-                        {
-                            foreach (var (key, value) in patch.Settings.Update)
-                            {
-                                if (settings.ContainsKey(key))
-                                {
-                                    settings[key] = value ?? string.Empty;
-                                }
-                            }
-                        }
-
-                        if (patch.Settings.Remove is not null)
-                        {
-                            foreach (var key in patch.Settings.Remove)
-                            {
-                                settings.Remove(key);
-                            }
-                        }
+                        ApplyPatch(settings, patch.Settings);
 
                         model.Settings = protector.Protect(settings);
                         context.Entry(model).Property(c => c.Settings).IsModified = true;

@@ -1,3 +1,5 @@
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { useLibraryRoute } from '@/pages/LibraryPage/useLibraryRoute';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -81,7 +83,6 @@ describe('useLibraryTypes', () => {
 
     describe('libraryTypesQueryKeys', () => {
         it('generates correct query keys', () => {
-            expect(libraryTypesQueryKeys.all).toEqual(['libraryTypes']);
             expect(libraryTypesQueryKeys.contentTypes()).toEqual(['libraryTypes', 'content-types']);
             expect(libraryTypesQueryKeys.subjectTypes()).toEqual(['libraryTypes', 'subject-types']);
         });
@@ -482,8 +483,47 @@ describe('useLibraryTypes', () => {
         });
     });
 
+    it.each([
+        ['/types/alpha/shared', 'camera'],
+        ['/types/beta/shared', 'book'],
+        ['/types/shared', 'folder'],
+    ])('resolves the route icon within its owning type: %s', async (path, icon) => {
+        // Arrange
+        vi.mocked(api.apiGet)
+            .mockResolvedValueOnce([
+                {
+                    slug: 'alpha',
+                    displayName: 'Alpha',
+                    iconName: 'star',
+                    levelDefinitions: [{ slug: 'shared', displayName: 'Shared', iconName: 'camera' }],
+                },
+                {
+                    slug: 'beta',
+                    displayName: 'Beta',
+                    iconName: 'heart',
+                    levelDefinitions: [{ slug: 'shared', displayName: 'Shared', iconName: 'book' }],
+                },
+                { slug: 'shared', displayName: 'Shared', iconName: 'folder', levelDefinitions: [] },
+            ])
+            .mockResolvedValueOnce([]);
+        // Act
+        const { result } = renderHook(() => useLibraryRoute(), {
+            wrapper: ({ children }) => (
+                <QueryClientProvider client={queryClient}>
+                    <MemoryRouter initialEntries={[path]}>
+                        <Routes>
+                            <Route path="/types/:contentType/:levelSlug?" element={children} />
+                        </Routes>
+                    </MemoryRouter>
+                </QueryClientProvider>
+            ),
+        });
+        // Assert
+        await waitFor(() => expect(result.current.pageIconName).toBe(icon));
+    });
+
     describe('useTypeIconName', () => {
-        it('resolves declared icon names for content types, levels, and subject kinds', async () => {
+        it('keeps type icons separate from colliding level slugs', async () => {
             vi.mocked(api.apiGet).mockImplementation((url: string) => {
                 if (url === '/content-types') {
                     return Promise.resolve([
@@ -498,7 +538,7 @@ describe('useLibraryTypes', () => {
                                     parentSlug: null,
                                     iconName: 'video-camera',
                                 },
-                                { slug: 'foo-b', displayName: 'B', parentSlug: null, iconName: 'film-reel' },
+                                { slug: 'foo', displayName: 'B', parentSlug: null, iconName: 'film-reel' },
                             ],
                         },
                     ]);
@@ -514,13 +554,13 @@ describe('useLibraryTypes', () => {
             const { result } = renderHook(() => useTypeIconName(), { wrapper: createWrapper(queryClient) });
 
             await waitFor(() => {
-                expect(result.current('foo-a')).toBe('video-camera');
+                expect(result.current('foo')).toBe('film-strip');
             });
 
             const resolve = result.current;
             expect(resolve('foo')).toBe('film-strip');
-            expect(resolve('foo-b')).toBe('film-reel');
-            expect(resolve('FOO-A')).toBe('video-camera');
+            expect(resolve('foo-a')).toBeUndefined();
+            expect(resolve('FOO')).toBe('film-strip');
             expect(resolve('person', { subject: true })).toBe('person');
             expect(resolve('unmapped')).toBeUndefined();
             expect(resolve('unmapped', { subject: true })).toBeUndefined();

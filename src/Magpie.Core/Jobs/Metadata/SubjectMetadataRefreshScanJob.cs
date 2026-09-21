@@ -24,11 +24,11 @@ internal sealed class SubjectMetadataRefreshScanJob(
     ISubjectRepository subjectRepository,
     TimeProvider timeProvider,
     ILogger<SubjectMetadataRefreshScanJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "SubjectMetadataRefreshScan",
+        JobType = MagpieJobs.Types.SubjectMetadataRefreshScan,
         DisplayName = "Subject metadata refresh scan",
         Description = "Refreshes metadata for subjects whose records are stale or never enriched.",
         Category = "Content",
@@ -42,15 +42,13 @@ internal sealed class SubjectMetadataRefreshScanJob(
         Parameters =
         [
             new(
-                SubjectStalenessDaysParameter,
+                MagpieJobs.Parameters.SubjectStalenessDays,
                 "Days before refreshed subject metadata is considered stale.",
                 DataType.Number,
                 false,
                 DefaultSubjectStalenessDays.ToString(CultureInfo.InvariantCulture))
         ],
     };
-
-    private const string SubjectStalenessDaysParameter = "subjectStalenessDays";
 
     private const int DefaultSubjectStalenessDays = 30;
 
@@ -63,9 +61,8 @@ internal sealed class SubjectMetadataRefreshScanJob(
     {
         var userId = jobContext.ManualTriggerUserId;
         var correlationId = jobContext.CorrelationId;
-        var progress = progressReporter;
 
-        progress?.Report(0, "The scan will load subjects that need a refresh.");
+        progressReporter.Report(0, "The scan will load subjects that need a refresh.");
 
         var subjectStalenessDays = ReadPositiveIntParameter(jobContext.Parameters);
         var now = timeProvider.GetUtcNow().UtcDateTime;
@@ -75,7 +72,7 @@ internal sealed class SubjectMetadataRefreshScanJob(
         var (supportedKinds, includeAllKinds) = ResolveSupportedKinds();
         if (!includeAllKinds && supportedKinds.Count == 0)
         {
-            progress?.Report(1, "The subject metadata refresh scan completed.");
+            progressReporter.Report(1, "The subject metadata refresh scan completed.");
             return;
         }
 
@@ -109,7 +106,7 @@ internal sealed class SubjectMetadataRefreshScanJob(
         foreach (var subjectId in staleSubjectIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report(GetRefreshProgress(completed, total), null);
+            progressReporter.Report(GetRefreshProgress(completed, total), null);
 
             try
             {
@@ -131,7 +128,7 @@ internal sealed class SubjectMetadataRefreshScanJob(
             completed++;
         }
 
-        progress?.Report(1, "The subject metadata refresh scan completed.");
+        progressReporter.Report(1, "The subject metadata refresh scan completed.");
     }
 
     private (IReadOnlyCollection<string> SupportedKinds, bool IncludeAllKinds) ResolveSupportedKinds()
@@ -155,7 +152,7 @@ internal sealed class SubjectMetadataRefreshScanJob(
 
     private int ReadPositiveIntParameter(IReadOnlyDictionary<string, string> parameters)
     {
-        if (!parameters.TryGetValue(SubjectStalenessDaysParameter, out var raw))
+        if (!parameters.TryGetValue(MagpieJobs.Parameters.SubjectStalenessDays, out var raw))
         {
             return DefaultSubjectStalenessDays;
         }
@@ -166,8 +163,8 @@ internal sealed class SubjectMetadataRefreshScanJob(
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Raw} is not positive. The job will use the default {Default}",
-            SubjectStalenessDaysParameter,
+            "Parameter {Parameter} value {Raw} is not positive, so the job will use the default {Default}",
+            MagpieJobs.Parameters.SubjectStalenessDays,
             raw,
             DefaultSubjectStalenessDays);
 
@@ -183,10 +180,10 @@ internal sealed class SubjectMetadataRefreshScanJob(
         await jobManager.ExecuteAsync(
             new JobEnqueueRequest
             {
-                JobType = SubjectMetadataRefreshItemJob.Spec.JobType,
+                JobType = MagpieJobs.Types.SubjectMetadataRefreshItem,
                 Parameters = new Dictionary<string, string>
                 {
-                    [SubjectMetadataRefreshItemJob.Spec.Parameters.Single().Name] = subjectId.ToString()
+                    [MagpieJobs.Parameters.SubjectId] = subjectId.ToString()
                 },
                 Mode = JobExecutionMode.Queue,
                 UserId = userId,
@@ -194,7 +191,7 @@ internal sealed class SubjectMetadataRefreshScanJob(
             },
             cancellationToken).ConfigureAwait(false);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "The subject metadata refresh scan enqueued a refresh for subject {SubjectId}",
             subjectId);
     }

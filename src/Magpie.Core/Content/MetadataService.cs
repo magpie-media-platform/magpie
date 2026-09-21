@@ -69,12 +69,20 @@ internal sealed class MetadataService(
         }
 
         var distinctIds = ids.Distinct().ToArray();
-        var related = await materializedRepository.QueryAsync(
-            new() { ContainerIds = distinctIds },
-            new() { PageNumber = 1, PageSize = distinctIds.Length },
-            null,
-            cancellationToken).ConfigureAwait(false);
-        var byId = related.Items.ToDictionary(value => value.ContainerId);
+        var byId = new Dictionary<Guid, MaterializedMetadata>();
+        foreach (var batch in distinctIds.Chunk(500))
+        {
+            var related = await materializedRepository.QueryAsync(
+                new() { ContainerIds = batch },
+                new() { PageNumber = 1, PageSize = batch.Length },
+                null,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var metadataItem in related.Items)
+            {
+                byId.Add(metadataItem.ContainerId, metadataItem);
+            }
+        }
+
         return [.. ids.Where(byId.ContainsKey).Select(id => byId[id])];
     }
 

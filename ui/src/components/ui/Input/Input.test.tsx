@@ -169,3 +169,15 @@ describe('Input', () => {
         expect(screen.getByRole('textbox')).toHaveValue('updated');
     });
 });
+
+it('links errors without caller IDs and keeps instances distinct', () => {
+    render(
+        <>
+            <Input aria-label="First" errorMessage="First error" />
+            <Input aria-label="Second" errorMessage="Second error" />
+        </>,
+    );
+    expect(screen.getByLabelText('First')).toHaveAccessibleDescription('First error');
+    expect(screen.getByLabelText('Second')).toHaveAccessibleDescription('Second error');
+    expect(screen.getByLabelText('First').id).not.toBe(screen.getByLabelText('Second').id);
+});

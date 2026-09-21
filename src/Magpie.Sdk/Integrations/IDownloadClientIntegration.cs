@@ -86,7 +86,7 @@ public interface IDownloadClientIntegration
     }
 
     /// <summary>
-    /// Gets a download by its external id.
+    /// A download by its external id.
     /// </summary>
     /// <param name="externalId">The external id of the download</param>
     /// <param name="settings">The settings of the configured provider</param>
@@ -98,7 +98,7 @@ public interface IDownloadClientIntegration
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets multiple downloads by their external ids.
+    /// Multiple downloads by their external ids.
     /// </summary>
     /// <param name="externalIds">The external ids of the downloads</param>
     /// <param name="settings">The settings of the configured provider</param>

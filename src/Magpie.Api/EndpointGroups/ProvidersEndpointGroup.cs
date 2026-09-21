@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 
 using Magpie.Models.Integrations;
 using Magpie.Sdk.Api;
@@ -31,10 +30,8 @@ internal sealed class ProvidersEndpointGroup : IApiEndpointGroup
         [FromServices] IEnumerable<IDownloadClientIntegration> downloadClients,
         [FromServices] IEnumerable<IMediaServerIntegration> mediaServers,
         [FromServices] IEnumerable<INotificationProvider> notifications,
-        [FromServices] IEnumerable<IIndexerFeedProvider> indexerFeeds,
-        CancellationToken cancellationToken)
+        [FromServices] IEnumerable<IIndexerFeedProvider> indexerFeeds)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         var providers = indexers.Select(provider => new ProviderDescriptor
         {
             Kind = "indexer",

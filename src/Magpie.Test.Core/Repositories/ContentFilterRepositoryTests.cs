@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -11,12 +12,12 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -25,7 +26,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class ContentFilterRepositoryTests
+public sealed class ContentFilterRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IContentFilterRepository _subject = null!;
@@ -61,7 +62,9 @@ public class ContentFilterRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _eventBus = new Mock<IEventBus>();
@@ -73,7 +76,8 @@ public class ContentFilterRepositoryTests
             auditRecordRepository,
             transactionManager,
             _eventBus.Object,
-            loggerFactory.CreateLogger<ContentFilterRepository>());
+            loggerFactory.CreateLogger<ContentFilterRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -449,7 +453,7 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesContentFilter_WithNullUserId()
+    public async Task CreateAsync_CreatesContentFilter_WhenNullUserIdIsProvided()
     {
         // Arrange
         var model = new ContentFilter
@@ -582,24 +586,18 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task DeleteAsync_ReturnsFalse_WhenNotFound()
+    public async Task DeleteAsync_ReturnsFalseAndWritesNoAuditRecord_WhenNotFound()
     {
         // Act
         var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result, Is.False);
-    }
-
-    [Test]
-    public async Task DeleteAsync_DoesNotCreateAuditRecord_WhenContentFilterDoesNotExist()
-    {
-        // Act
-        await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
-
-        // Assert
         var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
-        Assert.That(auditRecords, Is.Empty);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            Assert.That(auditRecords, Is.Empty);
+        }
     }
 
     [Test]
@@ -712,7 +710,7 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesTags_AddOnly()
+    public async Task PatchAsync_PatchesTags_WhenTagsAreAdded()
     {
         // Arrange
         var existingTag = new Tag { Name = "existing" };
@@ -756,7 +754,7 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesTags_RemoveOnly()
+    public async Task PatchAsync_PatchesTags_WhenTagsAreRemoved()
     {
         // Arrange
         var keepTag = new Tag { Name = "keepMe" };
@@ -773,6 +771,7 @@ public class ContentFilterRepositoryTests
         removeTag.ContentFilters.Add(entity);
         _context.ContentFilters.Add(entity);
         await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
 
         var patch = new ContentFilterPatch
         {
@@ -799,7 +798,7 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesTags_AddAndRemove()
+    public async Task PatchAsync_PatchesTags_WhenTagsAreAddedAndRemoved()
     {
         // Arrange
         var existingTag = new Tag { Name = "existing" };
@@ -817,6 +816,7 @@ public class ContentFilterRepositoryTests
         toRemoveTag.ContentFilters.Add(entity);
         _context.ContentFilters.Add(entity);
         await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
 
         var patch = new ContentFilterPatch
         {
@@ -923,17 +923,17 @@ public class ContentFilterRepositoryTests
         {
             _eventBus.Verify(
                 bus => bus.PublishAsync(
-                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == MagpieEvents.Names.ContentFilterCreated),
+                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == "contentFilter.created"),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             _eventBus.Verify(
                 bus => bus.PublishAsync(
-                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == MagpieEvents.Names.ContentFilterUpdated),
+                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == "contentFilter.updated"),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             _eventBus.Verify(
                 bus => bus.PublishAsync(
-                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == MagpieEvents.Names.ContentFilterDeleted),
+                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == "contentFilter.deleted"),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
         }

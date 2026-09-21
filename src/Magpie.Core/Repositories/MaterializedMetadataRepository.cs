@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -13,7 +12,6 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
@@ -36,97 +34,6 @@ internal sealed class MaterializedMetadataRepository(
         nameof(MaterializedMetadata.DeathDate),
     ];
 
-    private static Expression<Func<T, bool>> ApplyTypePredicate<T>(
-        PropertyCriterion<string> criterion,
-        Expression<Func<T, string?>> selector)
-    {
-        var value = criterion.Value?.ToLower();
-
-        Expression<Func<string?, bool>> test = criterion.Operator switch
-        {
-            CriteriaValueOperator.Equals => v => v != null && v.ToLower() == value,
-            CriteriaValueOperator.NotEquals => v => v == null || v.ToLower() != value,
-            CriteriaValueOperator.ContainsString => v => value != null && v != null && v.ToLower().Contains(value),
-            CriteriaValueOperator.NotContainsString => v => value == null || v == null || !v.ToLower().Contains(value),
-            CriteriaValueOperator.StartsWithString => v => value != null && v != null && v.ToLower().StartsWith(value),
-            CriteriaValueOperator.EndsWithString => v => value != null && v != null && v.ToLower().EndsWith(value),
-            var op => throw new NotSupportedException($"Operator {op} is not supported for relationship type")
-        };
-
-        var parameter = selector.Parameters[0];
-        var body = ReplacingExpressionVisitor.Replace(test.Parameters[0], selector.Body, test.Body);
-        return Expression.Lambda<Func<T, bool>>(body, parameter);
-    }
-
-    private static bool IsNegativeSubjectOperator(CriteriaValueOperator op) =>
-        op is CriteriaValueOperator.NotContainsString or CriteriaValueOperator.NotEquals;
-
-    private static PropertyCriterion<string> ToInnerPositive(PropertyCriterion<string> criterion) =>
-        criterion.Operator switch
-        {
-            CriteriaValueOperator.NotContainsString =>
-                criterion with { Operator = CriteriaValueOperator.ContainsString },
-            CriteriaValueOperator.NotEquals => criterion with { Operator = CriteriaValueOperator.Equals },
-            _ => criterion,
-        };
-
-    private static IQueryable<T> ApplyStringPredicate<T>(
-        IQueryable<T> query,
-        PropertyCriterion<string> criterion,
-        Expression<Func<T, string?>> selector)
-    {
-        var value = criterion.Value?.ToLower();
-        Expression<Func<string?, bool>> test = criterion.Operator switch
-        {
-            CriteriaValueOperator.Equals => v => v != null && v.ToLower() == value,
-            CriteriaValueOperator.NotEquals => v => v == null || v.ToLower() != value,
-            CriteriaValueOperator.ContainsString => v => value != null && v != null && v.ToLower().Contains(value),
-            CriteriaValueOperator.NotContainsString => v => value == null || v == null || !v.ToLower().Contains(value),
-            CriteriaValueOperator.StartsWithString => v => value != null && v != null && v.ToLower().StartsWith(value),
-            CriteriaValueOperator.EndsWithString => v => value != null && v != null && v.ToLower().EndsWith(value),
-            var op => throw new NotSupportedException($"Operator {op} is not supported for relationship subject")
-        };
-
-        var parameter = selector.Parameters[0];
-        var body = ReplacingExpressionVisitor.Replace(test.Parameters[0], selector.Body, test.Body);
-        return query.Where(Expression.Lambda<Func<T, bool>>(body, parameter));
-    }
-
-    private static IQueryable<Relationship> ApplyStringRelationshipPredicate(
-        IQueryable<Relationship> query,
-        PropertyCriterion<string> criterion,
-        Expression<Func<Relationship, string?>> selector)
-    {
-        var value = criterion.Value?.ToLower();
-        return criterion.Operator switch
-        {
-            CriteriaValueOperator.Equals => query.Where(
-                BuildRelationshipComparison(selector, v => v != null && v.ToLower() == value)),
-            CriteriaValueOperator.NotEquals => query.Where(
-                BuildRelationshipComparison(selector, v => v == null || v.ToLower() != value)),
-            CriteriaValueOperator.ContainsString => query.Where(
-                BuildRelationshipComparison(selector, v => value != null && v != null && v.ToLower().Contains(value))),
-            CriteriaValueOperator.NotContainsString => query.Where(BuildRelationshipComparison(
-                selector, v => value == null || v == null || !v.ToLower().Contains(value))),
-            CriteriaValueOperator.StartsWithString => query.Where(BuildRelationshipComparison(
-                selector, v => value != null && v != null && v.ToLower().StartsWith(value))),
-            CriteriaValueOperator.EndsWithString => query.Where(
-                BuildRelationshipComparison(selector, v => value != null && v != null && v.ToLower().EndsWith(value))),
-            CriteriaValueOperator.IsNull => query.Where(BuildRelationshipComparison(selector, v => v == null)),
-            CriteriaValueOperator.IsNotNull => query.Where(BuildRelationshipComparison(selector, v => v != null)),
-            var op => throw new NotSupportedException($"Operator {op} is not supported for relationship fields")
-        };
-    }
-
-    private static Expression<Func<Relationship, bool>> BuildRelationshipComparison(
-        Expression<Func<Relationship, string?>> selector,
-        Expression<Func<string?, bool>> test)
-    {
-        var parameter = selector.Parameters[0];
-        var body = ReplacingExpressionVisitor.Replace(test.Parameters[0], selector.Body, test.Body);
-        return Expression.Lambda<Func<Relationship, bool>>(body, parameter);
-    }
-
     private static IQueryable<MaterializedMetadata> ApplySort(
         IQueryable<MaterializedMetadata> query,
         SortParameter? sort)
@@ -145,16 +52,18 @@ internal sealed class MaterializedMetadataRepository(
         }
 
         return sort.Direction == SortDirection.Ascending
-            ? query.OrderBy(m => EF.Property<MaterializedMetadata>(m, sortProperty)).ThenBy(m => m.ContainerId)
-            : query.OrderByDescending(m => EF.Property<MaterializedMetadata>(m, sortProperty))
+            ? query.OrderBy(m => EF.Property<object>(m, sortProperty)).ThenBy(m => m.ContainerId)
+            : query.OrderByDescending(m => EF.Property<object>(m, sortProperty))
                 .ThenBy(m => m.ContainerId);
     }
 
     public async Task<IEnumerable<MaterializedMetadata>> ListAllAsync(CancellationToken cancellationToken)
     {
-        return await GetMetadataProjection()
+        var metadata = await GetMetadataProjection()
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+        await HydrateCollectionsAsync(metadata, cancellationToken).ConfigureAwait(false);
+        return metadata;
     }
 
     public async Task<PagedList<MaterializedMetadata>> QueryAsync(
@@ -175,6 +84,7 @@ internal sealed class MaterializedMetadataRepository(
                 .Take(paging.PageSize);
 
             var materialized = await projection.ToListAsync(cancellationToken).ConfigureAwait(false);
+            await HydrateCollectionsAsync(materialized, cancellationToken).ConfigureAwait(false);
 
             return new()
             {
@@ -239,30 +149,26 @@ internal sealed class MaterializedMetadataRepository(
                 continue;
             }
 
-            var includeIds = (
-                from c in context.MetadataContributions.AsNoTracking()
-                select c.MetadataContainerId).OrderBy(id => id).Take(0);
-
+            IQueryable<Guid>? includeIds = null;
             foreach (var itemCriteria in group)
             {
-                includeIds = includeIds.Union(matchingContainerIds(itemCriteria));
+                var branch = matchingContainerIds(itemCriteria);
+                includeIds = includeIds is null ? branch : includeIds.Union(branch);
             }
 
-            query = query.Where(m => includeIds.Contains(m.ContainerId));
+            query = query.Where(m => includeIds!.Contains(m.ContainerId));
         }
 
         if (criteria.None is { Count: > 0 })
         {
-            var excludeIds = (
-                from c in context.MetadataContributions.AsNoTracking()
-                select c.MetadataContainerId).OrderBy(id => id).Take(0);
-
+            IQueryable<Guid>? excludeIds = null;
             foreach (var itemCriteria in criteria.None)
             {
-                excludeIds = excludeIds.Union(matchingContainerIds(itemCriteria));
+                var branch = matchingContainerIds(itemCriteria);
+                excludeIds = excludeIds is null ? branch : excludeIds.Union(branch);
             }
 
-            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
+            query = query.Where(m => !excludeIds!.Contains(m.ContainerId));
         }
 
         return query;
@@ -325,7 +231,7 @@ internal sealed class MaterializedMetadataRepository(
             });
     }
 
-    private IQueryable<ExternalId> DeduplicatedExternalIds()
+    private IQueryable<ExternalId> GetExternalIdsProjection()
     {
         return
             from c in context.MetadataContributions.AsNoTracking()
@@ -336,8 +242,8 @@ internal sealed class MaterializedMetadataRepository(
                 where c2.MetadataContainerId == c.MetadataContainerId
                 where e.Source != null
                     ? e2.Source != null && e2.Source.ToLower() == e.Source.ToLower()
-                    : e2.Value.ToLower() == e.Value.ToLower()
-                orderby c2.Ordinal
+                    : e2.Source == null && e2.Value.ToLower() == e.Value.ToLower()
+                orderby c2.Ordinal, c2.Id
                 select c2.Id).FirstOrDefault()
             orderby c.Ordinal, e.Ordinal
             select e;
@@ -345,7 +251,7 @@ internal sealed class MaterializedMetadataRepository(
 
     private IQueryable<Guid> MatchingContainerIdsByExternalId(ExternalIdCriteria criterion)
     {
-        var externalIds = DeduplicatedExternalIds()
+        var externalIds = GetExternalIdsProjection()
             .ApplyCriteriaSet(criterion.Value, nameof(ExternalId.Value))
             .ApplyCriteriaSet(criterion.Source, nameof(ExternalId.Source));
 
@@ -488,12 +394,12 @@ internal sealed class MaterializedMetadataRepository(
     {
         foreach (var kind in criterion.Kind.And)
         {
-            relationships = ApplyStringRelationshipPredicate(relationships, kind, r => r.Kind);
+            relationships = relationships.ApplyStringPredicate(kind, r => r.Kind);
         }
 
         foreach (var qualifier in criterion.Qualifier.And)
         {
-            relationships = ApplyStringRelationshipPredicate(relationships, qualifier, r => r.Qualifier);
+            relationships = relationships.ApplyStringPredicate(qualifier, r => r.Qualifier);
         }
 
         foreach (var type in criterion.Type.And)
@@ -520,7 +426,9 @@ internal sealed class MaterializedMetadataRepository(
         foreach (var subject in criterion.Subject.And)
         {
             var subjectContainerIds = MatchingSubjectContainerIds(subject);
-            relationships = IsNegativeSubjectOperator(subject.Operator)
+            var negated = subject.Operator is CriteriaValueOperator.NotContainsString
+                or CriteriaValueOperator.NotEquals;
+            relationships = negated
                 ? relationships.Where(r =>
                     r.RelatedMetadataContainerId == null ||
                     !subjectContainerIds.Contains(r.RelatedMetadataContainerId.Value))
@@ -548,23 +456,6 @@ internal sealed class MaterializedMetadataRepository(
         return relationships;
     }
 
-    private IQueryable<Guid> MatchingContainerIdsByType(PropertyCriterion<string> criterion)
-    {
-        var subjectIds = context.Subjects.AsNoTracking()
-            .Where(ApplyTypePredicate<Subject>(criterion, s => s.Kind))
-            .Select(s => s.MetadataContainerId);
-
-        var levelIds = context.ContentHierarchyItems.AsNoTracking()
-            .Where(ApplyTypePredicate<ContentHierarchyItem>(criterion, i => i.Level))
-            .Select(i => i.MetadataContainerId);
-
-        var contentTypeIds = context.ContentHierarchyItems.AsNoTracking()
-            .Where(ApplyTypePredicate<ContentHierarchyItem>(criterion, i => i.ContentType))
-            .Select(i => i.MetadataContainerId);
-
-        return subjectIds.Concat(levelIds).Concat(contentTypeIds).Distinct();
-    }
-
     private IQueryable<Guid> AllTypedContainerIds()
     {
         var subjectIds = context.Subjects.AsNoTracking().Select(s => s.MetadataContainerId);
@@ -572,17 +463,33 @@ internal sealed class MaterializedMetadataRepository(
         return subjectIds.Concat(contentIds).Distinct();
     }
 
+    private IQueryable<Guid> MatchingContainerIdsByType(PropertyCriterion<string> criterion)
+    {
+        var subjectIds = context.Subjects.AsNoTracking()
+            .ApplyStringPredicate(criterion, s => s.Kind)
+            .Select(s => s.MetadataContainerId);
+
+        var levelIds = context.ContentHierarchyItems.AsNoTracking()
+            .ApplyStringPredicate(criterion, i => i.Level)
+            .Select(i => i.MetadataContainerId);
+
+        var contentTypeIds = context.ContentHierarchyItems.AsNoTracking()
+            .ApplyStringPredicate(criterion, i => i.ContentType)
+            .Select(i => i.MetadataContainerId);
+
+        return subjectIds.Concat(levelIds).Concat(contentTypeIds).Distinct();
+    }
+
     private IQueryable<Guid> MatchingSubjectContainerIds(PropertyCriterion<string> criterion)
     {
-        var positive = ToInnerPositive(criterion);
+        var positive = criterion.ToInnerPositive();
 
-        var byTitle = ApplyStringPredicate(context.MetadataContributions.AsNoTracking(), positive, c => c.Title)
+        var byTitle = context.MetadataContributions.AsNoTracking()
+            .ApplyStringPredicate(positive, c => c.Title)
             .Select(c => c.MetadataContainerId);
 
-        var byAlias = ApplyStringPredicate(
-            context.AlternateTexts.AsNoTracking().Where(a => a.Kind.ToLower() == "name"),
-            positive,
-            a => a.Text)
+        var byAlias = context.AlternateTexts.AsNoTracking().Where(a => a.Kind.ToLower() == "name")
+            .ApplyStringPredicate(positive, a => a.Text)
             .Join(
                 context.MetadataContributions.AsNoTracking(),
                 a => a.MetadataContributionId,
@@ -698,191 +605,207 @@ internal sealed class MaterializedMetadataRepository(
                     orderby preferredLanguage == null ? 0 : (c.Language == preferredLanguage ? 0 : 1),
                         c.Ordinal
                     select c.DeathDate).FirstOrDefault(),
-                Genres = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in GetGenresProjection() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    select value).ToList(),
-                ExternalIds = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in DeduplicatedExternalIds() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    select value).ToList(),
-                ContentRatings = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in GetContentRatingsProjection() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    select value).ToList(),
-                Awards = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in GetAwardsProjection() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    select value).ToList(),
-                AlternateTexts = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in GetAlternateTextsProjection() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    select value).ToList(),
-                References = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in GetReferencesProjection() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    orderby c.Ordinal, value.Ordinal
-                    select value).ToList(),
-                Relationships = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in GetRelationshipsProjection() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    orderby c.Ordinal, value.Ordinal
-                    select value).ToList(),
-                Images = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in GetImagesProjection() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    orderby c.Ordinal, value.Ordinal
-                    select value).ToList(),
-                Previews = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    join value in GetPreviewsProjection() on c.Id equals value.MetadataContributionId
-                    where c.MetadataContainerId == mc.Id
-                    orderby c.Ordinal, value.Ordinal
-                    select value).ToList(),
-                CustomMetadata = (
-                    from c in context.MetadataContributions.AsNoTracking()
-                    from value in c.CustomMetadata
-                    where c.MetadataContainerId == mc.Id
-                    where c.Id == (
-                        from c2 in context.MetadataContributions
-                        from value2 in c2.CustomMetadata
-                        where c2.MetadataContainerId == c.MetadataContainerId
-                        where value2.Key.ToLower() == value.Key.ToLower()
-                        orderby c2.Ordinal
-                        select c2.Id).FirstOrDefault()
-                    orderby c.Ordinal
-                    select value).ToList(),
             };
     }
+
+    private async Task HydrateCollectionsAsync(
+        IList<MaterializedMetadata> metadata,
+        CancellationToken cancellationToken)
+    {
+        if (metadata.Count == 0)
+        {
+            return;
+        }
+
+        var containerIds = metadata.Select(value => value.ContainerId).ToList();
+        var contributions = await context.MetadataContributions.AsNoTracking()
+            .Where(value => containerIds.Contains(value.MetadataContainerId))
+            .Include(value => value.AlternateTexts)
+            .Include(value => value.Awards)
+            .Include(value => value.ContentRatings)
+            .Include(value => value.CustomMetadata)
+            .Include(value => value.ExternalIds)
+            .Include(value => value.Genres)
+            .Include(value => value.Images)
+            .Include(value => value.Previews)
+            .Include(value => value.References)
+            .Include(value => value.Relationships)
+            .AsSplitQuery()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var byContainer = contributions
+            .GroupBy(value => value.MetadataContainerId)
+            .ToDictionary(group => group.Key, group => group.OrderBy(value => value.Ordinal)
+                .ThenBy(value => value.Id.ToString(), StringComparer.Ordinal).ToList());
+
+        for (var index = 0; index < metadata.Count; index++)
+        {
+            byContainer.TryGetValue(metadata[index].ContainerId, out var values);
+            values ??= [];
+            var relationships = values.SelectMany(value => value.Relationships)
+                .Where(value => value.Qualifier != null || !values.SelectMany(item => item.Relationships).Any(
+                    qualified => qualified.Qualifier != null &&
+                        EqualKey(qualified.Kind, value.Kind) &&
+                        qualified.RelatedMetadataContainerId == value.RelatedMetadataContainerId));
+
+            metadata[index] = metadata[index] with
+            {
+                AlternateTexts = Merge(values, value => value.AlternateTexts,
+                    value => (Key(value.Kind), Key(value.Language), Key(value.Text)), value => value.Ordinal),
+                Awards = Merge(values, value => value.Awards,
+                    value => (Key(value.Body), Key(value.Name), value.Year, Key(value.Category)),
+                    value => value.Ordinal),
+                ContentRatings = Merge(
+                    values, value => value.ContentRatings, value => Key(value.Body), value => value.Ordinal),
+                CustomMetadata = Merge(values, value => value.CustomMetadata, value => Key(value.Key)),
+                ExternalIds = Merge(values, value => value.ExternalIds,
+                    value => value.Source == null
+                        ? ((string?)null, Key(value.Value))
+                        : (Key(value.Source), (string?)null), value => value.Ordinal),
+                Genres = Merge(values, value => value.Genres, value => Key(value.Name), value => value.Ordinal),
+                Images = Merge(values, value => value.Images, value => Key(value.Type), value => value.Ordinal),
+                Previews = Merge(values, value => value.Previews, value => Key(value.Kind), value => value.Ordinal),
+                References = Merge(values, value => value.References,
+                    value => (Key(value.Source), Key(value.Kind), Key(value.Language)), value => value.Ordinal),
+                Relationships = Merge(values, contribution => relationships
+                        .Where(value => value.MetadataContributionId == contribution.Id),
+                    value => (Key(value.Kind), value.RelatedMetadataContainerId, Key(value.Qualifier)),
+                    value => value.Ordinal)
+            };
+        }
+    }
+
+    private List<T> Merge<T, TKey>(
+        IEnumerable<MetadataContribution> contributions,
+        Func<MetadataContribution, IEnumerable<T>> items,
+        Func<T, TKey> key,
+        Func<T, int>? order = null)
+    {
+        var seen = new HashSet<TKey>();
+        var result = new List<T>();
+        foreach (var contribution in contributions)
+        {
+            var contributionItems = items(contribution);
+            if (order is not null)
+            {
+                contributionItems = contributionItems.OrderBy(order);
+            }
+
+            var ordered = contributionItems.ToList();
+            result.AddRange(ordered.Where(value => !seen.Contains(key(value))));
+            seen.UnionWith(ordered.Select(key));
+        }
+
+        return result;
+    }
+
+    private string? Key(string? value) => value?.ToLower();
+
+    private bool EqualKey(string left, string right) =>
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
 
     private IQueryable<AlternateText> GetAlternateTextsProjection()
     {
         return
-            from c in context.MetadataContributions.AsNoTracking()
-            from a in c.AlternateTexts
-            where c.Id == (
-                from c2 in context.MetadataContributions
-                from a2 in c2.AlternateTexts
-                where c2.MetadataContainerId == c.MetadataContainerId
-                where a2.Kind.ToLower() == a.Kind.ToLower()
-                where
-                    (a2.Language == null && a.Language == null) ||
-                    (a2.Language != null && a.Language != null && a2.Language.ToLower() == a.Language.ToLower())
-                where a2.Text.ToLower() == a.Text.ToLower()
-                orderby c2.Ordinal
-                select c2.Id).FirstOrDefault()
-            orderby c.Ordinal, a.Ordinal
-            select a;
+            from contribution in context.MetadataContributions.AsNoTracking()
+            from value in contribution.AlternateTexts
+            where !context.MetadataContributions.Any(earlier =>
+                earlier.MetadataContainerId == contribution.MetadataContainerId &&
+                (earlier.Ordinal < contribution.Ordinal ||
+                    earlier.Ordinal == contribution.Ordinal &&
+                    string.Compare(earlier.Id.ToString(), contribution.Id.ToString()) < 0) &&
+                earlier.AlternateTexts.Any(other => other.Kind.ToLower() == value.Kind.ToLower() &&
+                    other.Language!.ToLower() == value.Language!.ToLower() &&
+                    other.Text.ToLower() == value.Text.ToLower()))
+            select value;
     }
 
     private IQueryable<Award> GetAwardsProjection()
     {
         return
-            from c in context.MetadataContributions.AsNoTracking()
-            from a in c.Awards
-            where c.Id == (
-                from c2 in context.MetadataContributions
-                from a2 in c2.Awards
-                where c2.MetadataContainerId == c.MetadataContainerId
-                where a2.Body.ToLower() == a.Body.ToLower()
-                where a2.Name.ToLower() == a.Name.ToLower()
-                where a2.Year == a.Year
-                where
-                    (a2.Category == null && a.Category == null) ||
-                    (a2.Category != null && a.Category != null && a2.Category.ToLower() == a.Category.ToLower())
-                orderby c2.Ordinal
-                select c2.Id).FirstOrDefault()
-            orderby c.Ordinal, a.Ordinal
-            select a;
+            from contribution in context.MetadataContributions.AsNoTracking()
+            from value in contribution.Awards
+            where !context.MetadataContributions.Any(earlier =>
+                earlier.MetadataContainerId == contribution.MetadataContainerId &&
+                (earlier.Ordinal < contribution.Ordinal ||
+                    earlier.Ordinal == contribution.Ordinal &&
+                    string.Compare(earlier.Id.ToString(), contribution.Id.ToString()) < 0) &&
+                earlier.Awards.Any(other =>
+                    other.Body.ToLower() == value.Body.ToLower() && other.Name.ToLower() == value.Name.ToLower() &&
+                    other.Year == value.Year && other.Category!.ToLower() == value.Category!.ToLower()))
+            select value;
     }
 
     private IQueryable<ContentRating> GetContentRatingsProjection()
     {
         return
-            from c in context.MetadataContributions.AsNoTracking()
-            from r in c.ContentRatings
-            where c.Id == (
-                from c2 in context.MetadataContributions
-                from r2 in c2.ContentRatings
-                where c2.MetadataContainerId == c.MetadataContainerId
-                where r2.Body.ToLower() == r.Body.ToLower()
-                orderby c2.Ordinal
-                select c2.Id).FirstOrDefault()
-            orderby c.Ordinal, r.Ordinal
-            select r;
+            from contribution in context.MetadataContributions.AsNoTracking()
+            from value in contribution.ContentRatings
+            where !context.MetadataContributions.Any(earlier =>
+                earlier.MetadataContainerId == contribution.MetadataContainerId &&
+                (earlier.Ordinal < contribution.Ordinal ||
+                    earlier.Ordinal == contribution.Ordinal &&
+                    string.Compare(earlier.Id.ToString(), contribution.Id.ToString()) < 0) &&
+                earlier.ContentRatings.Any(other => other.Body.ToLower() == value.Body.ToLower()))
+            select value;
     }
 
     private IQueryable<Genre> GetGenresProjection()
     {
         return
-            from c in context.MetadataContributions.AsNoTracking()
-            from g in c.Genres
-            where c.Id == (
-                from c2 in context.MetadataContributions
-                from g2 in c2.Genres
-                where c2.MetadataContainerId == c.MetadataContainerId
-                where g2.Name.ToLower() == g.Name.ToLower()
-                orderby c2.Ordinal
-                select c2.Id).FirstOrDefault()
-            orderby c.Ordinal, g.Ordinal
-            select g;
+            from contribution in context.MetadataContributions.AsNoTracking()
+            from value in contribution.Genres
+            where !context.MetadataContributions.Any(earlier =>
+                earlier.MetadataContainerId == contribution.MetadataContainerId &&
+                (earlier.Ordinal < contribution.Ordinal ||
+                    earlier.Ordinal == contribution.Ordinal &&
+                    string.Compare(earlier.Id.ToString(), contribution.Id.ToString()) < 0) &&
+                earlier.Genres.Any(other => other.Name.ToLower() == value.Name.ToLower()))
+            select value;
     }
 
     private IQueryable<Image> GetImagesProjection()
     {
         return
-            from c in context.MetadataContributions.AsNoTracking()
-            from i in c.Images
-            where c.Id == (
-                from c2 in context.MetadataContributions
-                from i2 in c2.Images
-                where c2.MetadataContainerId == c.MetadataContainerId
-                where i2.Type.ToLower() == i.Type.ToLower()
-                orderby c2.Ordinal
-                select c2.Id).FirstOrDefault()
-            select i;
+            from contribution in context.MetadataContributions.AsNoTracking()
+            from value in contribution.Images
+            where !context.MetadataContributions.Any(earlier =>
+                earlier.MetadataContainerId == contribution.MetadataContainerId &&
+                (earlier.Ordinal < contribution.Ordinal ||
+                    earlier.Ordinal == contribution.Ordinal &&
+                    string.Compare(earlier.Id.ToString(), contribution.Id.ToString()) < 0) &&
+                earlier.Images.Any(other => other.Type.ToLower() == value.Type.ToLower()))
+            select value;
     }
 
     private IQueryable<Preview> GetPreviewsProjection()
     {
         return
-            from c in context.MetadataContributions.AsNoTracking()
-            from p in c.Previews
-            where c.Id == (
-                from c2 in context.MetadataContributions
-                from p2 in c2.Previews
-                where c2.MetadataContainerId == c.MetadataContainerId
-                where p2.Kind.ToLower() == p.Kind.ToLower()
-                orderby c2.Ordinal
-                select c2.Id).FirstOrDefault()
-            select p;
+            from contribution in context.MetadataContributions.AsNoTracking()
+            from value in contribution.Previews
+            where !context.MetadataContributions.Any(earlier =>
+                earlier.MetadataContainerId == contribution.MetadataContainerId &&
+                (earlier.Ordinal < contribution.Ordinal ||
+                    earlier.Ordinal == contribution.Ordinal &&
+                    string.Compare(earlier.Id.ToString(), contribution.Id.ToString()) < 0) &&
+                earlier.Previews.Any(other => other.Kind.ToLower() == value.Kind.ToLower()))
+            select value;
     }
 
     private IQueryable<Reference> GetReferencesProjection()
     {
         return
-            from c in context.MetadataContributions.AsNoTracking()
-            from r in c.References
-            where c.Id == (
-                from c2 in context.MetadataContributions
-                from r2 in c2.References
-                where c2.MetadataContainerId == c.MetadataContainerId
-                where r2.Source.ToLower() == r.Source.ToLower()
-                where r2.Kind.ToLower() == r.Kind.ToLower()
-                where
-                    (r2.Language == null && r.Language == null) ||
-                    (r2.Language != null && r.Language != null && r2.Language.ToLower() == r.Language.ToLower())
-                orderby c2.Ordinal
-                select c2.Id).FirstOrDefault()
-            select r;
+            from contribution in context.MetadataContributions.AsNoTracking()
+            from value in contribution.References
+            where !context.MetadataContributions.Any(earlier =>
+                earlier.MetadataContainerId == contribution.MetadataContainerId &&
+                (earlier.Ordinal < contribution.Ordinal ||
+                    earlier.Ordinal == contribution.Ordinal &&
+                    string.Compare(earlier.Id.ToString(), contribution.Id.ToString()) < 0) &&
+                earlier.References.Any(other =>
+                    other.Source.ToLower() == value.Source.ToLower() && other.Kind.ToLower() == value.Kind.ToLower() &&
+                    other.Language!.ToLower() == value.Language!.ToLower()))
+            select value;
     }
 
     private IQueryable<Relationship> GetRelationshipsProjection()
@@ -891,24 +814,13 @@ internal sealed class MaterializedMetadataRepository(
             from c in context.MetadataContributions.AsNoTracking()
             from r in c.Relationships
             where r.Qualifier != null || !(
-                from c3 in context.MetadataContributions
-                from r3 in c3.Relationships
-                where c3.MetadataContainerId == c.MetadataContainerId
-                where r3.Kind.ToLower() == r.Kind.ToLower()
-                where r3.RelatedMetadataContainerId == r.RelatedMetadataContainerId
-                where r3.Qualifier != null
-                select r3).Any()
-            where c.Id == (
                 from c2 in context.MetadataContributions
                 from r2 in c2.Relationships
                 where c2.MetadataContainerId == c.MetadataContainerId
+                where r2.Qualifier != null
                 where r2.Kind.ToLower() == r.Kind.ToLower()
                 where r2.RelatedMetadataContainerId == r.RelatedMetadataContainerId
-                where
-                    (r2.Qualifier == null && r.Qualifier == null) ||
-                    (r2.Qualifier != null && r.Qualifier != null && r2.Qualifier.ToLower() == r.Qualifier.ToLower())
-                orderby c2.Ordinal
-                select c2.Id).FirstOrDefault()
+                select r2).Any()
             select r;
     }
 }

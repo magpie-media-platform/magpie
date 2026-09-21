@@ -51,7 +51,7 @@ public interface IApiKeyService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets an API key by id when the caller owns it or is an administrator.
+    /// An API key by id when the caller owns it or is an administrator.
     /// </summary>
     /// <param name="apiKeyId">The id of the API key to return</param>
     /// <param name="callerUserId">The id of the user that makes the request</param>

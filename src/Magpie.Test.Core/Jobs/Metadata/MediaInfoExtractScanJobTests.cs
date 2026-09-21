@@ -13,12 +13,12 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Media;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -27,7 +27,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Jobs.Metadata;
 
 [TestFixture]
-public class MediaInfoExtractScanJobTests
+public sealed class MediaInfoExtractScanJobTests
 {
     private Mock<IMediaFileRepository> _mediaFileRepository = null!;
     private Mock<IJobManager> _jobManager = null!;
@@ -36,12 +36,36 @@ public class MediaInfoExtractScanJobTests
     private List<JobEnqueueRequest> _queuedJobs = null!;
     private Guid _targetHierarchyItemId;
     private IJob _job = null!;
+    private JobContext _scheduledContext = null!;
+    private JobContext _manualContext = null!;
+    private JobContext _eventContext = null!;
+    private MagpieEvent _downloadImportedEvent = null!;
 
     [SetUp]
     public void SetUp()
     {
         _targetHierarchyItemId = Guid.NewGuid();
-        _mediaFileRepository = new Mock<IMediaFileRepository>();
+        _scheduledContext = new JobContext(
+            ExecutionId: Guid.NewGuid(),
+            ScheduleTriggerId: Guid.NewGuid(),
+            EventTriggerId: null,
+            ManualTriggerUserId: null,
+            ExecutionMode: JobExecutionMode.Queue,
+            Parameters: new Dictionary<string, string>(),
+            Event: null);
+        _manualContext = _scheduledContext with { ScheduleTriggerId = null, ManualTriggerUserId = Guid.NewGuid() };
+        _downloadImportedEvent = new MagpieEvent(
+            Guid.NewGuid(), "download.imported",
+            new Dictionary<string, string> { ["content.hierarchyItemId"] = _targetHierarchyItemId.ToString("D") },
+            new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc), null);
+        _eventContext = _scheduledContext with
+        {
+            ScheduleTriggerId = null,
+            EventTriggerId = Guid.NewGuid(),
+            Event = _downloadImportedEvent
+        };
+        _mediaFileRepository = new Mock<IMediaFileRepository> { CallBase = true };
         _mediaFileRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<MediaFileQuery>(),
@@ -61,70 +85,10 @@ public class MediaInfoExtractScanJobTests
         _job = new MediaInfoExtractScanJob(
             _mediaFileRepository.Object,
             _jobManager.Object,
-            TimeProvider.System,
+            new FakeTimeProvider(new DateTimeOffset(2026, 5, 20, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<MediaInfoExtractScanJob>.Instance,
             _progress.Object,
             _extractor.Object);
-    }
-
-    private static JobContext ScheduledContext(
-        IReadOnlyDictionary<string, string>? parameters = null,
-        Guid? userId = null,
-        Guid? correlationId = null)
-    {
-        return new JobContext(
-            ExecutionId: Guid.NewGuid(),
-            ScheduleTriggerId: Guid.NewGuid(),
-            EventTriggerId: null,
-            ManualTriggerUserId: userId,
-            ExecutionMode: JobExecutionMode.Queue,
-            Parameters: parameters ?? new Dictionary<string, string>(),
-            Event: null,
-            CorrelationId: correlationId);
-    }
-
-    private static JobContext ManualContext(
-        IReadOnlyDictionary<string, string>? parameters = null,
-        Guid? userId = null,
-        Guid? correlationId = null)
-    {
-        return new JobContext(
-            ExecutionId: Guid.NewGuid(),
-            ScheduleTriggerId: null,
-            EventTriggerId: null,
-            ManualTriggerUserId: userId ?? Guid.NewGuid(),
-            ExecutionMode: JobExecutionMode.Queue,
-            Parameters: parameters ?? new Dictionary<string, string>(),
-            Event: null,
-            CorrelationId: correlationId);
-    }
-
-    private static JobContext EventContext(
-        MagpieEvent magpieEvent,
-        IReadOnlyDictionary<string, string>? parameters = null)
-    {
-        return new JobContext(
-            ExecutionId: Guid.NewGuid(),
-            ScheduleTriggerId: null,
-            EventTriggerId: Guid.NewGuid(),
-            ManualTriggerUserId: null,
-            ExecutionMode: JobExecutionMode.Queue,
-            Parameters: parameters ?? new Dictionary<string, string>(),
-            Event: magpieEvent);
-    }
-
-    private static MagpieEvent DownloadImportedEvent(string contentHierarchyItemId)
-    {
-        return new MagpieEvent(
-            Guid.NewGuid(),
-            MagpieEvents.Names.DownloadImported,
-            new Dictionary<string, string>
-            {
-                [MagpieEvents.Keys.ContentHierarchyItemId] = contentHierarchyItemId
-            },
-            DateTime.UtcNow,
-            DateTime.UtcNow,
-            null);
     }
 
     [Test]
@@ -145,7 +109,7 @@ public class MediaInfoExtractScanJobTests
             Assert.That(spec.LockPartitionFields, Is.EqualTo(["contentHierarchyItemId"]));
             Assert.That(
                 spec.LockPartitionEventContextKeys!["contentHierarchyItemId"],
-                Is.EqualTo(MagpieEvents.Keys.ContentHierarchyItemId));
+                Is.EqualTo("content.hierarchyItemId"));
             Assert.That(
                 spec.SupportedTriggerModes,
                 Is.EquivalentTo([JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event]));
@@ -187,7 +151,7 @@ public class MediaInfoExtractScanJobTests
             });
         var userId = Guid.NewGuid();
         var correlationId = Guid.NewGuid();
-        var jobContext = ScheduledContext(userId: userId, correlationId: correlationId);
+        var jobContext = _scheduledContext with { ManualTriggerUserId = userId, CorrelationId = correlationId };
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -212,7 +176,7 @@ public class MediaInfoExtractScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_UsesMaxAgeHoursParameter_ForCutoff()
+    public async Task ExecuteAsync_UsesConfiguredAgeForCutoff_WhenMaxAgeHoursIsProvided()
     {
         // Arrange
         DateTime? capturedCutoff = null;
@@ -234,20 +198,21 @@ public class MediaInfoExtractScanJobTests
                 MediaInfo = new MediaInfo()
             }]
             });
-        var jobContext = ScheduledContext(new Dictionary<string, string> { ["maxAgeHours"] = "7" });
-        var beforeCall = DateTime.UtcNow;
+        var jobContext = _scheduledContext with
+        {
+            Parameters = new Dictionary<string, string> { ["maxAgeHours"] = "7" }
+        };
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
 
         // Assert
-        var expectedCutoff = beforeCall - TimeSpan.FromHours(7);
         Assert.That(capturedCutoff, Is.Not.Null);
-        Assert.That(capturedCutoff!.Value, Is.EqualTo(expectedCutoff).Within(TimeSpan.FromSeconds(5)));
+        Assert.That(capturedCutoff!.Value, Is.EqualTo(new DateTime(2026, 5, 20, 5, 0, 0, DateTimeKind.Utc)));
     }
 
     [Test]
-    public async Task ExecuteAsync_HonorsCap_PerRun()
+    public async Task ExecuteAsync_QueuesAtMostFiveHundredFiles_WhenThePageIsFull()
     {
         // Arrange
         var candidates = Enumerable.Range(0, 500)
@@ -265,7 +230,7 @@ public class MediaInfoExtractScanJobTests
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<MediaFile> { Items = candidates });
-        var jobContext = ScheduledContext();
+        var jobContext = _scheduledContext;
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -295,7 +260,7 @@ public class MediaInfoExtractScanJobTests
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<MediaFile>());
-        var jobContext = ScheduledContext();
+        var jobContext = _scheduledContext;
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -317,10 +282,10 @@ public class MediaInfoExtractScanJobTests
         var job = new MediaInfoExtractScanJob(
             _mediaFileRepository.Object,
             _jobManager.Object,
-            TimeProvider.System,
+            new FakeTimeProvider(new DateTimeOffset(2026, 5, 20, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<MediaInfoExtractScanJob>.Instance,
             _progress.Object);
-        var jobContext = ScheduledContext();
+        var jobContext = _scheduledContext;
 
         // Act
         await job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -391,7 +356,7 @@ public class MediaInfoExtractScanJobTests
     public void ExecuteAsync_ThrowsAndDoesNotQueue_WhenManualTriggerWithoutTarget()
     {
         // Arrange
-        var jobContext = ManualContext();
+        var jobContext = _manualContext;
 
         // Act
         var ex = Assert.Throws<MagpieException>(() => _job.ExecuteAsync(jobContext).GetAwaiter().GetResult());
@@ -412,7 +377,7 @@ public class MediaInfoExtractScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_QueuesExtractPerFile_ForEventContentHierarchyItemId()
+    public async Task ExecuteAsync_QueuesExtractPerFile_WhenTheEventSuppliesATarget()
     {
         // Arrange
         var targetFileId = Guid.NewGuid();
@@ -426,7 +391,7 @@ public class MediaInfoExtractScanJobTests
             {
                 Items = [new MediaFile { Id = targetFileId, FileKind = "video", FilePath = "/media/event-target.mkv" }]
             });
-        var jobContext = EventContext(DownloadImportedEvent(_targetHierarchyItemId.ToString("D")));
+        var jobContext = _eventContext;
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -453,12 +418,16 @@ public class MediaInfoExtractScanJobTests
     {
         // Arrange
         var eventHierarchyItemId = Guid.NewGuid();
-        var jobContext = EventContext(
-            DownloadImportedEvent(eventHierarchyItemId.ToString("D")),
-            new Dictionary<string, string>
+        var jobContext = _eventContext with
+        {
+            Event = _downloadImportedEvent with
             {
-                ["contentHierarchyItemId"] = _targetHierarchyItemId.ToString("D")
-            });
+                Context = new Dictionary<string, string>
+                { ["content.hierarchyItemId"] = eventHierarchyItemId.ToString("D") }
+            },
+            Parameters = new Dictionary<string, string>
+            { ["contentHierarchyItemId"] = _targetHierarchyItemId.ToString("D") }
+        };
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -484,7 +453,7 @@ public class MediaInfoExtractScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_QueuesExtractPerFile_ForSuppliedContentHierarchyItemId()
+    public async Task ExecuteAsync_QueuesExtractPerFile_WhenParametersSupplyATarget()
     {
         // Arrange
         var firstFileId = Guid.NewGuid();
@@ -505,10 +474,13 @@ public class MediaInfoExtractScanJobTests
             });
         var userId = Guid.NewGuid();
         var correlationId = Guid.NewGuid();
-        var jobContext = ManualContext(
-            new Dictionary<string, string> { ["contentHierarchyItemId"] = _targetHierarchyItemId.ToString() },
-            userId,
-            correlationId);
+        var jobContext = _manualContext with
+        {
+            Parameters = new Dictionary<string, string>
+            { ["contentHierarchyItemId"] = _targetHierarchyItemId.ToString() },
+            ManualTriggerUserId = userId,
+            CorrelationId = correlationId
+        };
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -534,8 +506,11 @@ public class MediaInfoExtractScanJobTests
     public async Task ExecuteAsync_ReportsNoFiles_WhenContentTargetHasNoFiles()
     {
         // Arrange
-        var jobContext = ManualContext(
-            new Dictionary<string, string> { ["contentHierarchyItemId"] = _targetHierarchyItemId.ToString() });
+        var jobContext = _manualContext with
+        {
+            Parameters = new Dictionary<string, string>
+            { ["contentHierarchyItemId"] = _targetHierarchyItemId.ToString() }
+        };
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -554,7 +529,10 @@ public class MediaInfoExtractScanJobTests
     public void ExecuteAsync_Throws_WhenContentHierarchyItemIdNotGuid()
     {
         // Arrange
-        var jobContext = ManualContext(new Dictionary<string, string> { ["contentHierarchyItemId"] = "not-a-guid" });
+        var jobContext = _manualContext with
+        {
+            Parameters = new Dictionary<string, string> { ["contentHierarchyItemId"] = "not-a-guid" }
+        };
 
         // Act
         var ex = Assert.Throws<ArgumentException>(() => _job.ExecuteAsync(jobContext).GetAwaiter().GetResult());
@@ -573,7 +551,13 @@ public class MediaInfoExtractScanJobTests
     public void ExecuteAsync_Throws_WhenEventContentHierarchyItemIdNotGuid()
     {
         // Arrange
-        var jobContext = EventContext(DownloadImportedEvent("not-a-guid"));
+        var jobContext = _eventContext with
+        {
+            Event = _downloadImportedEvent with
+            {
+                Context = new Dictionary<string, string> { ["content.hierarchyItemId"] = "not-a-guid" }
+            }
+        };
 
         // Act
         var ex = Assert.Throws<ArgumentException>(() => _job.ExecuteAsync(jobContext).GetAwaiter().GetResult());

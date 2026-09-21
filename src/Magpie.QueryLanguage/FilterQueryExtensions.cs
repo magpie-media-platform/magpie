@@ -1,3 +1,5 @@
+using System;
+
 using Magpie.Models.Data;
 
 namespace Magpie.QueryLanguage;
@@ -43,7 +45,18 @@ public static class FilterQueryExtensions
     /// <param name="criteria">The criteria to format</param>
     public static string FormatContentFilter(this ContentFilterCriteria criteria)
     {
-        return criteria.FormatFilterQuery();
+        return criteria.FormatFilterQueryOrDefault()
+            ?? throw new ArgumentException("Media file criteria cannot be formatted as a filter query.");
+    }
+
+    /// <summary>
+    /// Formats content filter criteria as a query string, or returns null when the criteria are not expressible.
+    /// </summary>
+    /// <param name="criteria">The criteria to format</param>
+    /// <returns>The query string, or <see langword="null"/> when the criteria are not expressible</returns>
+    public static string? FormatContentFilterOrDefault(this ContentFilterCriteria criteria)
+    {
+        return criteria.FormatFilterQueryOrDefault();
     }
 
     /// <summary>

@@ -17,7 +17,7 @@ import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import type { JobParameterDefinition } from '@/hooks/useJobs';
 
-import { describeCron, describeCronUtc } from './cronDescription';
+import { cronPresets, describeCron, describeCronUtc } from './cronDescription';
 import { JobParameterFieldset } from './JobParameterFieldset';
 import {
     areJobParameterValuesEqual,
@@ -73,16 +73,6 @@ const emptyValues: ScheduleTriggerFormValues = {
     enabled: true,
     parameters: {},
 };
-
-const cronPresets = [
-    { label: 'Every hour', value: '0 * * * *' },
-    { label: 'Every 4 hours', value: '0 */4 * * *' },
-    { label: 'Every 6 hours', value: '0 */6 * * *' },
-    { label: 'Every 12 hours', value: '0 */12 * * *' },
-    { label: 'Daily at midnight', value: '0 0 * * *' },
-    { label: 'Daily at 6 AM', value: '0 6 * * *' },
-    { label: 'Weekly on Sunday', value: '0 0 * * 0' },
-];
 
 const CUSTOM_PRESET = 'custom';
 

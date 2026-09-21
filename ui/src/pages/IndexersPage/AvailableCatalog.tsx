@@ -114,6 +114,7 @@ export function AvailableCatalog() {
                 id: 'name',
                 accessorKey: 'name',
                 header: 'Name',
+                meta: { mobileRole: 'header' },
                 size: 260,
                 cell: ({ row }) => {
                     const def = row.original;

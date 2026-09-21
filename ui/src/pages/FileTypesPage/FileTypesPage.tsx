@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ShieldWarningIcon, TrashIcon, PencilSimpleIcon, PlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
-import { DataTable } from '@/components/ui/DataTable';
+import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import {
     Dialog,
@@ -16,6 +19,7 @@ import {
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
@@ -27,19 +31,10 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
 import { useDenyList, useMimeMappings, type BlockedFileType, type MimeMapping } from '@/hooks/useFileTypes';
-import { isApiError } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 
+import '@/styles/bulk-actions-toolbar.css';
 import './FileTypesPage.css';
-
-function describeError(err: unknown, fallback: string): string {
-    if (isApiError(err)) {
-        return err.message || fallback;
-    }
-    if (err instanceof Error && err.message) {
-        return err.message;
-    }
-    return fallback;
-}
 
 export function FileTypesPage() {
     useDocumentTitle('File Types');
@@ -97,8 +92,12 @@ interface DenyListSectionProps {
 
 function DenyListSection({ denyList }: DenyListSectionProps) {
     const { toast } = useToast();
+    const runBulk = useBulkRun();
     const [addOpen, , openAdd, closeAdd] = useToggle();
     const [deletingEntry, setDeletingEntry] = useState<BlockedFileType | null>(null);
+    const [pageRowIds, setPageRowIds] = useState<string[]>([]);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
     const handleAdd = useCallback(
         async (pattern: string): Promise<string | null> => {
@@ -107,7 +106,7 @@ function DenyListSection({ denyList }: DenyListSectionProps) {
                 toast({ title: pattern, description: 'Blocked file pattern added.', variant: 'success' });
                 return null;
             } catch (err) {
-                const message = describeError(err, 'Failed to add deny-list entry');
+                const message = getErrorMessage(err, 'Failed to add deny-list entry');
                 toast({ title: pattern, description: message, variant: 'error' });
                 return message;
             }
@@ -126,7 +125,7 @@ function DenyListSection({ denyList }: DenyListSectionProps) {
         } catch (err) {
             toast({
                 title: entry.pattern,
-                description: describeError(err, 'Failed to remove deny-list entry'),
+                description: getErrorMessage(err, 'Failed to remove deny-list entry'),
                 variant: 'error',
             });
         } finally {
@@ -136,12 +135,39 @@ function DenyListSection({ denyList }: DenyListSectionProps) {
 
     const getRowId = useCallback((entry: BlockedFileType) => entry.id, []);
 
+    const selection = useBulkSelection({ pageRowIds, totalCount: denyList.entries.length });
+    const selectedEntries = useMemo(
+        () => denyList.entries.filter((e) => selection.isRowChecked(e.id)),
+        [denyList.entries, selection],
+    );
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedEntries, selection, {
+                action: (entry) => denyList.deleteEntry(entry.id),
+                verb: 'remove',
+                itemNounPlural: 'deny-list entries',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [denyList, runBulk, selectedEntries, selection]);
+
     const columns = useMemo<ColumnDef<BlockedFileType>[]>(
         () => [
+            selectColumn<BlockedFileType>({
+                selection,
+                getId: (row) => row.id,
+                headerLabel: 'Select all deny-list entries',
+                rowLabel: (row) => row.pattern,
+            }),
             {
                 id: 'pattern',
                 accessorKey: 'pattern',
                 header: 'Pattern',
+                meta: { mobileRole: 'header' },
                 cell: ({ row }) => <code className="file-types-page__code">{row.original.pattern}</code>,
             },
             {
@@ -166,7 +192,7 @@ function DenyListSection({ denyList }: DenyListSectionProps) {
                 ),
             },
         ],
-        [],
+        [selection],
     );
 
     return (
@@ -200,15 +226,42 @@ function DenyListSection({ denyList }: DenyListSectionProps) {
                     description="A blocked file extension or MIME type pattern can be added here."
                 />
             ) : (
-                <div data-table="deny-list">
-                    <DataTable<BlockedFileType>
-                        columns={columns}
-                        data={denyList.entries}
-                        enableSorting={false}
-                        getRowId={getRowId}
-                        aria-label="Deny list"
-                    />
-                </div>
+                <>
+                    <BulkActionsToolbar
+                        selection={selection}
+                        label="Deny-list selection actions"
+                        itemNounPlural="deny-list entries"
+                    >
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setIsBulkDeleteOpen(true)}
+                            aria-label="Delete selected deny-list entries"
+                            data-action="bulk-delete"
+                        >
+                            <TrashIcon weight="bold" aria-hidden="true" />
+                            <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                        </Button>
+                    </BulkActionsToolbar>
+
+                    <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+
+                    <div data-table="deny-list">
+                        <DataTable<BlockedFileType>
+                            columns={columns}
+                            data={denyList.entries}
+                            enableSorting={false}
+                            getRowId={getRowId}
+                            onPageRowIdsChange={setPageRowIds}
+                            mobileSelectionActive={selection.selectionMode}
+                            mobileSelectionOverlay={{
+                                isSelected: (entry) => selection.isRowChecked(entry.id),
+                                onToggle: (entry) => selection.toggleRow(entry.id, !selection.isRowChecked(entry.id)),
+                            }}
+                            aria-label="Deny list"
+                        />
+                    </div>
+                </>
             )}
 
             <DenyListAddDialog open={addOpen} onClose={closeAdd} onAdd={handleAdd} isCreating={denyList.isCreating} />
@@ -221,6 +274,35 @@ function DenyListSection({ denyList }: DenyListSectionProps) {
                 itemType="Deny-List Entry"
                 isDeleting={denyList.isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Deny-List Entries"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="deny-list-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="deny-list entries"
+                >
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected deny-list entries"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
         </section>
     );
 }
@@ -309,6 +391,10 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
     const [addOpen, , openAdd, closeAdd] = useToggle();
     const [editingMapping, setEditingMapping] = useState<MimeMapping | null>(null);
     const [deletingMapping, setDeletingMapping] = useState<MimeMapping | null>(null);
+    const [pageRowIds, setPageRowIds] = useState<string[]>([]);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const runBulk = useBulkRun();
 
     const { sorting, page, setSorting, setPage } = useUrlTableState({
         defaultSort: MIME_DEFAULT_SORTING,
@@ -327,11 +413,11 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
     const handleAdd = useCallback(
         async (extension: string, mimeType: string): Promise<string | null> => {
             try {
-                await registry.createMapping({ extension, mimeType });
+                await registry.saveMapping({ extension, mimeType });
                 toast({ title: extension, description: 'File extension association added.', variant: 'success' });
                 return null;
             } catch (err) {
-                const message = describeError(err, 'Failed to add MIME mapping');
+                const message = getErrorMessage(err, 'Failed to add MIME mapping');
                 toast({ title: extension, description: message, variant: 'error' });
                 return message;
             }
@@ -342,7 +428,7 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
     const handleEditSave = useCallback(
         async (mapping: MimeMapping, nextMime: string): Promise<string | null> => {
             try {
-                await registry.updateMapping({ extension: mapping.extension, mimeType: nextMime });
+                await registry.saveMapping({ extension: mapping.extension, mimeType: nextMime });
                 toast({
                     title: mapping.extension,
                     description: 'File extension association updated.',
@@ -350,7 +436,7 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
                 });
                 return null;
             } catch (err) {
-                const message = describeError(err, 'Failed to update MIME mapping');
+                const message = getErrorMessage(err, 'Failed to update MIME mapping');
                 toast({ title: mapping.extension, description: message, variant: 'error' });
                 return message;
             }
@@ -369,7 +455,7 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
         } catch (err) {
             toast({
                 title: mapping.extension,
-                description: describeError(err, 'Failed to remove MIME mapping'),
+                description: getErrorMessage(err, 'Failed to remove MIME mapping'),
                 variant: 'error',
             });
         } finally {
@@ -377,12 +463,39 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
         }
     }, [deletingMapping, registry, toast]);
 
+    const selection = useBulkSelection({ pageRowIds, totalCount: registry.mappings.length });
+    const selectedMappings = useMemo(
+        () => registry.mappings.filter((m) => selection.isRowChecked(m.extension)).map((m) => ({ id: m.extension })),
+        [registry.mappings, selection],
+    );
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedMappings, selection, {
+                action: (mapping) => registry.deleteMapping(mapping.id),
+                verb: 'remove',
+                itemNounPlural: 'MIME mappings',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [registry, runBulk, selectedMappings, selection]);
+
     const columns = useMemo<ColumnDef<MimeMapping>[]>(
         () => [
+            selectColumn<MimeMapping>({
+                selection,
+                getId: (row) => row.extension,
+                headerLabel: 'Select all MIME mappings',
+                rowLabel: (row) => row.extension,
+            }),
             {
                 id: 'extension',
                 accessorKey: 'extension',
                 header: 'Extension',
+                meta: { mobileRole: 'header' },
                 cell: ({ row }) => <code className="file-types-page__code">{row.original.extension}</code>,
             },
             {
@@ -428,7 +541,7 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
                 },
             },
         ],
-        [],
+        [selection],
     );
 
     return (
@@ -461,6 +574,25 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
                 />
             ) : (
                 <>
+                    <BulkActionsToolbar
+                        selection={selection}
+                        label="MIME mapping selection actions"
+                        itemNounPlural="MIME mappings"
+                    >
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setIsBulkDeleteOpen(true)}
+                            aria-label="Delete selected MIME mappings"
+                            data-action="bulk-delete"
+                        >
+                            <TrashIcon weight="bold" aria-hidden="true" />
+                            <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                        </Button>
+                    </BulkActionsToolbar>
+
+                    <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+
                     <div data-table="mime-registry">
                         <DataTable<MimeMapping>
                             columns={columns}
@@ -475,6 +607,13 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
                             pageSize={MIME_PAGE_SIZE}
                             pagination={pagination}
                             getRowId={getRowId}
+                            onPageRowIdsChange={setPageRowIds}
+                            mobileSelectionActive={selection.selectionMode}
+                            mobileSelectionOverlay={{
+                                isSelected: (mapping) => selection.isRowChecked(mapping.extension),
+                                onToggle: (mapping) =>
+                                    selection.toggleRow(mapping.extension, !selection.isRowChecked(mapping.extension)),
+                            }}
                             aria-label="MIME registry"
                         />
                     </div>
@@ -494,18 +633,13 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
                 </>
             )}
 
-            <MimeMappingAddDialog
-                open={addOpen}
-                onClose={closeAdd}
-                onAdd={handleAdd}
-                isCreating={registry.isCreating}
-            />
+            <MimeMappingAddDialog open={addOpen} onClose={closeAdd} onAdd={handleAdd} isCreating={registry.isSaving} />
 
             <MimeMappingEditDialog
                 mapping={editingMapping}
                 onClose={() => setEditingMapping(null)}
                 onSave={handleEditSave}
-                isSaving={registry.isUpdating}
+                isSaving={registry.isSaving}
             />
 
             <DeleteConfirmDialog
@@ -516,6 +650,35 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
                 itemType="MIME Mapping"
                 isDeleting={registry.isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="MIME Mappings"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="mime-registry-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="MIME mappings"
+                >
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected MIME mappings"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
         </section>
     );
 }

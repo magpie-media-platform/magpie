@@ -1,17 +1,13 @@
 import { execFile } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { integrationEnvironment } from './environment';
+import { INTEGRATION_ROOT, integrationEnvironment } from './environment';
 import { loginAdmin, type ApiClient } from './api';
 import { until } from './wait';
 
 const execFileAsync = promisify(execFile);
-
-const here = dirname(fileURLToPath(import.meta.url));
-const integrationRoot = resolve(here, '..');
 
 const HEALTH_TIMEOUT_MS = 120_000;
 const HEALTH_POLL_MS = 1_000;
@@ -21,7 +17,7 @@ function baseUrl(): string {
 }
 
 async function compose(...args: string[]): Promise<void> {
-    await execFileAsync('docker', ['compose', ...args], { cwd: integrationRoot });
+    await execFileAsync('docker', ['compose', ...args], { cwd: INTEGRATION_ROOT });
 }
 
 export async function startHost(): Promise<void> {
@@ -41,7 +37,9 @@ export async function ensureBindMountDirs(): Promise<void> {
     for (const dir of Object.values(integrationEnvironment.paths)) {
         await mkdir(dir, { recursive: true });
     }
-    await mkdir(resolve(integrationRoot, 'checkpoints'), { recursive: true });
+    for (const dir of ['checkpoints', 'db']) {
+        await mkdir(resolve(INTEGRATION_ROOT, dir), { recursive: true });
+    }
 }
 
 export async function restartHost(

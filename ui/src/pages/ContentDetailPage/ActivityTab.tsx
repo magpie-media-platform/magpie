@@ -1,13 +1,10 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import {
-    ArrowsDownUpIcon,
     CheckCircleIcon,
     ClockIcon,
     InfoIcon,
     MagnifyingGlassIcon,
-    SortAscendingIcon,
-    SortDescendingIcon,
     WarningIcon,
     XCircleIcon,
 } from '@phosphor-icons/react';
@@ -18,9 +15,10 @@ import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pager } from '@/components/ui/Pager';
 import { entryLabel, RelatedEventsModal } from '@/components/activity/RelatedEventsModal';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
+import { Alert } from '@/components/ui/Alert';
+import { getErrorMessage } from '@/lib/errors';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import { MagpieActivityEntryKind, useContentMagpieActivity, type MagpieActivityEntry } from '@/hooks/useMagpieActivity';
 import { formatDateTime } from '@/lib/dateFormatting';
 import { formatRelativeTime } from '@/lib/formatTime';
@@ -29,14 +27,6 @@ import { getMagpieActivityStatusBadge } from '@/lib/magpieActivityStatusBadge';
 import './ActivityTab.css';
 
 const PAGE_SIZE = 25;
-const SORT_KEYS = ['activity', 'status', 'type', 'timestamp'] as const;
-
-const ACTIVITY_SORT_LABELS: Record<string, string> = {
-    activity: 'Activity',
-    status: 'Status',
-    type: 'Type',
-    timestamp: 'Timestamp',
-};
 
 function jobStatusIcon(status?: string | null) {
     switch (status) {
@@ -63,11 +53,13 @@ interface ActivityTabProps {
 }
 
 export function ActivityTab({ contentHierarchyItemId }: ActivityTabProps): ReactNode {
-    const { sorting, page, setSorting, setPage } = useUrlTableState<Record<string, string>>({
-        defaultSort: [{ id: 'timestamp', desc: true }],
-        defaultFilters: {},
-        sortKeys: SORT_KEYS,
-    });
+    const [urlState, setUrlState] = useUrlFilterState({ page: '1' });
+    const rawPage = Number(urlState.page);
+    const page = Number.isInteger(rawPage) && rawPage >= 1 ? rawPage : 1;
+    const setPage = useCallback(
+        (next: number) => setUrlState({ page: String(Math.max(1, next)) }, { replace: true }),
+        [setUrlState],
+    );
 
     const params = useMemo(
         () => ({
@@ -77,15 +69,17 @@ export function ActivityTab({ contentHierarchyItemId }: ActivityTabProps): React
         [page],
     );
 
-    const { activity, isLoading, error } = useContentMagpieActivity(contentHierarchyItemId, params);
+    const { activity, isLoading, error, refetch } = useContentMagpieActivity(contentHierarchyItemId, params);
 
     const entries = useMemo(() => activity?.entries ?? [], [activity?.entries]);
     const totalCount = activity?.totalCount ?? 0;
     const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
     const safePage = Math.min(page, totalPages);
-    const activeSort = sorting[0];
-    const activeSortLabel = activeSort ? ACTIVITY_SORT_LABELS[activeSort.id] : undefined;
-    const DirectionIcon = activeSort?.desc ? SortDescendingIcon : SortAscendingIcon;
+    useEffect(() => {
+        if (activity && !error && page > totalPages) {
+            setPage(totalPages);
+        }
+    }, [activity, error, page, totalPages, setPage]);
 
     const [selectedEntry, setSelectedEntry] = useState<MagpieActivityEntry | null>(null);
     const [detailOpen, setDetailOpen] = useState(false);
@@ -103,21 +97,6 @@ export function ActivityTab({ contentHierarchyItemId }: ActivityTabProps): React
             setSelectedEntry(null);
         }
     }, []);
-
-    const handleSortFieldChange = useCallback(
-        (id: string) => {
-            const currentSort = sorting[0];
-            setSorting([{ id, desc: currentSort?.id === id ? currentSort.desc : false }]);
-        },
-        [sorting, setSorting],
-    );
-
-    const handleSortDirectionToggle = useCallback(() => {
-        if (!activeSort) {
-            return;
-        }
-        setSorting([{ id: activeSort.id, desc: !activeSort.desc }]);
-    }, [activeSort, setSorting]);
 
     const columns = useMemo<ColumnDef<MagpieActivityEntry, unknown>[]>(
         () => [
@@ -236,43 +215,15 @@ export function ActivityTab({ contentHierarchyItemId }: ActivityTabProps): React
     return (
         <div className="activity-tab" data-component="activity-tab">
             {error && (
-                <p className="activity-tab__error" role="alert">
-                    Failed to load activity: {error.message}
-                </p>
+                <Alert variant="error" title="Failed to load activity">
+                    <p>{getErrorMessage(error)}</p>
+                    <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                        Retry
+                    </Button>
+                </Alert>
             )}
 
-            <div className="activity-tab__sort-controls" data-testid="activity-tab__sort-controls">
-                <ArrowsDownUpIcon className="activity-tab__sort-icon" weight="duotone" aria-hidden="true" />
-                <Select value={activeSort?.id ?? ''} onValueChange={handleSortFieldChange}>
-                    <SelectTrigger size="sm" aria-label="Sort activity by" data-sort="field">
-                        <SelectValue placeholder="Sort by" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="activity">Activity</SelectItem>
-                        <SelectItem value="status">Status</SelectItem>
-                        <SelectItem value="type">Type</SelectItem>
-                        <SelectItem value="timestamp">Timestamp</SelectItem>
-                    </SelectContent>
-                </Select>
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleSortDirectionToggle}
-                    disabled={!activeSort}
-                    aria-label={
-                        activeSort
-                            ? `Sort activity by ${activeSortLabel} ${activeSort.desc ? 'ascending' : 'descending'}`
-                            : 'Choose an activity sort field before changing direction'
-                    }
-                    data-sort="direction"
-                    data-direction={activeSort?.desc ? 'desc' : 'asc'}
-                    className="activity-tab__sort-direction"
-                >
-                    <DirectionIcon weight="bold" aria-hidden="true" />
-                </Button>
-            </div>
-
-            {isLoading ? (
+            {isLoading || (!error && page !== safePage) ? (
                 <div className="activity-tab__skeletons">
                     {Array.from({ length: 4 }).map((_, i) => (
                         <Skeleton key={i} height={48} />
@@ -284,10 +235,7 @@ export function ActivityTab({ contentHierarchyItemId }: ActivityTabProps): React
                     data={entries}
                     size="sm"
                     manualPagination
-                    sorting={sorting}
-                    onSortingChange={(updater) =>
-                        setSorting(typeof updater === 'function' ? updater(sorting) : updater)
-                    }
+                    enableSorting={false}
                     rowCount={totalCount}
                     getRowId={(row) => `${row.kind}-${row.id}`}
                     data-testid="activity-tab__table"

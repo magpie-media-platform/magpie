@@ -32,6 +32,7 @@ internal sealed class ContentService(
     IContentRepository contentRepository,
     IAuditRecordRepository auditRecordRepository,
     IRootFolderRepository rootFolderRepository,
+    IQualityTierListRepository qualityTierListRepository,
     IMetadataContainerRepository metadataContainerRepository,
     IEnumerable<IContentHierarchyMetadataProvider> metadataProviders,
     IDownloadRepository downloadRepository,
@@ -43,6 +44,27 @@ internal sealed class ContentService(
     TimeProvider timeProvider,
     ILogger<ContentService> logger) : IContentService
 {
+    private static FulfillmentStatus AggregateFulfillment(IReadOnlyCollection<FulfillmentStatus> childStatuses)
+    {
+        if (childStatuses.Count == 0)
+        {
+            return FulfillmentStatus.Fulfilled;
+        }
+
+        var fullyCovered = childStatuses.Count(status =>
+            status is not FulfillmentStatus.Missing and not FulfillmentStatus.Partial);
+        if (fullyCovered == childStatuses.Count)
+        {
+            return childStatuses.Contains(FulfillmentStatus.Upgradable)
+                ? FulfillmentStatus.Upgradable
+                : FulfillmentStatus.Fulfilled;
+        }
+
+        return childStatuses.Any(status => status != FulfillmentStatus.Missing)
+            ? FulfillmentStatus.Partial
+            : FulfillmentStatus.Missing;
+    }
+
     public async Task<ContentItem> GetOrCreateContentItemAsync(
         Guid contentHierarchyItemId,
         DateTime now,
@@ -107,8 +129,6 @@ internal sealed class ContentService(
         SortParameter? sort,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(query);
-
         var criteria = BuildCriteria(query);
 
         var page = await contentHierarchyItemRepository
@@ -130,7 +150,11 @@ internal sealed class ContentService(
             return null;
         }
 
-        return item;
+        var effectivePath = await contentFileService
+            .GetEffectivePathAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return item with { Path = effectivePath };
     }
 
     public async Task<PagedList<ContentHierarchyItem>?> GetChildrenAsync(
@@ -174,7 +198,12 @@ internal sealed class ContentService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(patch);
+        if (patch.Slug is not null)
+        {
+            throw new ArgumentException("Content slug changes are not supported.", nameof(patch));
+        }
+
+        await ValidateReferencesAsync(patch, cancellationToken).ConfigureAwait(false);
 
         if (patch.Path is not null)
         {
@@ -204,23 +233,35 @@ internal sealed class ContentService(
             return false;
         }
 
-        var subtree = await ListSubtreeAsync(item, cancellationToken).ConfigureAwait(false);
-        var contentItemIds = subtree
-            .Select(subtreeItem => subtreeItem.ContentItem)
-            .Where(contentItem => contentItem is not null)
-            .Select(contentItem => contentItem!.Id)
-            .ToArray();
-        await StopClientResidentDownloadsAsync(contentItemIds, cancellationToken).ConfigureAwait(false);
-
-        if (deleteFromLibrary)
+        if (!deleteFromLibrary)
         {
-            await contentFileService.DeleteFilesAsync(subtree, cancellationToken)
+            var removedIds = await contentHierarchyItemRepository
+                .DeleteSubtreeAsync(contentHierarchyItemId, actingUserId, cancellationToken)
                 .ConfigureAwait(false);
+            return removedIds.Count > 0;
         }
 
-        return await contentHierarchyItemRepository
-            .DeleteAsync(contentHierarchyItemId, actingUserId, cancellationToken)
+        var subtree = await ListSubtreeAsync(item, cancellationToken).ConfigureAwait(false);
+        var clientResidentDownloads = await ListClientResidentDownloadsAsync(subtree, cancellationToken)
             .ConfigureAwait(false);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var deletedIds = await contentHierarchyItemRepository
+            .DeleteSubtreeAsync(contentHierarchyItemId, actingUserId, CancellationToken.None)
+            .ConfigureAwait(false);
+        if (deletedIds.Count == 0)
+        {
+            return false;
+        }
+
+        var removed = new HashSet<Guid>(deletedIds);
+
+        await StopClientResidentDownloadsAsync(clientResidentDownloads, removed, CancellationToken.None)
+            .ConfigureAwait(false);
+        await contentFileService
+            .DeleteFilesAsync([.. subtree.Where(entry => removed.Contains(entry.Id))], CancellationToken.None)
+            .ConfigureAwait(false);
+        return true;
     }
 
     /// <inheritdoc />
@@ -292,17 +333,22 @@ internal sealed class ContentService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(patch);
-
         if (patch.Patch.Path is not null)
         {
             throw new ArgumentException("Bulk content path changes are not supported.", nameof(patch));
         }
 
+        if (patch.Patch.Slug is not null)
+        {
+            throw new ArgumentException("Bulk content slug changes are not supported.", nameof(patch));
+        }
+
+        await ValidateReferencesAsync(patch.Patch, cancellationToken).ConfigureAwait(false);
+
         var translated = new BulkPatch<ContentHierarchyItemCriteria, ContentHierarchyItemPatch>
         {
             Ids = patch.Ids,
-            Filter = TranslateFilter(contentTypeRegistry, patch.Filter),
+            Filter = TranslateFilter(patch.Filter),
             Patch = patch.Patch,
         };
 
@@ -313,20 +359,87 @@ internal sealed class ContentService(
 
     public async Task<BulkResult> BulkDeleteAsync(
         BulkAction<ContentFilterCriteria> action,
+        bool deleteFromLibrary,
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(action);
-
         var translated = new BulkAction<ContentHierarchyItemCriteria>
         {
             Ids = action.Ids,
-            Filter = TranslateFilter(contentTypeRegistry, action.Filter),
+            Filter = TranslateFilter(action.Filter),
         };
 
-        return await contentHierarchyItemRepository
-            .BulkDeleteAsync(translated, actingUserId, cancellationToken)
+        var removableItems = (IReadOnlyList<ContentHierarchyItem>)[];
+        var clientResidentDownloads = (IReadOnlyList<Download>)[];
+        if (deleteFromLibrary)
+        {
+            var roots = new Dictionary<Guid, ContentHierarchyItem>();
+            if (translated.Ids is not null)
+            {
+                foreach (var id in translated.Ids)
+                {
+                    var item = await contentHierarchyItemRepository.GetByIdAsync(id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (item is not null)
+                    {
+                        roots[item.Id] = item;
+                    }
+                }
+            }
+
+            if (translated.Filter is not null)
+            {
+                const int pageSize = 500;
+                for (var pageNumber = 1; ; pageNumber++)
+                {
+                    var page = await contentHierarchyItemRepository.QueryAsync(
+                        translated.Filter,
+                        new() { PageNumber = pageNumber, PageSize = pageSize },
+                        sort: null,
+                        cancellationToken).ConfigureAwait(false);
+                    var pageItems = page.Items.ToList();
+                    foreach (var item in pageItems)
+                    {
+                        roots[item.Id] = item;
+                    }
+
+                    if (pageNumber * pageSize >= page.TotalItems || pageItems.Count == 0)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            var subtree = new Dictionary<Guid, ContentHierarchyItem>();
+            foreach (var root in roots.Values)
+            {
+                foreach (var item in await ListSubtreeAsync(root, cancellationToken).ConfigureAwait(false))
+                {
+                    subtree[item.Id] = item;
+                }
+            }
+
+            removableItems = [.. subtree.Values];
+            clientResidentDownloads = await ListClientResidentDownloadsAsync(removableItems, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var (result, deletedIds) = await contentHierarchyItemRepository
+            .BulkDeleteAsync(translated, actingUserId, deleteFromLibrary ? CancellationToken.None : cancellationToken)
             .ConfigureAwait(false);
+
+        if (deleteFromLibrary && deletedIds.Count > 0)
+        {
+            var removed = new HashSet<Guid>(deletedIds);
+            await StopClientResidentDownloadsAsync(clientResidentDownloads, removed, CancellationToken.None)
+                .ConfigureAwait(false);
+            await contentFileService
+                .DeleteFilesAsync([.. removableItems.Where(item => removed.Contains(item.Id))], CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+
+        return result;
     }
 
     public Task<ContentStats> GetStatsAsync(CancellationToken cancellationToken = default)
@@ -361,7 +474,7 @@ internal sealed class ContentService(
             tags,
             actingUserId,
             correlationId: null,
-            cancellationToken)
+            cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         return result is null
             ? null
@@ -370,57 +483,131 @@ internal sealed class ContentService(
                 cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<(ContentHierarchyItem Root, IReadOnlyCollection<Guid> CreatedHierarchyItemIds)?>
+        HydrateWithDescendantsFromExternalIdAsync(
+        string providerType,
+        string externalIdKey,
+        string externalId,
+        string contentType,
+        string? levelSlug,
+        Guid? rootFolderId,
+        bool? monitoring,
+        Guid? qualityTierListId,
+        Guid? requestedViaWishlistId,
+        IReadOnlyCollection<string>? tags,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateHydrationRequest(providerType, externalIdKey, externalId, contentType);
+
+        var rootLevelSlug = contentTypeRegistry.GetRootLevelSlug(contentType, levelSlug);
+        var createdHierarchyItemIds = new HashSet<Guid>();
+        var hasChildLevels = contentTypeRegistry.GetChildLevels(contentType, rootLevelSlug).Count > 0;
+        ContentHierarchyItem? existingRoot = null;
+        if (hasChildLevels)
+        {
+            existingRoot = await FindHierarchyItemByExternalIdAsync(
+                contentType, rootLevelSlug, externalIdKey, externalId, cancellationToken).ConfigureAwait(false);
+            if (existingRoot is not null &&
+                await HasChildrenAsync(existingRoot.Id, cancellationToken).ConfigureAwait(false))
+            {
+                return (existingRoot, createdHierarchyItemIds);
+            }
+        }
+
+        var rootId = await HydrateCoreAsync(
+            providerType,
+            externalIdKey,
+            externalId,
+            contentType,
+            levelSlug,
+            rootFolderId,
+            monitoring,
+            qualityTierListId,
+            requestedViaWishlistId,
+            tags,
+            actingUserId,
+            correlationId: null,
+            createdHierarchyItemIds,
+            materializeDeclaredChildren: hasChildLevels,
+            cancellationToken).ConfigureAwait(false);
+        if (rootId is null)
+        {
+            return existingRoot is null ? null : (existingRoot, createdHierarchyItemIds);
+        }
+
+        var hydratedRoot = await contentHierarchyItemRepository.GetByIdAsync(rootId.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return hydratedRoot is null ? null : (hydratedRoot, createdHierarchyItemIds);
+    }
+
     public async Task<ContentHierarchyItem?> MaterializeFulfillmentStatusAsync(
         Guid changedContentHierarchyItemId,
         Guid? actingUserId,
         bool includeSelf = false,
         CancellationToken cancellationToken = default)
     {
+        var materialized = await transactionManager.ExecuteWithTransactionAsync(
+            ct => MaterializeFulfillmentCoreAsync(
+                changedContentHierarchyItemId,
+                actingUserId,
+                includeSelf,
+                ct),
+            cancellationToken).ConfigureAwait(false);
+
+        return materialized
+            ? await GetAsync(changedContentHierarchyItemId, cancellationToken).ConfigureAwait(false)
+            : null;
+    }
+
+    private async Task<bool> MaterializeFulfillmentCoreAsync(
+        Guid changedContentHierarchyItemId,
+        Guid? actingUserId,
+        bool includeSelf,
+        CancellationToken cancellationToken)
+    {
         var lineage = await contentHierarchyItemRepository
             .GetLineageAsync(changedContentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
         if (lineage.Count == 0)
         {
-            return null;
+            return false;
         }
+
+        await contentHierarchyItemRepository
+            .LockAsync(lineage[^1].Id, cancellationToken)
+            .ConfigureAwait(false);
 
         var overrides = new Dictionary<Guid, FulfillmentStatus>();
         var nodesToCompute = includeSelf ? lineage : lineage.Skip(1);
         var pending = new List<PendingRollup>();
-        const int pageSize = 500;
         foreach (var node in nodesToCompute)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var children = new List<ContentHierarchyItem>();
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await contentHierarchyItemRepository.QueryAsync(
-                    new ContentHierarchyItemCriteria
-                    {
-                        ParentId = new CriteriaSet<PropertyCriterion<Guid>>
-                        {
-                            And = [EqualsCriterion(node.Id)],
-                        },
-                    },
-                    new() { PageNumber = pageNumber, PageSize = pageSize },
-                    sort: null,
-                    cancellationToken).ConfigureAwait(false);
-                var pageItems = page.Items.ToList();
-                children.AddRange(pageItems);
-                if (pageItems.Count < pageSize)
+            var children = await contentHierarchyItemRepository.QueryAllAsync(
+                new ContentHierarchyItemCriteria
                 {
-                    break;
-                }
+                    ParentId = new CriteriaSet<PropertyCriterion<Guid>>
+                    {
+                        And = [EqualsCriterion(node.Id)],
+                    },
+                },
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
-                pageNumber++;
+            if (children.Count == 0)
+            {
+                continue;
             }
 
+            var storedChildStatuses = await LoadStoredFulfillmentAsync(
+                [.. children.Select(child => child.Id).Where(id => !overrides.ContainsKey(id))],
+                cancellationToken).ConfigureAwait(false);
             var childStatuses = new List<FulfillmentStatus>(children.Count);
             foreach (var child in children)
             {
-                childStatuses.Add(await ResolveStoredFulfillmentAsync(child.Id, overrides, cancellationToken)
-                    .ConfigureAwait(false));
+                childStatuses.Add(overrides.TryGetValue(child.Id, out var overridden)
+                    ? overridden
+                    : storedChildStatuses.GetValueOrDefault(child.Id, FulfillmentStatus.Missing));
             }
 
             var computed = AggregateFulfillment(childStatuses);
@@ -429,7 +616,7 @@ internal sealed class ContentService(
             overrides[node.Id] = computed;
             if (computed != current)
             {
-                pending.Add(new PendingRollup(node.Id, current, computed));
+                pending.Add(new PendingRollup(node.Id, computed));
             }
         }
 
@@ -467,20 +654,48 @@ internal sealed class ContentService(
                 changedContentHierarchyItemId);
         }
 
-        return await GetAsync(changedContentHierarchyItemId, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task<Dictionary<Guid, FulfillmentStatus>> LoadStoredFulfillmentAsync(
+        IReadOnlyList<Guid> hierarchyItemIds,
+        CancellationToken cancellationToken)
+    {
+        const int batchSize = 500;
+        var stored = new Dictionary<Guid, FulfillmentStatus>(hierarchyItemIds.Count);
+        for (var offset = 0; offset < hierarchyItemIds.Count; offset += batchSize)
+        {
+            var batch = hierarchyItemIds.Skip(offset).Take(batchSize).ToList();
+            var page = await contentRepository.QueryAsync(
+                new ContentItemQuery { ContentHierarchyItemIds = batch },
+                new() { PageNumber = 1, PageSize = batch.Count },
+                null,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var item in page.Items)
+            {
+                stored[item.ContentHierarchyItemId] = item.Fulfillment;
+            }
+        }
+
+        return stored;
     }
 
     private ContentHierarchyItemCriteria BuildCriteria(ContentQuery query)
     {
-        var baseCriteria = query.Criteria?.ContentHierarchyItem.And.FirstOrDefault()
-            ?? new ContentHierarchyItemCriteria();
+        var baseCriteria = TranslateFilter(query.Criteria) ?? new ContentHierarchyItemCriteria();
 
-        return new ContentHierarchyItemCriteria
+        if (query.RootFolderId is { } rootFolderId &&
+            baseCriteria.EffectiveRootFolderId is { } filteredRootFolderId &&
+            rootFolderId != filteredRootFolderId)
+        {
+            throw new ArgumentException("The query and filter specify different root folders.", nameof(query));
+        }
+
+        return baseCriteria with
         {
             ParentId = Combine(
                 baseCriteria.ParentId,
                 query.ParentId is { } parentId ? EqualsCriterion(parentId) : null),
-            RootFolderId = baseCriteria.RootFolderId,
             EffectiveRootFolderId = query.RootFolderId ?? baseCriteria.EffectiveRootFolderId,
             ContentType = Combine(
                 baseCriteria.ContentType,
@@ -488,44 +703,38 @@ internal sealed class ContentService(
             Level = Combine(
                 baseCriteria.Level,
                 string.IsNullOrWhiteSpace(query.Level) ? null : EqualsCriterion(query.Level!)),
-            Slug = baseCriteria.Slug,
             Name = Combine(
                 baseCriteria.Name,
                 string.IsNullOrWhiteSpace(query.Search) ? null : ContainsCriterion(query.Search!)),
             Monitoring = Combine(
                 baseCriteria.Monitoring,
                 query.Monitoring is { } monitoring ? EqualsCriterion(monitoring) : null),
-            EffectiveMonitoring = baseCriteria.EffectiveMonitoring,
             Fulfillment = Combine(
                 baseCriteria.Fulfillment,
                 query.Fulfillment is { } fulfillment ? EqualsCriterion(fulfillment) : null),
-            ActiveAcquisitionStatus = baseCriteria.ActiveAcquisitionStatus,
-            QualityStatus = baseCriteria.QualityStatus,
-            Path = baseCriteria.Path,
             Tags = Combine(
                 baseCriteria.Tags,
                 string.IsNullOrWhiteSpace(query.Tag) ? null : EqualsCriterion(query.Tag!)),
-            Metadata = baseCriteria.Metadata,
             RootLevelOnly = query.TopLevelOnly == true ? true : baseCriteria.RootLevelOnly,
-            LeafOnly = baseCriteria.LeafOnly,
-            PendingMetadataRefresh = baseCriteria.PendingMetadataRefresh,
-            HasMetadataExternalIds = baseCriteria.HasMetadataExternalIds,
-            HasSearchableTitle = baseCriteria.HasSearchableTitle,
-            ExcludeIds = baseCriteria.ExcludeIds,
-            AncestorId = baseCriteria.AncestorId,
         };
     }
 
-    private ContentHierarchyItemCriteria? TranslateFilter(
-        IContentTypeRegistry registry,
-        ContentFilterCriteria? filter)
+    private ContentHierarchyItemCriteria? TranslateFilter(ContentFilterCriteria? filter)
     {
         if (filter is null)
         {
             return null;
         }
 
-        return filter.ContentHierarchyItem.And.FirstOrDefault() ?? new ContentHierarchyItemCriteria();
+        var criteria = filter.ContentHierarchyItem.And.ToList();
+        if (criteria.Count != 1 || filter.MediaFiles.And.Any())
+        {
+            throw new ArgumentException(
+                "The content filter does not hold exactly one hierarchy item criteria set.",
+                nameof(filter));
+        }
+
+        return criteria[0];
     }
 
     private CriteriaSet<PropertyCriterion<T>> Combine<T>(
@@ -545,27 +754,6 @@ internal sealed class ContentService(
     private PropertyCriterion<string> ContainsCriterion(string value)
     {
         return new PropertyCriterion<string> { Operator = CriteriaValueOperator.ContainsString, Value = value };
-    }
-
-    private FulfillmentStatus AggregateFulfillment(IReadOnlyList<FulfillmentStatus> childStatuses)
-    {
-        if (childStatuses.Count == 0)
-        {
-            return FulfillmentStatus.Fulfilled;
-        }
-
-        var fullyCovered = childStatuses.Count(status =>
-            status is not FulfillmentStatus.Missing and not FulfillmentStatus.Partial);
-        if (fullyCovered == childStatuses.Count)
-        {
-            return childStatuses.Contains(FulfillmentStatus.Upgradable)
-                ? FulfillmentStatus.Upgradable
-                : FulfillmentStatus.Fulfilled;
-        }
-
-        return childStatuses.Any(status => status != FulfillmentStatus.Missing)
-            ? FulfillmentStatus.Partial
-            : FulfillmentStatus.Missing;
     }
 
     private bool SupportsContentType(IEnumerable<string>? supportedContentTypes, string contentType) =>
@@ -588,6 +776,24 @@ internal sealed class ContentService(
         {
             throw new ArgumentException(
                 "Provider type, external ID source, external ID, and content type are all required.");
+        }
+    }
+
+    private async Task ValidateReferencesAsync(
+        ContentHierarchyItemPatch patch,
+        CancellationToken cancellationToken)
+    {
+        if (patch.RootFolderId?.Value is { } rootFolderId &&
+            await rootFolderRepository.GetByIdAsync(rootFolderId, cancellationToken).ConfigureAwait(false) is null)
+        {
+            throw new MagpieException($"Root folder {rootFolderId} does not exist.");
+        }
+
+        if (patch.QualityTierListId?.Value is { } qualityTierListId &&
+            await qualityTierListRepository.GetByIdAsync(qualityTierListId, cancellationToken)
+                .ConfigureAwait(false) is null)
+        {
+            throw new MagpieException($"Quality tier list {qualityTierListId} does not exist.");
         }
     }
 
@@ -635,31 +841,46 @@ internal sealed class ContentService(
                 cancellationToken).ConfigureAwait(false);
             var descendants = page.Items.ToList();
             items.AddRange(descendants);
-            if (descendants.Count < pageSize)
+            if (pageNumber * pageSize >= page.TotalItems || descendants.Count == 0)
             {
                 return items;
             }
         }
     }
 
-    private async Task StopClientResidentDownloadsAsync(
-        IReadOnlyList<Guid> contentItemIds,
+    private async Task<IReadOnlyList<Download>> ListClientResidentDownloadsAsync(
+        IReadOnlyCollection<ContentHierarchyItem> items,
         CancellationToken cancellationToken)
     {
-        if (contentItemIds.Count == 0)
+        var contentItemIds = items
+            .Select(item => item.ContentItem)
+            .Where(contentItem => contentItem is not null)
+            .Select(contentItem => contentItem!.Id)
+            .ToArray();
+        if (contentItemIds.Length == 0)
         {
-            return;
+            return [];
         }
 
-        var downloads = await downloadRepository
+        return await downloadRepository
             .ListClientResidentByContentItemsAsync(contentItemIds, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private async Task StopClientResidentDownloadsAsync(
+        IReadOnlyList<Download> downloads,
+        IReadOnlySet<Guid> deletedIds,
+        CancellationToken cancellationToken)
+    {
         if (downloads.Count == 0)
         {
             return;
         }
 
-        foreach (var group in downloads.GroupBy(download => download.DownloadClientId))
+        foreach (var group in downloads
+            .Where(download => download.Scope.Count > 0 &&
+                download.Scope.All(scope => deletedIds.Contains(scope.ContentHierarchyItemId)))
+            .GroupBy(download => download.DownloadClientId))
         {
             var downloadClient = await downloadClientRepository
                 .GetByIdAsync(group.Key, cancellationToken)
@@ -667,8 +888,8 @@ internal sealed class ContentService(
             if (downloadClient is null)
             {
                 logger.LogInformation(
-                    "The content service did not delete {DownloadCount} downloads from the client. " +
-                    "Client {DownloadClientId} does not exist any more",
+                    "The content service skipped {DownloadCount} downloads because client " +
+                    "{DownloadClientId} no longer exists",
                     group.Count(),
                     group.Key);
                 continue;
@@ -681,8 +902,8 @@ internal sealed class ContentService(
             if (integration is null)
             {
                 logger.LogInformation(
-                    "The content service did not delete {DownloadCount} downloads from the client. " +
-                    "No provider is registered for {ProviderType}",
+                    "The content service skipped {DownloadCount} downloads because no provider is " +
+                    "registered for {ProviderType}",
                     group.Count(),
                     downloadClient.ProviderType);
                 continue;
@@ -710,8 +931,8 @@ internal sealed class ContentService(
                 {
                     logger.LogWarning(
                         ex,
-                        "The content service failed to delete download {DownloadId} (external id {ExternalId}) " +
-                        "from the client during content deletion. The library deletion will continue",
+                        "The content service failed to delete download {DownloadId} (external id " +
+                        "{ExternalId}) from the client during content deletion",
                         download.Id,
                         download.ExternalId);
                 }
@@ -750,19 +971,21 @@ internal sealed class ContentService(
         IReadOnlyCollection<string>? tags,
         Guid? userId,
         Guid? correlationId = null,
+        ISet<Guid>? createdHierarchyItemIds = null,
+        bool materializeDeclaredChildren = false,
         CancellationToken cancellationToken = default)
     {
         ValidateHydrationRequest(providerType, externalIdKey, externalId, contentType);
 
         var rootLevelSlug = contentTypeRegistry.GetRootLevelSlug(contentType, levelSlug);
-        var contribution = await GetInitialContributionAsync(
+        var fetched = await GetInitialMetadataAsync(
             providerType,
             externalIdKey,
             externalId,
             contentType,
             rootLevelSlug,
             cancellationToken).ConfigureAwait(false);
-        if (contribution is null)
+        if (fetched?.Contribution is not { } contribution)
         {
             logger.LogInformation("Provider {ProviderType} returned no metadata", providerType);
             return null;
@@ -785,19 +1008,18 @@ internal sealed class ContentService(
         {
             rootFolder = await rootFolderRepository.GetByIdAsync(selectedRootFolderId, cancellationToken)
                 .ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    $"Root folder {selectedRootFolderId} does not exist. Content creation stopped.");
+                ?? throw new InvalidOperationException($"Root folder {selectedRootFolderId} does not exist.");
 
             if (rootFolder.ContentType != contentType)
             {
                 throw new InvalidOperationException(
-                    $"Root folder {selectedRootFolderId} is not configured for {contentType}, cannot create content.");
+                    $"Root folder {selectedRootFolderId} is not configured for {contentType}.");
             }
         }
 
         var primaryExternalId = contribution.ExternalIds.OrderBy(id => id.Ordinal).First();
         var slug = BuildSlug(primaryExternalId.Source!, primaryExternalId.Value);
-        var createdHierarchyItemIds = new HashSet<Guid>();
+        createdHierarchyItemIds ??= new HashSet<Guid>();
         var createResult = await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
@@ -822,39 +1044,54 @@ internal sealed class ContentService(
                     ct)
                     .ConfigureAwait(false);
 
-                if (!createdHierarchyItemIds.Contains(result))
+                if (createdHierarchyItemIds.Contains(result))
                 {
-                    logger.LogInformation(
-                        "The content service will return the existing content hierarchy item {ItemId} for " +
-                        "external id {Key}={Value}",
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Content,
+                            Operation = "Create",
+                            EntityId = result.ToString(),
+                            EntityType = nameof(ContentHierarchyItem),
+                            Detail = $"Created content item from external ID {externalIdKey}={externalId}.",
+                            Timestamp = now,
+                            UserId = userId,
+                            CorrelationId = correlationId
+                        },
+                        ct).ConfigureAwait(false);
+
+                    logger.LogDebug(
+                        "The content service created {ItemId} from external id {Key}={Value}",
                         result,
                         externalIdKey,
                         externalId);
-                    return result;
+                }
+                else
+                {
+                    logger.LogDebug(
+                        "The content hierarchy item {ItemId} already exists for external id {Key}={Value}",
+                        result,
+                        externalIdKey,
+                        externalId);
                 }
 
-                await auditRecordRepository.CreateAsync(
-                    new()
-                    {
-                        Category = AuditCategories.Content,
-                        Operation = "Create",
-                        EntityId = result.ToString(),
-                        EntityType = nameof(ContentHierarchyItem),
-                        Detail = $"Created content item from external ID {externalIdKey}={externalId}.",
-                        Timestamp = now,
-                        UserId = userId,
-                        CorrelationId = correlationId
-                    },
-                    ct).ConfigureAwait(false);
-
-                logger.LogInformation(
-                    "The content service created {ItemId} from external id {Key}={Value} with provider " +
-                    "{Provider} and content type {ContentType}",
-                    result,
-                    externalIdKey,
-                    externalId,
-                    providerType,
-                    contentType);
+                if (materializeDeclaredChildren &&
+                    fetched.Children.Count > 0 &&
+                    !await HasChildrenAsync(result, ct).ConfigureAwait(false))
+                {
+                    var root = await contentHierarchyItemRepository.GetByIdAsync(result, ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException($"Content hierarchy item {result} no longer exists.");
+                    await MaterializeDeclaredChildrenAsync(
+                        root,
+                        fetched.Children,
+                        providerType,
+                        monitoring,
+                        userId,
+                        now,
+                        createdHierarchyItemIds,
+                        ct)
+                        .ConfigureAwait(false);
+                }
 
                 return result;
             },
@@ -863,7 +1100,7 @@ internal sealed class ContentService(
         return createResult;
     }
 
-    private async Task<MetadataContribution?> GetInitialContributionAsync(
+    private async Task<ContentHierarchyMetadataResult?> GetInitialMetadataAsync(
         string providerType,
         string externalIdKey,
         string externalId,
@@ -889,7 +1126,7 @@ internal sealed class ContentService(
             Value = externalId,
             Ordinal = 0
         });
-        var result = await provider.TryGetMetadataAsync(
+        return await provider.TryGetMetadataAsync(
             new MetadataFetchRequest
             {
                 Item = new ContentHierarchyItem
@@ -903,7 +1140,6 @@ internal sealed class ContentService(
                 DefaultLanguagePreference = string.Empty
             },
             cancellationToken).ConfigureAwait(false);
-        return result?.Contribution;
     }
 
     private async Task<ContentHierarchyItem?> FindHierarchyItemBySlugAsync(
@@ -1009,8 +1245,10 @@ internal sealed class ContentService(
             else
             {
                 existing = existing with { Slug = slug };
-                if (!await contentHierarchyItemRepository.UpdateAsync(existing, userId, cancellationToken)
-                    .ConfigureAwait(false))
+                if (!await contentHierarchyItemRepository.PatchAsync(
+                    new ContentHierarchyItemPatch { Id = existing.Id, Slug = new() { Value = slug } },
+                    userId,
+                    cancellationToken).ConfigureAwait(false))
                 {
                     throw new InvalidOperationException(
                         $"Failed to normalize external root content for {externalIdKey}={externalId}.");
@@ -1045,7 +1283,7 @@ internal sealed class ContentService(
             CreatedAt = now,
             CreatedByUserId = userId,
         };
-        InitializeContentPath(item, contentTypeRegistry);
+        InitializeContentPath(item);
 
         var created = await contentHierarchyItemRepository
             .TryCreateAsync(item, userId, cancellationToken)
@@ -1100,9 +1338,9 @@ internal sealed class ContentService(
         return item.Id;
     }
 
-    private void InitializeContentPath(ContentHierarchyItem item, IContentTypeRegistry registry, int? year = null)
+    private void InitializeContentPath(ContentHierarchyItem item)
     {
-        var level = registry.GetDefinitionFor(item.ContentType)?.LevelDefinitions
+        var level = contentTypeRegistry.GetDefinitionFor(item.ContentType)?.LevelDefinitions
             .FirstOrDefault(definition => definition.Slug == item.Level);
         var origin = item.Settings.TryGetValue("content.path.origin", out var value) ? value : null;
         if (level?.Subfolder is null ||
@@ -1124,9 +1362,160 @@ internal sealed class ContentService(
             segment = item.Slug;
         }
 
-        item.Path = year is null ? segment : $"{segment} ({year.Value})";
+        item.Path = segment;
         item.Settings["content.path.origin"] = "Generated";
     }
 
-    private readonly record struct PendingRollup(Guid HierarchyItemId, FulfillmentStatus From, FulfillmentStatus To);
+    private async Task<bool> HasChildrenAsync(Guid parentId, CancellationToken cancellationToken)
+    {
+        var page = await contentHierarchyItemRepository.QueryAsync(
+            new ContentHierarchyItemCriteria
+            {
+                ParentId = new CriteriaSet<PropertyCriterion<Guid>> { And = [EqualsCriterion(parentId)] },
+            },
+            new() { PageNumber = 1, PageSize = 1 },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+        return page.TotalItems > 0;
+    }
+
+    private async Task MaterializeDeclaredChildrenAsync(
+        ContentHierarchyItem parent,
+        IReadOnlyList<ChildHierarchyDefinition> definitions,
+        string providerType,
+        bool? monitoring,
+        Guid? userId,
+        DateTime now,
+        ISet<Guid> createdHierarchyItemIds,
+        CancellationToken cancellationToken)
+    {
+        var childLevels = contentTypeRegistry.GetChildLevels(parent.ContentType, parent.Level)
+            .Select(level => level.Slug)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var definition in definitions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(definition.Level) ||
+                string.IsNullOrWhiteSpace(definition.Name) ||
+                string.IsNullOrWhiteSpace(definition.Slug) ||
+                !childLevels.Contains(definition.Level))
+            {
+                continue;
+            }
+
+            var metadataContainerId = Guid.NewGuid();
+            var child = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                MetadataContainerId = metadataContainerId,
+                MetadataContainer = new MetadataContainer { Id = metadataContainerId, CreatedAt = now },
+                ParentId = parent.Id,
+                ContentType = parent.ContentType,
+                Level = definition.Level,
+                Slug = definition.Slug,
+                Name = definition.Name,
+                Ordinal = definition.Ordinal,
+                AlignmentKey = definition.AlignmentKey,
+                PendingMetadataRefresh = true,
+                Monitoring = monitoring,
+                CreatedAt = now,
+                CreatedByUserId = userId,
+            };
+            InitializeContentPath(child);
+
+            if (!await contentHierarchyItemRepository.TryCreateAsync(child, userId, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                var page = await contentHierarchyItemRepository.QueryAsync(
+                    new ContentHierarchyItemCriteria
+                    {
+                        ContentType = SlugCriterion(parent.ContentType),
+                        ParentId = new CriteriaSet<PropertyCriterion<Guid>>
+                        {
+                            And = [EqualsCriterion(parent.Id)]
+                        },
+                        Level = SlugCriterion(definition.Level),
+                        Slug = SlugCriterion(definition.Slug)
+                    },
+                    new() { PageNumber = 1, PageSize = 1 },
+                    sort: null,
+                    cancellationToken).ConfigureAwait(false);
+                child = page.Items.FirstOrDefault()
+                    ?? throw new InvalidOperationException(
+                        $"Failed to create hierarchy child {definition.Level}/{definition.Slug} under {parent.Id}.");
+            }
+            else
+            {
+                createdHierarchyItemIds.Add(child.Id);
+                await AddInitialChildContributionAsync(child, definition, providerType, userId, now, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (definition.Children.Count > 0)
+            {
+                await MaterializeDeclaredChildrenAsync(
+                    child,
+                    definition.Children,
+                    providerType,
+                    monitoring,
+                    userId,
+                    now,
+                    createdHierarchyItemIds,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task AddInitialChildContributionAsync(
+        ContentHierarchyItem child,
+        ChildHierarchyDefinition definition,
+        string providerType,
+        Guid? userId,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        var externalIds = definition.ExternalIds
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Key) && !string.IsNullOrWhiteSpace(entry.Value))
+            .ToArray();
+        var contribution = definition.InitialContribution;
+        if (contribution is null && externalIds.Length == 0)
+        {
+            return;
+        }
+
+        contribution ??= new MetadataContribution { ProviderType = providerType };
+        if (string.IsNullOrWhiteSpace(contribution.ProviderType))
+        {
+            contribution.ProviderType = providerType;
+        }
+
+        contribution.MetadataContainerId = child.MetadataContainerId;
+        contribution.Ordinal = 0;
+        contribution.CreatedAt = now;
+        contribution.CreatedByUserId = userId;
+        contribution.DateLastRefreshed = now;
+        foreach (var (source, value) in externalIds)
+        {
+            if (contribution.ExternalIds.Any(externalId =>
+                string.Equals(externalId.Source, source, StringComparison.Ordinal) &&
+                string.Equals(externalId.Value, value, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            contribution.ExternalIds.Add(new ExternalId
+            {
+                Source = source,
+                Value = value,
+                Ordinal = contribution.ExternalIds.Count
+            });
+        }
+
+        var added = await metadataContainerRepository
+            .AddContributionAsync(child.MetadataContainerId, contribution, userId, cancellationToken)
+            .ConfigureAwait(false);
+        child.MetadataContainer!.Contributions.Add(added);
+    }
+
+    private readonly record struct PendingRollup(Guid HierarchyItemId, FulfillmentStatus To);
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -377,26 +377,36 @@ internal sealed class WishlistDiscoveredRepository(
                 g => g.Key,
                 g => (
                     from image in g
-                    orderby string.Equals(image.Type, "poster", StringComparison.OrdinalIgnoreCase) descending
-                    orderby string.Equals(image.Type, "primary", StringComparison.OrdinalIgnoreCase) descending
-                    orderby string.Equals(image.Type, "profile", StringComparison.OrdinalIgnoreCase) descending
-                    orderby image.ContributionOrdinal
-                    orderby image.Ordinal
+                    orderby string.Equals(image.Type, "poster", StringComparison.OrdinalIgnoreCase) descending,
+                        string.Equals(image.Type, "primary", StringComparison.OrdinalIgnoreCase) descending,
+                        string.Equals(image.Type, "profile", StringComparison.OrdinalIgnoreCase) descending,
+                        image.ContributionOrdinal,
+                        image.Ordinal
                     select image.Url.ToString()).First());
     }
 
-    private sealed class EnrichedProjection
+    private sealed record EnrichedProjection
     {
         public Guid DiscoveredId { get; init; }
-        public string Source { get; init; } = string.Empty;
-        public string ExternalId { get; init; } = string.Empty;
+
+        public required string Source { get; init; }
+
+        public required string ExternalId { get; init; }
+
         public string? Title { get; init; }
+
         public DateTime DiscoveredAt { get; init; }
+
         public Guid? LinkId { get; init; }
+
         public Guid? ContainerId { get; init; }
+
         public DateTime? PublishDate { get; init; }
+
         public DateTime? AddedAt { get; init; }
+
         public Guid? FulfilledContainerId { get; init; }
+
         public bool Fulfilled => FulfilledContainerId is not null;
     }
 }

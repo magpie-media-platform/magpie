@@ -77,7 +77,6 @@ internal sealed class ContentFileService(
             var effectivePath = ResolvePath(
                 lineage,
                 rootFolder,
-                contentTypeRegistry,
                 pathOverrides: null,
                 out _,
                 out _);
@@ -94,6 +93,31 @@ internal sealed class ContentFileService(
         {
             throw new ArgumentException("The configured content path is not accessible.", ex);
         }
+    }
+
+    public async Task<string?> GetEffectivePathAsync(
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default)
+    {
+        var lineage = await contentHierarchyItemRepository
+            .GetLineageAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (lineage.Count == 0)
+        {
+            return null;
+        }
+
+        var rootFolder = await rootFolderRepository
+            .GetByIdAsync(lineage[0].EffectiveRootFolderId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var effectivePath = ResolvePath(
+            lineage,
+            rootFolder,
+            pathOverrides: null,
+            out var leafRawPath,
+            out _);
+        return effectivePath ?? leafRawPath;
     }
 
     public async Task<IReadOnlyList<FileSystemEntry>?> BrowseAsync(
@@ -245,8 +269,7 @@ internal sealed class ContentFileService(
 
         if (level.AcceptedFileTypes.Count == 0 && !allowContainerFallback)
         {
-            throw new ArgumentException(
-                "This content level has no configured file types. Configure them in the level settings before importing files.");
+            throw new ArgumentException("This content level has no configured file types.");
         }
 
         var mimeType = await fileSystem.LookupMimeTypeAsync(fullPath, cancellationToken)
@@ -396,29 +419,12 @@ internal sealed class ContentFileService(
             return new DeleteContentFileResult();
         }
 
-        var fileDeleted = fileSystem.FileExists(target.FilePath);
-        if (fileDeleted)
-        {
-            try
-            {
-                fileSystem.DeleteFile(target.FilePath);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(
-                    ex,
-                    "The content service failed to delete media file {MediaFileId} at {FilePath}. The row is intact",
-                    mediaFileId,
-                    target.FilePath);
-                throw new MediaFileDeletionException(
-                    $"Failed to delete {target.FilePath} from disk; the file row was left in place.",
-                    ex);
-            }
-        }
-        else
+        var fileExists = fileSystem.FileExists(target.FilePath);
+        if (!fileExists)
         {
             logger.LogWarning(
-                "Media file {MediaFileId} was already missing on disk at {FilePath}. The row will be deleted",
+                "The content service removes the row for media file {MediaFileId}, missing on disk at " +
+                "{FilePath}",
                 mediaFileId,
                 target.FilePath);
         }
@@ -427,12 +433,46 @@ internal sealed class ContentFileService(
             contentHierarchyItemId,
             target,
             "FileDeleted",
-            fileDeleted
+            fileExists
                 ? $"Deleted {Path.GetFileName(target.FilePath)} from the host."
                 : $"Removed the missing file {Path.GetFileName(target.FilePath)} from content.",
-            completeIfAlreadyRemoved: fileDeleted,
+            completeIfAlreadyRemoved: fileExists,
             actingUserId,
             cancellationToken).ConfigureAwait(false);
+
+        var fileDeleted = false;
+        if (fileExists)
+        {
+            try
+            {
+                fileSystem.DeleteFile(target.FilePath);
+                fileDeleted = true;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "The content service deleted media file {MediaFileId} from the database but failed to " +
+                    "delete {FilePath} from disk",
+                    mediaFileId,
+                    target.FilePath);
+                await auditRecordRepository.CreateAsync(
+                    new AuditRecord
+                    {
+                        Category = AuditCategories.Content,
+                        Operation = "FileDeleteFailed",
+                        EntityType = nameof(MediaFile),
+                        EntityId = target.Id.ToString(),
+                        ParentEntityId = contentHierarchyItemId.ToString(),
+                        Detail = $"Deleted the content row but could not delete {target.FilePath}.",
+                        Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                        UserId = actingUserId
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                throw new MediaFileDeletionException($"Failed to delete {target.FilePath} from disk.", ex);
+            }
+        }
+
         return new DeleteContentFileResult
         {
             Deleted = fileDeleted || removed,
@@ -485,8 +525,6 @@ internal sealed class ContentFileService(
         FileInfo original,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(original);
-
         var lineage = await contentHierarchyItemRepository
             .GetLineageAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
@@ -516,37 +554,17 @@ internal sealed class ContentFileService(
             rootFolder.RenameTemplate,
             [original.Name],
             logger)[0];
-        var pathUpdates = BuildPathUpdates(lineage, pathResult, out var hasOwnedDirectory);
-        var root = lineage[^1];
-        var subfolder = contentTypeRegistry.GetDefinitionFor(root.ContentType)?.LevelDefinitions
-            .FirstOrDefault(level => level.Slug == root.Level)?.Subfolder;
-        var effectivePath = fileSystem.GetFullPath(string.IsNullOrWhiteSpace(subfolder)
-            ? rootFolder.Path.Trim()
-            : Path.Combine(rootFolder.Path.Trim(), subfolder));
-        for (var index = lineage.Count - 1; index >= 0; index--)
-        {
-            var item = lineage[index];
-            var rawPath = pathUpdates.TryGetValue(item.Id, out var updatedPath) ? updatedPath : item.Path;
-            if (rawPath is null)
-            {
-                continue;
-            }
-
-            var normalizedPath = rawPath.Trim().Replace('\\', Path.DirectorySeparatorChar)
-                .Replace('/', Path.DirectorySeparatorChar);
-            effectivePath = Path.IsPathFullyQualified(normalizedPath)
-                ? fileSystem.GetFullPath(normalizedPath)
-                : fileSystem.GetFullPath(Path.Combine(effectivePath, normalizedPath));
-        }
-
+        var pathUpdates = BuildPathUpdates(
+            lineage, pathResult.Path, pathResult.Directories, out var hasOwnedDirectory);
+        var effectivePath = ResolvePath(lineage, rootFolder, pathUpdates, out _, out var resolutionError);
         if (string.IsNullOrWhiteSpace(effectivePath))
         {
-            throw new ArgumentException("The content path could not be resolved.");
+            throw new ArgumentException(resolutionError ?? "The content path could not be resolved.");
         }
 
         var relativeFilePath = hasOwnedDirectory
-            ? Path.GetFileName(pathResult)
-            : pathResult;
+            ? Path.GetFileName(pathResult.Path)
+            : pathResult.Path;
         var targetPath = Path.Combine(effectivePath, relativeFilePath);
         if (!lineage.Any(item => item.Path is not null && Path.IsPathFullyQualified(
             item.Path.Trim().Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar))))
@@ -568,8 +586,6 @@ internal sealed class ContentFileService(
         Guid? correlationId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(rename);
-
         if (!fileSystem.FileExists(rename.Original.FullName))
         {
             throw new InvalidOperationException("Rename source file does not exist");
@@ -650,8 +666,8 @@ internal sealed class ContentFileService(
         {
             logger.LogError(
                 ex,
-                "The rename engine failed to persist the rename of media file {OriginalPath}. " +
-                "The engine will revert {NewPath} to {OldPath}",
+                "The rename engine failed to persist the rename of media file {OriginalPath} and reverts " +
+                "{NewPath} to {OldPath}",
                 rename.Original.FullName,
                 rename.Rename.FullName,
                 rename.Original.FullName);
@@ -664,8 +680,8 @@ internal sealed class ContentFileService(
             {
                 logger.LogError(
                     revertEx,
-                    "The revert of the media file rename from {NewPath} to {OldPath} failed. " +
-                    "An operator must reconcile the files manually",
+                    "The revert of the media file rename from {NewPath} to {OldPath} failed and needs " +
+                    "manual reconciliation",
                     rename.Rename.FullName,
                     rename.Original.FullName);
             }
@@ -798,8 +814,8 @@ internal sealed class ContentFileService(
         {
             logger.LogError(
                 ex,
-                "The content path change for {ContentHierarchyItemId} failed after moving {FileCount} files. " +
-                "The service will restore the files",
+                "The content path change for {ContentHierarchyItemId} failed after moving {FileCount} " +
+                "files and restores them",
                 contentHierarchyItemId,
                 completedMoves.Count);
             RevertPathMoves(completedMoves);
@@ -809,44 +825,55 @@ internal sealed class ContentFileService(
         return true;
     }
 
-    public Task DeleteFilesAsync(
+    public async Task DeleteFilesAsync(
         IReadOnlyCollection<ContentHierarchyItem> items,
         CancellationToken cancellationToken = default)
     {
-        void DeleteFiles(IEnumerable<MediaFile> files)
+        var abandoned = new List<MediaFile>();
+        foreach (var file in items.SelectMany(item => item.ContentItem?.MediaFiles ?? []))
         {
-            foreach (var file in files)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!fileSystem.FileExists(file.FilePath))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!fileSystem.FileExists(file.FilePath))
-                {
-                    logger.LogWarning(
-                        "Media file {MediaFileId} is missing from {FilePath}",
-                        file.Id,
-                        file.FilePath);
-                    continue;
-                }
+                logger.LogWarning(
+                    "Media file {MediaFileId} is missing from {FilePath}",
+                    file.Id,
+                    file.FilePath);
+                continue;
+            }
 
-                try
-                {
-                    fileSystem.DeleteFile(file.FilePath);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(
-                        ex,
-                        "Could not delete media file {MediaFileId} from {FilePath}",
-                        file.Id,
-                        file.FilePath);
-                    throw new ContentRemovalException(
-                        "Could not delete the media file. The library did not change.",
-                        ex);
-                }
+            try
+            {
+                fileSystem.DeleteFile(file.FilePath);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "Could not delete media file {MediaFileId} from {FilePath}",
+                    file.Id,
+                    file.FilePath);
+                abandoned.Add(file);
             }
         }
 
-        DeleteFiles(items.SelectMany(item => item.ContentItem?.MediaFiles ?? []));
-        return Task.CompletedTask;
+        if (abandoned.Count == 0)
+        {
+            return;
+        }
+
+        await auditRecordRepository.CreateAsync(
+            new AuditRecord
+            {
+                Category = AuditCategories.Content,
+                Operation = "FileDeleteFailed",
+                EntityType = nameof(MediaFile),
+                EntityId = abandoned[0].Id.ToString(),
+                Detail = $"Deleted the content rows but could not delete {abandoned.Count} media files: " +
+                    string.Join(", ", abandoned.Take(10).Select(file => file.FilePath)),
+                Timestamp = timeProvider.GetUtcNow().UtcDateTime
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static bool IsPathUniqueViolation(Exception exception)
@@ -927,7 +954,6 @@ internal sealed class ContentFileService(
 
     private static string ApplyTemplate(string template, RenameTokenSet tokens)
     {
-        ArgumentNullException.ThrowIfNull(tokens);
         if (string.IsNullOrEmpty(template))
         {
             return string.Empty;
@@ -984,19 +1010,15 @@ internal sealed class ContentFileService(
         return builder.ToString();
     }
 
-    private static IReadOnlyList<string> BuildRelativePaths(
-        IReadOnlyList<ContentHierarchyItem> leafToRoot,
-        IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>> relationshipsByNode,
-        IPathResolutionContentTypeDefinitionProvider? pathProvider,
-        string? renameTemplate,
-        IReadOnlyList<string> fileNames,
-        ILogger logger)
+    private static IReadOnlyList<(string Path, IReadOnlyList<ContentPathPlanDirectory>? Directories)>
+        BuildRelativePaths(
+            IReadOnlyList<ContentHierarchyItem> leafToRoot,
+            IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>> relationshipsByNode,
+            IPathResolutionContentTypeDefinitionProvider? pathProvider,
+            string? renameTemplate,
+            IReadOnlyList<string> fileNames,
+            ILogger logger)
     {
-        ArgumentNullException.ThrowIfNull(leafToRoot);
-        ArgumentNullException.ThrowIfNull(relationshipsByNode);
-        ArgumentNullException.ThrowIfNull(fileNames);
-        ArgumentNullException.ThrowIfNull(logger);
-
         if (leafToRoot.Count == 0)
         {
             return [];
@@ -1056,7 +1078,7 @@ internal sealed class ContentFileService(
             ["Slug"] = leafSlug
         };
 
-        var paths = new List<string>(fileNames.Count);
+        var paths = new List<(string Path, IReadOnlyList<ContentPathPlanDirectory>? Directories)>(fileNames.Count);
         foreach (var fileName in fileNames)
         {
             paths.Add(BuildRelativePath(
@@ -1132,7 +1154,7 @@ internal sealed class ContentFileService(
         return result;
     }
 
-    private static string BuildRelativePath(
+    private static (string Path, IReadOnlyList<ContentPathPlanDirectory>? Directories) BuildRelativePath(
         IReadOnlyList<ContentHierarchyItem> ancestors,
         IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>> relationshipsByNode,
         string flatLeafFolder,
@@ -1149,22 +1171,31 @@ internal sealed class ContentFileService(
 
         if (pathProvider is not null)
         {
-            string? generated = null;
+            ContentPathPlan? plan = null;
             try
             {
-                generated = pathProvider.BuildPath(ancestors, relationshipsByNode, originalFileName, extension);
+                plan = pathProvider.BuildPathPlan(ancestors, relationshipsByNode, originalFileName, extension);
             }
             catch (Exception ex)
             {
                 logger.LogWarning(
                     ex,
-                    "The content path provider {Provider} failed. The rename engine will use the fallback path",
+                    "The content path provider {Provider} failed and the rename engine uses the fallback path",
                     pathProvider.GetType().FullName);
             }
 
-            if (!string.IsNullOrWhiteSpace(generated))
+            if (plan is not null && !string.IsNullOrWhiteSpace(plan.FileName))
             {
-                return NormalizeContentPath(generated);
+                var directories = plan.Directories
+                    .Select(directory => new ContentPathPlanDirectory
+                    {
+                        LevelSlug = directory.LevelSlug,
+                        Name = NormalizeContentPath(directory.Name)
+                    })
+                    .Where(directory => directory.Name.Length > 0)
+                    .ToArray();
+                var joined = string.Join('/', directories.Select(directory => directory.Name).Append(plan.FileName));
+                return (NormalizeContentPath(joined), directories);
             }
         }
 
@@ -1178,11 +1209,11 @@ internal sealed class ContentFileService(
             var rendered = ApplyTemplate(renameTemplate, new RenameTokenSet { Tokens = tokens });
             if (!string.IsNullOrWhiteSpace(rendered))
             {
-                return BuildFallbackPathResult(rendered);
+                return (BuildFallbackPathResult(rendered), null);
             }
         }
 
-        return BuildFallbackPathResult(flatLeafFolder + "/" + fileName);
+        return (BuildFallbackPathResult(flatLeafFolder + "/" + fileName), null);
     }
 
     private static string BuildFallbackPathResult(string relativeFilePath)
@@ -1221,11 +1252,47 @@ internal sealed class ContentFileService(
         return segments.Count == 0 ? string.Empty : Path.Combine([.. segments]);
     }
 
+    private static Dictionary<Guid, string?> BuildPathUpdatesFromPlan(
+        IReadOnlyList<ContentHierarchyItem> leafToRoot,
+        IReadOnlyList<ContentPathPlanDirectory> planDirectories,
+        out bool hasOwnedDirectory)
+    {
+        hasOwnedDirectory = false;
+        var updates = new Dictionary<Guid, string?>();
+        foreach (var item in leafToRoot)
+        {
+            var directory = planDirectories.FirstOrDefault(
+                candidate => string.Equals(candidate.LevelSlug, item.Level, StringComparison.Ordinal));
+            if (directory is null)
+            {
+                continue;
+            }
+
+            hasOwnedDirectory = true;
+            var origin = item.Settings.TryGetValue("content.path.origin", out var value) ? value : null;
+            if (!(string.Equals(origin, "Generated", StringComparison.OrdinalIgnoreCase) ||
+                    origin is null && item.Path is null))
+            {
+                continue;
+            }
+
+            updates[item.Id] = directory.Name;
+        }
+
+        return updates;
+    }
+
     private Dictionary<Guid, string?> BuildPathUpdates(
         IReadOnlyList<ContentHierarchyItem> leafToRoot,
         string relativeFilePath,
+        IReadOnlyList<ContentPathPlanDirectory>? planDirectories,
         out bool hasOwnedDirectory)
     {
+        if (planDirectories is not null)
+        {
+            return BuildPathUpdatesFromPlan(leafToRoot, planDirectories, out hasOwnedDirectory);
+        }
+
         hasOwnedDirectory = false;
         var directory = Path.GetDirectoryName(relativeFilePath);
         if (string.IsNullOrEmpty(directory))
@@ -1468,7 +1535,7 @@ internal sealed class ContentFileService(
                 }
             }
 
-            if (hasPrimary || pageItems.Count < pageSize)
+            if (hasPrimary || pageNumber * pageSize >= page.TotalItems || pageItems.Count == 0)
             {
                 break;
             }
@@ -1504,7 +1571,7 @@ internal sealed class ContentFileService(
         }
 
         logger.LogError(
-            "The rename target {TargetPath} is not in root {RootPath}. The rename engine refused the move",
+            "The rename engine refused to move target {TargetPath} outside root {RootPath}",
             targetPath,
             rootFolder.Path);
         throw new InvalidOperationException("Rename target escapes root folder");
@@ -1517,9 +1584,7 @@ internal sealed class ContentFileService(
     {
         if (requestedPath is not null && string.IsNullOrWhiteSpace(requestedPath))
         {
-            throw new ArgumentException(
-                "A content path cannot be empty. Use the inherited-path action to clear it.",
-                nameof(requestedPath));
+            throw new ArgumentException("A content path cannot be empty.", nameof(requestedPath));
         }
 
         var targetLineage = await contentHierarchyItemRepository
@@ -1549,7 +1614,6 @@ internal sealed class ContentFileService(
         var currentTargetEffectivePath = ResolvePath(
             targetLineage,
             targetRootFolder,
-            contentTypeRegistry,
             pathOverrides: null,
             out var currentTargetRawPath,
             out var currentTargetError);
@@ -1557,7 +1621,6 @@ internal sealed class ContentFileService(
         var proposedTargetEffectivePath = ResolvePath(
             targetLineage,
             targetRootFolder,
-            contentTypeRegistry,
             requestedOverrides,
             out var proposedTargetRawPath,
             out var proposedTargetError);
@@ -1573,25 +1636,9 @@ internal sealed class ContentFileService(
 
         var overrides = new Dictionary<Guid, string?> { [contentHierarchyItemId] = normalizedPath };
 
-        const int pageSize = 500;
-        var descendants = new List<ContentHierarchyItem>();
-        var descendantsPageNumber = 1;
-        while (true)
-        {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new ContentHierarchyItemCriteria { AncestorId = contentHierarchyItemId },
-                new() { PageNumber = descendantsPageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            descendants.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            descendantsPageNumber++;
-        }
+        var descendants = await contentHierarchyItemRepository.QueryAllAsync(
+            new ContentHierarchyItemCriteria { AncestorId = contentHierarchyItemId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var hierarchyItems = new List<ContentHierarchyItem>(descendants.Count + 1) { targetLineage[0] };
         hierarchyItems.AddRange(descendants.Where(item => item.Id != contentHierarchyItemId));
@@ -1641,14 +1688,12 @@ internal sealed class ContentFileService(
                 currentEffectivePath = ResolvePath(
                     lineage,
                     rootFolder,
-                    contentTypeRegistry,
                     null,
                     out _,
                     out currentError);
                 proposedEffectivePath = ResolvePath(
                     lineage,
                     rootFolder,
-                    contentTypeRegistry,
                     overrides,
                     out _,
                     out proposedError);
@@ -1812,8 +1857,8 @@ internal sealed class ContentFileService(
             {
                 logger.LogError(
                     ex,
-                    "The content path rollback could not restore {DestinationPath} to {SourcePath}. " +
-                    "An operator must reconcile the file",
+                    "The content path rollback could not restore {DestinationPath} to {SourcePath} and " +
+                    "needs manual reconciliation",
                     move.DestinationPath,
                     move.SourcePath);
             }
@@ -1857,7 +1902,6 @@ internal sealed class ContentFileService(
     private string? ResolvePath(
         IReadOnlyList<ContentHierarchyItem> leafToRoot,
         RootFolder? rootFolder,
-        IContentTypeRegistry registry,
         IReadOnlyDictionary<Guid, string?>? pathOverrides,
         out string? leafRawPath,
         out string? resolutionError)
@@ -1880,7 +1924,7 @@ internal sealed class ContentFileService(
             try
             {
                 var root = leafToRoot[^1];
-                var subfolder = registry.GetDefinitionFor(root.ContentType)?.LevelDefinitions
+                var subfolder = contentTypeRegistry.GetDefinitionFor(root.ContentType)?.LevelDefinitions
                     .FirstOrDefault(level => level.Slug == root.Level)?.Subfolder;
                 var basePath = string.IsNullOrWhiteSpace(subfolder)
                     ? rootFolder.Path.Trim()

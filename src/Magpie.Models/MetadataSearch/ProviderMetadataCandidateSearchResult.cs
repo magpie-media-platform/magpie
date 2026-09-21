@@ -11,7 +11,7 @@ public sealed record ProviderMetadataCandidateSearchResult
     /// <summary>
     /// A result with no candidates.
     /// </summary>
-    public static ProviderMetadataCandidateSearchResult Empty { get; } = new()
+    public static ProviderMetadataCandidateSearchResult Empty => new()
     {
         Matches = [],
         PageItemCount = 0,
@@ -19,7 +19,7 @@ public sealed record ProviderMetadataCandidateSearchResult
     };
 
     /// <summary>
-    /// The warning messages from the search.
+    /// Warnings for failed or incomplete searches, not valid empty results.
     /// </summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
 

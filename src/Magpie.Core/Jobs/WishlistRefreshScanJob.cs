@@ -1,13 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Arguments;
-using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
 using Magpie.Sdk.Jobs;
@@ -25,7 +23,7 @@ internal sealed class WishlistRefreshScanJob(
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "WishlistRefreshScan",
+        JobType = MagpieJobs.Types.WishlistRefreshScan,
         DisplayName = "Wishlist refresh scan",
         Description = "Queues a refresh for every monitored wishlist.",
         Category = "Content",
@@ -42,25 +40,9 @@ internal sealed class WishlistRefreshScanJob(
     {
         progressReporter.Report(0, "The scan will load monitored wishlists.");
 
-        const int pageSize = 500;
-        var wishlists = new List<Wishlist>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await wishlistRepository.QueryAsync(
-                new WishlistQuery { Monitored = true },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            wishlists.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var wishlists = await wishlistRepository.QueryAllAsync(
+            new WishlistQuery { Monitored = true },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (wishlists.Count == 0)
         {
@@ -110,7 +92,7 @@ internal sealed class WishlistRefreshScanJob(
         await jobManager.ExecuteAsync(
             new JobEnqueueRequest
             {
-                JobType = WishlistRefreshItemJob.Spec.JobType,
+                JobType = MagpieJobs.Types.WishlistRefreshItem,
                 Parameters = new Dictionary<string, string>
                 {
                     [MagpieJobs.Parameters.WishlistId] = wishlistId.ToString("D"),
@@ -121,6 +103,6 @@ internal sealed class WishlistRefreshScanJob(
             },
             cancellationToken).ConfigureAwait(false);
 
-        logger.LogInformation("The job queued a wishlist refresh for wishlist {WishlistId}", wishlistId);
+        logger.LogDebug("The job queued a wishlist refresh for wishlist {WishlistId}", wishlistId);
     }
 }

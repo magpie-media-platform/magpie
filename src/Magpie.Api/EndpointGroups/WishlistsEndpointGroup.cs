@@ -84,7 +84,7 @@ internal sealed class WishlistsEndpointGroup : IApiEndpointGroup
     {
         var created = await wishlistService.CreateAsync(create, user.Id, cancellationToken).ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Created($"/api/{Name}/{created.Id}", created);
     }
 
     internal async Task<IResult> GetMyWishlistsAsync(

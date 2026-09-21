@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Core.Jobs.Downloads;
 using Magpie.Models;
 using Magpie.Models.Data;
@@ -27,7 +26,6 @@ public sealed class DownloadCleanupJobTests
     private Mock<IDownloadClientIntegration> _torrentIntegration = null!;
     private Mock<IDownloadClientIntegration> _usenetIntegration = null!;
     private Mock<IDownloadRepository> _downloadRepository = null!;
-    private Mock<IDataProtectionService> _protector = null!;
     private Mock<IProgressReporter> _progress = null!;
     private FakeTimeProvider _timeProvider = null!;
     private IJob _subject = null!;
@@ -60,11 +58,6 @@ public sealed class DownloadCleanupJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        _protector = new Mock<IDataProtectionService>();
-        _protector
-            .Setup(p => p.Unprotect(It.IsAny<IReadOnlyDictionary<string, string>>()))
-            .Returns((IReadOnlyDictionary<string, string> stored) => new Dictionary<string, string>(stored));
-
         _downloadRepository = new Mock<IDownloadRepository>();
         _downloadRepository
             .Setup(r => r.ListCleanupCandidatesAsync(It.IsAny<CancellationToken>()))
@@ -85,7 +78,6 @@ public sealed class DownloadCleanupJobTests
         _subject = new DownloadCleanupJob(
             [_torrentIntegration.Object, _usenetIntegration.Object],
             _downloadRepository.Object,
-            _protector.Object,
             NullLogger<DownloadCleanupJob>.Instance,
             _timeProvider,
             _progress.Object);
@@ -171,7 +163,7 @@ public sealed class DownloadCleanupJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_RemovesFailedRow_AndHonorsDeleteFilesDefault()
+    public async Task ExecuteAsync_RemovesFailedRow_WhenDefaultFileDeletionApplies()
     {
         // Arrange
         var candidate = new DownloadCleanupCandidate
@@ -318,7 +310,7 @@ public sealed class DownloadCleanupJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_AppliesEachClientsOwnCleanupSettings_Independently()
+    public async Task ExecuteAsync_AppliesEachClientsOwnCleanupSettings_WhenTheClientsDiffer()
     {
         // Arrange
         var keepCandidate = new DownloadCleanupCandidate
@@ -397,7 +389,7 @@ public sealed class DownloadCleanupJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_RemovesImportedUsenetRow_Immediately()
+    public async Task ExecuteAsync_RemovesImportedUsenetRow_WhenTheImportedDownloadUsesUsenet()
     {
         // Arrange
         var candidate = new DownloadCleanupCandidate
@@ -445,7 +437,7 @@ public sealed class DownloadCleanupJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_WaitsOnImportedDownload_UntilClientReleasesIt()
+    public async Task ExecuteAsync_WaitsOnImportedDownload_WhenTheClientStillHoldsTheDownload()
     {
         // Arrange
         var candidate = new DownloadCleanupCandidate
@@ -512,7 +504,7 @@ public sealed class DownloadCleanupJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_SkipsImportedHeldDownload_WithoutExternalId()
+    public async Task ExecuteAsync_SkipsImportedHeldDownload_WhenTheExternalIdIsMissing()
     {
         // Arrange
         var candidate = new DownloadCleanupCandidate
@@ -719,6 +711,54 @@ public sealed class DownloadCleanupJobTests
     }
 
     [Test]
+    public async Task ExecuteAsync_LeavesRowUnstamped_WhenClientSettingsCannotBeRead()
+    {
+        // Arrange
+        var candidate = new DownloadCleanupCandidate
+        {
+            DownloadId = Guid.NewGuid(),
+            ExternalId = Guid.NewGuid().ToString("N"),
+            Title = $"download-{Guid.NewGuid():N}",
+            Status = DownloadStatus.Failed,
+            HeldByPolicy = false,
+            ProviderType = "torrent-client",
+            ClientName = $"client-{Guid.NewGuid():N}",
+            Settings = null,
+            CleanupDeleteFiles = true,
+            KeepFailedOnClient = false
+        };
+        _downloadRepository
+            .Setup(r => r.ListCleanupCandidatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([candidate]);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _torrentIntegration.Verify(
+                i => i.RemoveDownloadAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _downloadRepository.Verify(
+                r => r.StampClientRemovedAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<DateTime>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
     public async Task ExecuteAsync_DoesNotDeleteDownloadRow_WhenCleanupCompletes()
     {
         // Arrange
@@ -763,7 +803,7 @@ public sealed class DownloadCleanupJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_PassesUserAndCorrelation_ToRemovalStamp()
+    public async Task ExecuteAsync_PassesUserAndCorrelation_WhenMarkingClientRemoval()
     {
         // Arrange
         var candidate = new DownloadCleanupCandidate

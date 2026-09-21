@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -131,7 +128,7 @@ describe('TagsChipStrip', () => {
         expect(screen.queryByTestId('tags-chip-strip-remove-Action Picks')).not.toBeInTheDocument();
     });
 
-    it('centers the add glyph on an integer icon box rather than a nudge transform', async () => {
+    it('renders the add control with a single glyph and no inline style', async () => {
         tagsByEntity.set('content-42', ['Action Picks']);
 
         renderStrip('content-42');
@@ -139,37 +136,15 @@ describe('TagsChipStrip', () => {
         const addButton = await screen.findByTestId('tags-chip-strip-add');
         expect(addButton.querySelectorAll('svg')).toHaveLength(1);
         expect(addButton.getAttribute('style')).toBeNull();
-
-        const tokens = readFileSync(resolve(process.cwd(), 'src/styles/tokens.css'), 'utf8');
-        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/TagsChipStrip/TagsChipStrip.css'), 'utf8');
-        const add = css.match(/\.tags-chip-strip__add\s*{(?<declarations>[\s\S]*?)\n {4}}/)?.groups?.declarations;
-
-        expect(tokens).toContain('--icon-inline-xs: 16px;');
-        expect(add).toContain('align-items: center;');
-        expect(add).toContain('justify-content: center;');
-        expect(add).toContain('width: var(--space-xl);');
-        expect(add).toContain('height: var(--space-xl);');
-        expect(add).toContain('width: var(--icon-inline-xs);');
-        expect(add).toContain('height: var(--icon-inline-xs);');
-        expect(add).not.toContain('transform:');
     });
 
-    it('declares in css one icon-sizing idiom for both the add and the remove glyph', () => {
-        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/TagsChipStrip/TagsChipStrip.css'), 'utf8');
-        const remove = css.match(/\.tags-chip-strip__chip-remove\s*{(?<declarations>[\s\S]*?)\n {4}}/)?.groups
-            ?.declarations;
+    it('shows an empty tags section when the viewer cannot edit', async () => {
+        renderStrip('content-empty', false);
 
-        expect(remove).toContain('width: var(--icon-inline-xs);');
-        expect(remove).toContain('height: var(--icon-inline-xs);');
-        expect(remove).not.toContain('font-size:');
-    });
-
-    it('renders nothing when the viewer cannot edit and there are no tags', async () => {
-        const { container } = renderStrip('content-empty', false);
-
+        expect(screen.getByText('Loading tags...')).toHaveClass('tags-chip-strip__empty');
         await waitFor(() => {
-            expect(screen.queryByTestId('tags-chip-strip')).not.toBeInTheDocument();
+            expect(screen.getByText('No tags')).toHaveClass('tags-chip-strip__empty');
         });
-        expect(container).toBeEmptyDOMElement();
+        expect(screen.queryByRole('button', { name: 'Add tag' })).not.toBeInTheDocument();
     });
 });

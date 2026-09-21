@@ -308,7 +308,7 @@ describe('WishlistDetailPage', () => {
         expect(wishlistLinks.length).toBeGreaterThan(0);
     });
 
-    it('renders monitored badge for monitored wishlist', async () => {
+    it('renders enabled badge for enabled wishlist', async () => {
         render(
             <TestWrapper>
                 <WishlistDetailPage />
@@ -316,11 +316,11 @@ describe('WishlistDetailPage', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByText('Monitored')).toBeInTheDocument();
+            expect(screen.getByText('Enabled')).toBeInTheDocument();
         });
     });
 
-    it('renders unmonitored badge for unmonitored wishlist', async () => {
+    it('renders disabled badge for disabled wishlist', async () => {
         render(
             <TestWrapper initialPath="/wishlists/wl-4">
                 <WishlistDetailPage />
@@ -328,7 +328,7 @@ describe('WishlistDetailPage', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByText('Unmonitored')).toBeInTheDocument();
+            expect(screen.getByText('Disabled')).toBeInTheDocument();
         });
     });
 });

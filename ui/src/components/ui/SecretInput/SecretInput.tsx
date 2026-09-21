@@ -71,13 +71,13 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(functi
                 masked ? (
                     <button
                         type="button"
-                        className="secret-input__clear"
+                        className="secret-input__replace"
                         onClick={handleUnlock}
                         disabled={disabled}
-                        aria-label={`Clear ${fieldLabel}`}
-                        data-action="clear-secret"
+                        aria-label={`Replace ${fieldLabel}`}
+                        data-action="replace-secret"
                     >
-                        Clear
+                        Replace
                     </button>
                 ) : undefined
             }

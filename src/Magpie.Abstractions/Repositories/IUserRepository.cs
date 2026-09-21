@@ -17,7 +17,7 @@ public interface IUserRepository :
     IPatchRepository<Guid, User, UserPatch>
 {
     /// <summary>
-    /// Sets the password hash and the salt of a user.
+    /// Replaces the stored password hash and salt of a user.
     /// </summary>
     /// <param name="userId">The id of the user</param>
     /// <param name="passwordHash">The new hash of the password</param>
@@ -45,7 +45,7 @@ public interface IUserRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Sets the failed login counter of a user back to zero.
+    /// Resets the failed login counter of a user.
     /// </summary>
     /// <param name="userId">The id of the user</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

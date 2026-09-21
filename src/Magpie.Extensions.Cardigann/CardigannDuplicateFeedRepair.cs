@@ -16,9 +16,7 @@ internal sealed class CardigannDuplicateFeedRepair(
     IIndexerService indexers,
     ILogger<CardigannDuplicateFeedRepair> logger) : IDiagnosticRepair
 {
-    public const string Id = "cardigann.config.dedup-feed";
-
-    public string RepairId => Id;
+    public string RepairId => Constants.DuplicateFeedRepairId;
 
     public async Task<DiagnosticRepairResult> RunAsync(
         DiagnosticFinding finding,
@@ -29,15 +27,15 @@ internal sealed class CardigannDuplicateFeedRepair(
             from feed in feeds
             where string.Equals(
                 feed.ProviderType,
-                CardigannFeedProvider.ProviderTypeName,
+                Constants.ProviderTypeName,
                 StringComparison.OrdinalIgnoreCase)
-            let sourceUrl = feed.Settings.TryGetValue(CardigannFeedProvider.GitUrlSettingKey, out var value) &&
+            let sourceUrl = feed.Settings.TryGetValue(Constants.GitUrlSettingKey, out var value) &&
                 !string.IsNullOrWhiteSpace(value)
                     ? value.Trim()
-                    : CardigannFeedProvider.DefaultGitUrl
+                    : Constants.DefaultGitUrl
             where string.Equals(
                 sourceUrl,
-                CardigannFeedProvider.DefaultGitUrl,
+                Constants.DefaultGitUrl,
                 StringComparison.OrdinalIgnoreCase)
             select feed).ToList();
         if (communityFeeds.Count < 2)
@@ -51,7 +49,7 @@ internal sealed class CardigannDuplicateFeedRepair(
                 feed.Enabled descending,
                 string.Equals(
                     feed.Name,
-                    CardigannFeedProvider.DefaultFeedName,
+                    Constants.DefaultFeedName,
                     StringComparison.Ordinal) descending,
                 feed.CreatedAt,
                 feed.Id

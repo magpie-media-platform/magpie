@@ -24,17 +24,23 @@ const ROLE_NAME_TO_VALUE: Record<string, Role> = {
     Admin: Role.Admin,
 };
 
+const ROLE_VALUES = new Set<number>(Object.values(Role));
+
+export function isRole(value: unknown): value is Role {
+    return typeof value === 'number' && ROLE_VALUES.has(value);
+}
+
 export function roleFromApi(value: Role | string | number | null | undefined): Role {
-    if (typeof value === 'number') {
-        return value as Role;
+    if (isRole(value)) {
+        return value;
     }
     if (typeof value === 'string') {
         if (value in ROLE_NAME_TO_VALUE) {
             return ROLE_NAME_TO_VALUE[value];
         }
         const numeric = Number(value);
-        if (!Number.isNaN(numeric)) {
-            return numeric as Role;
+        if (isRole(numeric)) {
+            return numeric;
         }
     }
     return Role.Viewer;

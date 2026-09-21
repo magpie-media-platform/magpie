@@ -17,7 +17,7 @@ namespace Magpie.Test.Extensions.Wikidata;
 internal sealed class QueryPlannerTests
 {
     [Test]
-    public void Plan_TitleMovie_ApproximateBoundedStrategy()
+    public void Plan_ApproximateBoundedStrategy_WhenTitleMovie()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -91,7 +91,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ShowDateAndLanguage_ExactStructuredStrategy()
+    public void Plan_ExactStructuredStrategy_WhenShowDateAndLanguage()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -134,7 +134,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ContainsWord_UsesLocalPaging()
+    public void Plan_UsesLocalPaging_WhenContainsWord()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -183,7 +183,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_NegativeOnly_ReturnsEmptyWithoutWarning()
+    public void Plan_ReturnsEmptyWithoutWarning_WhenNegativeOnly()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -247,7 +247,6 @@ internal sealed class QueryPlannerTests
             Assert.That(disposition.Source, Is.EqualTo("Title.And[0]"));
             Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.Residual));
             Assert.That(disposition.Reason, Does.Contain("no selective server bound"));
-            Assert.That(disposition.Warning, Is.Null);
         }
     }
 
@@ -340,7 +339,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_UnknownPropertyId_DoesNotEnterQueryPlan()
+    public void Plan_DoesNotEnterQueryPlan_WhenUnknownPropertyId()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -476,7 +475,7 @@ internal sealed class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
-            Assert.That(externalIds.Single().PropertyId, Is.EqualTo(Constants.ImdbPropertyId));
+            Assert.That(externalIds.Single().PropertyId, Is.EqualTo("P345"));
             Assert.That(externalIds.Single().Value, Is.EqualTo("tt0133093"));
             Assert.That(plan.Warnings, Is.Empty);
         }
@@ -535,7 +534,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_SeasonSearch_IsUnsupported()
+    public void Plan_IsUnsupported_WhenSeasonSearch()
     {
         // Arrange
         var subject = new QueryPlanner();
@@ -560,7 +559,7 @@ internal sealed class QueryPlannerTests
     [TestCase(CriteriaValueOperator.ContainsWord)]
     [TestCase(CriteriaValueOperator.StartsWithString)]
     [TestCase(CriteriaValueOperator.EndsWithString)]
-    public void Plan_SupportedTitleOperators_AreMapped(CriteriaValueOperator valueOperator)
+    public void Plan_AreMapped_WhenSupportedTitleOperators(CriteriaValueOperator valueOperator)
     {
         // Arrange
         var values = valueOperator == CriteriaValueOperator.In
@@ -579,10 +578,7 @@ internal sealed class QueryPlannerTests
         var result = subject.Plan(EntityKind.Movie, criteria, 1);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Filters.Single().Operator, Is.EqualTo(valueOperator));
-        }
+        Assert.That(result.Filters.Single().Operator, Is.EqualTo(valueOperator));
     }
 
     [TestCase(CriteriaValueOperator.Equals)]
@@ -593,7 +589,7 @@ internal sealed class QueryPlannerTests
     [TestCase(CriteriaValueOperator.LessThanOrEqual)]
     [TestCase(CriteriaValueOperator.IsNull)]
     [TestCase(CriteriaValueOperator.IsNotNull)]
-    public void Plan_SupportedDateOperators_AreExact(CriteriaValueOperator valueOperator)
+    public void Plan_AreExact_WhenSupportedDateOperators(CriteriaValueOperator valueOperator)
     {
         // Arrange
         var temporalValues = valueOperator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull
@@ -639,10 +635,7 @@ internal sealed class QueryPlannerTests
         var dateFilter = result.Filters.Single(filter => filter.Kind == QueryFilterKind.PublishDate);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(dateFilter.Operator, Is.EqualTo(valueOperator));
-        }
+        Assert.That(dateFilter.Operator, Is.EqualTo(valueOperator));
     }
 
     [TestCase(CriteriaValueOperator.NotEquals, CriteriaValueOperator.Equals)]
@@ -650,7 +643,7 @@ internal sealed class QueryPlannerTests
     [TestCase(CriteriaValueOperator.NotContainsString, CriteriaValueOperator.ContainsString)]
     [TestCase(CriteriaValueOperator.NotStartsWithString, CriteriaValueOperator.StartsWithString)]
     [TestCase(CriteriaValueOperator.NotEndsWithString, CriteriaValueOperator.EndsWithString)]
-    public void Plan_NormalizedNegativeTitleOperators_PreserveOneNegation(
+    public void Plan_PreserveOneNegation_WhenNormalizedNegativeTitleOperators(
         CriteriaValueOperator input,
         CriteriaValueOperator expected)
     {
@@ -692,7 +685,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_RelationshipKindAndType_IntersectRoles()
+    public void Plan_MapsToTheDirectorProperty_WhenRelationshipKindAndTypeIntersect()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -728,10 +721,7 @@ internal sealed class QueryPlannerTests
         var relationship = result.Filters.Single();
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(relationship.Alternatives.Single().PropertyIds, Is.EqualTo(["P57"]));
-        }
+        Assert.That(relationship.Alternatives.Single().PropertyIds, Is.EqualTo(["P57"]));
     }
 
     [TestCase("producer", Constants.ProducerPropertyId)]
@@ -1325,7 +1315,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_RelatedMetadataContainerId_ReturnsEmptyWithoutWarning()
+    public void Plan_ReturnsEmptyWithoutWarning_WhenRelatedMetadataContainerId()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1510,7 +1500,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_RelationshipResidualCoarseBound_PrefersExactSubjectAfterFuzzySubject()
+    public void Plan_PrefersExactSubjectAfterFuzzySubject_WhenRelationshipResidualCoarseBound()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1562,7 +1552,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_RelationshipResidualCoarseBound_OmitsMixedSubjectSelectorWhenExternalIdBounds()
+    public void Plan_OmitsMixedSubjectSelectorWhenExternalIdBounds_WhenRelationshipResidualCoarseBound()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1673,7 +1663,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_RelationshipExternalIdGroups_RemainConjunctive()
+    public void Plan_RemainConjunctive_WhenRelationshipExternalIdGroups()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1744,7 +1734,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_CustomRelationshipSubjectAndExternalId_SkipsUnsupportedSource()
+    public void Plan_SkipsUnsupportedSource_WhenCustomRelationshipSubjectAndExternalId()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1797,7 +1787,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_NegatedCustomRelationshipSubjectAndExternalId_KeepFacetsOnSameRelationship()
+    public void Plan_KeepFacetsOnSameRelationship_WhenNegatedCustomRelationshipSubjectAndExternalId()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1856,7 +1846,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_NegatedExactCustomRelationshipSubject_PreservesPositiveExternalIdBound()
+    public void Plan_PreservesPositiveExternalIdBound_WhenNegatedExactCustomRelationshipSubject()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1961,7 +1951,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_CustomRelationshipSubject_KeepsQidWhenNamesExceedLimit()
+    public void Plan_KeepsQidWhenNamesExceedLimit_WhenCustomRelationshipSubject()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2063,7 +2053,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_RelationshipSubject_KeepsQidWhenNamesExceedLimit()
+    public void Plan_KeepsQidWhenNamesExceedLimit_WhenRelationshipSubject()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2516,7 +2506,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_CustomRelationshipExternalIdKeys_MapToOneExactTypedFilter()
+    public void Plan_MapToOneExactTypedFilter_WhenCustomRelationshipExternalIdKeys()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2564,7 +2554,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_CustomRelationshipExternalIdKeys_DoNotPairAcrossGroups()
+    public void Plan_DoNotPairAcrossGroups_WhenCustomRelationshipExternalIdKeys()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2602,10 +2592,7 @@ internal sealed class QueryPlannerTests
         var result = subject.Plan(EntityKind.Movie, criteria, 1);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Filters, Is.Empty);
-        }
+        Assert.That(result.Filters, Is.Empty);
     }
 
     [Test]
@@ -2646,12 +2633,9 @@ internal sealed class QueryPlannerTests
         var externalIds = result.Filters.Single().Alternatives.Single().ExternalIdGroups.Single().ExternalIds;
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(
-                externalIds.Select(externalId => externalId.Value),
-                Is.EqualTo(["nm0000206", "nm0000151"]));
-        }
+        Assert.That(
+            externalIds.Select(externalId => externalId.Value),
+            Is.EqualTo(["nm0000206", "nm0000151"]));
     }
 
     [Test]
@@ -2904,7 +2888,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_UnresolvedGenreName_IsApproximate()
+    public void Plan_IsApproximate_WhenUnresolvedGenreName()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2931,10 +2915,7 @@ internal sealed class QueryPlannerTests
         var result = subject.Plan(EntityKind.Movie, criteria, 1);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Warnings, Is.Empty);
-        }
+        Assert.That(result.Warnings, Is.Empty);
     }
 
     [Test]
@@ -3016,7 +2997,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ProviderTypeExcludesWikidata_RecordsEveryCriterionDisposition()
+    public void Plan_RecordsEveryCriterionDisposition_WhenProviderTypeExcludesWikidata()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -3403,7 +3384,7 @@ internal sealed class QueryPlannerTests
         {
             Assert.That(filter.Values, Is.EqualTo(["Ended"]));
             Assert.That(filter.Negate, Is.False);
-            Assert.That(filter.PropertyId, Is.EqualTo(Constants.SeriesEndPropertyId));
+            Assert.That(filter.PropertyId, Is.EqualTo("P582"));
             Assert.That(result.ResidualFilters, Is.Empty);
             Assert.That(result.Warnings, Is.Empty);
         }
@@ -3441,7 +3422,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ExcludedGenreName_UsesHitResidualWithoutRemoteGenreFilter()
+    public void Plan_UsesHitResidualWithoutRemoteGenreFilter_WhenExcludedGenreName()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -3496,7 +3477,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ExcludedGenreQid_StaysServerSide()
+    public void Plan_StaysServerSide_WhenExcludedGenreQid()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -3544,7 +3525,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ExcludedMixedGenreValues_SplitQidAndNameChecks()
+    public void Plan_SplitQidAndNameChecks_WhenExcludedMixedGenreValues()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -3980,7 +3961,7 @@ internal sealed class QueryPlannerTests
     [TestCase(CriteriaValueOperator.IsNotNull, false, CriteriaValueOperator.IsNotNull)]
     [TestCase(CriteriaValueOperator.IsNull, true, CriteriaValueOperator.IsNotNull)]
     [TestCase(CriteriaValueOperator.IsNotNull, true, CriteriaValueOperator.IsNull)]
-    public void Plan_LanguagePresence_FoldsNegateIntoTheOperator(
+    public void Plan_FoldsNegateIntoTheOperator_WhenLanguagePresence(
         CriteriaValueOperator valueOperator,
         bool negate,
         CriteriaValueOperator expectedOperator)
@@ -4364,7 +4345,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ContentRatingBodyAndNameRating_UsesRemoteAlternativeAndResidual()
+    public void Plan_UsesRemoteAlternativeAndResidual_WhenContentRatingBodyAndNameRating()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4418,7 +4399,7 @@ internal sealed class QueryPlannerTests
             Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
             Assert.That(filter.Kind, Is.EqualTo(QueryFilterKind.ContentRating));
             Assert.That(filter.Operator, Is.EqualTo(CriteriaValueOperator.Equals));
-            Assert.That(alternative.PropertyIds, Is.EqualTo([Constants.MpaaRatingPropertyId]));
+            Assert.That(alternative.PropertyIds, Is.EqualTo(["P1657"]));
             Assert.That(alternative.Names, Is.EqualTo(["R"]));
             Assert.That(residual.CollectionGroup!.Kind, Is.EqualTo(ResidualCollectionKind.ContentRating));
             Assert.That(
@@ -4431,12 +4412,11 @@ internal sealed class QueryPlannerTests
             Assert.That(
                 disposition.Disposition,
                 Is.EqualTo(CriterionDispositionKind.ServerFilterAndResidual));
-            Assert.That(disposition.Warning, Is.Null);
         }
     }
 
     [Test]
-    public void Plan_ContentRatingMixedQidAndName_UsesRemoteAlternativeAndIdentityResidual()
+    public void Plan_UsesRemoteAlternativeAndIdentityResidual_WhenContentRatingMixedQidAndName()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4485,7 +4465,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ContentRatingQidAndLabelExactCriteria_UseSafeCoarseAndResidualConjunction()
+    public void Plan_UseSafeCoarseAndResidualConjunction_WhenContentRatingQidAndLabelExactCriteria()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4533,7 +4513,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ContentRatingDisjointQidExactCriteria_ProduceKnownEmpty()
+    public void Plan_ProduceKnownEmpty_WhenContentRatingDisjointQidExactCriteria()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4581,7 +4561,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_BareContentRatingPresence_IsNotASelectiveBound()
+    public void Plan_IsNotASelectiveBound_WhenBareContentRatingPresence()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4608,12 +4588,11 @@ internal sealed class QueryPlannerTests
                 disposition.Disposition,
                 Is.EqualTo(CriterionDispositionKind.ServerFilter));
             Assert.That(disposition.Reason, Does.Contain("server-side filter"));
-            Assert.That(disposition.Warning, Is.Null);
         }
     }
 
     [Test]
-    public void Plan_ContentRatingBodyOnly_UsesExactPropertyFilterWithoutResidual()
+    public void Plan_UsesExactPropertyFilterWithoutResidual_WhenContentRatingBodyOnly()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4655,7 +4634,7 @@ internal sealed class QueryPlannerTests
             Assert.That(filter.Operator, Is.EqualTo(CriteriaValueOperator.Equals));
             Assert.That(
                 filter.Alternatives.Single().PropertyIds,
-                Is.EqualTo([Constants.MpaaRatingPropertyId]));
+                Is.EqualTo(["P1657"]));
             Assert.That(plan.ResidualFilters, Is.Empty);
             Assert.That(plan.UsesLocalPaging, Is.False);
             Assert.That(plan.Warnings, Is.Empty);
@@ -4663,7 +4642,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_UnsupportedContentRatingBodyAndImpossibleRating_ProducesKnownEmptyWithoutWarning()
+    public void Plan_ProducesKnownEmptyWithoutWarning_WhenUnsupportedContentRatingBodyAndImpossibleRating()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4720,7 +4699,7 @@ internal sealed class QueryPlannerTests
     [TestCase(nameof(MetadataCriteria.Awards))]
     [TestCase(nameof(MetadataCriteria.Images))]
     [TestCase(nameof(MetadataCriteria.References))]
-    public void Plan_BareCollectionPresence_IsNotASelectiveBound(string fieldName)
+    public void Plan_IsNotASelectiveBound_WhenBareCollectionPresence(string fieldName)
     {
         // Arrange
         var criteria = fieldName switch
@@ -4837,7 +4816,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ContentRatingNoneResidual_DoesNotApplyCoarseRemoteNegation()
+    public void Plan_DoesNotApplyCoarseRemoteNegation_WhenContentRatingNoneResidual()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4886,7 +4865,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_AwardNameAndYear_UsesNameBoundAndYearResidual()
+    public void Plan_UsesNameBoundAndYearResidual_WhenAwardNameAndYear()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -4951,7 +4930,7 @@ internal sealed class QueryPlannerTests
             Assert.That(filter.Kind, Is.EqualTo(QueryFilterKind.Award));
             Assert.That(
                 filter.Alternatives.Single().PropertyIds,
-                Is.EqualTo([Constants.AwardReceivedPropertyId]));
+                Is.EqualTo(["P166"]));
             Assert.That(filter.Alternatives.Single().Qids, Is.EqualTo(["Q19020"]));
             Assert.That(predicate.Field, Is.EqualTo(ResidualCollectionField.AwardYear));
             Assert.That(predicate.IntegerValues, Is.EqualTo([2000]));
@@ -4960,7 +4939,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_MoviePosterType_UsesSafePropertiesAndResidualForConditionalImageType()
+    public void Plan_UsesSafePropertiesAndResidualForConditionalImageType_WhenMoviePosterType()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5003,8 +4982,8 @@ internal sealed class QueryPlannerTests
                 filter.Alternatives.Single().PropertyIds,
                 Is.EquivalentTo(
                 [
-                    Constants.PosterPropertyId,
-                    Constants.ImagePropertyId
+                    "P3383",
+                    "P18"
                 ]));
             Assert.That(
                 plan.ResidualFilters.Single().CollectionGroup!.Kind,
@@ -5014,7 +4993,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ImageLogoType_UsesExactPropertyWithoutResidual()
+    public void Plan_UsesExactPropertyWithoutResidual_WhenImageLogoType()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5055,7 +5034,7 @@ internal sealed class QueryPlannerTests
             Assert.That(filter.Kind, Is.EqualTo(QueryFilterKind.Image));
             Assert.That(
                 filter.Alternatives.Single().PropertyIds,
-                Is.EqualTo([Constants.LogoPropertyId]));
+                Is.EqualTo(["P154"]));
             Assert.That(plan.ResidualFilters, Is.Empty);
             Assert.That(plan.UsesLocalPaging, Is.False);
             Assert.That(plan.Warnings, Is.Empty);
@@ -5066,7 +5045,7 @@ internal sealed class QueryPlannerTests
     [TestCase(nameof(EntityKind.Movie), "profile")]
     [TestCase(nameof(EntityKind.Show), "still")]
     [TestCase(nameof(EntityKind.Show), "profile")]
-    public void Plan_UnmaterializedImageType_ProducesKnownEmpty(string entityKindName, string imageType)
+    public void Plan_ProducesKnownEmpty_WhenUnmaterializedImageType(string entityKindName, string imageType)
     {
         // Arrange
         var entityKind = entityKindName == nameof(EntityKind.Movie)
@@ -5120,7 +5099,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_UnsupportedImageTypeAndImpossibleWidth_ProducesKnownEmptyWithoutWarning()
+    public void Plan_ProducesKnownEmptyWithoutWarning_WhenUnsupportedImageTypeAndImpossibleWidth()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5307,7 +5286,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ImageWidthIsNotNull_FoldsToKnownEmpty()
+    public void Plan_FoldsToKnownEmpty_WhenImageWidthIsNotNull()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5353,7 +5332,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ReferenceUrlEquality_UsesExactServerFilterAndRemotePaging()
+    public void Plan_UsesExactServerFilterAndRemotePaging_WhenReferenceUrlEquality()
     {
         // Arrange
         var website = new Uri("https://example.test/matrix");
@@ -5389,7 +5368,7 @@ internal sealed class QueryPlannerTests
             Assert.That(filter.Operator, Is.EqualTo(CriteriaValueOperator.Equals));
             Assert.That(
                 filter.Alternatives.Single().PropertyIds,
-                Is.EqualTo([Constants.OfficialWebsitePropertyId]));
+                Is.EqualTo(["P856"]));
             Assert.That(filter.Alternatives.Single().UriSchemes, Is.Empty);
             Assert.That(filter.Alternatives.Single().UriValues, Is.EqualTo([website.AbsoluteUri]));
             Assert.That(plan.ResidualFilters, Is.Empty);
@@ -5399,7 +5378,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ReferenceUrlIn_UsesAllExactServerValuesWithoutResidual()
+    public void Plan_UsesAllExactServerValuesWithoutResidual_WhenReferenceUrlIn()
     {
         // Arrange
         var websites = new[]
@@ -5455,7 +5434,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_DistinctReferenceUrlExactCriteria_ProduceKnownEmpty()
+    public void Plan_ProduceKnownEmpty_WhenDistinctReferenceUrlExactCriteria()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5502,7 +5481,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ReferenceUrlExactCriteriaDifferingOnlyByCase_UseSingleServerValue()
+    public void Plan_UseSingleServerValue_WhenReferenceUrlExactCriteriaDifferingOnlyByCase()
     {
         // Arrange
         var first = new Uri("https://example.test/Matrix");
@@ -5545,7 +5524,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_FtpReferenceUrlExactCriterion_ProducesKnownEmpty()
+    public void Plan_ProducesKnownEmpty_WhenFtpReferenceUrlExactCriterion()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5589,7 +5568,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_BareReferencePresence_UsesServerFilterWithoutResidual()
+    public void Plan_UsesServerFilterWithoutResidual_WhenBareReferencePresence()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5615,7 +5594,7 @@ internal sealed class QueryPlannerTests
             Assert.That(filter.Operator, Is.EqualTo(CriteriaValueOperator.IsNotNull));
             Assert.That(
                 filter.Alternatives.Single().PropertyIds,
-                Is.EqualTo([Constants.OfficialWebsitePropertyId]));
+                Is.EqualTo(["P856"]));
             Assert.That(
                 filter.Alternatives.Single().UriSchemes,
                 Is.EqualTo([Uri.UriSchemeHttp, Uri.UriSchemeHttps]));
@@ -5625,7 +5604,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ReferenceConstantPresenceCriteria_UseServerFilterWithoutResidual()
+    public void Plan_UseServerFilterWithoutResidual_WhenReferenceConstantPresenceCriteria()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5666,14 +5645,14 @@ internal sealed class QueryPlannerTests
             Assert.That(filter.Operator, Is.EqualTo(CriteriaValueOperator.IsNotNull));
             Assert.That(
                 filter.Alternatives.Single().PropertyIds,
-                Is.EqualTo([Constants.OfficialWebsitePropertyId]));
+                Is.EqualTo(["P856"]));
             Assert.That(plan.ResidualFilters, Is.Empty);
             Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_AwardQidName_UsesExactServerFilterWithoutResidual()
+    public void Plan_UsesExactServerFilterWithoutResidual_WhenAwardQidName()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5721,7 +5700,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_AwardQidUrlAndBareQidExactCriteria_UseCanonicalServerFilter()
+    public void Plan_UseCanonicalServerFilter_WhenAwardQidUrlAndBareQidExactCriteria()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5767,7 +5746,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_AwardDisjointNameExactCriteria_ProduceKnownEmpty()
+    public void Plan_ProduceKnownEmpty_WhenAwardDisjointNameExactCriteria()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5815,7 +5794,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_BareReferenceNone_UsesNegatedServerFilterWithoutResidual()
+    public void Plan_UsesNegatedServerFilterWithoutResidual_WhenBareReferenceNone()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5846,7 +5825,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_AwardNameOnly_UsesSelectiveRemoteAlternativeAndResidual()
+    public void Plan_UsesSelectiveRemoteAlternativeAndResidual_WhenAwardNameOnly()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5897,7 +5876,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_AwardWonStatus_UsesPresenceFilterWithoutResidual()
+    public void Plan_UsesPresenceFilterWithoutResidual_WhenAwardWonStatus()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -5941,14 +5920,14 @@ internal sealed class QueryPlannerTests
             Assert.That(filter.Operator, Is.EqualTo(CriteriaValueOperator.IsNotNull));
             Assert.That(
                 filter.Alternatives.Single().PropertyIds,
-                Is.EqualTo([Constants.AwardReceivedPropertyId]));
+                Is.EqualTo(["P166"]));
             Assert.That(plan.ResidualFilters, Is.Empty);
             Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_CollectionOr_DiscardsImpossibleUnsupportedAlternative()
+    public void Plan_DiscardsImpossibleUnsupportedAlternative_WhenCollectionOr()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6020,7 +5999,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ImpossibleUnsupportedCollectionAlternative_ProducesKnownEmpty()
+    public void Plan_ProducesKnownEmpty_WhenImpossibleUnsupportedCollectionAlternative()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6085,7 +6064,7 @@ internal sealed class QueryPlannerTests
     [TestCase(nameof(MetadataCriteria.Awards), CriteriaValueOperator.IsNotNull)]
     [TestCase(nameof(MetadataCriteria.AlternateTexts), CriteriaValueOperator.IsNull)]
     [TestCase(nameof(MetadataCriteria.AlternateTexts), CriteriaValueOperator.IsNotNull)]
-    public void Plan_AlwaysNonNullCollectionField_FoldsNullCheck(
+    public void Plan_FoldsNullCheck_WhenAlwaysNonNullCollectionField(
         string fieldName,
         CriteriaValueOperator valueOperator)
     {
@@ -6163,7 +6142,7 @@ internal sealed class QueryPlannerTests
 
     [TestCase(CriteriaValueOperator.IsNull)]
     [TestCase(CriteriaValueOperator.IsNotNull)]
-    public void Plan_ReferenceOrdinalNullCheck_FoldsNonNullInvariant(CriteriaValueOperator valueOperator)
+    public void Plan_FoldsNonNullInvariant_WhenReferenceOrdinalNullCheck(CriteriaValueOperator valueOperator)
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6224,7 +6203,7 @@ internal sealed class QueryPlannerTests
 
     [TestCase(CriteriaValueOperator.IsNull, false)]
     [TestCase(CriteriaValueOperator.IsNotNull, true)]
-    public void Plan_ReferenceOrdinalNullCheckNone_PreservesCollectionNegation(
+    public void Plan_PreservesCollectionNegation_WhenReferenceOrdinalNullCheckNone(
         CriteriaValueOperator valueOperator,
         bool expectsNegatedFilter)
     {
@@ -6274,7 +6253,7 @@ internal sealed class QueryPlannerTests
 
     [TestCase(CriteriaValueOperator.Equals, 1)]
     [TestCase(CriteriaValueOperator.GreaterThan, 0)]
-    public void Plan_ReferenceOrdinal_UsesPresenceCoarseFilterAndIntegerResidual(
+    public void Plan_UsesPresenceCoarseFilterAndIntegerResidual_WhenReferenceOrdinal(
         CriteriaValueOperator valueOperator,
         int value)
     {
@@ -6321,7 +6300,7 @@ internal sealed class QueryPlannerTests
             Assert.That(filter.Operator, Is.EqualTo(CriteriaValueOperator.IsNotNull));
             Assert.That(
                 filter.Alternatives.Single().PropertyIds,
-                Is.EqualTo([Constants.OfficialWebsitePropertyId]));
+                Is.EqualTo(["P856"]));
             Assert.That(
                 filter.Alternatives.Single().UriSchemes,
                 Is.EqualTo([Uri.UriSchemeHttp, Uri.UriSchemeHttps]));
@@ -6333,7 +6312,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ReferenceOrdinalNone_DoesNotApplyRemoteCollectionFilter()
+    public void Plan_DoesNotApplyRemoteCollectionFilter_WhenReferenceOrdinalNone()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6378,7 +6357,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ReferenceUrlPrefix_UsesPresenceCoarseFilterAndResidual()
+    public void Plan_UsesPresenceCoarseFilterAndResidual_WhenReferenceUrlPrefix()
     {
         // Arrange
         var website = new Uri("https://example.test/");
@@ -6436,7 +6415,7 @@ internal sealed class QueryPlannerTests
     [TestCase(nameof(MetadataCriteria.Awards))]
     [TestCase(nameof(MetadataCriteria.Images))]
     [TestCase(nameof(MetadataCriteria.References))]
-    public void Plan_ResidualCollectionNone_DoesNotApplyRemoteCollectionFilter(string fieldName)
+    public void Plan_DoesNotApplyRemoteCollectionFilter_WhenResidualCollectionNone(string fieldName)
     {
         // Arrange
         var criteria = fieldName switch
@@ -6546,7 +6525,7 @@ internal sealed class QueryPlannerTests
 
     [TestCase(nameof(MetadataCriteria.ContentRatings))]
     [TestCase(nameof(MetadataCriteria.Awards))]
-    public void Plan_BareMaterializedCollectionNone_UsesNegatedServerFilter(string fieldName)
+    public void Plan_UsesNegatedServerFilter_WhenBareMaterializedCollectionNone(string fieldName)
     {
         // Arrange
         var criteria = fieldName == nameof(MetadataCriteria.ContentRatings)
@@ -6592,7 +6571,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ContentRatingGroups_PreserveAndBetweenGroupsAndOrWithinGroup()
+    public void Plan_PreserveAndBetweenGroupsAndOrWithinGroup_WhenContentRatingGroups()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6669,7 +6648,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_EmptyContentRatingSomeGroup_IsIgnored()
+    public void Plan_IsIgnored_WhenEmptyContentRatingSomeGroup()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6695,7 +6674,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_AlternateText_UsesOnlyAliasResidual()
+    public void Plan_UsesOnlyAliasResidual_WhenAlternateText()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6752,7 +6731,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_PreviewCriterion_UsesEntityResidualEvaluation()
+    public void Plan_UsesEntityResidualEvaluation_WhenPreviewCriterion()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6803,7 +6782,6 @@ internal sealed class QueryPlannerTests
             Assert.That(plan.Warnings, Is.Empty);
             Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.Residual));
             Assert.That(disposition.Reason, Is.Not.Empty);
-            Assert.That(disposition.Warning, Is.Null);
         }
     }
 
@@ -6943,7 +6921,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ExactExternalIdAndStartsWithTitle_UsesIdentitySeed()
+    public void Plan_UsesIdentitySeed_WhenExactExternalIdAndStartsWithTitle()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -7000,7 +6978,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_GenreNamePredicates_CompileOneAlignedResidualAlternative()
+    public void Plan_CompileOneAlignedResidualAlternative_WhenGenreNamePredicates()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -7057,7 +7035,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ExactRelationshipName_UsesCoarseResolutionAndResidualVerification()
+    public void Plan_UsesCoarseResolutionAndResidualVerification_WhenExactRelationshipName()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -7101,7 +7079,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ExternalIdSourceIn_MapsEverySourceAsAnAlternativeSelector()
+    public void Plan_MapsEverySourceAsAnAlternativeSelector_WhenExternalIdSourceIn()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -7146,8 +7124,8 @@ internal sealed class QueryPlannerTests
                 ids.Select(value => value.PropertyId),
                 Is.EquivalentTo(
                 [
-                    Constants.ImdbPropertyId,
-                    Constants.TmdbMoviePropertyId
+                    "P345",
+                    "P4947"
                 ]));
             Assert.That(ids.Select(value => value.Value), Is.All.EqualTo("tt0133093"));
             Assert.That(plan.Warnings, Is.Empty);
@@ -7155,7 +7133,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ExactIdentityBound_DropsApproximateRelationshipNameBound()
+    public void Plan_DropsApproximateRelationshipNameBound_WhenExactIdentityBound()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -7221,13 +7199,12 @@ internal sealed class QueryPlannerTests
             Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.ExternalId));
             Assert.That(plan.ResidualFilters.Single().Kind, Is.EqualTo(ResidualFilterKind.Relationship));
             Assert.That(relationshipDisposition.Disposition, Is.EqualTo(CriterionDispositionKind.Residual));
-            Assert.That(relationshipDisposition.Warning, Is.Null);
             Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_ExactIdentityBound_DropsOnlyApproximateRelationshipNameBound()
+    public void Plan_DropsOnlyApproximateRelationshipNameBound_WhenExactIdentityBound()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -7324,17 +7301,15 @@ internal sealed class QueryPlannerTests
                     ResidualFilterKind.Collection
                 ]));
             Assert.That(relationshipDisposition.Disposition, Is.EqualTo(CriterionDispositionKind.Residual));
-            Assert.That(relationshipDisposition.Warning, Is.Null);
             Assert.That(
                 contentRatingDisposition.Disposition,
                 Is.EqualTo(CriterionDispositionKind.ServerFilterAndResidual));
-            Assert.That(contentRatingDisposition.Warning, Is.Null);
             Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_RelationshipExternalIdGroup_PreservesQidAndPropertyAlternatives()
+    public void Plan_PreservesQidAndPropertyAlternatives_WhenRelationshipExternalIdGroup()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -7395,14 +7370,14 @@ internal sealed class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(group.Qids, Is.EqualTo(["Q43416"]));
-            Assert.That(group.ExternalIds.Single().PropertyId, Is.EqualTo(Constants.ImdbPropertyId));
+            Assert.That(group.ExternalIds.Single().PropertyId, Is.EqualTo("P345"));
             Assert.That(group.ExternalIds.Single().Value, Is.EqualTo("nm0000206"));
             Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_RelationshipExternalIdSourceAndValueSets_SkipUnsupportedSources()
+    public void Plan_SkipUnsupportedSources_WhenRelationshipExternalIdSourceAndValueSets()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -7473,7 +7448,7 @@ internal sealed class QueryPlannerTests
             Assert.That(group.Qids, Is.EqualTo(["Q43416"]));
             Assert.That(
                 group.ExternalIds.Select(value => value.PropertyId),
-                Is.All.EqualTo(Constants.ImdbPropertyId));
+                Is.All.EqualTo("P345"));
             Assert.That(
                 group.ExternalIds.Select(value => value.Value),
                 Is.EquivalentTo(["Q43416", "nm0000206"]));
@@ -7718,7 +7693,7 @@ internal sealed class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
-            Assert.That(externalId.PropertyId, Is.EqualTo(Constants.ImdbPropertyId));
+            Assert.That(externalId.PropertyId, Is.EqualTo("P345"));
             Assert.That(externalId.Value, Is.EqualTo("tt0133093"));
             Assert.That(plan.CriterionDispositions[1].Disposition, Is.EqualTo(CriterionDispositionKind.Refused));
             Assert.That(plan.Warnings, Is.Empty);

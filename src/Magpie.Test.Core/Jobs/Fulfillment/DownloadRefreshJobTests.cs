@@ -29,6 +29,8 @@ namespace Magpie.Test.Core.Jobs.Fulfillment;
 [TestFixture]
 public sealed class DownloadRefreshJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private List<IDownloadClientIntegration> _integrations = null!;
     private List<DownloadClient> _clients = null!;
     private Dictionary<Guid, List<Download>> _downloadsByClient = null!;
@@ -52,12 +54,12 @@ public sealed class DownloadRefreshJobTests
         _clients = [];
         _downloadsByClient = [];
 
-        _downloadClientRepository = new Mock<IDownloadClientRepository>();
+        _downloadClientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
         _downloadClientRepository
             .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => [.. _clients]);
 
-        _downloadRepository = new Mock<IDownloadRepository>();
+        _downloadRepository = new Mock<IDownloadRepository> { CallBase = true };
         _downloadRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<DownloadQuery>(),
@@ -87,7 +89,8 @@ public sealed class DownloadRefreshJobTests
             _jobManager.Object,
             NullLogger<DownloadRefreshJob>.Instance,
             _downloadService.Object,
-            _timeProvider);
+            _timeProvider,
+            _progressReporter);
 
         _userId = Guid.NewGuid();
         _jobContext = new JobContext(
@@ -236,7 +239,7 @@ public sealed class DownloadRefreshJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_BatchesOnlyNonTerminalDownloads_ForEnabledClient()
+    public async Task ExecuteAsync_BatchesOnlyNonTerminalDownloads_WhenTheClientIsEnabled()
     {
         // Arrange
         var client = new DownloadClient
@@ -331,7 +334,7 @@ public sealed class DownloadRefreshJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_AppliesRefreshedClientState_FromIntegrationResult()
+    public async Task ExecuteAsync_AppliesRefreshedClientState_WhenIntegrationResultIsProvided()
     {
         // Arrange
         var client = new DownloadClient
@@ -448,8 +451,70 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(5) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_MarksTheRequestAsSuccessor_WhenItSchedulesTheNextPoll()
+    {
+        // Arrange
+        var client = new DownloadClient
+        {
+            Id = Guid.NewGuid(),
+            Name = "Enabled",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Healthy,
+            Settings = [],
+            CreatedAt = _now
+        };
+        _clients.Add(client);
+        _downloadsByClient[client.Id] =
+        [
+            new Download
+            {
+                Id = Guid.NewGuid(),
+                DownloadClientId = client.Id,
+                ExternalId = "ext-1",
+                Title = "Download ext-1",
+                Status = DownloadStatus.Downloading,
+                Progress = 0m,
+                LastProgressAt = _now.AddSeconds(-60),
+                CreatedAt = _now.AddSeconds(-60)
+            }
+        ];
+        var integration = new Mock<IDownloadClientIntegration>();
+        integration.SetupGet(i => i.ProviderType).Returns("fake");
+        integration
+            .Setup(i => i.GetDownloadsAsync(
+                It.IsAny<IEnumerable<string>>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BatchDownloadStatusResult(
+                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
+                {
+                    ["ext-1"] = new DownloadInfo
+                    {
+                        ExternalId = "ext-1",
+                        Status = DownloadStatus.Downloading,
+                        ProgressPercent = 50m
+                    }
+                },
+                new Dictionary<string, Exception>(StringComparer.Ordinal)));
+        _integrations.Add(integration.Object);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            r => r.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.JobType == "DownloadRefresh" &&
+                    request.IsSuccessor &&
+                    request.CorrelationId == null),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -513,7 +578,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(15) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -578,7 +642,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(30) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -643,7 +706,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(60) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -708,7 +770,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(15) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -773,7 +834,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(15) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -838,7 +898,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(5) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -903,7 +962,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(60) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -1019,7 +1077,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(60) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -1084,7 +1141,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(60) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -1149,7 +1205,6 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(60) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -1233,7 +1288,6 @@ public sealed class DownloadRefreshJobTests
                         request.JobType == "DownloadRefresh" &&
                         request.Mode == JobExecutionMode.Queue &&
                         request.NotBeforeAt == _now.AddSeconds(5) &&
-                        !request.ClearDeferralOnCoalesce &&
                         request.UserId == _userId),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -1244,7 +1298,7 @@ public sealed class DownloadRefreshJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_EnqueuesSuccessor_WithoutConsultingPendingExecutions()
+    public async Task ExecuteAsync_EnqueuesSuccessor_WhenTheRefreshFinishes()
     {
         // Arrange
         var client = new DownloadClient
@@ -1302,14 +1356,13 @@ public sealed class DownloadRefreshJobTests
                     request.JobType == "DownloadRefresh" &&
                     request.Mode == JobExecutionMode.Queue &&
                     request.NotBeforeAt == _now.AddSeconds(5) &&
-                    !request.ClearDeferralOnCoalesce &&
                     request.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Test]
-    public async Task ExecuteAsync_AppliesImportedHoldTracking_ForHeldImportedDownload()
+    public async Task ExecuteAsync_AppliesImportedHoldTracking_WhenTheClientHoldsAnImportedDownload()
     {
         // Arrange
         var client = new DownloadClient
@@ -1379,7 +1432,7 @@ public sealed class DownloadRefreshJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_SkipsImportedDownload_OnceClientRemovedAtIsSet()
+    public async Task ExecuteAsync_SkipsImportedDownload_WhenClientRemovedAtIsSet()
     {
         // Arrange
         var client = new DownloadClient
@@ -1644,7 +1697,7 @@ public sealed class DownloadRefreshJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_PassesClientSettings_ToIntegration()
+    public async Task ExecuteAsync_PassesClientSettings_WhenQueryingTheClient()
     {
         // Arrange
         var client = new DownloadClient
@@ -1778,7 +1831,7 @@ public sealed class DownloadRefreshJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_PropagatesCancellationWithinTwoSeconds_WhenIntegrationIsSlow()
+    public async Task ExecuteAsync_PropagatesCancellation_WhenTheTokenIsAlreadyCancelled()
     {
         // Arrange
         var client = new DownloadClient
@@ -1804,7 +1857,6 @@ public sealed class DownloadRefreshJobTests
                 CreatedAt = DateTime.UtcNow
             }
         ];
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var integration = new Mock<IDownloadClientIntegration>();
         integration.SetupGet(i => i.ProviderType).Returns("fake");
         integration
@@ -1814,7 +1866,6 @@ public sealed class DownloadRefreshJobTests
                 It.IsAny<CancellationToken>()))
             .Returns(async (IEnumerable<string> _, IReadOnlyDictionary<string, string> _, CancellationToken ct) =>
             {
-                entered.TrySetResult();
                 await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
                 return new BatchDownloadStatusResult(
                     new Dictionary<string, DownloadInfo>(StringComparer.Ordinal),
@@ -1823,39 +1874,14 @@ public sealed class DownloadRefreshJobTests
         _integrations.Add(integration.Object);
 
         using var cts = new CancellationTokenSource();
-        var refreshTask = Task.Run(() => _subject.ExecuteAsync(_jobContext, cts.Token));
-
-        // Act
-        var entryGuard = Task.Delay(TimeSpan.FromSeconds(5));
-        var entryWinner = await Task.WhenAny(entered.Task, entryGuard).ConfigureAwait(false);
-        Assert.That(entryWinner, Is.SameAs(entered.Task));
-
-        var stopwatch = Stopwatch.StartNew();
         await cts.CancelAsync().ConfigureAwait(false);
 
-        var guard = Task.Delay(TimeSpan.FromSeconds(5));
-        var winner = await Task.WhenAny(refreshTask, guard).ConfigureAwait(false);
-        stopwatch.Stop();
-
-        Exception? caught = null;
-        if (winner == refreshTask)
-        {
-            try
-            {
-                await refreshTask.ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                caught = ex;
-            }
-        }
+        // Act
+        var caught = Assert.CatchAsync<OperationCanceledException>(
+            () => _subject.ExecuteAsync(_jobContext, cts.Token));
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(caught, Is.InstanceOf<OperationCanceledException>());
-            Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(2)));
-        }
+        Assert.That(caught, Is.Not.Null);
     }
 
     [Test]

@@ -10,5 +10,5 @@ public sealed record TagCriteria
     /// <summary>
     /// The criteria on the name of the tag.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<string>> Name { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Name { get; set; } = new();
 }

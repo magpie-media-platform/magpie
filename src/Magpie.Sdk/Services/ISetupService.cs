@@ -8,7 +8,7 @@ using Magpie.Models.Data;
 namespace Magpie.Sdk.Services;
 
 /// <summary>
-/// Manages first-run setup.
+/// The management of first-run setup.
 /// </summary>
 public interface ISetupService
 {

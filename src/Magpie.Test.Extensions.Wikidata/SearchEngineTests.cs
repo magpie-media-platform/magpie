@@ -127,4 +127,60 @@ internal sealed class SearchEngineTests
         // Assert
         Assert.That(act, Throws.TypeOf<HttpRequestException>());
     }
+
+    [Test]
+    public async Task SearchAsync_ReturnsNoResultsWithoutWarning_WhenARequestedCriterionIsRefused()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria();
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+        var plan = new QueryPlan
+        {
+            EntityKind = EntityKind.Movie,
+            Strategy = QueryStrategy.TitleSearch,
+            Filters = [],
+            Warnings = ["unsupported criterion"],
+            Page = 1,
+            CriterionDispositions =
+            [
+                new CriterionDisposition
+                {
+                    Source = "Metadata.Relationships.And[0]",
+                    Disposition = CriterionDispositionKind.Refused,
+                    Reason = "Not supported."
+                }
+            ]
+        };
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(EntityKind.Movie, criteria, 1, null, 25)).Returns(plan);
+        var executor = new Mock<IQueryExecutor>();
+        var subject = new SearchEngine(planner.Object, executor.Object);
+
+        // Act
+        var result = await subject.SearchAsync(
+            new QueryRequest
+            {
+                EntityKind = EntityKind.Movie,
+                Criteria = criteria,
+                Context = context,
+                Page = 1,
+                MaximumResults = 25
+            },
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Supported, Is.True);
+            Assert.That(result.Hits, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        executor.VerifyNoOtherCalls();
+    }
 }

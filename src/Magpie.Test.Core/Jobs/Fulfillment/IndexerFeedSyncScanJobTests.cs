@@ -10,6 +10,7 @@ using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
+using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -23,6 +24,8 @@ namespace Magpie.Test.Core.Jobs.Fulfillment;
 [TestFixture]
 public sealed class IndexerFeedSyncScanJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IIndexerFeedRepository> _indexerFeedRepository = null!;
     private Mock<IJobManager> _jobManager = null!;
     private List<IndexerFeed> _feeds = null!;
@@ -85,7 +88,8 @@ public sealed class IndexerFeedSyncScanJobTests
         var service = new IndexerFeedSyncScanJob(
             _indexerFeedRepository.Object,
             _jobManager.Object,
-            NullLogger<IndexerFeedSyncScanJob>.Instance);
+            NullLogger<IndexerFeedSyncScanJob>.Instance,
+            _progressReporter);
 
         // Act
         await service.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -94,11 +98,11 @@ public sealed class IndexerFeedSyncScanJobTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(_enqueued, Has.Count.EqualTo(2));
-            Assert.That(_enqueued.Select(r => r.JobType), Is.All.EqualTo(IndexerFeedSyncItemJob.Spec.JobType));
+            Assert.That(_enqueued.Select(r => r.JobType), Is.All.EqualTo("IndexerFeedSyncItem"));
             Assert.That(_enqueued.Select(r => r.Mode), Is.All.EqualTo(JobExecutionMode.Queue));
             Assert.That(_enqueued.Select(r => r.UserId), Is.All.EqualTo(_userId));
             Assert.That(
-                _enqueued.Select(r => r.Parameters![MagpieJobs.Parameters.FeedId]),
+                _enqueued.Select(r => r.Parameters!["feedId"]),
                 Is.EquivalentTo([first.Id.ToString(), second.Id.ToString()]));
         }
     }
@@ -110,7 +114,8 @@ public sealed class IndexerFeedSyncScanJobTests
         var service = new IndexerFeedSyncScanJob(
             _indexerFeedRepository.Object,
             _jobManager.Object,
-            NullLogger<IndexerFeedSyncScanJob>.Instance);
+            NullLogger<IndexerFeedSyncScanJob>.Instance,
+            _progressReporter);
 
         // Act
         await service.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -148,7 +153,8 @@ public sealed class IndexerFeedSyncScanJobTests
         var service = new IndexerFeedSyncScanJob(
             _indexerFeedRepository.Object,
             _jobManager.Object,
-            NullLogger<IndexerFeedSyncScanJob>.Instance);
+            NullLogger<IndexerFeedSyncScanJob>.Instance,
+            _progressReporter);
 
         // Act
         await service.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -158,7 +164,7 @@ public sealed class IndexerFeedSyncScanJobTests
         {
             Assert.That(_enqueued, Has.Count.EqualTo(1));
             Assert.That(
-                _enqueued[0].Parameters![MagpieJobs.Parameters.FeedId],
+                _enqueued[0].Parameters!["feedId"],
                 Is.EqualTo(enabled.Id.ToString()));
         }
     }
@@ -190,13 +196,14 @@ public sealed class IndexerFeedSyncScanJobTests
         _jobManager
             .Setup(m => m.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(r =>
-                    r.Parameters![MagpieJobs.Parameters.FeedId] == failing.Id.ToString()),
+                    r.Parameters!["feedId"] == failing.Id.ToString()),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Enqueue failed"));
         var service = new IndexerFeedSyncScanJob(
             _indexerFeedRepository.Object,
             _jobManager.Object,
-            NullLogger<IndexerFeedSyncScanJob>.Instance);
+            NullLogger<IndexerFeedSyncScanJob>.Instance,
+            _progressReporter);
 
         // Act
         await service.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -205,13 +212,13 @@ public sealed class IndexerFeedSyncScanJobTests
         _jobManager.Verify(
             m => m.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(r =>
-                    r.Parameters![MagpieJobs.Parameters.FeedId] == working.Id.ToString()),
+                    r.Parameters!["feedId"] == working.Id.ToString()),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Test]
-    public async Task ExecuteAsync_PropagatesCancellation_BeforeEnqueue()
+    public async Task ExecuteAsync_PropagatesCancellation_WhenCancellationPrecedesEnqueue()
     {
         // Arrange
         var feed = new IndexerFeed
@@ -227,7 +234,8 @@ public sealed class IndexerFeedSyncScanJobTests
         var service = new IndexerFeedSyncScanJob(
             _indexerFeedRepository.Object,
             _jobManager.Object,
-            NullLogger<IndexerFeedSyncScanJob>.Instance);
+            NullLogger<IndexerFeedSyncScanJob>.Instance,
+            _progressReporter);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync().ConfigureAwait(false);
 

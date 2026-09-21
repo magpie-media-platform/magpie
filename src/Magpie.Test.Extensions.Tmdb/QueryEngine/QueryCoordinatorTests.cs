@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Core.Caching;
 using Magpie.Extensions.Tmdb;
 using Magpie.Extensions.Tmdb.Mapping;
 using Magpie.Extensions.Tmdb.QueryEngine;
@@ -23,32 +22,53 @@ namespace Magpie.Test.Extensions.Tmdb.QueryEngine;
 [TestFixture]
 public class QueryCoordinatorTests
 {
-    [Test]
-    public void RegisterServices_ResolvesQueryCoordinator_WhenCacheFactoryIsScoped()
+    private ICacheFactory _cacheFactory = null!;
+
+    private IServiceScopeFactory _scopeFactory = null!;
+
+    [SetUp]
+    public void SetUp()
     {
-        // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        var services = new ServiceCollection();
-        services.AddSingleton(cacheStore);
-        services.AddScoped<ICacheFactory, MemoryCacheFactory>();
-        services.AddSingleton(Mock.Of<IHostApplicationLifetime>());
-        new TmdbExtension().RegisterServices(services);
-        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        var cacheFactory = new Mock<ICacheFactory>();
+        var caches = new Dictionary<string, ICache>(StringComparer.Ordinal);
+        cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns<string, Func<CachePolicy>?>((name, _) =>
+            {
+                if (caches.TryGetValue(name, out var existing))
+                {
+                    return existing;
+                }
 
-        // Act
-        var coordinator = provider.GetRequiredService<IQueryCoordinator>();
-
-        // Assert
-        Assert.That(coordinator, Is.TypeOf<QueryCoordinator>());
+                var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+                var cache = new Mock<ICache>();
+                cache.Setup(value => value.Set(It.IsAny<string>(), It.IsAny<It.IsAnyType>()))
+                    .Callback(new InvocationAction(invocation =>
+                        values[(string)invocation.Arguments[0]] = invocation.Arguments[1]));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<It.IsAnyType?>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value;
+                        return found;
+                    }));
+                cache.Setup(value => value.Remove(It.IsAny<string>())).Returns<string>(values.Remove);
+                return caches[name] = cache.Object;
+            });
+        _cacheFactory = cacheFactory.Object;
+        var provider = new Mock<IServiceProvider>();
+        provider.Setup(value => value.GetService(typeof(ICacheFactory))).Returns(_cacheFactory);
+        var scope = new Mock<IServiceScope>();
+        scope.Setup(value => value.ServiceProvider).Returns(provider.Object);
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(value => value.CreateScope()).Returns(scope.Object);
+        _scopeFactory = scopeFactory.Object;
     }
 
     [Test]
     public async Task GetImageBaseUrlAsync_ReturnsAndCachesTheSecureUrl_WhenConfigurationIsValid()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var context = new RequestContext { ApiKey = "key", Language = "en-US" };
         var client = new Mock<ITmdbClient>();
         var issued = default(Request);
@@ -96,9 +116,7 @@ public class QueryCoordinatorTests
     public async Task GetImageBaseUrlAsync_ReturnsFallbackAndRetries_WhenConfigurationOmitsTheSecureUrl()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var context = new RequestContext { ApiKey = "key", Language = "en-US" };
         var client = new Mock<ITmdbClient>();
         client.Setup(subject => subject.GetAsync<ConfigurationEnvelopeDto>(
@@ -139,9 +157,7 @@ public class QueryCoordinatorTests
     public async Task GetImageBaseUrlAsync_ThrowsCancellation_WhenTheCallerCancels()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var context = new RequestContext { ApiKey = "key", Language = "en-US" };
         var client = new Mock<ITmdbClient>();
         var release = new TaskCompletionSource<ConfigurationEnvelopeDto?>(
@@ -173,9 +189,7 @@ public class QueryCoordinatorTests
     public async Task GetGenreMapAsync_ReturnsAndCachesValidGenres_WhenTheResponseContainsMixedRows()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var context = new RequestContext { ApiKey = "key", Language = "en-US" };
         var request = new Request
         {
@@ -224,9 +238,7 @@ public class QueryCoordinatorTests
     public async Task GetGenreMapAsync_ReturnsEmpty_WhenTheResponseHasNoGenreList()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var context = new RequestContext { ApiKey = "key", Language = "en-US" };
         var request = new Request
         {
@@ -254,9 +266,7 @@ public class QueryCoordinatorTests
     public async Task GetCreditsAsync_ReturnsAndCachesTheFirstResponse_WhenTheKeyIsEquivalent()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var calls = 0;
         var movie = new CreditResponse { Movie = new PersonMovieCreditsDto { Cast = [] } };
         var tv = new CreditResponse { Tv = new PersonTvCreditsDto { Cast = [] } };
@@ -297,9 +307,7 @@ public class QueryCoordinatorTests
     public async Task GetSubjectResolutionsAsync_ReusesTheResult_WhenTheFirstLoadResolved()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var calls = 0;
 
         // Act
@@ -343,9 +351,7 @@ public class QueryCoordinatorTests
     public async Task GetSubjectResolutionAsync_KeepsTheSharedLoadRunning_WhenOneWaiterCancels()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var release = new TaskCompletionSource<SubjectResolution>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var first = cache.GetSubjectResolutionAsync(
@@ -385,9 +391,7 @@ public class QueryCoordinatorTests
     public async Task GetSubjectResolutionsAsync_CancelsTheLoad_WhenTheOnlyWaiterCancels()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = new CancellationTokenSource();
@@ -422,9 +426,7 @@ public class QueryCoordinatorTests
     public async Task GetSubjectResolutionsAsync_KeepsTheSharedLoadRunning_WhenOneWaiterCancels()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var release = new TaskCompletionSource<IReadOnlyList<SubjectResolution>>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var first = cache.GetSubjectResolutionsAsync(
@@ -458,9 +460,7 @@ public class QueryCoordinatorTests
     public void GetSubjectResolutionAsync_RunsTheLoaderAgain_WhenTheFirstLoadFailed()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var calls = 0;
 
         // Act
@@ -491,9 +491,7 @@ public class QueryCoordinatorTests
     public async Task GetSubjectResolutionAsync_ReusesTheResult_WhenTheSubjectWasNotFound()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var calls = 0;
 
         // Act
@@ -524,9 +522,7 @@ public class QueryCoordinatorTests
     public void GetScanState_ReturnsTheSameState_WhenTheKeyIsEquivalent()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
 
         // Act
         var first = cache.GetScanState("same-plan");
@@ -545,9 +541,7 @@ public class QueryCoordinatorTests
     public void GetScanState_ReturnsOneState_WhenColdCallersRace()
     {
         // Arrange
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
-        var cache = new QueryCoordinator(cacheFactory, Mock.Of<IHostApplicationLifetime>());
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var states = new QueryScanState[64];
 
         // Act
@@ -562,10 +556,8 @@ public class QueryCoordinatorTests
     {
         // Arrange
         using var application = new CancellationTokenSource();
-        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
         var cache = new QueryCoordinator(
-            cacheFactory,
+            _scopeFactory,
             Mock.Of<IHostApplicationLifetime>(host => host.ApplicationStopping == application.Token));
         var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var loading = cache.GetSubjectResolutionAsync(

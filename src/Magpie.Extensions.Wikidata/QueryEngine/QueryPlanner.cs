@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 
 using Magpie.Extensions.Wikidata.Mapping;
@@ -12,6 +13,29 @@ namespace Magpie.Extensions.Wikidata.QueryEngine;
 
 internal sealed class QueryPlanner : IQueryPlanner
 {
+    private sealed record MappedCriterion(
+        QueryFilter? Filter,
+        bool MatchesNothing = false,
+        ResidualFilter? ResidualFilter = null,
+        string? Reason = null,
+        bool IsUnsupported = false);
+
+    private sealed class CollectionAlternativeCompilation
+    {
+        public SubjectFilter? Coarse { get; set; }
+
+        public List<ResidualCollectionPredicate> Predicates { get; } = [];
+
+        public bool RequiresResidual { get; set; }
+
+        public bool MatchesNothing { get; set; }
+
+        public bool ValueBearing { get; set; }
+
+        public string? UnsupportedField { get; set; }
+    }
+
+    [SuppressMessage("Ordering", "SA1201", Justification = "Nested types come first in this codebase.")]
     private static readonly string SourceKeyPrefix = Constants.ProviderType + ":";
 
     private static readonly string[] SourceKeyTemplates = [.. Enum.GetValues(typeof(EntityKind))
@@ -86,8 +110,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 criterionDispositions[index] = criterionDispositions[index] with
                 {
                     Disposition = CriterionDispositionKind.Omitted,
-                    Reason = "Omitted because an identity criterion already makes the Wikidata result empty.",
-                    Warning = null
+                    Reason = "Omitted because an identity criterion already makes the Wikidata result empty."
                 };
             }
         }
@@ -125,8 +148,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                     Reason = disposition.Disposition == CriterionDispositionKind.Residual
                         ? "Planned for local residual evaluation, but no selective server bound was available."
                         : "Planned as a coarse server filter and local residual, but no selective server bound " +
-                            "was available.",
-                    Warning = null
+                            "was available."
                 };
             }
         }
@@ -204,8 +226,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             criterionDispositions[index] = disposition with
             {
                 Disposition = CriterionDispositionKind.Residual,
-                Reason = "Planned for local residual evaluation behind an exact identity server bound.",
-                Warning = null
+                Reason = "Planned for local residual evaluation behind an exact identity server bound."
             };
         }
     }
@@ -620,7 +641,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             var names = new List<string>();
             foreach (var value in values)
             {
-                if (TryNormalizeQid(value, out var qid))
+                if (value.TryNormalizeQid(out var qid))
                 {
                     qids.Add(qid!);
                 }
@@ -1069,7 +1090,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         var names = new List<string>();
         foreach (var value in subjectValues)
         {
-            if (exactSubjectOperator && TryNormalizeQid(value, out var qid))
+            if (exactSubjectOperator && value.TryNormalizeQid(out var qid))
             {
                 qids.Add(qid!);
             }
@@ -1297,7 +1318,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             return true;
         }
 
-        return TextValues(subjectCriteria[0]).Any(value => !TryNormalizeQid(value, out _));
+        return TextValues(subjectCriteria[0]).Any(value => !value.TryNormalizeQid(out _));
     }
 
     private bool TryCompileResidualRelationshipAlternative(
@@ -1334,7 +1355,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             foreach (var value in values)
             {
                 if (op is CriteriaValueOperator.Equals or CriteriaValueOperator.In &&
-                    TryNormalizeQid(value, out var qid))
+                    value.TryNormalizeQid(out var qid))
                 {
                     qids.Add(qid!);
                 }
@@ -2372,7 +2393,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         var mappedNames = new List<string>();
         foreach (var value in values)
         {
-            if (TryNormalizeQid(value, out var qid))
+            if (value.TryNormalizeQid(out var qid))
             {
                 mappedQids.Add(qid!);
             }
@@ -2491,7 +2512,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             var names = new List<string>();
             foreach (var value in values)
             {
-                if (exactOperator && TryNormalizeQid(value, out var qid))
+                if (exactOperator && value.TryNormalizeQid(out var qid))
                 {
                     qids.Add(qid!);
                 }
@@ -3133,7 +3154,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             actualValue = actualValue.Substring(separator + 1).Trim();
         }
 
-        if (actualSource is null && TryNormalizeQid(actualValue, out qid))
+        if (actualSource is null && actualValue.TryNormalizeQid(out qid))
         {
             return true;
         }
@@ -3147,7 +3168,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (IsQidSource(actualSource))
         {
-            return TryNormalizeQid(actualValue, out qid);
+            return actualValue.TryNormalizeQid(out qid);
         }
 
         var propertyId = MapExternalProperty(kind, actualSource);
@@ -3177,14 +3198,14 @@ internal sealed class QueryPlanner : IQueryPlanner
             actualValue = actualValue.Substring(separator + 1).Trim();
         }
 
-        if (actualSource is null && TryNormalizeQid(actualValue, out qid))
+        if (actualSource is null && actualValue.TryNormalizeQid(out qid))
         {
             return true;
         }
 
         if (actualSource is not null && IsQidSource(actualSource))
         {
-            return TryNormalizeQid(actualValue, out qid);
+            return actualValue.TryNormalizeQid(out qid);
         }
 
         var normalized = actualSource?.Trim().ToLowerInvariant();
@@ -3332,28 +3353,6 @@ internal sealed class QueryPlanner : IQueryPlanner
         }
     }
 
-    private bool TryNormalizeQid(string value, out string? qid)
-    {
-        qid = null;
-        var trimmed = value.Trim();
-        var slash = trimmed.LastIndexOf('/');
-        if (slash >= 0 && slash < trimmed.Length - 1)
-        {
-            trimmed = trimmed.Substring(slash + 1);
-        }
-
-        if (trimmed.Length < 2 ||
-            char.ToUpperInvariant(trimmed[0]) != 'Q' ||
-            trimmed[1] == '0' ||
-            !trimmed.Substring(1).All(IsAsciiDigit))
-        {
-            return false;
-        }
-
-        qid = "Q" + trimmed.Substring(1);
-        return true;
-    }
-
     private bool TryNormalizeLanguageCode(string value, out string? language)
     {
         language = null;
@@ -3368,8 +3367,6 @@ internal sealed class QueryPlanner : IQueryPlanner
     }
 
     private bool IsAsciiLetter(char value) => value is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
-
-    private bool IsAsciiDigit(char value) => value is >= '0' and <= '9';
 
     private bool IsQidSource(string source)
     {
@@ -3463,26 +3460,4 @@ internal sealed class QueryPlanner : IQueryPlanner
 
     private string CriterionSource(string field, string group, int index) =>
         field + "." + group + "[" + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
-
-    private sealed record MappedCriterion(
-        QueryFilter? Filter,
-        bool MatchesNothing = false,
-        ResidualFilter? ResidualFilter = null,
-        string? Reason = null,
-        bool IsUnsupported = false);
-
-    private sealed class CollectionAlternativeCompilation
-    {
-        public SubjectFilter? Coarse { get; set; }
-
-        public List<ResidualCollectionPredicate> Predicates { get; } = [];
-
-        public bool RequiresResidual { get; set; }
-
-        public bool MatchesNothing { get; set; }
-
-        public bool ValueBearing { get; set; }
-
-        public string? UnsupportedField { get; set; }
-    }
 }

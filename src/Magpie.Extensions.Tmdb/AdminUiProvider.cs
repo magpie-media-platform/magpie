@@ -21,7 +21,7 @@ internal sealed class AdminUiProvider : IUIExtensionProvider, IAssetProvider, IE
 
     private static readonly ExtensionSettingsGroupDefinition SettingsGroupDefinition = new()
     {
-        ExtensionId = new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A"),
+        ExtensionId = Constants.ExtensionId,
         Name = Settings.GroupName,
         SettingsSchema =
         [
@@ -53,7 +53,7 @@ internal sealed class AdminUiProvider : IUIExtensionProvider, IAssetProvider, IE
             new UIExtension
             {
                 Id = RouteUIExtensionId,
-                ExtensionId = new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A"),
+                ExtensionId = Constants.ExtensionId,
                 Name = "TMDb Settings",
                 Slot = "admin.route.tmdb",
                 Modifier = nameof(UISlotModifier.After),
@@ -63,7 +63,7 @@ internal sealed class AdminUiProvider : IUIExtensionProvider, IAssetProvider, IE
             new UIExtension
             {
                 Id = NavUIExtensionId,
-                ExtensionId = new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A"),
+                ExtensionId = Constants.ExtensionId,
                 Name = "TMDb",
                 Slot = "nav.admin",
                 Modifier = nameof(UISlotModifier.After),
@@ -86,7 +86,7 @@ internal sealed class AdminUiProvider : IUIExtensionProvider, IAssetProvider, IE
             new Asset
             {
                 Id = RuntimeAssetId,
-                ExtensionId = new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A"),
+                ExtensionId = Constants.ExtensionId,
                 Name = "Metadata settings runtime",
                 Kind = AssetKind.Script,
                 RelativePath = RuntimeAssetPath,
@@ -95,7 +95,7 @@ internal sealed class AdminUiProvider : IUIExtensionProvider, IAssetProvider, IE
             new Asset
             {
                 Id = AssetId,
-                ExtensionId = new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A"),
+                ExtensionId = Constants.ExtensionId,
                 Name = "TMDb settings component",
                 Kind = AssetKind.Script,
                 RelativePath = AssetPath,

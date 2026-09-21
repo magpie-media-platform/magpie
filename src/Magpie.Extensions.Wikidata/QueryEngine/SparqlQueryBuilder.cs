@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 
+using Magpie.Extensions.Wikidata.Mapping;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 
@@ -31,13 +32,7 @@ internal static class SparqlQueryBuilder
 
     public static SparqlRequest BuildSearch(QueryPlan plan, string language, int candidateOffset = 0)
     {
-        var normalizedLanguage = NormalizeLanguage(language);
-        var labelLanguages = string.Equals(
-            normalizedLanguage,
-            Settings.FallbackLanguage,
-            StringComparison.Ordinal)
-            ? normalizedLanguage
-            : normalizedLanguage + "," + Settings.FallbackLanguage;
+        var labelLanguages = LabelLanguages(language);
         var titleTerms = plan.Strategy == QueryStrategy.TitleSearch ? TitleTerms(plan) : [];
         var offset = plan.UsesLocalPaging
             ? plan.Strategy == QueryStrategy.TitleSearch ? 0 : candidateOffset
@@ -152,13 +147,7 @@ internal static class SparqlQueryBuilder
             ValidateQid(qid);
         }
 
-        var normalizedLanguage = NormalizeLanguage(language);
-        var labelLanguages = string.Equals(
-            normalizedLanguage,
-            Settings.FallbackLanguage,
-            StringComparison.Ordinal)
-            ? normalizedLanguage
-            : normalizedLanguage + "," + Settings.FallbackLanguage;
+        var labelLanguages = LabelLanguages(language);
         var projectionDateProperty = kind == EntityKind.Movie
             ? Constants.PublicationDatePropertyId
             : Constants.SeriesStartPropertyId;
@@ -349,10 +338,7 @@ internal static class SparqlQueryBuilder
             throw new InvalidOperationException("Wikidata hierarchy requests support seasons and episodes only.");
         }
 
-        var labelLanguage = NormalizeLanguage(language);
-        var labelLanguages = labelLanguage == Settings.FallbackLanguage
-            ? labelLanguage
-            : labelLanguage + "," + Settings.FallbackLanguage;
+        var labelLanguages = LabelLanguages(language);
         var builder = new StringBuilder();
         AppendPrefixes(builder);
         builder.AppendLine("SELECT ?child ?childLabel ?childDescription ?ordinal");
@@ -419,6 +405,15 @@ internal static class SparqlQueryBuilder
         builder.AppendLine("GROUP BY ?child ?childLabel ?childDescription ?ordinal");
         builder.AppendLine("ORDER BY ASC(?ordinal) ASC(?child)");
         return Request(builder.ToString(), HierarchyTimeout);
+    }
+
+    private static string LabelLanguages(string language)
+    {
+        var normalized = language.ToPrimaryLanguage()
+            ?? throw new InvalidOperationException("Invalid Wikidata language code.");
+        return string.Equals(normalized, Settings.FallbackLanguage, StringComparison.Ordinal)
+            ? normalized
+            : normalized + "," + Settings.FallbackLanguage;
     }
 
     private static void AppendPrefixes(StringBuilder builder)
@@ -1511,7 +1506,7 @@ internal static class SparqlQueryBuilder
         builder.Append(timezone);
         builder.Append(" = 0 && ");
         builder.Append(calendar);
-        builder.AppendLine(" = wd:Q1985727)");
+        builder.AppendLine($" = wd:{EntityMappingExtensions.GregorianCalendarQid})");
         if (projectAs is null)
         {
             return;
@@ -1590,52 +1585,9 @@ internal static class SparqlQueryBuilder
     private static string EscapeCirrus(string value) => EscapeLiteral(value.Replace("\"", string.Empty))
         .Replace(":", "\\:");
 
-    private static string NormalizeLanguage(string value)
-    {
-        var trimmed = value.Trim();
-        var separator = trimmed.IndexOf('-');
-        var primary = separator > 0 ? trimmed.Substring(0, separator) : trimmed;
-        if (primary.Length is < 2 or > 12 || !primary.All(char.IsLetter))
-        {
-            throw new InvalidOperationException("Invalid Wikidata language code.");
-        }
-
-        return primary.ToLowerInvariant();
-    }
-
-    private static bool TryNormalizeQid(string value, out string? qid)
-    {
-        qid = null;
-        var normalized = NormalizeQid(value);
-        if (normalized.Length < 2 ||
-            normalized[0] != 'Q' ||
-            normalized[1] == '0' ||
-            !normalized.Substring(1).All(IsAsciiDigit))
-        {
-            return false;
-        }
-
-        qid = normalized;
-        return true;
-    }
-
-    private static string NormalizeQid(string value)
-    {
-        var trimmed = value.Trim();
-        var slash = trimmed.LastIndexOf('/');
-        if (slash >= 0 && slash < trimmed.Length - 1)
-        {
-            trimmed = trimmed.Substring(slash + 1);
-        }
-
-        return trimmed.Length > 0
-            ? char.ToUpperInvariant(trimmed[0]) + trimmed.Substring(1)
-            : trimmed;
-    }
-
     private static void ValidateQid(string qid)
     {
-        if (!TryNormalizeQid(qid, out var normalized) ||
+        if (!qid.TryNormalizeQid(out var normalized) ||
             !string.Equals(qid, normalized, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Invalid Wikidata QID.");

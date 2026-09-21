@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
@@ -22,7 +22,7 @@ vi.mock('@/hooks/useLibraryTypes', () => ({
 }));
 
 import { usePreviewByExternalId, type ContentPreview } from '@/hooks/usePreviewByExternalId';
-import { createApiError } from '@/lib/errors';
+import { ApiError } from '@/lib/api';
 import { PreviewDrawer, type PreviewDrawerTarget } from './PreviewDrawer';
 
 const mockUsePreview = vi.mocked(usePreviewByExternalId);
@@ -273,6 +273,9 @@ describe('PreviewDrawer', () => {
         expect(frame).toContainElement(artwork);
         expect(artwork).toHaveClass('preview-drawer__artwork');
         expect(artwork).toHaveAttribute('src', 'https://img/poster.jpg');
+        fireEvent.error(artwork);
+        expect(screen.queryByTestId('preview-drawer-artwork')).not.toBeInTheDocument();
+        expect(frame.querySelector('.preview-drawer__artwork--placeholder')).toBeInTheDocument();
         expect(screen.queryByTestId('preview-player-facade')).not.toBeInTheDocument();
     });
 
@@ -368,7 +371,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('shows the empty state on a 404', async () => {
-        mockHook({ error: createApiError(404, 'Not found') });
+        mockHook({ error: new ApiError(404, 'Not found') });
 
         render(
             <PreviewDrawer

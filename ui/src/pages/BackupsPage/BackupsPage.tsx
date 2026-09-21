@@ -255,16 +255,6 @@ export function BackupsPage() {
                         actions={
                             canManageBackups ? (
                                 <>
-                                    {capabilities?.optimizeSupported && (
-                                        <Tooltip content="Manual optimization is unavailable. Database maintenance runs on its configured schedule.">
-                                            <span>
-                                                <Button variant="secondary" size="sm" disabled>
-                                                    <WrenchIcon weight="bold" aria-hidden="true" />
-                                                    Scheduled maintenance
-                                                </Button>
-                                            </span>
-                                        </Tooltip>
-                                    )}
                                     <Button
                                         variant="primary"
                                         size="sm"
@@ -303,6 +293,24 @@ export function BackupsPage() {
                                 {formatBackupSize(totalSize)}
                             </span>
                         </div>
+                        {capabilities?.optimizeSupported && (
+                            <div className="backups-page__summary-item">
+                                <WrenchIcon
+                                    weight="duotone"
+                                    className="backups-page__summary-icon"
+                                    aria-hidden="true"
+                                />
+                                <span className="backups-page__summary-label">Scheduled Optimization</span>
+                                <span
+                                    className="backups-page__summary-value"
+                                    data-testid="backups-page__last-optimized"
+                                >
+                                    {capabilities.lastOptimizedAt
+                                        ? formatUtcDateTime(capabilities.lastOptimizedAt)
+                                        : 'Never'}
+                                </span>
+                            </div>
+                        )}
                     </div>
 
                     <div className="backups-page__list" role="list" aria-label="Backups">

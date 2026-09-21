@@ -101,3 +101,21 @@ describe('MobileListToolbar', () => {
         expect(screen.getByRole('group', { name: 'Sort list' })).toBeInTheDocument();
     });
 });
+
+it('keeps selection and filters when there are no sort options', async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(
+        <MobileListToolbar
+            sorting={[]}
+            sortOptions={[]}
+            onSortingChange={vi.fn()}
+            selection={{ active: false, onToggle }}
+            filterActions={<button>Filters</button>}
+        />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Select' }));
+    expect(onToggle).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Sort list' })).not.toBeInTheDocument();
+});

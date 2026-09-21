@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core.Events;
 using Magpie.Core.Observability;
 using Magpie.Data;
@@ -30,7 +32,8 @@ internal sealed class DownloadRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<DownloadRepository> logger,
-    TimeProvider? timeProvider = null) : IDownloadRepository
+    IDataProtectionService protector,
+    TimeProvider timeProvider) : IDownloadRepository
 {
     private static readonly string[] FullUpdateFields =
     [
@@ -63,7 +66,7 @@ internal sealed class DownloadRepository(
         "failedAt",
     ];
 
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     private static List<Guid> ContentItemIdsOf(IReadOnlyCollection<DownloadScopeRow> scope)
     {
@@ -157,13 +160,6 @@ internal sealed class DownloadRepository(
         return fields;
     }
 
-    private static string? ResolveSortProperty<TEntity>(string? propertyName)
-    {
-        return typeof(TEntity).GetProperties()
-            .Select(property => property.Name)
-            .FirstOrDefault(name => string.Equals(name, propertyName, StringComparison.OrdinalIgnoreCase));
-    }
-
     private static IQueryable<Download> ApplyNativeSort(
         IQueryable<Download> downloads,
         SortParameter? sort,
@@ -197,8 +193,8 @@ internal sealed class DownloadRepository(
         }
 
         return descending
-            ? downloads.OrderByDescending(d => EF.Property<Download>(d, resolvedProperty)).ThenBy(d => d.Id)
-            : downloads.OrderBy(d => EF.Property<Download>(d, resolvedProperty)).ThenBy(d => d.Id);
+            ? downloads.OrderByDescending(d => EF.Property<object>(d, resolvedProperty)).ThenBy(d => d.Id)
+            : downloads.OrderBy(d => EF.Property<object>(d, resolvedProperty)).ThenBy(d => d.Id);
     }
 
     private static IOrderedQueryable<Download> OrderByEndedAt(IQueryable<Download> downloads, bool descending)
@@ -257,6 +253,16 @@ internal sealed class DownloadRepository(
             key.Ordinal = download.ReleaseIdentityKeys.Count;
             download.ReleaseIdentityKeys.Add(key);
         }
+    }
+
+    private string? ResolveSortProperty<TEntity>(string? propertyName)
+    {
+        return context.Model.FindEntityType(typeof(TEntity))!.GetProperties()
+            .Where(property => !property.IsShadowProperty() &&
+                (property.ClrType.IsValueType || property.ClrType == typeof(string) ||
+                    property.ClrType == typeof(Uri)))
+            .Select(property => property.Name)
+            .FirstOrDefault(name => string.Equals(name, propertyName, StringComparison.OrdinalIgnoreCase));
     }
 
     public async Task<IEnumerable<Download>> ListAllAsync(CancellationToken cancellationToken)
@@ -323,8 +329,8 @@ internal sealed class DownloadRepository(
                 else
                 {
                     downloads = descending
-                        ? downloads.OrderByDescending(d => EF.Property<Download>(d, sortProperty)).ThenBy(d => d.Id)
-                        : downloads.OrderBy(d => EF.Property<Download>(d, sortProperty)).ThenBy(d => d.Id);
+                        ? downloads.OrderByDescending(d => EF.Property<object>(d, sortProperty)).ThenBy(d => d.Id)
+                        : downloads.OrderBy(d => EF.Property<object>(d, sortProperty)).ThenBy(d => d.Id);
                 }
             }
             else
@@ -363,7 +369,13 @@ internal sealed class DownloadRepository(
 
             var totalCount = await filtered.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = ResolveSortProperty<DownloadQueueEntry>(sort?.PropertyName);
+            var sortProperty = new[]
+                {
+                    nameof(DownloadQueueEntry.ContentHierarchyName),
+                    nameof(DownloadQueueEntry.DownloadClientName)
+                }
+                .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase))
+                ?? ResolveSortProperty<Download>(sort?.PropertyName);
             var descending = sort is not null && sort.Direction != SortDirection.Ascending;
 
             var entries = sortProperty
@@ -415,81 +427,77 @@ internal sealed class DownloadRepository(
         }
     }
 
+    private IQueryable<DownloadScope> TopmostScopes()
+    {
+        return
+            from scope in context.DownloadScopes.AsNoTracking()
+            join node in context.ContentHierarchyItems.AsNoTracking() on scope.ContentHierarchyItemId equals node.Id
+            where node.ParentId == null || !context.DownloadScopes.Any(parent =>
+                parent.DownloadId == scope.DownloadId && parent.ContentHierarchyItemId == node.ParentId)
+            select scope;
+    }
+
     private IQueryable<DownloadQueueEntry> ProjectToQueueEntry(IQueryable<Download> downloads)
     {
-        return downloads.Select(d => new DownloadQueueEntry
-        {
-            Id = d.Id,
-            ReleaseId = d.ReleaseId,
-            DownloadClientId = d.DownloadClientId,
-            DownloadClientName = (
-                from c in context.DownloadClients
-                where c.Id == d.DownloadClientId
-                select c.Name)
-                .FirstOrDefault(),
-            ProviderType = (
-                from c in context.DownloadClients
-                where c.Id == d.DownloadClientId
-                select c.ProviderType)
-                .FirstOrDefault(),
-            ExternalId = d.ExternalId,
-            Title = d.Title,
-            ContentHierarchyName = (
-                from c in context.DownloadScopes
-                where c.DownloadId == d.Id
-                join n in context.ContentHierarchyItems on c.ContentHierarchyItemId equals n.Id
-                where n.ParentId == null ||
-                    !context.DownloadScopes.Any(p => p.DownloadId == d.Id && p.ContentHierarchyItemId == n.ParentId)
-                select n.Name)
-                .FirstOrDefault(),
-            ContentMetadataTitle = (
-                from c in context.DownloadScopes
-                where c.DownloadId == d.Id
-                join n in context.ContentHierarchyItems on c.ContentHierarchyItemId equals n.Id
-                where n.ParentId == null ||
-                    !context.DownloadScopes.Any(p => p.DownloadId == d.Id && p.ContentHierarchyItemId == n.ParentId)
-                select (
-                    from contribution in n.MetadataContainer!.Contributions
-                    where contribution.Title != null && contribution.Title != ""
-                    orderby contribution.Ordinal
-                    select contribution.Title).FirstOrDefault())
-                .FirstOrDefault(),
-            ContentHierarchyItemId = (
-                from c in context.DownloadScopes
-                where c.DownloadId == d.Id
-                join n in context.ContentHierarchyItems on c.ContentHierarchyItemId equals n.Id
-                where n.ParentId == null ||
-                    !context.DownloadScopes.Any(p => p.DownloadId == d.Id && p.ContentHierarchyItemId == n.ParentId)
-                select (Guid?)c.ContentHierarchyItemId)
-                .FirstOrDefault(),
-            ContentHierarchyParentId = (
-                from c in context.DownloadScopes
-                where c.DownloadId == d.Id
-                join n in context.ContentHierarchyItems on c.ContentHierarchyItemId equals n.Id
-                where n.ParentId == null ||
-                    !context.DownloadScopes.Any(p => p.DownloadId == d.Id && p.ContentHierarchyItemId == n.ParentId)
-                select n.ParentId)
-                .FirstOrDefault(),
-            ReleaseInfoUrl = d.ReleaseId == null
-                ? null
-                : (
-                    from r in context.Releases
-                    where r.Id == d.ReleaseId && r.InfoUrl != null
-                    select r.InfoUrl!.ToString())
+        var topmostScopes = TopmostScopes();
+        return
+            from d in downloads
+            join scope in context.DownloadScopes.AsNoTracking() on (
+                from candidate in topmostScopes
+                where candidate.DownloadId == d.Id
+                orderby candidate.Id
+                select (Guid?)candidate.Id).FirstOrDefault() equals (Guid?)scope.Id into scopes
+            from scope in scopes.DefaultIfEmpty()
+            join node in context.ContentHierarchyItems.AsNoTracking()
+                on scope.ContentHierarchyItemId equals node.Id into nodes
+            from node in nodes.DefaultIfEmpty()
+            select new DownloadQueueEntry
+            {
+                Id = d.Id,
+                ReleaseId = d.ReleaseId,
+                DownloadClientId = d.DownloadClientId,
+                DownloadClientName = (
+                    from c in context.DownloadClients
+                    where c.Id == d.DownloadClientId
+                    select c.Name)
                     .FirstOrDefault(),
-            Status = d.Status,
-            OutputPath = d.OutputPath,
-            StatusReason = d.StatusReason,
-            DateCompleted = d.DateCompleted,
-            Progress = d.Progress,
-            LastProgressAt = d.LastProgressAt,
-            FailedAt = d.FailedAt,
-            FailureReason = d.FailureReason,
-            CreatedAt = d.CreatedAt,
-            ModifiedAt = d.ModifiedAt,
-            ClientRemovedAt = d.ClientRemovedAt,
-            HeldByPolicy = d.HeldByPolicy
-        });
+                ProviderType = (
+                    from c in context.DownloadClients
+                    where c.Id == d.DownloadClientId
+                    select c.ProviderType)
+                    .FirstOrDefault(),
+                ExternalId = d.ExternalId,
+                Title = d.Title,
+                ContentHierarchyName = node == null ? null : node.Name,
+                ContentMetadataTitle = node == null
+                    ? null
+                    : (
+                        from contribution in node.MetadataContainer!.Contributions
+                        where contribution.Title != null && contribution.Title != ""
+                        orderby contribution.Ordinal
+                        select contribution.Title).FirstOrDefault(),
+                ContentHierarchyItemId = node == null ? null : (Guid?)node.Id,
+                ContentHierarchyParentId = node == null ? null : node.ParentId,
+                ReleaseInfoUrl = d.ReleaseId == null
+                    ? null
+                    : (
+                        from r in context.Releases
+                        where r.Id == d.ReleaseId && r.InfoUrl != null
+                        select r.InfoUrl!.ToString())
+                        .FirstOrDefault(),
+                Status = d.Status,
+                OutputPath = d.OutputPath,
+                StatusReason = d.StatusReason,
+                DateCompleted = d.DateCompleted,
+                Progress = d.Progress,
+                LastProgressAt = d.LastProgressAt,
+                FailedAt = d.FailedAt,
+                FailureReason = d.FailureReason,
+                CreatedAt = d.CreatedAt,
+                ModifiedAt = d.ModifiedAt,
+                ClientRemovedAt = d.ClientRemovedAt,
+                HeldByPolicy = d.HeldByPolicy
+            };
     }
 
     private async Task<List<DownloadQueueEntry>> ResolvePostersAsync(
@@ -530,11 +538,11 @@ internal sealed class DownloadRepository(
                 g => g.Key,
                 g => (
                     from image in g
-                    orderby string.Equals(image.Type, "poster", StringComparison.OrdinalIgnoreCase) descending
-                    orderby string.Equals(image.Type, "primary", StringComparison.OrdinalIgnoreCase) descending
-                    orderby string.Equals(image.Type, "profile", StringComparison.OrdinalIgnoreCase) descending
-                    orderby image.ContributionOrdinal
-                    orderby image.Ordinal
+                    orderby string.Equals(image.Type, "poster", StringComparison.OrdinalIgnoreCase) descending,
+                        string.Equals(image.Type, "primary", StringComparison.OrdinalIgnoreCase) descending,
+                        string.Equals(image.Type, "profile", StringComparison.OrdinalIgnoreCase) descending,
+                        image.ContributionOrdinal,
+                        image.Ordinal
                     select image.Url.ToString()).First());
 
         return [.. entries
@@ -756,115 +764,11 @@ internal sealed class DownloadRepository(
         Guid? modifiedByUserId,
         CancellationToken cancellationToken = default)
     {
-        try
-        {
-            var affectedScope = new List<DownloadScopeRow>();
-            var patched = await transactionManager.ExecuteWithTransactionAsync(
-                async _ =>
-                {
-                    var model = await context.Downloads
-                        .FirstOrDefaultAsync(d => d.Id == patch.Id, cancellationToken)
-                        .ConfigureAwait(false);
-
-                    if (model is null)
-                    {
-                        return false;
-                    }
-
-                    var now = _time.GetUtcNow().UtcDateTime;
-                    if (patch.Status is not null)
-                    {
-                        model.Status = patch.Status.Value;
-                    }
-
-                    if (patch.StatusReason is not null)
-                    {
-                        model.StatusReason = patch.StatusReason.Value;
-                    }
-
-                    if (patch.OutputPath is not null)
-                    {
-                        model.OutputPath = patch.OutputPath.Value;
-                    }
-
-                    if (patch.DateCompleted is not null)
-                    {
-                        model.DateCompleted = patch.DateCompleted.Value;
-                    }
-
-                    if (patch.Progress is not null)
-                    {
-                        model.Progress = patch.Progress.Value;
-                    }
-
-                    if (patch.LastProgressAt is not null)
-                    {
-                        model.LastProgressAt = patch.LastProgressAt.Value;
-                    }
-
-                    if (patch.FailureReason is not null)
-                    {
-                        model.FailureReason = patch.FailureReason.Value;
-                    }
-
-                    if (patch.FailedAt is not null)
-                    {
-                        model.FailedAt = patch.FailedAt.Value;
-                    }
-
-                    if (patch.ClientRemovedAt is not null)
-                    {
-                        model.ClientRemovedAt = patch.ClientRemovedAt.Value;
-                    }
-
-                    if (patch.HeldByPolicy is not null)
-                    {
-                        model.HeldByPolicy = patch.HeldByPolicy.Value;
-                    }
-
-                    model.ModifiedAt = now;
-                    model.ModifiedByUserId = modifiedByUserId;
-
-                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                    if (updated > 0)
-                    {
-                        await auditRecordRepository.CreateAsync(
-                            new()
-                            {
-                                Category = AuditCategories.Integrations,
-                                Operation = "Patch",
-                                EntityId = patch.Id.ToString(),
-                                EntityType = nameof(Download),
-                                Detail = $"Updated download {model.Title}.",
-                                Timestamp = now,
-                                UserId = modifiedByUserId
-                            },
-                            cancellationToken).ConfigureAwait(false);
-
-                        affectedScope = await ListScopedContentAsync([patch.Id], cancellationToken)
-                            .ConfigureAwait(false);
-                        var affectedContentItemIds = ContentItemIdsOf(affectedScope);
-                        await RecomputeActiveAcquisitionStatusAsync(
-                            affectedContentItemIds, now, modifiedByUserId, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    return updated > 0;
-                },
-                cancellationToken).ConfigureAwait(false);
-
-            if (patched)
-            {
-                await PublishUpdatedAsync(patch.Id, ChangedFields(patch), affectedScope, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            return patched;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "The download repository failed to patch download {DownloadId}.", patch.Id);
-            throw;
-        }
+        var result = await BulkPatchAsync(
+            new() { Ids = [patch.Id], Patch = patch },
+            modifiedByUserId,
+            cancellationToken).ConfigureAwait(false);
+        return result.Count > 0;
     }
 
     public async Task<BulkResult> BulkPatchAsync(
@@ -872,21 +776,118 @@ internal sealed class DownloadRepository(
         Guid? modifiedByUserId,
         CancellationToken cancellationToken = default)
     {
-        var ids = await ResolveBulkTargetIdsAsync(patch, cancellationToken).ConfigureAwait(false);
-        var count = 0;
-        foreach (var id in ids)
+        try
         {
-            var applied = await PatchAsync(
-                patch.Patch with { Id = id },
-                modifiedByUserId,
-                cancellationToken).ConfigureAwait(false);
-            if (applied)
-            {
-                count++;
-            }
-        }
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
+                {
+                    var ids = await ResolveBulkTargetIdsAsync(patch, ct).ConfigureAwait(false);
+                    var downloads = await context.Downloads.AsNoTracking()
+                        .Where(d => ids.Contains(d.Id))
+                        .Select(d => new { d.Id, d.Title })
+                        .ToListAsync(ct).ConfigureAwait(false);
+                    if (downloads.Count == 0)
+                    {
+                        return new BulkResult { Count = 0 };
+                    }
 
-        return new BulkResult { Count = count };
+                    var targets = downloads.Select(d => d.Id).ToList();
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var affectedScope = await ListScopedContentAsync(targets, ct).ConfigureAwait(false);
+                    var affected = await context.Downloads.Where(d => targets.Contains(d.Id))
+                        .ExecuteUpdateAsync(
+                            setters =>
+                            {
+                                if (patch.Patch.Status is not null)
+                                {
+                                    setters.SetProperty(d => d.Status, patch.Patch.Status.Value);
+                                }
+
+                                if (patch.Patch.StatusReason is not null)
+                                {
+                                    setters.SetProperty(d => d.StatusReason, patch.Patch.StatusReason.Value);
+                                }
+
+                                if (patch.Patch.OutputPath is not null)
+                                {
+                                    setters.SetProperty(d => d.OutputPath, patch.Patch.OutputPath.Value);
+                                }
+
+                                if (patch.Patch.DateCompleted is not null)
+                                {
+                                    setters.SetProperty(d => d.DateCompleted, patch.Patch.DateCompleted.Value);
+                                }
+
+                                if (patch.Patch.Progress is not null)
+                                {
+                                    setters.SetProperty(d => d.Progress, patch.Patch.Progress.Value);
+                                }
+
+                                if (patch.Patch.LastProgressAt is not null)
+                                {
+                                    setters.SetProperty(d => d.LastProgressAt, patch.Patch.LastProgressAt.Value);
+                                }
+
+                                if (patch.Patch.FailureReason is not null)
+                                {
+                                    setters.SetProperty(d => d.FailureReason, patch.Patch.FailureReason.Value);
+                                }
+
+                                if (patch.Patch.FailedAt is not null)
+                                {
+                                    setters.SetProperty(d => d.FailedAt, patch.Patch.FailedAt.Value);
+                                }
+
+                                if (patch.Patch.ClientRemovedAt is not null)
+                                {
+                                    setters.SetProperty(d => d.ClientRemovedAt, patch.Patch.ClientRemovedAt.Value);
+                                }
+
+                                if (patch.Patch.HeldByPolicy is not null)
+                                {
+                                    setters.SetProperty(d => d.HeldByPolicy, patch.Patch.HeldByPolicy.Value);
+                                }
+
+                                setters.SetProperty(d => d.ModifiedAt, now);
+                                setters.SetProperty(d => d.ModifiedByUserId, modifiedByUserId);
+                            },
+                            ct).ConfigureAwait(false);
+                    if (affected > 0)
+                    {
+                        foreach (var download in downloads)
+                        {
+                            await auditRecordRepository.CreateAsync(
+                                new()
+                                {
+                                    Category = AuditCategories.Integrations,
+                                    Operation = "Patch",
+                                    EntityId = download.Id.ToString(),
+                                    EntityType = nameof(Download),
+                                    Detail = $"Updated download {download.Title}.",
+                                    Timestamp = now,
+                                    UserId = modifiedByUserId
+                                },
+                                ct).ConfigureAwait(false);
+                        }
+
+                        await RecomputeActiveAcquisitionStatusAsync(
+                            ContentItemIdsOf(affectedScope), now, modifiedByUserId, ct).ConfigureAwait(false);
+                        foreach (var id in targets)
+                        {
+                            await PublishUpdatedAsync(id, ChangedFields(patch.Patch), affectedScope, ct)
+                                .ConfigureAwait(false);
+                        }
+                    }
+
+                    return new BulkResult { Count = affected };
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The download repository failed to patch the downloads.");
+            throw;
+        }
     }
 
     public async Task<BulkResult> BulkDeleteAsync(
@@ -937,7 +938,8 @@ internal sealed class DownloadRepository(
                         },
                         ct).ConfigureAwait(false);
 
-                    await RecomputeActiveAcquisitionStatusAsync(affectedContentItemIds, now, deletedByUserId, ct)
+                    await RecomputeActiveAcquisitionStatusAsync(
+                        affectedContentItemIds, now, deletedByUserId, ct)
                         .ConfigureAwait(false);
 
                     return new BulkResult { Count = affected };
@@ -1006,28 +1008,19 @@ internal sealed class DownloadRepository(
 
             var authorities = keySet.Select(k => k.Authority).Distinct().ToList();
             var values = keySet.Select(k => k.Value).Distinct().ToList();
-            var rows = await (
-                from identity in context.ReleaseIdentityKeys.AsNoTracking()
-                where identity.DownloadId != null &&
-                    authorities.Contains(identity.Authority) &&
-                    values.Contains(identity.Value)
-                join download in context.Downloads.AsNoTracking() on identity.DownloadId equals download.Id
-                where download.Status == DownloadStatus.Failed &&
-                    (downloadClientId == null || download.DownloadClientId == downloadClientId)
-                select new
-                {
-                    identity.Authority,
-                    identity.Value,
-                    Download = download
-                })
+            var downloads = await context.Downloads
+                .AsNoTracking()
+                .Include(download => download.ReleaseIdentityKeys)
+                .Where(download => download.Status == DownloadStatus.Failed &&
+                    (downloadClientId == null || download.DownloadClientId == downloadClientId) &&
+                    download.ReleaseIdentityKeys.Any(identity =>
+                        authorities.Contains(identity.Authority) && values.Contains(identity.Value)))
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
             return
             [
-                .. rows
-                    .Where(row => keySet.Contains((row.Authority, row.Value)))
-                    .GroupBy(row => row.Download.Id)
-                    .Select(group => group.First().Download)
+                .. downloads.Where(download => download.ReleaseIdentityKeys
+                    .Any(identity => keySet.Contains((identity.Authority, identity.Value))))
             ];
         }
         catch (Exception ex)
@@ -1049,15 +1042,18 @@ internal sealed class DownloadRepository(
     {
         try
         {
-            return await context.Downloads
-                .AsNoTracking()
-                .Include(download => download.ReleaseIdentityKeys)
-                .Where(download => download.Status == DownloadStatus.Imported &&
-                    download.DateCompleted != null &&
-                    download.DateCompleted >= completedAfter &&
-                    context.DownloadScopes.Any(scope =>
-                        scope.DownloadId == download.Id &&
-                        scope.ContentHierarchyItemId == contentHierarchyItemId))
+            var downloads = ApplyQueryFilters(
+                context.Downloads
+                    .AsNoTracking()
+                    .Include(download => download.ReleaseIdentityKeys),
+                new DownloadQuery
+                {
+                    ContentItemId = contentHierarchyItemId,
+                    Status = DownloadStatus.Imported,
+                    DateCompleted = new Range<DateTime>(completedAfter, null),
+                });
+
+            return await downloads
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -1129,6 +1125,50 @@ internal sealed class DownloadRepository(
             .ConfigureAwait(false);
     }
 
+    public Task<bool> UpdateRefreshedStatusAsync(
+        Guid downloadId,
+        DownloadStatus status,
+        string? statusReason,
+        string? outputPath,
+        DateTime? dateCompleted,
+        decimal? progress,
+        DateTime? lastProgressAt,
+        bool heldByPolicy,
+        DownloadFailureReason? failureReason,
+        DateTime? failedAt,
+        DateTime now,
+        Guid? userId,
+        CancellationToken cancellationToken = default)
+    {
+        return UpdateRefreshedStatusAsync(
+            d => d.Status != DownloadStatus.Imported && d.Status != DownloadStatus.Importing &&
+                d.Status != DownloadStatus.Cancelled && d.Status != DownloadStatus.Failed,
+            downloadId, status, statusReason, outputPath, dateCompleted, progress, lastProgressAt,
+            heldByPolicy, failureReason, failedAt, now, userId, cancellationToken);
+    }
+
+    public Task<bool> UpdateActiveRefreshedStatusAsync(
+        Guid downloadId,
+        DownloadStatus status,
+        string? statusReason,
+        string? outputPath,
+        DateTime? dateCompleted,
+        decimal? progress,
+        DateTime? lastProgressAt,
+        bool heldByPolicy,
+        DownloadFailureReason? failureReason,
+        DateTime? failedAt,
+        DateTime now,
+        Guid? userId,
+        CancellationToken cancellationToken = default)
+    {
+        return UpdateRefreshedStatusAsync(
+            d => d.Status == DownloadStatus.Downloading || d.Status == DownloadStatus.Stalled ||
+                d.Status == DownloadStatus.Grabbed,
+            downloadId, status, statusReason, outputPath, dateCompleted, progress, lastProgressAt,
+            heldByPolicy, failureReason, failedAt, now, userId, cancellationToken);
+    }
+
     private async Task RecomputeActiveAcquisitionStatusAsync(
         IReadOnlyCollection<Guid> contentItemIds,
         DateTime now,
@@ -1176,7 +1216,8 @@ internal sealed class DownloadRepository(
         }
     }
 
-    public async Task<bool> UpdateRefreshedStatusAsync(
+    private async Task<bool> UpdateRefreshedStatusAsync(
+        Expression<Func<Download, bool>> guard,
         Guid downloadId,
         DownloadStatus status,
         string? statusReason,
@@ -1214,10 +1255,8 @@ internal sealed class DownloadRepository(
                     priorStatus = prior.Status;
                     releaseId = prior.ReleaseId;
                     affected = await context.Downloads
-                        .Where(d => d.Id == downloadId &&
-                            d.Status != DownloadStatus.Imported &&
-                            d.Status != DownloadStatus.Cancelled &&
-                            d.Status != DownloadStatus.Failed)
+                        .Where(guard)
+                        .Where(d => d.Id == downloadId)
                         .ExecuteUpdateAsync(
                             s => s
                                 .SetProperty(d => d.Status, status)
@@ -1282,114 +1321,6 @@ internal sealed class DownloadRepository(
         }
     }
 
-    public async Task<bool> UpdateActiveRefreshedStatusAsync(
-        Guid downloadId,
-        DownloadStatus status,
-        string? statusReason,
-        string? outputPath,
-        DateTime? dateCompleted,
-        decimal? progress,
-        DateTime? lastProgressAt,
-        bool heldByPolicy,
-        DownloadFailureReason? failureReason,
-        DateTime? failedAt,
-        DateTime now,
-        Guid? userId,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var affectedScope = new List<DownloadScopeRow>();
-            var affected = 0;
-            DownloadStatus? priorStatus = null;
-            Guid? releaseId = null;
-            await transactionManager.ExecuteWithTransactionAsync(
-                async ct =>
-                {
-                    var prior = await context.Downloads
-                        .AsNoTracking()
-                        .Where(d => d.Id == downloadId)
-                        .Select(d => new { d.Status, d.ReleaseId })
-                        .FirstOrDefaultAsync(ct)
-                        .ConfigureAwait(false);
-                    if (prior is null)
-                    {
-                        return;
-                    }
-
-                    priorStatus = prior.Status;
-                    releaseId = prior.ReleaseId;
-                    affected = await context.Downloads
-                        .Where(d => d.Id == downloadId &&
-                            (d.Status == DownloadStatus.Downloading ||
-                                d.Status == DownloadStatus.Stalled ||
-                                d.Status == DownloadStatus.Grabbed))
-                        .ExecuteUpdateAsync(
-                            s => s
-                                .SetProperty(d => d.Status, status)
-                                .SetProperty(d => d.StatusReason, statusReason)
-                                .SetProperty(d => d.OutputPath, outputPath)
-                                .SetProperty(d => d.DateCompleted, dateCompleted)
-                                .SetProperty(d => d.Progress, progress)
-                                .SetProperty(d => d.LastProgressAt, lastProgressAt)
-                                .SetProperty(d => d.HeldByPolicy, heldByPolicy)
-                                .SetProperty(d => d.FailureReason, failureReason)
-                                .SetProperty(d => d.FailedAt, failedAt)
-                                .SetProperty(d => d.ModifiedAt, now)
-                                .SetProperty(d => d.ModifiedByUserId, userId),
-                            ct)
-                        .ConfigureAwait(false);
-
-                    if (affected > 0)
-                    {
-                        affectedScope = await ListScopedContentAsync([downloadId], ct)
-                            .ConfigureAwait(false);
-                        var affectedContentItemIds = ContentItemIdsOf(affectedScope);
-                        await RecomputeActiveAcquisitionStatusAsync(affectedContentItemIds, now, userId, ct)
-                            .ConfigureAwait(false);
-                    }
-                },
-                cancellationToken).ConfigureAwait(false);
-
-            if (affected > 0 && priorStatus is { } from)
-            {
-                DownloadTelemetry.Transitions.Add(
-                    1,
-                    new("from_status", from.ToString()),
-                    new("to_status", status.ToString()));
-                if (status is DownloadStatus.Failed && from is not DownloadStatus.Failed)
-                {
-                    var reasonTag = new KeyValuePair<string, object?>(
-                        "reason",
-                        failureReason?.ToString() ?? "none");
-                    DownloadTelemetry.Failures.Add(1, reasonTag);
-                }
-
-                await transactionManager.OnCommittedAsync(
-                    token => PublishStatusTransitionEventsAsync(
-                        downloadId,
-                        releaseId,
-                        from,
-                        status,
-                        statusReason,
-                        failureReason,
-                        affectedScope,
-                        token),
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            return affected > 0;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "The download repository failed to update the active refreshed status of download {DownloadId}.",
-                downloadId);
-            throw;
-        }
-    }
-
     public async Task UpdateImportedHoldTrackingAsync(
         Guid downloadId,
         bool heldByPolicy,
@@ -1431,29 +1362,35 @@ internal sealed class DownloadRepository(
     {
         try
         {
-            var affectedScope = new List<DownloadScopeRow>();
-            var affected = await context.Downloads
-                .Where(d => d.Id == downloadId && d.Status == DownloadStatus.Downloaded)
-                .ExecuteUpdateAsync(
-                    s => s
-                        .SetProperty(d => d.Status, DownloadStatus.Importing)
-                        .SetProperty(d => d.ModifiedAt, now)
-                        .SetProperty(d => d.ModifiedByUserId, userId),
-                    cancellationToken)
-                .ConfigureAwait(false);
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var affectedScope = new List<DownloadScopeRow>();
+                    var affected = await context.Downloads
+                        .Where(d => d.Id == downloadId && d.Status == DownloadStatus.Downloaded)
+                        .ExecuteUpdateAsync(
+                            s => s
+                                .SetProperty(d => d.Status, DownloadStatus.Importing)
+                                .SetProperty(d => d.ModifiedAt, now)
+                                .SetProperty(d => d.ModifiedByUserId, userId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
-            if (affected > 0)
-            {
-                affectedScope = await ListScopedContentAsync([downloadId], cancellationToken)
-                    .ConfigureAwait(false);
-                var affectedContentItemIds = ContentItemIdsOf(affectedScope);
-                await RecomputeActiveAcquisitionStatusAsync(affectedContentItemIds, now, userId, cancellationToken)
-                    .ConfigureAwait(false);
-                await PublishUpdatedAsync(downloadId, ["status"], affectedScope, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+                    if (affected > 0)
+                    {
+                        affectedScope = await ListScopedContentAsync([downloadId], cancellationToken)
+                            .ConfigureAwait(false);
+                        var affectedContentItemIds = ContentItemIdsOf(affectedScope);
+                        await RecomputeActiveAcquisitionStatusAsync(
+                            affectedContentItemIds, now, userId, cancellationToken)
+                            .ConfigureAwait(false);
+                        await PublishUpdatedAsync(downloadId, ["status"], affectedScope, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
 
-            return affected > 0;
+                    return affected > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1584,9 +1521,7 @@ internal sealed class DownloadRepository(
                             Operation = "DownloadStuck",
                             EntityId = downloadId.ToString(),
                             EntityType = nameof(Download),
-                            Detail =
-                                    $"Marked {title} as failed after no progress was reported for {threshold}. " +
-                                    $"The last progress was at {inactivityAnchor:O}.",
+                            Detail = $"Marked {title} as failed after no progress since {inactivityAnchor:O}.",
                             Timestamp = now,
                             UserId = userId,
                             CorrelationId = correlationId
@@ -1828,9 +1763,10 @@ internal sealed class DownloadRepository(
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            return
-            [
-                .. candidates.Select(c => new StuckDownloadCandidate
+            var results = new List<StuckDownloadCandidate>();
+            foreach (var c in candidates)
+            {
+                results.Add(new StuckDownloadCandidate
                 {
                     DownloadId = c.DownloadId,
                     ExternalId = c.ExternalId,
@@ -1845,9 +1781,11 @@ internal sealed class DownloadRepository(
                     ReleaseId = c.ReleaseId,
                     ProviderType = c.DownloadClientProviderType,
                     ClientName = c.DownloadClientName,
-                    Settings = c.DownloadClientSettings
-                })
-            ];
+                    Settings = ReadClientSettings(c.DownloadClientSettings, c.DownloadClientName)
+                });
+            }
+
+            return results;
         }
         catch (Exception ex)
         {
@@ -1885,9 +1823,10 @@ internal sealed class DownloadRepository(
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            return
-            [
-                .. candidates.Select(c => new DownloadCleanupCandidate
+            var results = new List<DownloadCleanupCandidate>();
+            foreach (var c in candidates)
+            {
+                results.Add(new DownloadCleanupCandidate
                 {
                     DownloadId = c.DownloadId,
                     ExternalId = c.ExternalId,
@@ -1896,16 +1835,34 @@ internal sealed class DownloadRepository(
                     HeldByPolicy = c.HeldByPolicy,
                     ProviderType = c.ProviderType,
                     ClientName = c.ClientName,
-                    Settings = c.Settings,
+                    Settings = ReadClientSettings(c.Settings, c.ClientName),
                     CleanupDeleteFiles = c.CleanupDeleteFiles,
                     KeepFailedOnClient = c.KeepFailedOnClient
-                })
-            ];
+                });
+            }
+
+            return results;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "The download repository failed to list the download cleanup candidates.");
             throw;
+        }
+    }
+
+    private Dictionary<string, string>? ReadClientSettings(
+        IReadOnlyDictionary<string, string> settings,
+        string clientName)
+    {
+        try
+        {
+            return protector.Unprotect(settings);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex, "The download repository failed to read settings for client {ClientName}.", clientName);
+            return null;
         }
     }
 
@@ -1932,6 +1889,7 @@ internal sealed class DownloadRepository(
                     d.ExternalId != ""
                 select d)
                 .Distinct()
+                .Include(download => download.Scope)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -2064,85 +2022,61 @@ internal sealed class DownloadRepository(
     {
         try
         {
-            var failedRows = await (
-                from d in context.Downloads.AsNoTracking()
-                where d.Status == DownloadStatus.Failed
-                select new FailedDownloadAnchor(
-                    d.Id,
-                    d.FailedAt ?? d.CreatedAt,
-                    (
-                        from c in context.DownloadScopes
-                        where c.DownloadId == d.Id
-                        join n in context.ContentHierarchyItems on c.ContentHierarchyItemId equals n.Id
-                        where n.ParentId == null ||
-                            !context.DownloadScopes.Any(p =>
-                                p.DownloadId == d.Id && p.ContentHierarchyItemId == n.ParentId)
-                        select (Guid?)c.ContentHierarchyItemId)
-                        .FirstOrDefault()))
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            if (failedRows.Count == 0)
-            {
-                return 0;
-            }
-
-            var wantedItemIds = (from a in failedRows where a.WantedItemId != null select a.WantedItemId!.Value)
-                .Distinct()
-                .ToList();
-            var latestImportByWantedItem = wantedItemIds.Count == 0
-                ? []
-                : await (
-                    from d in context.Downloads.AsNoTracking()
-                    where d.Status == DownloadStatus.Imported &&
-                        d.DateCompleted != null
-                    let wantedItemId = (
-                        from c in context.DownloadScopes
-                        where c.DownloadId == d.Id
-                        join n in context.ContentHierarchyItems on c.ContentHierarchyItemId equals n.Id
-                        where n.ParentId == null ||
-                            !context.DownloadScopes.Any(p =>
-                                p.DownloadId == d.Id && p.ContentHierarchyItemId == n.ParentId)
-                        select (Guid?)c.ContentHierarchyItemId).FirstOrDefault()
-                    where wantedItemId != null && wantedItemIds.Contains(wantedItemId.Value)
-                    group d by wantedItemId!.Value into g
-                    select new { WantedItemId = g.Key, LatestCompleted = g.Max(x => x.DateCompleted) })
-                    .ToDictionaryAsync(x => x.WantedItemId, x => x.LatestCompleted, cancellationToken)
-                    .ConfigureAwait(false);
-
-            var idsToDelete = new List<Guid>(failedRows.Count);
-            foreach (var row in failedRows)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var clearedByAlternative = row.WantedItemId != null &&
-                    latestImportByWantedItem.TryGetValue(row.WantedItemId.Value, out var latestCompleted) &&
-                    latestCompleted is DateTime completed &&
-                    completed > row.AnchorTimestamp;
-                var clearedByTime = row.AnchorTimestamp < failedBefore;
-
-                if (clearedByAlternative || clearedByTime)
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
                 {
-                    idsToDelete.Add(row.Id);
-                }
-            }
+                    var topmostScopes = TopmostScopes();
+                    var anchors =
+                        from d in context.Downloads.AsNoTracking()
+                        select new
+                        {
+                            d.Id,
+                            d.Status,
+                            d.DateCompleted,
+                            AnchorTimestamp = d.FailedAt ?? d.CreatedAt,
+                            WantedItemId = (
+                                from scope in topmostScopes
+                                where scope.DownloadId == d.Id
+                                orderby scope.Id
+                                select (Guid?)scope.ContentHierarchyItemId).FirstOrDefault(),
+                        };
+                    var ids = await anchors
+                        .Where(d => d.Status == DownloadStatus.Failed &&
+                            (d.AnchorTimestamp < failedBefore ||
+                                (d.WantedItemId != null && anchors.Any(imported =>
+                                    imported.Status == DownloadStatus.Imported &&
+                                    imported.WantedItemId == d.WantedItemId &&
+                                    imported.DateCompleted > d.AnchorTimestamp))))
+                        .Select(d => d.Id)
+                        .ToListAsync(ct)
+                        .ConfigureAwait(false);
+                    if (ids.Count == 0)
+                    {
+                        return 0;
+                    }
 
-            if (idsToDelete.Count == 0)
-            {
-                return 0;
-            }
+                    var scope = await ListScopedContentAsync(ids, ct).ConfigureAwait(false);
+                    var deleted = await context.Downloads
+                        .Where(d => ids.Contains(d.Id) && d.Status == DownloadStatus.Failed)
+                        .ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    if (deleted > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Delete",
+                                EntityType = nameof(Download),
+                                Detail = $"Deleted {deleted} cleared failed downloads.",
+                                Timestamp = _time.GetUtcNow().UtcDateTime
+                            },
+                            ct).ConfigureAwait(false);
+                        await PublishDeletedAsync(ids, scope, ct).ConfigureAwait(false);
+                    }
 
-            var deleted = await context.Downloads
-                .Where(d => idsToDelete.Contains(d.Id))
-                .ExecuteDeleteAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            if (deleted > 0)
-            {
-                await PublishDeletedAsync(idsToDelete, [], cancellationToken).ConfigureAwait(false);
-            }
-
-            return deleted;
+                    return deleted;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -2237,18 +2171,6 @@ internal sealed class DownloadRepository(
             cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task PublishUpdatedAsync(
-        IReadOnlyCollection<Guid> downloadIds,
-        IReadOnlyCollection<string> changedFields,
-        IReadOnlyCollection<DownloadScopeRow> scope,
-        CancellationToken cancellationToken)
-    {
-        foreach (var downloadId in downloadIds)
-        {
-            await PublishUpdatedAsync(downloadId, changedFields, scope, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
     private async Task PublishDeletedAsync(
         IReadOnlyCollection<Guid> downloadIds,
         IReadOnlyCollection<DownloadScopeRow> scope,
@@ -2325,6 +2247,4 @@ internal sealed class DownloadRepository(
         bool EffectiveMonitoring,
         FulfillmentStatus Fulfillment,
         Guid? RequestedViaWishlistId);
-
-    private sealed record FailedDownloadAnchor(Guid Id, DateTime AnchorTimestamp, Guid? WantedItemId);
 }

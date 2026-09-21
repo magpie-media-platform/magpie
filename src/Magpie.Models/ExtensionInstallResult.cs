@@ -10,10 +10,10 @@ public sealed record ExtensionInstallResult
     /// <summary>
     /// The installed or upgraded extension.
     /// </summary>
-    public required Extension Extension { get; set; }
+    public required Extension Extension { get; init; }
 
     /// <summary>
     /// Whether the host must restart for the change to take effect.
     /// </summary>
-    public required bool RestartRequired { get; set; }
+    public required bool RestartRequired { get; init; }
 }

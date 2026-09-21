@@ -30,8 +30,6 @@ internal sealed class LocalCommandTransport(HttpClient client) : ICommandTranspo
         HttpCompletionOption completionOption,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
-
         return client.SendAsync(request, completionOption, cancellationToken);
     }
 

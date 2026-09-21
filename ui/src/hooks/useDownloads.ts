@@ -7,7 +7,7 @@ import { magpieEventNames } from '@/lib/magpieEventNames';
 import { queryErrorOrNull } from '@/lib/utils';
 import type { BadgeVariant } from '@/types/badge';
 import type { DownloadStatusValue } from '@/types/content';
-import type { PagedList } from '@/types/paging';
+import type { PagedList, SortDirectionName } from '@/types/paging';
 
 export type { DownloadStatusValue } from '@/types/content';
 
@@ -23,12 +23,6 @@ export const downloadStatusLabels: Record<DownloadStatusValue, string> = {
     Failed: 'Failed',
     Cancelled: 'Cancelled',
 };
-
-export const terminalDownloadStatuses: ReadonlySet<DownloadStatusValue> = new Set(['Imported', 'Failed', 'Cancelled']);
-
-export function isTerminalDownloadStatus(status: DownloadStatusValue | undefined): boolean {
-    return status !== undefined && terminalDownloadStatuses.has(status);
-}
 
 export const downloadStatusVariants: Record<DownloadStatusValue, BadgeVariant> = {
     Grabbed: 'grabbed',
@@ -141,7 +135,7 @@ export interface DownloadQueryParams {
 
     sortBy?: string;
 
-    sortDirection?: 0 | 1 | 2;
+    sortDirection?: SortDirectionName;
 }
 
 export interface DownloadBulkFilter {
@@ -195,7 +189,6 @@ export const downloadQueryKeys = {
     list: (params?: DownloadQueryParams) => ['downloads', 'list', params ?? {}] as const,
     count: (status: DownloadStatusValue, downloadClientId?: string) =>
         ['downloads', 'count', status, downloadClientId ?? null] as const,
-    detail: (id: string) => ['downloads', 'detail', id] as const,
 };
 
 export const downloadEvents = [
@@ -214,35 +207,42 @@ const CONTENT_LINEAGE_EVENTS = [
     magpieEventNames.metadataRefreshed,
 ] as const;
 
+function changesDownloadStatus(event: EventStreamPayload): boolean {
+    return (
+        event.context['download.changedFields']?.split(',').some((field) => field.trim().toLowerCase() === 'status') ===
+        true
+    );
+}
+
+interface DownloadEventInvalidationOptions {
+    entityIds?: readonly string[];
+    failOpenEventNames?: readonly string[];
+    prePredicate?: (event: EventStreamPayload) => boolean;
+    predicate?: (event: EventStreamPayload) => boolean;
+    unprovableMembership?: boolean;
+}
+
 function useDownloadEventInvalidation(
     queryKeys: readonly (readonly unknown[])[],
     enabled = true,
-    entityIds?: readonly string[],
-    predicate?: (event: EventStreamPayload) => boolean,
-    unprovableMembership = false,
-    prePredicate?: (event: EventStreamPayload) => boolean,
-    failOpenEventNames?: readonly string[],
+    options: DownloadEventInvalidationOptions = {},
 ) {
     useInvalidateQueriesOnEvents(enabled ? downloadEvents : [], queryKeys, {
         debounceMs: 200,
-        entityIds,
+        entityIds: options.entityIds,
         exact: true,
-        failOpenEventNames,
+        failOpenEventNames: options.failOpenEventNames,
         maxWaitMs: 800,
         owner: 'downloads-query',
-        prePredicate,
-        predicate,
-        unprovableMembership,
+        prePredicate: options.prePredicate,
+        predicate: options.predicate,
+        unprovableMembership: options.unprovableMembership ?? false,
     });
 }
 
 async function fetchDownloads(params?: DownloadQueryParams): Promise<PagedDownloads> {
     const url = buildUrl('/downloads', params);
     return apiGet<PagedDownloads>(url);
-}
-
-async function fetchDownloadById(id: string): Promise<ApiDownload> {
-    return apiGet<ApiDownload>(`/downloads/${id}`);
 }
 
 async function removeDownload(id: string): Promise<void> {
@@ -273,25 +273,35 @@ async function cancelDownload(id: string): Promise<void> {
     return apiPost(`/downloads/${id}/cancel`);
 }
 
-export function useDownloads(params?: DownloadQueryParams) {
+export function useDownloads(params?: DownloadQueryParams, enabled = true) {
     const queryClient = useQueryClient();
     const hasFilters = !!(params?.downloadClientId || params?.releaseId || params?.status);
-    useDownloadEventInvalidation(
-        [downloadQueryKeys.list(params)],
-        true,
-        undefined,
-        (event) => {
-            const current = queryClient.getQueryData<PagedDownloads>(downloadQueryKeys.list(params));
-            const isCurrent = !!current?.items.some((download) => download.id === event.context['download.id']);
-            const changedFields = event.context['download.changedFields']?.split(',') ?? [];
-            const normalizedSortBy = params?.sortBy?.replace(/[^a-z]/gi, '').toLowerCase();
-            const affectsSort = changedFields.some(
+    const describeDownloadEvent = (event: EventStreamPayload) => {
+        const current = queryClient.getQueryData<PagedDownloads>(downloadQueryKeys.list(params));
+        const changedFields = event.context['download.changedFields']?.split(',') ?? [];
+        const normalizedSortBy = params?.sortBy?.replace(/[^a-z]/gi, '').toLowerCase();
+        return {
+            isCurrent: !!current?.items.some((download) => download.id === event.context['download.id']),
+            affectsSort: changedFields.some(
                 (field) => field.replace(/[^a-z]/gi, '').toLowerCase() === normalizedSortBy,
-            );
-            if (event.name === 'download.updated' && !changedFields.some((field) => field.toLowerCase() === 'status')) {
+            ),
+            changesStatus: changesDownloadStatus(event),
+        };
+    };
+    useDownloadEventInvalidation([downloadQueryKeys.list(params)], enabled, {
+        failOpenEventNames: hasFilters ? ['download.created'] : undefined,
+        prePredicate: (event) => {
+            if (event.name !== 'download.updated') {
+                return true;
+            }
+            const { isCurrent, affectsSort, changesStatus } = describeDownloadEvent(event);
+            return isCurrent || affectsSort || changesStatus;
+        },
+        predicate: (event) => {
+            const { isCurrent, affectsSort, changesStatus } = describeDownloadEvent(event);
+            if (event.name === 'download.updated' && !changesStatus) {
                 return isCurrent || affectsSort;
             }
-
             if (event.name === 'download.deleted') {
                 return true;
             }
@@ -304,23 +314,9 @@ export function useDownloads(params?: DownloadQueryParams) {
                 (!params?.status || event.context['download.status'] === params.status)
             );
         },
-        hasFilters,
-        (event) => {
-            if (event.name !== 'download.updated') {
-                return true;
-            }
-            const current = queryClient.getQueryData<PagedDownloads>(downloadQueryKeys.list(params));
-            const isCurrent = !!current?.items.some((download) => download.id === event.context['download.id']);
-            const changedFields = event.context['download.changedFields']?.split(',') ?? [];
-            const normalizedSortBy = params?.sortBy?.replace(/[^a-z]/gi, '').toLowerCase();
-            const affectsSort = changedFields.some(
-                (field) => field.replace(/[^a-z]/gi, '').toLowerCase() === normalizedSortBy,
-            );
-            return isCurrent || affectsSort || changedFields.some((field) => field.trim().toLowerCase() === 'status');
-        },
-        hasFilters ? ['download.created'] : undefined,
-    );
-    useInvalidateQueriesOnEvents(CONTENT_LINEAGE_EVENTS, [downloadQueryKeys.list(params)], {
+        unprovableMembership: hasFilters,
+    });
+    useInvalidateQueriesOnEvents(enabled ? CONTENT_LINEAGE_EVENTS : [], [downloadQueryKeys.list(params)], {
         debounceMs: 200,
         exact: true,
         maxWaitMs: 800,
@@ -336,6 +332,7 @@ export function useDownloads(params?: DownloadQueryParams) {
     const downloadsQuery = useQuery({
         queryKey: downloadQueryKeys.list(params),
         queryFn: () => fetchDownloads(params),
+        enabled,
     });
 
     const removeMutation = useMutation({
@@ -451,16 +448,9 @@ export function useDownloadStatusCounts(statuses: readonly DownloadStatusValue[]
             failOpenEventNames: downloadClientId ? ['download.created'] : undefined,
             maxWaitMs: 800,
             owner: 'downloads:status-counts',
-            prePredicate: (event) =>
-                event.name !== 'download.updated' ||
-                event.context['download.changedFields']
-                    ?.split(',')
-                    .some((field) => field.trim().toLowerCase() === 'status') === true,
+            prePredicate: (event) => event.name !== 'download.updated' || changesDownloadStatus(event),
             predicate: (event) =>
-                (event.name !== 'download.updated' ||
-                    event.context['download.changedFields']
-                        ?.split(',')
-                        .some((field) => field.trim().toLowerCase() === 'status') === true) &&
+                (event.name !== 'download.updated' || changesDownloadStatus(event)) &&
                 (!downloadClientId ||
                     event.name === 'download.deleted' ||
                     event.context['downloadClient.id'] === downloadClientId),
@@ -508,16 +498,9 @@ export function useDownloadStatusTotal(
         pageNumber: 1,
         pageSize: 1,
     };
-    useDownloadEventInvalidation(
-        [downloadQueryKeys.list(params)],
-        enabled,
-        undefined,
-        (event) =>
-            event.name !== 'download.updated' ||
-            event.context['download.changedFields']
-                ?.split(',')
-                .some((field) => field.trim().toLowerCase() === 'status') === true,
-    );
+    useDownloadEventInvalidation([downloadQueryKeys.list(params)], enabled, {
+        predicate: (event) => event.name !== 'download.updated' || changesDownloadStatus(event),
+    });
     const query = useQuery({
         queryKey: downloadQueryKeys.list(params),
         queryFn: () => fetchDownloads(params),
@@ -537,7 +520,7 @@ export function useLatestDownloadForRelease(releaseId: string | null | undefined
         pageNumber: 1,
         pageSize: 1,
         sortBy: 'CreatedAt',
-        sortDirection: 2,
+        sortDirection: 'Descending',
     };
 
     const query = useQuery({
@@ -546,38 +529,11 @@ export function useLatestDownloadForRelease(releaseId: string | null | undefined
         enabled: !!releaseId,
     });
     const relatedIds = [releaseId, query.data?.items?.[0]?.id].filter((id): id is string => !!id);
-    useDownloadEventInvalidation([downloadQueryKeys.list(params)], !!releaseId, relatedIds);
+    useDownloadEventInvalidation([downloadQueryKeys.list(params)], !!releaseId, { entityIds: relatedIds });
 
     return {
         download: query.data?.items?.[0] ?? null,
         isLoading: query.isLoading,
         error: queryErrorOrNull(query),
-    };
-}
-
-export function useDownload(id: string, enabled = true) {
-    useDownloadEventInvalidation([downloadQueryKeys.detail(id)], enabled && Boolean(id), id ? [id] : []);
-    const downloadQuery = useQuery({
-        queryKey: downloadQueryKeys.detail(id),
-        queryFn: () => fetchDownloadById(id),
-        enabled: enabled && Boolean(id),
-    });
-    useInvalidateQueriesOnEvents(
-        enabled && downloadQuery.data?.contentHierarchyItemId ? CONTENT_LINEAGE_EVENTS : [],
-        [downloadQueryKeys.detail(id)],
-        {
-            debounceMs: 200,
-            entityIds: downloadQuery.data?.contentHierarchyItemId ? [downloadQuery.data.contentHierarchyItemId] : [],
-            exact: true,
-            maxWaitMs: 800,
-            owner: 'download-detail:content-lineage',
-        },
-    );
-
-    return {
-        download: downloadQuery.data ?? null,
-        isLoading: downloadQuery.isLoading,
-        error: queryErrorOrNull(downloadQuery),
-        refetch: downloadQuery.refetch,
     };
 }

@@ -10,7 +10,6 @@ using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Data;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -82,9 +81,9 @@ public sealed class MimeMappingRepositoryTests
                 _publishedEvents.Select(magpieEvent => magpieEvent.Name),
                 Is.EqualTo(
                 [
-                    MagpieEvents.Names.MimeMappingCreated,
-                    MagpieEvents.Names.MimeMappingUpdated,
-                    MagpieEvents.Names.MimeMappingDeleted
+                    "mimeMapping.created",
+                    "mimeMapping.updated",
+                    "mimeMapping.deleted"
                 ]));
             Assert.That(
                 _publishedEvents,

@@ -9,10 +9,10 @@ public sealed record PermissionGrant
     /// <summary>
     /// The minimum role that the permission requires.
     /// </summary>
-    public required Role RequiredRole { get; set; }
+    public required Role RequiredRole { get; init; }
 
     /// <summary>
     /// Whether the role of the caller meets the requirement.
     /// </summary>
-    public required bool Granted { get; set; }
+    public required bool Granted { get; init; }
 }

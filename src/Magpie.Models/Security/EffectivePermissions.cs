@@ -11,10 +11,10 @@ public sealed record EffectivePermissions
     /// <summary>
     /// The role of the caller.
     /// </summary>
-    public required Role Role { get; set; }
+    public required Role Role { get; init; }
 
     /// <summary>
     /// The grant state of each named permission, keyed by permission name.
     /// </summary>
-    public required IReadOnlyDictionary<string, PermissionGrant> Permissions { get; set; }
+    public required IReadOnlyDictionary<string, PermissionGrant> Permissions { get; init; }
 }

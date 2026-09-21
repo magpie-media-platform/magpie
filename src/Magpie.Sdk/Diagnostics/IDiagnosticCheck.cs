@@ -12,7 +12,7 @@ namespace Magpie.Sdk.Diagnostics;
 public interface IDiagnosticCheck
 {
     /// <summary>
-    /// The diagnostic check id.
+    /// The stable id that this check stamps on the findings it raises.
     /// </summary>
     string DiagnosticCheckId { get; }
 

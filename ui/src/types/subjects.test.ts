@@ -1,20 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatSubjectKindLabel } from './subjects';
+import { resolveSubjectKindLabel } from './subjects';
 
-describe('formatSubjectKindLabel', () => {
+describe('resolveSubjectKindLabel', () => {
     it('returns label for known kinds', () => {
-        expect(formatSubjectKindLabel('show')).toBe('Show');
-        expect(formatSubjectKindLabel('movie')).toBe('Movie');
-        expect(formatSubjectKindLabel('person')).toBe('Person');
-        expect(formatSubjectKindLabel('album')).toBe('Album');
-        expect(formatSubjectKindLabel('book')).toBe('Book');
-        expect(formatSubjectKindLabel('unknown')).toBe('Unknown');
+        expect(resolveSubjectKindLabel('show')).toBe('Show');
+        expect(resolveSubjectKindLabel('movie')).toBe('Movie');
+        expect(resolveSubjectKindLabel('person')).toBe('Person');
+        expect(resolveSubjectKindLabel('album')).toBe('Album');
+        expect(resolveSubjectKindLabel('book')).toBe('Book');
+        expect(resolveSubjectKindLabel('unknown')).toBe('Unknown');
     });
 
     it('returns capitalized fallback for extension-defined kinds', () => {
-        expect(formatSubjectKindLabel('studio')).toBe('Studio');
-        expect(formatSubjectKindLabel('publisher')).toBe('Publisher');
-        expect(formatSubjectKindLabel('network')).toBe('Network');
+        expect(resolveSubjectKindLabel('studio')).toBe('Studio');
+        expect(resolveSubjectKindLabel('publisher')).toBe('Publisher');
+        expect(resolveSubjectKindLabel('network')).toBe('Network');
     });
 });

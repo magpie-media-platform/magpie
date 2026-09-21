@@ -1,3 +1,4 @@
+import type { BulkSelectionState } from '@/types/bulkSelection';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render as rtlRender, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -66,6 +67,21 @@ const mockItems: ContentItem[] = [
     },
 ];
 
+const selection: BulkSelectionState = {
+    allPages: false,
+    hasSelection: false,
+    headerChecked: false,
+    selectedCount: 0,
+    pageSelectedCount: 0,
+    totalCount: 4,
+    showAcrossPagesPrompt: false,
+    isRowChecked: () => false,
+    toggleRow: vi.fn(),
+    toggleHeader: vi.fn(),
+    selectAllAcrossPages: vi.fn(),
+    clear: vi.fn(),
+};
+
 describe('ContentList', () => {
     it('renders with correct data-component attribute', () => {
         render(<ContentList items={mockItems} />);
@@ -90,13 +106,15 @@ describe('ContentList', () => {
     });
 
     it('resolves a nested title in the desktop content table', async () => {
+        const queryClient = new QueryClient();
+        queryClient.setQueryData(['content-lineage', 'season'], { id: 'season', title: 'Season 1' });
+
         render(
-            <ContentLineageProvider
-                contentTypes={[]}
-                loadQualifiedName={async () => ({ id: 'season', title: 'Season 1' })}
-            >
-                <ContentList items={[{ ...mockItems[0], id: 'pilot', parentId: 'season', title: 'Pilot' }]} />
-            </ContentLineageProvider>,
+            <QueryClientProvider client={queryClient}>
+                <ContentLineageProvider contentTypes={[]}>
+                    <ContentList items={[{ ...mockItems[0], id: 'pilot', parentId: 'season', title: 'Pilot' }]} />
+                </ContentLineageProvider>
+            </QueryClientProvider>,
         );
 
         expect(await screen.findByTitle('Season 1 > Pilot')).toBeInTheDocument();
@@ -134,14 +152,13 @@ describe('ContentList', () => {
     it('renders fulfillment status badges for monitored items', () => {
         render(<ContentList items={mockItems} />);
 
-        expect(screen.getByText('Fulfilled')).toBeInTheDocument();
-        expect(screen.getByText('Upgradable')).toBeInTheDocument();
+        expect(within(screen.getByText('Breaking Bad').closest('tr')!).getByText('Fulfilled')).toBeInTheDocument();
+        expect(within(screen.getByText('The Office').closest('tr')!).getByText('Upgradable')).toBeInTheDocument();
     });
 
     it('renders no fulfillment badge for an excluded item', () => {
         render(<ContentList items={mockItems} />);
 
-        // Dune (excluded/missing) and Poor Things (excluded/external) are the only sources of those labels
         expect(screen.queryByText('Missing')).not.toBeInTheDocument();
         expect(screen.queryByText('External')).not.toBeInTheDocument();
     });
@@ -458,14 +475,14 @@ describe('ContentList', () => {
         });
 
         it('shows checkboxes when enableSelection is true', () => {
-            render(<ContentList items={mockItems} enableSelection />);
+            render(<ContentList items={mockItems} selection={selection} />);
 
             const checkboxes = screen.getAllByRole('checkbox');
             expect(checkboxes).toHaveLength(mockItems.length + 1);
         });
 
         it('sets data-selection-enabled attribute when selection is enabled', () => {
-            render(<ContentList items={mockItems} enableSelection />);
+            render(<ContentList items={mockItems} selection={selection} />);
 
             const list = document.querySelector('[data-selection-enabled="true"]');
             expect(list).toBeInTheDocument();
@@ -478,16 +495,14 @@ describe('ContentList', () => {
             expect(list).not.toBeInTheDocument();
         });
 
-        it('calls onRowSelectionChange when a row is selected', async () => {
+        it('calls toggleRow when a row is selected', async () => {
             const user = userEvent.setup();
             const handleSelectionChange = vi.fn();
 
             render(
                 <ContentList
                     items={mockItems}
-                    enableSelection
-                    rowSelection={{}}
-                    onRowSelectionChange={handleSelectionChange}
+                    selection={{ ...selection, toggleRow: handleSelectionChange, toggleHeader: handleSelectionChange }}
                 />,
             );
 
@@ -498,7 +513,7 @@ describe('ContentList', () => {
         });
 
         it('shows select-all checkbox in header', () => {
-            render(<ContentList items={mockItems} enableSelection />);
+            render(<ContentList items={mockItems} selection={selection} />);
 
             const selectAllCheckbox = screen.getByLabelText('Select all');
             expect(selectAllCheckbox).toBeInTheDocument();
@@ -511,9 +526,7 @@ describe('ContentList', () => {
             render(
                 <ContentList
                     items={mockItems}
-                    enableSelection
-                    rowSelection={{}}
-                    onRowSelectionChange={handleSelectionChange}
+                    selection={{ ...selection, toggleRow: handleSelectionChange, toggleHeader: handleSelectionChange }}
                 />,
             );
 
@@ -524,7 +537,7 @@ describe('ContentList', () => {
         });
 
         it('checkbox has accessible label with item title', () => {
-            render(<ContentList items={mockItems} enableSelection />);
+            render(<ContentList items={mockItems} selection={selection} />);
 
             expect(screen.getByLabelText('Select Breaking Bad')).toBeInTheDocument();
             expect(screen.getByLabelText('Select Dune: Part Two')).toBeInTheDocument();
@@ -536,9 +549,11 @@ describe('ContentList', () => {
             render(
                 <ContentList
                     items={mockItems}
-                    enableSelection
-                    rowSelection={{ '1': true, '3': true }}
-                    onRowSelectionChange={vi.fn()}
+                    selection={{
+                        ...selection,
+                        headerChecked: 'indeterminate',
+                        isRowChecked: (id) => id === '1' || id === '3',
+                    }}
                 />,
             );
 
@@ -549,10 +564,12 @@ describe('ContentList', () => {
             expect(breakingBadCheckbox).toBeChecked();
             expect(officeCheckbox).toBeChecked();
             expect(duneCheckbox).not.toBeChecked();
+            expect(breakingBadCheckbox.closest('[role="row"]')).toHaveAttribute('aria-selected', 'true');
+            expect(duneCheckbox.closest('[role="row"]')).not.toHaveAttribute('aria-selected');
         });
 
         it('select-all is unchecked when no rows are selected', () => {
-            render(<ContentList items={mockItems} enableSelection rowSelection={{}} onRowSelectionChange={vi.fn()} />);
+            render(<ContentList items={mockItems} selection={selection} />);
 
             const selectAllCheckbox = screen.getByLabelText('Select all');
             expect(selectAllCheckbox).not.toBeChecked();
@@ -563,9 +580,11 @@ describe('ContentList', () => {
             render(
                 <ContentList
                     items={mockItems}
-                    enableSelection
-                    rowSelection={{ '1': true, '3': true }}
-                    onRowSelectionChange={vi.fn()}
+                    selection={{
+                        ...selection,
+                        headerChecked: 'indeterminate',
+                        isRowChecked: (id) => id === '1' || id === '3',
+                    }}
                 />,
             );
 
@@ -578,9 +597,7 @@ describe('ContentList', () => {
             render(
                 <ContentList
                     items={mockItems}
-                    enableSelection
-                    rowSelection={{ '1': true, '2': true, '3': true, '4': true }}
-                    onRowSelectionChange={vi.fn()}
+                    selection={{ ...selection, headerChecked: true, isRowChecked: () => true }}
                 />,
             );
 
@@ -590,7 +607,7 @@ describe('ContentList', () => {
         });
 
         it('tags the select column cells so the mobile CSS rule can hide them', () => {
-            render(<ContentList items={mockItems} enableSelection />);
+            render(<ContentList items={mockItems} selection={selection} />);
 
             const header = document.querySelector('.data-table__header-cell[data-column="select"]');
             expect(header).toBeInTheDocument();
@@ -607,9 +624,7 @@ describe('ContentList', () => {
             render(
                 <ContentList
                     items={mockItems}
-                    enableSelection
-                    rowSelection={{}}
-                    onRowSelectionChange={handleSelectionChange}
+                    selection={{ ...selection, toggleRow: handleSelectionChange, toggleHeader: handleSelectionChange }}
                     onContentClick={handleClick}
                 />,
             );
@@ -670,4 +685,14 @@ describe('ContentList', () => {
             expect(cell).toHaveTextContent('--');
         });
     });
+});
+
+it('keeps a one-row header selection distinct from an individual row toggle', async () => {
+    const user = userEvent.setup();
+    const toggleHeader = vi.fn();
+    const toggleRow = vi.fn();
+    render(<ContentList items={[mockItems[0]]} selection={{ ...selection, toggleHeader, toggleRow }} />);
+    await user.click(screen.getByRole('checkbox', { name: 'Select all' }));
+    expect(toggleHeader).toHaveBeenCalledWith(true);
+    expect(toggleRow).not.toHaveBeenCalled();
 });

@@ -7,10 +7,14 @@ using System.Threading.Tasks;
 using Magpie.Extensions.MusicBrainz.Mapping;
 using Magpie.Sdk.Caching;
 
+using Microsoft.Extensions.DependencyInjection;
+
 namespace Magpie.Extensions.MusicBrainz.QueryEngine;
 
-internal sealed class QueryCoordinator(ICacheFactory cacheFactory) : IQueryCoordinator
+internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
 {
+    private const int EntityCapacity = 1024;
+
     private static readonly TimeSpan SearchTtl = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan EntityTtl = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan MissingEntityTtl = TimeSpan.FromMinutes(5);
@@ -19,40 +23,27 @@ internal sealed class QueryCoordinator(ICacheFactory cacheFactory) : IQueryCoord
 
     private readonly object _loadGate = new();
 
-    private readonly ICache _searchPages = cacheFactory.GetOrCreate(
-        "musicbrainz-search-pages",
-        () => Policy(SearchTtl, 256));
+    private readonly IServiceScope _cacheScope;
 
-    private readonly ICache _verifiedScans = cacheFactory.GetOrCreate(
-        "musicbrainz-verified-scans",
-        () => Policy(SearchTtl, 128));
+    private readonly ICache _searchPages;
 
-    private readonly ICache _entities = cacheFactory.GetOrCreate("musicbrainz-entities", () => Policy(EntityTtl, 1024));
+    private readonly ICache _verifiedScans;
 
-    private readonly ICache _missingEntities = cacheFactory.GetOrCreate(
-            "musicbrainz-entities-negative",
-            () => Policy(MissingEntityTtl, 256));
+    private readonly ICache _entities;
 
-    private readonly ICache _browsePages = cacheFactory.GetOrCreate(
-        "musicbrainz-browse-pages",
-        () => Policy(EntityTtl, 256));
+    private readonly ICache _missingEntities;
 
-    private readonly ICache _artistBrowsePages = cacheFactory.GetOrCreate(
-        "musicbrainz-artist-browse",
-        () => Policy(EntityTtl, 256));
+    private readonly ICache _browsePages;
 
-    private readonly ICache _artistResolutions = cacheFactory.GetOrCreate(
-            "musicbrainz-artist-resolution",
-            () => Policy(SearchTtl, 256));
+    private readonly ICache _artistBrowsePages;
 
-    private readonly ICache _isrcResults = cacheFactory.GetOrCreate("musicbrainz-isrc", () => Policy(SearchTtl, 256));
-    private readonly ICache _covers = cacheFactory.GetOrCreate("musicbrainz-covers", () => Policy(CoverTtl, 512));
+    private readonly ICache _artistResolutions;
 
-    private readonly ICache _missingCovers = cacheFactory.GetOrCreate(
-            "musicbrainz-covers-negative",
-            () => Policy(MissingCoverTtl, 256));
+    private readonly ICache _isrcResults;
 
-    private readonly HashSet<EntityCacheKey> _entityKeys = [];
+    private readonly ICache _covers;
+
+    private readonly ICache _missingCovers;
 
     private readonly Dictionary<SearchCacheKey, Task<FetchResult<SearchPage>>> _searchLoads = [];
     private readonly Dictionary<string, Task<FetchResult<VerifiedScan>>> _scanLoads = [];
@@ -69,6 +60,26 @@ internal sealed class QueryCoordinator(ICacheFactory cacheFactory) : IQueryCoord
 
     private readonly Dictionary<string, Task<FetchResult<SearchPage>>> _isrcLoads = [];
     private readonly Dictionary<CoverCacheKey, Task<FetchResult<Uri>>> _coverLoads = [];
+
+    public QueryCoordinator(IServiceScopeFactory scopeFactory)
+    {
+        _cacheScope = scopeFactory.CreateScope();
+        var cacheFactory = _cacheScope.ServiceProvider.GetRequiredService<ICacheFactory>();
+        _searchPages = cacheFactory.GetOrCreate("musicbrainz-search-pages", () => Policy(SearchTtl, 256));
+        _verifiedScans = cacheFactory.GetOrCreate("musicbrainz-verified-scans", () => Policy(SearchTtl, 128));
+        _entities = cacheFactory.GetOrCreate("musicbrainz-entities", () => Policy(EntityTtl, EntityCapacity));
+        _missingEntities = cacheFactory.GetOrCreate(
+            "musicbrainz-entities-negative",
+            () => Policy(MissingEntityTtl, 256));
+        _browsePages = cacheFactory.GetOrCreate("musicbrainz-browse-pages", () => Policy(EntityTtl, 256));
+        _artistBrowsePages = cacheFactory.GetOrCreate("musicbrainz-artist-browse", () => Policy(EntityTtl, 256));
+        _artistResolutions = cacheFactory.GetOrCreate(
+            "musicbrainz-artist-resolution",
+            () => Policy(SearchTtl, 256));
+        _isrcResults = cacheFactory.GetOrCreate("musicbrainz-isrc", () => Policy(SearchTtl, 256));
+        _covers = cacheFactory.GetOrCreate("musicbrainz-covers", () => Policy(CoverTtl, 512));
+        _missingCovers = cacheFactory.GetOrCreate("musicbrainz-covers-negative", () => Policy(MissingCoverTtl, 256));
+    }
 
     public Task<FetchResult<SearchPage>> GetSearchPageAsync(
         SearchCacheKey key,
@@ -118,21 +129,15 @@ internal sealed class QueryCoordinator(ICacheFactory cacheFactory) : IQueryCoord
         CancellationToken cancellationToken)
     {
         var normalizedKey = key.Normalize();
-        foreach (var candidate in _entityKeys.ToArray())
+        var identity = new EntityIdentityKey { Kind = normalizedKey.Kind, Mbid = normalizedKey.Mbid };
+        if (_entities.TryGet<CachedEntity>(identity.ToString(), out var cached) &&
+            cached is not null &&
+            cached.Key.Satisfies(normalizedKey))
         {
-            if (!candidate.Satisfies(normalizedKey))
-            {
-                continue;
-            }
-
-            if (_entities.TryGet<EntityResponseDto>(candidate.ToString(), out var cached) && cached is not null)
-            {
-                RecordCache("entity", hit: true);
-                return Success(cached);
-            }
+            RecordCache("entity", hit: true);
+            return Success(cached.Value);
         }
 
-        var identity = new EntityIdentityKey { Kind = normalizedKey.Kind, Mbid = normalizedKey.Mbid };
         if (_missingEntities.TryGet<bool>(identity.ToString(), out _))
         {
             RecordCache("entity", hit: true);
@@ -252,6 +257,11 @@ internal sealed class QueryCoordinator(ICacheFactory cacheFactory) : IQueryCoord
         }
 
         return await AwaitAsync(shared, cancellationToken).ConfigureAwait(false);
+    }
+
+    public void Dispose()
+    {
+        _cacheScope.Dispose();
     }
 
     private static CachePolicy Policy(TimeSpan lifetime, int capacity)
@@ -399,8 +409,7 @@ internal sealed class QueryCoordinator(ICacheFactory cacheFactory) : IQueryCoord
             var result = await loader(default).ConfigureAwait(false);
             if (result is { Outcome: FetchOutcome.Success, Value: { } value })
             {
-                _entities.Set(key.ToString(), value);
-                _entityKeys.Add(key);
+                _entities.Set(identity.ToString(), new CachedEntity(key, value));
             }
             else if (result.Outcome == FetchOutcome.NotFound)
             {
@@ -474,4 +483,6 @@ internal sealed class QueryCoordinator(ICacheFactory cacheFactory) : IQueryCoord
             }
         }
     }
+
+    private sealed record CachedEntity(EntityCacheKey Key, EntityResponseDto Value);
 }

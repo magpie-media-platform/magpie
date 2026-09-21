@@ -360,6 +360,7 @@ test.describe.serial('Journey 8: pick the right release by hand', () => {
                 });
 
                 await mocks.downloadClient.useScenario(movieDownloadScenario);
+                await mocks.downloadClient.armRemove(true);
                 await mocks.downloadClient.armTestConnection({
                     success: true,
                     message: 'journey movie download healthy',
@@ -577,6 +578,7 @@ test.describe.serial('Journey 8: pick the right release by hand', () => {
                 await mocks.indexer.armSearchFallback([bookRelease]);
 
                 await mocks.downloadClient.useScenario(bookDownloadScenario);
+                await mocks.downloadClient.armRemove(true);
                 await mocks.downloadClient.armTestConnection({
                     success: true,
                     message: 'journey book download healthy',

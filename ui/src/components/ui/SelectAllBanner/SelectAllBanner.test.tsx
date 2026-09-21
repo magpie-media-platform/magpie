@@ -38,7 +38,7 @@ describe('SelectAllBanner', () => {
             />,
         );
 
-        expect(screen.getByText(/all 1,233 matching downloads across all pages are selected/i)).toBeInTheDocument();
+        expect(screen.getByText(/all 1,233 matching items across all pages are selected/i)).toBeInTheDocument();
         await user.click(screen.getByRole('button', { name: /clear selection/i }));
         expect(onClear).toHaveBeenCalledOnce();
     });

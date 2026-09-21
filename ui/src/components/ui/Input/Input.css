@@ -39,6 +39,10 @@
     .input-wrapper--sm {
         min-height: 32px;
 
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
+        }
+
         & .input {
             padding: var(--space-xs) var(--space-sm);
             font-size: var(--text-sm);

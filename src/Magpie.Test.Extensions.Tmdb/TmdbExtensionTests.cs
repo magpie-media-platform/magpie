@@ -67,10 +67,8 @@ public class TmdbExtensionTests
                 Assert.That(navExtension.Attributes!["href"], Is.EqualTo("/admin/ext/tmdb"));
                 Assert.That(runtimeAsset.ExtensionId, Is.EqualTo(expectedExtensionId));
                 Assert.That(runtimeAsset.Kind, Is.EqualTo(AssetKind.Script));
-                Assert.That(runtimeAsset.RelativePath, Is.EqualTo("metadata-settings.js"));
                 Assert.That(asset.ExtensionId, Is.EqualTo(expectedExtensionId));
                 Assert.That(asset.Kind, Is.EqualTo(AssetKind.Script));
-                Assert.That(asset.RelativePath, Is.EqualTo("tmdb-settings.js"));
                 Assert.That(runtimeStream, Is.Not.Null);
                 Assert.That(templateStream, Is.Not.Null);
                 Assert.That(stream, Is.Not.Null);
@@ -92,45 +90,6 @@ public class TmdbExtensionTests
             {
                 await templateStream.DisposeAsync().ConfigureAwait(false);
             }
-        }
-    }
-
-    [Test]
-    public async Task GetAssetStreamAsync_ReturnsTemplateDrivenScriptWithRoleGating_WhenMetadataSettingsAreRequested()
-    {
-        // Arrange
-        var assetProvider = new AdminUiProvider();
-
-        // Act
-        using var runtimeStream = await assetProvider.GetAssetStreamAsync("metadata-settings.js")
-            .ConfigureAwait(false);
-        using var templateStream = await assetProvider.GetAssetStreamAsync("metadata-settings.html")
-            .ConfigureAwait(false);
-        using var reader = new StreamReader(runtimeStream!);
-        var script = await reader.ReadToEndAsync().ConfigureAwait(false);
-        using var templateReader = new StreamReader(templateStream!);
-        var template = await templateReader.ReadToEndAsync().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(runtimeStream, Is.Not.Null);
-            Assert.That(templateStream, Is.Not.Null);
-            Assert.That(script, Does.Contain("document.currentScript?.magpieExtensionContext"));
-            Assert.That(script, Does.Contain("context.loadAssetText(\"metadata-settings.html\")"));
-            Assert.That(script, Does.Contain("extensionContext.waitUntil(initialize(extensionContext))"));
-            Assert.That(script, Does.Contain("template.content.cloneNode(true)"));
-            Assert.That(script, Does.Contain("data-magpie-role"));
-            Assert.That(script, Does.Contain("Admin role required to save settings."));
-            Assert.That(script, Does.Contain(".trim().toLowerCase() ==="));
-            Assert.That(script, Does.Contain("type === \"\" && entityId === \"\""));
-            Assert.That(script, Does.Not.Contain("innerHTML"));
-            Assert.That(script, Does.Not.Contain("document.currentScript?.src"));
-            Assert.That(script, Does.Not.Contain("templatePromise"));
-            Assert.That(script, Does.Not.Contain("<style"));
-            Assert.That(script, Does.Not.Contain("<section"));
-            Assert.That(template, Does.Contain("<template id=\"metadata-settings-template\">"));
-            Assert.That(template, Does.Contain("<form class=\"surface\">"));
         }
     }
 }

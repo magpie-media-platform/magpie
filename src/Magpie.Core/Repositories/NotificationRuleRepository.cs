@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
@@ -14,6 +15,7 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Models.Patch;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -27,9 +29,68 @@ internal sealed class NotificationRuleRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<NotificationRuleRepository> logger,
-    TimeProvider? timeProvider = null) : INotificationRuleRepository
+    IDataProtectionService protector,
+    TimeProvider timeProvider) : INotificationRuleRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
+
+    private static void ApplyPatch(
+        IDictionary<string, string> values,
+        DictionaryPatch<string, string?, string?> patch)
+    {
+        if (patch.Add is not null)
+        {
+            foreach (var (key, value) in patch.Add)
+            {
+                values[key] = value ?? string.Empty;
+            }
+        }
+
+        if (patch.Update is not null)
+        {
+            foreach (var (key, value) in patch.Update)
+            {
+                if (values.ContainsKey(key))
+                {
+                    values[key] = value ?? string.Empty;
+                }
+            }
+        }
+
+        if (patch.Remove is not null)
+        {
+            foreach (var key in patch.Remove)
+            {
+                values.Remove(key);
+            }
+        }
+    }
+
+    private static List<string> ChangedFields(NotificationRulePatch patch)
+    {
+        var fields = new List<string>();
+        if (patch.Name is not null)
+        {
+            fields.Add("name");
+        }
+
+        if (patch.EventFilter is not null)
+        {
+            fields.Add("eventFilter");
+        }
+
+        if (patch.Settings is not null)
+        {
+            fields.Add("settings");
+        }
+
+        if (patch.Enabled is not null)
+        {
+            fields.Add("enabled");
+        }
+
+        return fields;
+    }
 
     private static List<string> ChangedFields(NotificationRule current, NotificationRule model)
     {
@@ -79,14 +140,25 @@ internal sealed class NotificationRuleRepository(
                 string.Equals(pair.Value, value, StringComparison.Ordinal));
     }
 
+    private Dictionary<string, string> ReadSettings(IReadOnlyDictionary<string, string> settings)
+    {
+        return protector.TryGetKeyId(settings, out _) ? protector.Unprotect(settings) : new(settings);
+    }
+
     public async Task<IEnumerable<NotificationRule>> ListAllAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            return await context.NotificationRules
+            var models = await context.NotificationRules
                 .AsNoTracking()
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+            foreach (var model in models)
+            {
+                model.Settings = ReadSettings(model.Settings);
+            }
+
+            return models;
         }
         catch (Exception ex)
         {
@@ -99,10 +171,16 @@ internal sealed class NotificationRuleRepository(
     {
         try
         {
-            return await context.NotificationRules
+            var model = await context.NotificationRules
                 .AsNoTracking()
                 .FirstOrDefaultAsync(r => r.Id == id, cancellationToken)
                 .ConfigureAwait(false);
+            if (model is not null)
+            {
+                model.Settings = ReadSettings(model.Settings);
+            }
+
+            return model;
         }
         catch (Exception ex)
         {
@@ -133,14 +211,23 @@ internal sealed class NotificationRuleRepository(
 
             var totalCount = await rules.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            var sortProperty = typeof(NotificationRule).GetProperties()
-                .Select(property => property.Name)
+            var sortableProperties = new[]
+            {
+                nameof(NotificationRule.Id), nameof(NotificationRule.Name), nameof(NotificationRule.OwnerUserId),
+                nameof(NotificationRule.ProviderType),
+                nameof(NotificationRule.Enabled),
+                nameof(NotificationRule.CreatedAt),
+                nameof(NotificationRule.CreatedByUserId),
+                nameof(NotificationRule.ModifiedAt),
+                nameof(NotificationRule.ModifiedByUserId),
+            };
+            var sortProperty = sortableProperties
                 .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
             if (sort is not null && sortProperty is not null)
             {
                 rules = sort.Direction == SortDirection.Ascending
-                    ? rules.OrderBy(r => EF.Property<NotificationRule>(r, sortProperty)).ThenBy(r => r.Id)
-                    : rules.OrderByDescending(r => EF.Property<NotificationRule>(r, sortProperty)).ThenBy(r => r.Id);
+                    ? rules.OrderBy(r => EF.Property<object>(r, sortProperty)).ThenBy(r => r.Id)
+                    : rules.OrderByDescending(r => EF.Property<object>(r, sortProperty)).ThenBy(r => r.Id);
             }
             else
             {
@@ -150,6 +237,10 @@ internal sealed class NotificationRuleRepository(
             rules = rules.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
             var items = await rules.ToListAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var item in items)
+            {
+                item.Settings = ReadSettings(item.Settings);
+            }
 
             return new()
             {
@@ -180,8 +271,10 @@ internal sealed class NotificationRuleRepository(
                     model.CreatedAt = now;
                     model.CreatedByUserId = createdByUserId;
 
-                    context.NotificationRules.Add(model);
+                    var stored = model with { Settings = protector.Protect(model.Settings) };
+                    context.NotificationRules.Add(stored);
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    model.Id = stored.Id;
 
                     await auditRecordRepository.CreateAsync(
                         new()
@@ -227,6 +320,7 @@ internal sealed class NotificationRuleRepository(
             var applied = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
+                    var encryptedSettings = protector.Protect(model.Settings);
                     var now = _time.GetUtcNow().UtcDateTime;
 
                     var current = await context.NotificationRules
@@ -238,6 +332,7 @@ internal sealed class NotificationRuleRepository(
                         return false;
                     }
 
+                    current.Settings = ReadSettings(current.Settings);
                     changedFields = ChangedFields(current, model);
                     var updated = await context.NotificationRules
                         .Where(r => r.Id == model.Id)
@@ -247,7 +342,7 @@ internal sealed class NotificationRuleRepository(
                                 .SetProperty(r => r.Enabled, model.Enabled)
                                 .SetProperty(r => r.OwnerUserId, model.OwnerUserId)
                                 .SetProperty(r => r.ProviderType, model.ProviderType)
-                                .SetProperty(r => r.Settings, model.Settings)
+                                .SetProperty(r => r.Settings, encryptedSettings)
                                 .SetProperty(r => r.EventFilter, model.EventFilter)
                                 .SetProperty(r => r.ModifiedAt, now)
                                 .SetProperty(r => r.ModifiedByUserId, modifiedByUserId),
@@ -288,6 +383,92 @@ internal sealed class NotificationRuleRepository(
         {
             logger.LogError(ex, "The notification rule repository failed to update notification rule " +
                 "{RuleId}.", model.Id);
+            throw;
+        }
+    }
+
+    public async Task<bool> PatchAsync(
+        NotificationRulePatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var model = await context.NotificationRules
+                        .FirstOrDefaultAsync(r => r.Id == patch.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (model is null)
+                    {
+                        return false;
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    if (patch.Name is not null)
+                    {
+                        model.Name = patch.Name.Value;
+                    }
+
+                    if (patch.EventFilter is not null)
+                    {
+                        model.EventFilter = patch.EventFilter.Value;
+                    }
+
+                    if (patch.Enabled is not null)
+                    {
+                        model.Enabled = patch.Enabled.Value;
+                    }
+
+                    if (patch.Settings is not null)
+                    {
+                        var settings = ReadSettings(model.Settings);
+                        ApplyPatch(settings, patch.Settings);
+
+                        model.Settings = protector.Protect(settings);
+                        context.Entry(model).Property(r => r.Settings).IsModified = true;
+                    }
+
+                    model.ModifiedAt = now;
+                    model.ModifiedByUserId = modifiedByUserId;
+
+                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (updated > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Patch",
+                                EntityId = patch.Id.ToString(),
+                                EntityType = nameof(NotificationRule),
+                                Detail = $"Updated notification rule {model.Name}",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patched)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        NotificationEventBuilder.BuildNotificationRuleUpdatedEvent(patch.Id, ChangedFields(patch)),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return patched;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The notification rule repository failed to patch notification rule " +
+                "{RuleId}.", patch.Id);
             throw;
         }
     }

@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Observability;
 using Magpie.Models;
@@ -15,7 +15,6 @@ using Magpie.Models.Jobs;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Jobs;
-using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
 
@@ -24,16 +23,20 @@ namespace Magpie.Core.Jobs;
 internal sealed class MediaServerRefreshJob(
     IMediaServerRepository mediaServerRepository,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
-    IRootFolderRepository rootFolderRepository,
+    IContentFileService contentFileService,
     IMaterializedMetadataRepository materializedMetadataRepository,
     IEnumerable<IMediaServerIntegration> mediaServerIntegrations,
-    IContentTypeRegistry contentTypeRegistry,
     ILogger<MediaServerRefreshJob> logger,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
+    private sealed record RefreshScope(
+        string ContentType,
+        string ContentPath,
+        IReadOnlyDictionary<string, string> ExternalIds);
+
     public static readonly JobSpec Spec = new()
     {
-        JobType = "MediaServerRefresh",
+        JobType = MagpieJobs.Types.MediaServerRefresh,
         DisplayName = "Media server refresh",
         Description = "Asks configured media servers to refresh their libraries.",
         Category = "Integrations",
@@ -47,7 +50,7 @@ internal sealed class MediaServerRefreshJob(
         Parameters =
         [
             new(
-                ContentHierarchyItemIdParameter,
+                MagpieJobs.Parameters.ContentHierarchyItemId,
                 "Optional content hierarchy item id passed through when the job was event-triggered.",
                 DataType.String,
                 false,
@@ -58,11 +61,9 @@ internal sealed class MediaServerRefreshJob(
     private static readonly IReadOnlyDictionary<string, string> EmptyExternalIds
         = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-    private const string ContentHierarchyItemIdParameter = "contentHierarchyItemId";
-
     private static Guid? ResolveContentHierarchyItemId(JobContext context)
     {
-        if (context.Parameters.TryGetValue(ContentHierarchyItemIdParameter, out var rawParameter) &&
+        if (context.Parameters.TryGetValue(MagpieJobs.Parameters.ContentHierarchyItemId, out var rawParameter) &&
             !string.IsNullOrWhiteSpace(rawParameter))
         {
             if (!Guid.TryParse(rawParameter, out var parsed))
@@ -91,12 +92,11 @@ internal sealed class MediaServerRefreshJob(
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
         var contentHierarchyItemId = ResolveContentHierarchyItemId(context);
-        var progress = progressReporter;
 
         using var activity = MediaServerTelemetry.Source.StartActivity("MediaServerRefresh");
         activity?.SetTag("magpie.content_hierarchy_item_id", contentHierarchyItemId?.ToString());
 
-        progress?.Report(0, "The refresh will load the media servers.");
+        progressReporter.Report(0, "The refresh will load the media servers.");
 
         var integrations = BuildIntegrationMap();
         var enabledServers = (await mediaServerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
@@ -114,7 +114,7 @@ internal sealed class MediaServerRefreshJob(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var server = enabledServers[i];
-            progress?.ReportFraction(
+            progressReporter.ReportFraction(
                 i,
                 enabledServers.Length,
                 $"The media-server refresh will refresh the libraries on {server.Name}.");
@@ -142,7 +142,8 @@ internal sealed class MediaServerRefreshJob(
                 {
                     outcome = "skipped_not_refreshable";
                     logger.LogDebug(
-                        "The integration does not support refresh. The job skipped media server {MediaServerName}",
+                        "The integration does not support refresh, so the job skipped media server" +
+                        " {MediaServerName}",
                         server.Name);
                     continue;
                 }
@@ -153,8 +154,8 @@ internal sealed class MediaServerRefreshJob(
                 {
                     outcome = "skipped_content_type";
                     logger.LogDebug(
-                        "The job skipped the refresh on media server {MediaServerName}. " +
-                        "It is not configured for {ContentType}",
+                        "The job skipped the refresh on media server {MediaServerName} because it is not " +
+                        "configured for {ContentType}",
                         server.Name,
                         scope.ContentType);
                     continue;
@@ -166,8 +167,8 @@ internal sealed class MediaServerRefreshJob(
                 {
                     outcome = "skipped_content_type";
                     logger.LogDebug(
-                        "The job skipped the refresh on media server {MediaServerName}. " +
-                        "The integration does not support {ContentType}",
+                        "The job skipped the refresh on media server {MediaServerName} because the " +
+                        "integration does not support {ContentType}",
                         server.Name,
                         scope.ContentType);
                     continue;
@@ -220,7 +221,7 @@ internal sealed class MediaServerRefreshJob(
             }
         }
 
-        progress?.Report(1, "The media-server refresh completed.");
+        progressReporter.Report(1, "The media-server refresh completed.");
     }
 
     private async Task<RefreshScope?> ResolveScopeAsync(
@@ -253,8 +254,8 @@ internal sealed class MediaServerRefreshJob(
         if (triggeringItem is null)
         {
             logger.LogDebug(
-                "The job did not find content hierarchy item {ContentHierarchyItemId}. " +
-                "The media server refresh will continue without a scope",
+                "The job did not find content hierarchy item {ContentHierarchyItemId}, so the media server " +
+                "refresh will continue without a scope",
                 contentHierarchyItemId);
             return null;
         }
@@ -267,39 +268,16 @@ internal sealed class MediaServerRefreshJob(
         var effectivePath = string.Empty;
         try
         {
-            var rootFolder = await rootFolderRepository
-                .GetByIdAsync(triggeringItem.EffectiveRootFolderId, cancellationToken)
-                .ConfigureAwait(false);
-            if (rootFolder is not null && lineage.Count > 0)
-            {
-                var root = lineage[^1];
-                var subfolder = contentTypeRegistry.GetDefinitionFor(root.ContentType)?.LevelDefinitions
-                    .FirstOrDefault(level => level.Slug == root.Level)?.Subfolder;
-                effectivePath = Path.GetFullPath(string.IsNullOrWhiteSpace(subfolder)
-                    ? rootFolder.Path.Trim()
-                    : Path.Combine(rootFolder.Path.Trim(), subfolder));
-                for (var index = lineage.Count - 1; index >= 0; index--)
-                {
-                    var itemPath = lineage[index].Path;
-                    if (itemPath is null)
-                    {
-                        continue;
-                    }
-
-                    var normalized = itemPath.Trim().Replace('\\', Path.DirectorySeparatorChar)
-                        .Replace('/', Path.DirectorySeparatorChar);
-                    effectivePath = Path.IsPathFullyQualified(normalized)
-                        ? Path.GetFullPath(normalized)
-                        : Path.GetFullPath(Path.Combine(effectivePath, normalized));
-                }
-            }
+            effectivePath = await contentFileService
+                .GetEffectivePathAsync(triggeringItem.Id, cancellationToken)
+                .ConfigureAwait(false) ?? string.Empty;
         }
         catch (Exception ex)
         {
             logger.LogWarning(
                 ex,
-                "The job failed to resolve the path for content hierarchy item {ContentHierarchyItemId}. " +
-                "The media server refresh will use an empty content path",
+                "The job failed to resolve the path for content hierarchy item {ContentHierarchyItemId}, so " +
+                "the media server refresh will use an empty content path",
                 triggeringItem.Id);
         }
 
@@ -356,19 +334,18 @@ internal sealed class MediaServerRefreshJob(
 
     private Dictionary<string, IMediaServerIntegration> BuildIntegrationMap()
     {
-        var map = new Dictionary<string, IMediaServerIntegration>();
+        var map = new Dictionary<string, IMediaServerIntegration>(StringComparer.Ordinal);
         foreach (var group in mediaServerIntegrations
             .Where(integration => !string.IsNullOrWhiteSpace(integration.ProviderType))
-            .GroupBy(integration => integration.ProviderType))
+            .GroupBy(integration => integration.ProviderType, StringComparer.Ordinal))
         {
             var members = group.ToList();
             var winner = members[^1];
             if (members.Count > 1)
             {
                 logger.LogWarning(
-                    "Multiple {ItemLabel} declared {KeyLabel} {Key}. The job will use {Winner} and ignore {Displaced}",
-                    "media-server integrations",
-                    "ProviderType",
+                    "Multiple media-server integrations declared provider type {ProviderType}, so the job will " +
+                    "use {Winner} and ignore {Displaced}",
                     group.Key,
                     winner.GetType().FullName,
                     string.Join(", ", members.Take(members.Count - 1).Select(member => member.GetType().FullName)));
@@ -379,9 +356,4 @@ internal sealed class MediaServerRefreshJob(
 
         return map;
     }
-
-    private sealed record RefreshScope(
-        string ContentType,
-        string ContentPath,
-        IReadOnlyDictionary<string, string> ExternalIds);
 }

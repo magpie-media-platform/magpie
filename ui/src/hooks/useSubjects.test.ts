@@ -36,9 +36,6 @@ import {
     useSubject,
     useSetPrimaryImage,
     subjectQueryKeys,
-    extractCustomValues,
-    extractBirthDate,
-    extractDeathDate,
     type ApiSubject,
     type ApiMetadataContainer,
 } from './useSubjects';
@@ -590,115 +587,6 @@ describe('useSubject', () => {
         expect(result.current.error).toBeInstanceOf(Error);
     });
 });
-
-describe('extractCustomValues', () => {
-    it('returns deduped key/value pairs in priority then source order', () => {
-        const container: ApiMetadataContainer = {
-            id: 'mc',
-            createdAt: '2024-01-01T00:00:00Z',
-            contributions: [
-                {
-                    id: 'c1',
-                    ordinal: 0,
-                    locked: false,
-                    customMetadata: [
-                        { key: 'Ethnicity', value: 'Caucasian' },
-                        { key: 'Height', value: '170 cm' },
-                    ],
-                },
-                {
-                    id: 'c2',
-                    ordinal: 1,
-                    locked: false,
-                    customMetadata: [
-                        { key: 'Height', value: '168 cm' },
-                        { key: 'Eye colour', value: 'Brown' },
-                    ],
-                },
-            ],
-        };
-
-        expect(extractCustomValues(container)).toEqual([
-            { key: 'Ethnicity', value: 'Caucasian' },
-            { key: 'Height', value: '170 cm' },
-            { key: 'Eye colour', value: 'Brown' },
-        ]);
-    });
-
-    it('dedupes case-insensitively and keeps the highest-priority value', () => {
-        const container: ApiMetadataContainer = {
-            id: 'mc',
-            createdAt: '2024-01-01T00:00:00Z',
-            contributions: [
-                { id: 'c1', ordinal: 0, locked: false, customMetadata: [{ key: 'height', value: 'first' }] },
-                { id: 'c2', ordinal: 1, locked: false, customMetadata: [{ key: 'Height', value: 'second' }] },
-            ],
-        };
-
-        expect(extractCustomValues(container)).toEqual([{ key: 'height', value: 'first' }]);
-    });
-
-    it('skips entries without a non-empty key or value', () => {
-        const container: ApiMetadataContainer = {
-            id: 'mc',
-            createdAt: '2024-01-01T00:00:00Z',
-            contributions: [
-                {
-                    id: 'c1',
-                    ordinal: 0,
-                    locked: false,
-                    customMetadata: [
-                        { key: 'Nationality', value: '' },
-                        { key: '  ', value: 'orphan' },
-                        { key: 'Weight', value: null },
-                        { key: 'Hair colour', value: 'Black' },
-                    ],
-                },
-            ],
-        };
-
-        expect(extractCustomValues(container)).toEqual([{ key: 'Hair colour', value: 'Black' }]);
-    });
-
-    it('returns an empty array when no container or custom values are present', () => {
-        expect(extractCustomValues(undefined)).toEqual([]);
-        expect(extractCustomValues({ id: 'mc', createdAt: '', contributions: [] })).toEqual([]);
-    });
-});
-
-describe('built-in scalar extraction', () => {
-    it('resolves birth and death dates from the highest-priority contribution', () => {
-        const container: ApiMetadataContainer = {
-            id: 'mc',
-            createdAt: '2024-01-01T00:00:00Z',
-            contributions: [
-                { id: 'c1', ordinal: 0, locked: false, birthDate: '1956-03-07T00:00:00Z' },
-                {
-                    id: 'c2',
-                    ordinal: 1,
-                    locked: false,
-                    birthDate: '1956-01-01T00:00:00Z',
-                    deathDate: '2020-12-01T00:00:00Z',
-                },
-            ],
-        };
-
-        expect(extractBirthDate(container)).toBe('1956-03-07T00:00:00Z');
-        expect(extractDeathDate(container)).toBe('2020-12-01T00:00:00Z');
-    });
-
-    it('returns undefined when the scalar is absent', () => {
-        const container: ApiMetadataContainer = {
-            id: 'mc',
-            createdAt: '2024-01-01T00:00:00Z',
-            contributions: [{ id: 'c1', ordinal: 0, locked: false }],
-        };
-
-        expect(extractBirthDate(container)).toBeUndefined();
-        expect(extractDeathDate(container)).toBeUndefined();
-    });
-});
-
 describe('useSetPrimaryImage', () => {
     const mockApiPost = vi.mocked(apiPost);
 

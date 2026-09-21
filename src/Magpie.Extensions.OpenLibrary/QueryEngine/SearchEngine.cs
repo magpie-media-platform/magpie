@@ -38,11 +38,7 @@ internal sealed class SearchEngine(
                     RequestedPage = Math.Max(1, plan.Page),
                     HasMore = true
                 },
-                Warnings =
-                [
-                    .. plan.Warnings,
-                    "Open Library could not complete the remote search."
-                ],
+                Warnings = ["Open Library could not complete the remote search."],
                 CandidateLanguagePreferences = plan.CandidateLanguagePreferences
             };
         }

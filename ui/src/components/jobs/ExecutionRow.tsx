@@ -148,9 +148,13 @@ export function ExecutionRow({ execution, autoExpand = false }: ExecutionRowProp
                                 {execution.completedAt && <span className="execution-row__duration">{duration}</span>}
                             </div>
                             {execution.statusMessage && (
-                                <div className={`execution-row__message execution-row__message--${displayStatus}`}>
+                                <div
+                                    className={`execution-row__message execution-row__message--${displayStatus}`}
+                                    data-message-kind={isActive ? 'live' : 'result'}
+                                >
                                     {displayStatus === 'failed' && <WarningIcon weight="fill" aria-hidden="true" />}
-                                    <span>{execution.statusMessage}</span>
+                                    <span className="execution-row__message-label">{isActive ? 'Now' : 'Result'}</span>
+                                    <span className="execution-row__message-text">{execution.statusMessage}</span>
                                 </div>
                             )}
                         </div>

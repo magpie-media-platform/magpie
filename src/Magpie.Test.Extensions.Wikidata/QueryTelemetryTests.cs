@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -47,7 +48,7 @@ internal sealed class QueryTelemetryTests
     public void TearDown() => _listener.Dispose();
 
     [Test]
-    public async Task SearchAsync_ExecuteActivity_ReportsRowsRequestsAndCompletedTerminalReason()
+    public async Task SearchAsync_ReportsRowsRequestsAndCompletedTerminalReason_WhenExecuteActivity()
     {
         // Arrange
         var context = new RequestContext
@@ -123,7 +124,7 @@ internal sealed class QueryTelemetryTests
     }
 
     [Test]
-    public async Task SearchAsync_ExecuteActivity_EmitsResidualRejectionEvent_WhenResidualPrunesCandidate()
+    public async Task SearchAsync_EmitsResidualRejectionEvent_WhenResidualPrunesCandidate()
     {
         // Arrange
         var context = new RequestContext
@@ -196,7 +197,7 @@ internal sealed class QueryTelemetryTests
     }
 
     [Test]
-    public async Task SearchAsync_ExecuteActivity_ReportsSkippedStages_WhenProjectionAndResidualsDoNotRun()
+    public async Task SearchAsync_ReportsSkippedStages_WhenProjectionAndResidualsDoNotRun()
     {
         // Arrange
         var context = new RequestContext
@@ -264,7 +265,7 @@ internal sealed class QueryTelemetryTests
     }
 
     [Test]
-    public async Task SearchAsync_RequestActivity_ReportsRoleTargetRowsAndCacheMiss()
+    public async Task SearchAsync_ReportsRoleTargetRowsAndCacheMiss_WhenRequestActivity()
     {
         // Arrange
         var context = new RequestContext
@@ -324,7 +325,7 @@ internal sealed class QueryTelemetryTests
     }
 
     [Test]
-    public async Task SearchAsync_ExecuteActivity_ReportsRateLimitedTerminalReason()
+    public async Task SearchAsync_ReportsRateLimitedTerminalReason_WhenExecuteActivity()
     {
         // Arrange
         var context = new RequestContext
@@ -396,7 +397,7 @@ internal sealed class QueryTelemetryTests
     }
 
     [Test]
-    public async Task SearchAsync_ExecuteActivity_ReportsKnownEmptyTerminalReasonWithRedactedPlanEvent()
+    public async Task SearchAsync_ReportsKnownEmptyTerminalReasonWithRedactedPlanEvent_WhenExecuteActivity()
     {
         // Arrange
         var context = new RequestContext
@@ -427,8 +428,7 @@ internal sealed class QueryTelemetryTests
                 {
                     Source = "Title[0]",
                     Disposition = CriterionDispositionKind.ProvablyUnsatisfiable,
-                    Reason = "secret-reason",
-                    Warning = "secret-warning"
+                    Reason = "secret-reason"
                 }
             ],
             Warnings = [],
@@ -459,12 +459,11 @@ internal sealed class QueryTelemetryTests
             Assert.That(planJson, Does.Not.Contain("unique-secret"));
             Assert.That(planJson, Does.Not.Contain("ordinary-secret"));
             Assert.That(planJson, Does.Not.Contain("secret-reason"));
-            Assert.That(planJson, Does.Not.Contain("secret-warning"));
         }
     }
 
     [Test]
-    public async Task SearchAsync_RepeatedSearches_ReportOneRequestOnEachIsolatedExecuteActivity()
+    public async Task SearchAsync_ReportOneRequestOnEachIsolatedExecuteActivity_WhenRepeatedSearches()
     {
         // Arrange
         var context = new RequestContext
@@ -534,6 +533,130 @@ internal sealed class QueryTelemetryTests
             Assert.That(requests[0].GetTagItem("magpie.request.role"), Is.EqualTo("wdqsWindows"));
             Assert.That(requests[0].GetTagItem("magpie.cache.hit"), Is.EqualTo(false));
             Assert.That(requests[1].GetTagItem("magpie.cache.hit"), Is.EqualTo(false));
+        }
+    }
+
+    [Test]
+    public async Task SearchAsync_AreSiblingsOfEachOther_WhenHydrationRequestActivities()
+    {
+        // Arrange
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+        IReadOnlyList<Dictionary<string, SparqlBindingDto>> rows =
+        [
+            new()
+            {
+                ["item"] = new SparqlBindingDto { Value = "Q1" },
+                ["itemLabel"] = new SparqlBindingDto { Value = "Movie 1" },
+                ["type"] = new SparqlBindingDto { Value = "Q11424" }
+            }
+        ];
+        var cache = new Mock<IQueryCoordinator>();
+        cache.Setup(value => value.GetSearchAsync(
+            It.IsAny<string>(),
+            It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()))
+            .ReturnsAsync(new SearchCacheResult(rows, SearchCacheProvenance.Remote));
+        using var languageValue = JsonDocument.Parse("{\"id\":\"Q100\"}");
+        cache.Setup(value => value.GetEntitiesAsync(
+            It.Is<IReadOnlyCollection<string>>(qids => qids.SequenceEqual(new[] { "Q1" })),
+            It.IsAny<RequestContext>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()))
+            .ReturnsAsync(new Dictionary<string, EntityDto>
+            {
+                ["Q1"] = new EntityDto
+                {
+                    Id = "Q1",
+                    Claims = new Dictionary<string, List<StatementDto>>
+                    {
+                        [Constants.OriginalLanguagePropertyId] =
+                        [
+                            new StatementDto
+                            {
+                                Rank = "normal",
+                                Mainsnak = new SnakDto
+                                {
+                                    SnakType = "value",
+                                    DataValue = new DataValueDto
+                                    {
+                                        Value = languageValue.RootElement.Clone()
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            });
+        cache.Setup(value => value.GetEntitiesAsync(
+            It.Is<IReadOnlyCollection<string>>(qids => qids.SequenceEqual(new[] { "Q100" })),
+            It.IsAny<RequestContext>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()))
+            .ReturnsAsync(new Dictionary<string, EntityDto>
+            {
+                ["Q100"] = new EntityDto
+                {
+                    Id = "Q100",
+                    Labels = new Dictionary<string, MonolingualTextDto>
+                    {
+                        ["en"] = new MonolingualTextDto { Language = "en", Value = "English" }
+                    }
+                }
+            });
+        IQueryExecutor subject = new QueryExecutor(
+            new Mock<IWikidataClient>(MockBehavior.Strict).Object,
+            cache.Object,
+            NullLogger<QueryExecutor>.Instance);
+        var plan = new QueryPlan
+        {
+            EntityKind = EntityKind.Movie,
+            Strategy = QueryStrategy.Structured,
+            Filters = [],
+            ResidualFilters =
+            [
+                new ResidualFilter
+                {
+                    Kind = ResidualFilterKind.Language,
+                    Source = "Language",
+                    Hydration = ResidualHydration.Entity | ResidualHydration.Support,
+                    Criterion = new ResidualStringCriterion
+                    {
+                        Operator = CriteriaValueOperator.Equals,
+                        Negate = false,
+                        Values = ["English"]
+                    },
+                    LanguageNames = ["English"]
+                }
+            ],
+            Warnings = [],
+            Page = 1,
+            UsesLocalPaging = true
+        };
+        using var root = new Activity("test").Start();
+
+        // Act
+        await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
+
+        // Assert
+        var execute = _activities.Single(activity =>
+            activity.OperationName == "wikidata.query.execute" &&
+            activity.RootId == root.RootId);
+        var entity = _activities.Single(activity =>
+            activity.RootId == root.RootId &&
+            (string?)activity.GetTagItem("magpie.request.role") == "residualEntityHydration");
+        var support = _activities.Single(activity =>
+            activity.RootId == root.RootId &&
+            (string?)activity.GetTagItem("magpie.request.role") == "residualSupportHydration");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(entity.ParentSpanId, Is.EqualTo(execute.SpanId));
+            Assert.That(support.ParentSpanId, Is.EqualTo(execute.SpanId));
         }
     }
 }

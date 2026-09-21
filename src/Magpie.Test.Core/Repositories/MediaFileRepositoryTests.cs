@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
@@ -49,15 +50,14 @@ public sealed class MediaFileRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.AddRange(metadataContainer, hierarchyItem, contentItem);
-        _context.MediaFiles.AddRange(
-            new MediaFile
-            {
-                ContentItemId = contentItem.Id,
-                FileKind = "Video",
-                FilePath = "/media/Film.mkv",
-                PathKey = OperatingSystem.IsWindows() ? "/MEDIA/FILM.MKV" : "/media/Film.mkv",
-                CreatedAt = DateTime.UtcNow
-            });
+        _context.MediaFiles.Add(new MediaFile
+        {
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = "/media/Film.mkv",
+            PathKey = "/MEDIA/FILM.MKV",
+            CreatedAt = DateTime.UtcNow
+        });
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         _subject = new MediaFileRepository(_context, NullLogger<MediaFileRepository>.Instance);
@@ -71,15 +71,39 @@ public sealed class MediaFileRepositoryTests
     }
 
     [Test]
-    public async Task GetByPathAsync_ReturnsPlatformMatch_WhenPathDiffersOnlyByCase()
+    public async Task GetByPathAsync_ReturnsTheStoredFile_WhenThePathDiffersOnlyByCase()
     {
-        // Arrange
-        const string path = "/media/FILM.MKV";
-
         // Act
-        var result = await _subject.GetByPathAsync(path).ConfigureAwait(false);
+        var result = await _subject.GetByPathAsync("/media/FILM.MKV").ConfigureAwait(false);
 
         // Assert
-        Assert.That(result is not null, Is.EqualTo(OperatingSystem.IsWindows()));
+        Assert.That(result, Has.Property(nameof(MediaFile.FilePath)).EqualTo("/media/Film.mkv"));
+    }
+
+    [TestCase(SortDirection.Ascending, 100L, 200L)]
+    [TestCase(SortDirection.Descending, 200L, 100L)]
+    public async Task QueryAsync_ReturnsSortedFiles_WhenScalarSortIsRequested(
+        SortDirection direction,
+        long firstSize,
+        long secondSize)
+    {
+        // Arrange
+        var original = await _context.MediaFiles.SingleAsync().ConfigureAwait(false);
+        original.FileSize = 200;
+        _context.MediaFiles.Add(original with
+        {
+            Id = Guid.NewGuid(),
+            FilePath = "/media/Second.mkv",
+            PathKey = "/MEDIA/SECOND.MKV",
+            FileSize = 100
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(new(), new() { PageNumber = 1, PageSize = 10 },
+            new() { PropertyName = "fileSize", Direction = direction }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items.Select(file => file.FileSize), Is.EqualTo([firstSize, secondSize]));
     }
 }

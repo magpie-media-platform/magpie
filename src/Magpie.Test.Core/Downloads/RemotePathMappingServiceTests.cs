@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Caching;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
@@ -20,12 +21,13 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Downloads;
 
 [TestFixture]
-public class RemotePathMappingServiceTests
+public sealed class RemotePathMappingServiceTests
 {
     private MemoryCacheFactory _cacheFactory = null!;
     private MemoryCacheStore _cacheStore = null!;
     private Mock<IDownloadClientRepository> _downloadClientRepository = null!;
     private IDownloadClientService _downloadClientService = null!;
+    private Mock<IRemotePathMappingRepository> _remotePathMappingRepository = null!;
     private IRemotePathMappingService _service = null!;
     private string _testRoot = null!;
 
@@ -54,8 +56,23 @@ public class RemotePathMappingServiceTests
             Mock.Of<ISettingsService>(),
             Mock.Of<IEventBus>(),
             TimeProvider.System);
+        _remotePathMappingRepository = new Mock<IRemotePathMappingRepository>();
+        _remotePathMappingRepository
+            .Setup(repository => repository.CreateAsync(
+                It.IsAny<RemotePathMapping>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RemotePathMapping mapping, Guid? _, CancellationToken _) => mapping);
+        _remotePathMappingRepository
+            .Setup(repository => repository.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RemotePathMapping
+            {
+                Host = "downloadbox.example.test",
+                RemotePath = "/downloads",
+                LocalPath = "/mnt/downloads"
+            });
         _service = new RemotePathMappingService(
-            Mock.Of<IRemotePathMappingRepository>(),
+            _remotePathMappingRepository.Object,
             new FileSystem(
                 Mock.Of<IBlockedFileTypeRepository>(),
                 Mock.Of<IMimeMappingRepository>(),
@@ -149,6 +166,7 @@ public class RemotePathMappingServiceTests
     [Test]
     public void ExtractHost_ReturnsIpv6Host_WhenValueUsesIpv6()
     {
+        // Act
         // Assert
         using (Assert.EnterMultipleScope())
         {
@@ -165,7 +183,7 @@ public class RemotePathMappingServiceTests
     }
 
     [Test]
-    public void Apply_RewritesPrefix_OnHostAndPrefixMatch()
+    public void Apply_RewritesPrefix_WhenHostAndPrefixMatch()
     {
         // Arrange
         var mappings = new[]
@@ -228,7 +246,7 @@ public class RemotePathMappingServiceTests
     }
 
     [Test]
-    public void Apply_ReturnsUnchanged_OnHostMismatch()
+    public void Apply_ReturnsUnchanged_WhenHostMismatch()
     {
         // Arrange
         var mappings = new[]
@@ -298,7 +316,7 @@ public class RemotePathMappingServiceTests
     }
 
     [Test]
-    public void Apply_NormalisesRemainderSeparators_ForWindowsLocalPath()
+    public void Apply_NormalisesRemainderSeparators_WhenWindowsLocalPathIsRequested()
     {
         // Arrange
         var mappings = new[]
@@ -314,7 +332,7 @@ public class RemotePathMappingServiceTests
     }
 
     [Test]
-    public void Apply_NormalisesRemainderSeparators_ForUnixLocalPath()
+    public void Apply_NormalisesRemainderSeparators_WhenUnixLocalPathIsRequested()
     {
         // Arrange
         var mappings = new[]
@@ -348,7 +366,6 @@ public class RemotePathMappingServiceTests
     [Test]
     public void Apply_ReturnsUnchanged_WhenNoMappings()
     {
-        // Arrange
         // Act
         var resolved = _service.Map(@"E:\dl\Film", "h", []);
 
@@ -413,7 +430,6 @@ public class RemotePathMappingServiceTests
     [Test]
     public async Task TestMappingLocalPath_ReturnsFailure_WhenLocalPathIsBlank()
     {
-        // Arrange
         // Act
         var result = await _service.TestLocalPathAsync(" ", default).ConfigureAwait(false);
 
@@ -423,5 +439,118 @@ public class RemotePathMappingServiceTests
             Assert.That(result.Success, Is.False);
             Assert.That(result.Message, Is.EqualTo("Local path is required."));
         }
+    }
+
+    [TestCase("", "/downloads", "/mnt/downloads")]
+    [TestCase("   ", "/downloads", "/mnt/downloads")]
+    [TestCase("://", "/downloads", "/mnt/downloads")]
+    [TestCase("http://", "/downloads", "/mnt/downloads")]
+    [TestCase("downloadbox.example.test", "", "/mnt/downloads")]
+    [TestCase("downloadbox.example.test", "   ", "/mnt/downloads")]
+    [TestCase("downloadbox.example.test", "/downloads", "")]
+    [TestCase("downloadbox.example.test", "/downloads", "   ")]
+    public void CreateAsync_ThrowsArgumentException_WhenAValueIsEmptyOrHostIsMalformed(
+        string host,
+        string remotePath,
+        string localPath)
+    {
+        // Arrange
+        var create = new RemotePathMappingCreate { Host = host, RemotePath = remotePath, LocalPath = localPath };
+
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(() => _service.CreateAsync(create, null), Throws.ArgumentException);
+            _remotePathMappingRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<RemotePathMapping>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_TrimsValues_WhenValuesHaveSurroundingWhitespace()
+    {
+        // Arrange
+        var create = new RemotePathMappingCreate
+        {
+            Host = "  downloadbox.example.test  ",
+            RemotePath = "  /downloads  ",
+            LocalPath = "  /mnt/downloads  "
+        };
+
+        // Act
+        var result = await _service.CreateAsync(create, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Host, Is.EqualTo("downloadbox.example.test"));
+            Assert.That(result.RemotePath, Is.EqualTo("/downloads"));
+            Assert.That(result.LocalPath, Is.EqualTo("/mnt/downloads"));
+        }
+    }
+
+    [TestCase("", null, null)]
+    [TestCase("   ", null, null)]
+    [TestCase("://", null, null)]
+    [TestCase(null, "   ", null)]
+    [TestCase(null, null, "   ")]
+    public void PatchAsync_ThrowsArgumentException_WhenAValueIsEmptyOrHostIsMalformed(
+        string? host,
+        string? remotePath,
+        string? localPath)
+    {
+        // Arrange
+        var patch = new RemotePathMappingPatch
+        {
+            Host = host is null ? null : new() { Value = host },
+            RemotePath = remotePath is null ? null : new() { Value = remotePath },
+            LocalPath = localPath is null ? null : new() { Value = localPath }
+        };
+
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                async () => await _service.PatchAsync(Guid.NewGuid(), patch, null).ConfigureAwait(false),
+                Throws.ArgumentException);
+            _remotePathMappingRepository.Verify(
+                repository => repository.PatchAsync(
+                    It.IsAny<RemotePathMappingPatch>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_TrimsValues_WhenValuesHaveSurroundingWhitespace()
+    {
+        // Arrange
+        var patch = new RemotePathMappingPatch
+        {
+            Host = new() { Value = "  seedbox.example  " },
+            RemotePath = new() { Value = "  /remote  " },
+            LocalPath = new() { Value = "  /local  " }
+        };
+
+        // Act
+        await _service.PatchAsync(Guid.NewGuid(), patch, null).ConfigureAwait(false);
+
+        // Assert
+        _remotePathMappingRepository.Verify(
+            repository => repository.PatchAsync(
+                It.Is<RemotePathMappingPatch>(applied =>
+                    applied.Host!.Value == "seedbox.example" &&
+                    applied.RemotePath!.Value == "/remote" &&
+                    applied.LocalPath!.Value == "/local"),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

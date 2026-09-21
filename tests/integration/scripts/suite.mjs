@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { mkdir, open } from "node:fs/promises";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { reset } from "./reset.mjs";
+import { reset, suiteLockPath } from "./reset.mjs";
 
 const integrationRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const integrationPort =
@@ -14,14 +14,17 @@ const suiteEnvironment = {
   MAGPIE_INTEGRATION_PORT: integrationPort,
 };
 
+await acquireSuiteLock();
+
 process.stdout.write(`Integration host port: ${integrationPort}\n`);
 
 try {
   await reset();
-  await run(["compose", "build", "magpie"]);
+  await run(["compose", "build", "magpie", "package-feed"]);
   await run(["compose", "--profile", "test", "build", "tests"]);
   await run(["compose", "up", "-d", "--wait"]);
   await run(["compose", "--profile", "test", "run", "--rm", "tests"]);
+  await reset();
 } catch (error) {
   try {
     await captureHostLogs();
@@ -30,9 +33,61 @@ try {
       `Could not capture Magpie host logs: ${logError.message}\n`,
     );
   }
+  process.stderr.write(
+    "Kept the failed run for inspection; `pnpm down` discards it.\n",
+  );
   throw error;
 } finally {
-  await reset();
+  await rm(suiteLockPath, { force: true });
+}
+
+// One compose project over one set of bind-mounted directories: a second run tears the first one down.
+async function acquireSuiteLock() {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let lock;
+    try {
+      lock = await open(suiteLockPath, "wx");
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+
+      const owner = Number.parseInt(
+        await readFile(suiteLockPath, "utf8").catch(() => ""),
+        10,
+      );
+      if (isRunning(owner)) {
+        throw new Error(
+          `Another integration run (process ${owner}) is in progress.`,
+        );
+      }
+
+      await rm(suiteLockPath, { force: true });
+      continue;
+    }
+
+    try {
+      await lock.write(String(process.pid));
+    } finally {
+      await lock.close();
+    }
+    return;
+  }
+
+  throw new Error(`Could not take ${suiteLockPath}.`);
+}
+
+function isRunning(processId) {
+  if (!Number.isInteger(processId) || processId <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
 }
 
 async function captureHostLogs() {

@@ -1,5 +1,11 @@
+import { useDownloadClientProviderTypes } from './useProviderTypes';
+import { useNotificationProviders, useNotificationProviderSchema } from './useNotificationRules';
+import { useEventStream } from './useEventStream';
+
+vi.mock('./useEventStream', () => ({ useEventStream: vi.fn() }));
+
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
 
@@ -47,6 +53,43 @@ describe('useProviderSchema hooks', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('shares one catalog request across lists and schemas and refreshes on extension updates', async () => {
+        // Arrange
+        mockApiGet.mockResolvedValue([
+            { kind: 'downloadClient', providerType: 'client-a', schema: sampleSchema },
+            { kind: 'notification', providerType: 'notice-a', schema: [] },
+        ]);
+        // Act
+        const { result, rerender } = renderHook(
+            ({ providerType }) => ({
+                types: useDownloadClientProviderTypes(),
+                schema: useDownloadClientSchema(providerType),
+                notifications: useNotificationProviders(),
+                notificationSchema: useNotificationProviderSchema('notice-a'),
+            }),
+            { wrapper: createWrapper(), initialProps: { providerType: 'client-a' } },
+        );
+        await waitFor(() => expect(result.current.schema.isSuccess).toBe(true));
+        // Assert
+        expect(mockApiGet).toHaveBeenCalledTimes(1);
+        expect(result.current.types.types).toEqual(['client-a']);
+        expect(result.current.schema.data).toEqual(sampleSchema);
+        expect(result.current.notifications.providers).toEqual(['notice-a']);
+        expect(result.current.notificationSchema.data).toEqual([]);
+        rerender({ providerType: 'absent' });
+        expect(result.current.schema.data).toEqual([]);
+        expect(mockApiGet).toHaveBeenCalledTimes(1);
+
+        // Arrange
+        mockApiGet.mockResolvedValue([{ kind: 'notification', providerType: 'notice-b', schema: [] }]);
+        // Act
+        act(() => vi.mocked(useEventStream).mock.calls[0][0]({ name: 'extension.updated', context: {} }));
+        // Assert
+        await waitFor(() => expect(result.current.notifications.providers).toEqual(['notice-b']));
+        expect(result.current.types.types).toEqual([]);
+        expect(mockApiGet).toHaveBeenCalledTimes(2);
     });
 
     describe('useDownloadClientSchema', () => {
@@ -137,9 +180,6 @@ describe('omitUnchangedSecretSettings', () => {
     });
 
     it('omits a schema-marked secret whose value is nullish', () => {
-        // an untouched secret can reach this transform as null (not an empty
-        // string); it must still be dropped so the stored secret is kept rather
-        // than overwritten with a null credential
         const result = omitUnchangedSecretSettings(
             { host: 'localhost', password: null as unknown as string },
             secretSchema,

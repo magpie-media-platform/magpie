@@ -37,7 +37,7 @@ public interface IDataProtectionService
     string Unprotect(string protectedSecret);
 
     /// <summary>
-    /// Gets the id of the key that protects a set of secret settings.
+    /// Gets the id of the key that protects a set of secret settings, if the key is known.
     /// </summary>
     /// <param name="stored">The protected settings to read</param>
     /// <param name="keyId">The id of the key, set only when the method returns true</param>

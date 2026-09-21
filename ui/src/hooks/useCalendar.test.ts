@@ -71,6 +71,32 @@ describe('useCalendar', () => {
         expect(result.current.error?.message).toBe('API unavailable');
     });
 
+    it.each([
+        [10000, false],
+        [10001, true],
+    ])('bounds calendar loading and reports truncation for %i items', async (totalItems, isTruncated) => {
+        // Arrange
+        mockApiGet.mockResolvedValue({
+            items: Array(200).fill({
+                id: 'content-1',
+                metadataContainer: { contributions: [{ title: 'Item', publishDate: '2024-01-01' }] },
+            }),
+            totalItems,
+        });
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const wrapper = ({ children }: { children: React.ReactNode }) =>
+            createElement(QueryClientProvider, { client: queryClient }, children);
+
+        // Act
+        const { result } = renderHook(() => useCalendar(), { wrapper });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+        // Assert
+        expect(mockApiGet).toHaveBeenCalledTimes(50);
+        expect(result.current.events).toHaveLength(10000);
+        expect(result.current.isTruncated).toBe(isTruncated);
+    });
+
     it('returns events from API when successful', async () => {
         const apiResponse = {
             items: [
@@ -610,5 +636,11 @@ describe('buildDateFilter', () => {
 
     it('builds an exclusive end boundary across a leap day', () => {
         expect(buildDateFilter(undefined, '2024-02-29')).toBe('publishDate < "2024-03-01"');
+    });
+
+    it('escapes quotes and backslashes in the start date so the literal stays closed', () => {
+        expect(buildDateFilter('2024-01-01" or Name contains "a\\b')).toBe(
+            'publishDate >= "2024-01-01\\" or Name contains \\"a\\\\b"',
+        );
     });
 });

@@ -1,6 +1,7 @@
 import { useEffect, type CSSProperties } from 'react';
 import { PlusIcon, CheckIcon, CaretDownIcon, FilmStripIcon, WarningCircleIcon, UserIcon } from '@phosphor-icons/react';
 
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -187,9 +188,10 @@ export function PreviewDrawer({
                                     }
                                     data-testid="preview-drawer-artwork-frame"
                                 >
-                                    <img
+                                    <ContentPoster
                                         className="preview-drawer__artwork"
-                                        src={artwork}
+                                        posterUrl={artwork}
+                                        placeholderClassName="preview-drawer__artwork--placeholder"
                                         alt=""
                                         loading="lazy"
                                         data-testid="preview-drawer-artwork"

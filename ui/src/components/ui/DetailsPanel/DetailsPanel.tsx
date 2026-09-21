@@ -1,15 +1,11 @@
-import type { Key, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { safeHttpUrl } from '@/lib/safeUrl';
+import type { DetailRow } from '@/types/details';
 
 import './DetailsPanel.css';
 
-export interface DetailRow {
-    key?: Key;
-    label: ReactNode;
-    value: ReactNode;
-    mono?: boolean;
-}
+export type { DetailRow };
 
 type DetailsPanelVariant = 'default' | 'dialog' | 'facts';
 

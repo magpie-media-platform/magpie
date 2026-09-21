@@ -1,5 +1,3 @@
-import type { WishlistFormValues } from '@/types';
-
 const CONTENT_TYPE_EQUALS = /\bcontentType\s*=\s*"([^"]*)"/i;
 const CONTENT_TYPE_IN = /\bcontentType\s+in\s*\(\s*"([^"]*)"/i;
 
@@ -84,16 +82,4 @@ export function resolveFilterContentType(criteria: unknown): string | undefined 
         }
     }
     return undefined;
-}
-
-export function valuesEqual(a: WishlistFormValues, b: WishlistFormValues): boolean {
-    return (
-        a.name === b.name &&
-        a.contentType === b.contentType &&
-        a.qualityTierListId === b.qualityTierListId &&
-        a.rootFolderId === b.rootFolderId &&
-        a.monitored === b.monitored &&
-        a.tagIds.length === b.tagIds.length &&
-        a.tagIds.every((id) => b.tagIds.includes(id))
-    );
 }

@@ -11,7 +11,7 @@ namespace Magpie.Core.Jobs.Fulfillment;
 
 internal sealed class ReleaseDownloadItemJob(
     IReleaseService contentReleaseService,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
     {

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQueryClient, type Query, type QueryKey } from '@tanstack/react-query';
 
 import { contentRelevanceSnapshot } from './contentRelevanceSnapshot';
-import { emitEventInvalidationDiagnostic, getDiagnosticSubscriptionCount } from './eventInvalidationDiagnostics';
 import { evaluateEventQueryRelevance, eventFingerprint, type EventQueryRelevanceScope } from './eventQueryRelevance';
 import { useEventStream, type EventStreamPayload } from './useEventStream';
 
@@ -130,7 +129,6 @@ export function useInvalidateQueriesOnEvents(
         (
             targetQueryKeys: readonly QueryKey[],
             targetExact: boolean,
-            targetOwner: string,
             coalesceMs: number,
             reconnectEvent?: EventStreamPayload,
         ) => {
@@ -163,24 +161,6 @@ export function useInvalidateQueriesOnEvents(
                     coordinator.recentRefetches.set(query.queryHash, now + Math.max(coalesceMs, 25));
                     reconnectedTargets?.add(query.queryHash);
                 }
-                emitEventInvalidationDiagnostic({
-                    active,
-                    mounted: mountedRef.current,
-                    owner: targetOwner,
-                    queryHash: query.queryHash,
-                    reason: fetching
-                        ? 'query is already fetching'
-                        : recentlyRefetched
-                          ? 'query was already refetched in this window'
-                          : reconciled
-                            ? 'query was already reconciled for this reconnect'
-                            : active
-                              ? 'active query matched'
-                              : 'inactive query marked stale',
-                    refetched,
-                    subscriptionCount: getDiagnosticSubscriptionCount(),
-                    type: 'target',
-                });
             }
 
             if (eligibleHashes.size > 0 && mountedRef.current) {
@@ -209,7 +189,6 @@ export function useInvalidateQueriesOnEvents(
         const targetOptions = optionsRef.current;
         const targetEventNames = eventNamesRef.current;
         const targetExact = targetOptions.exact;
-        const targetOwner = targetOptions.owner;
         const scope: EventQueryRelevanceScope = {
             context: targetOptions.context,
             entityIds: targetOptions.entityIds,
@@ -226,17 +205,6 @@ export function useInvalidateQueriesOnEvents(
             result: evaluateEventQueryRelevance(event, scope),
         }));
 
-        for (const { event, result } of receivedDecisions) {
-            emitEventInvalidationDiagnostic({
-                eventName: event.name,
-                mounted: mountedRef.current,
-                owner: targetOwner,
-                reason: result.reason,
-                subscriptionCount: getDiagnosticSubscriptionCount(),
-                type: 'decision',
-            });
-        }
-
         const relevantEvents = receivedDecisions
             .filter(({ result }) => result.decision === 'relevant')
             .map(({ event }) => event);
@@ -248,7 +216,6 @@ export function useInvalidateQueriesOnEvents(
         refreshTargets(
             targetQueryKeys,
             targetExact,
-            targetOwner,
             debounceMsRef.current,
             relevantEvents.find((event) => event.name === 'stream.reconnected'),
         );
@@ -268,14 +235,6 @@ export function useInvalidateQueriesOnEvents(
 
     useEventStream(
         (event) => {
-            emitEventInvalidationDiagnostic({
-                eventName: event.name,
-                mounted: mountedRef.current,
-                owner,
-                reason: 'event received',
-                subscriptionCount: getDiagnosticSubscriptionCount(),
-                type: 'event',
-            });
             pendingEventsRef.current.set(eventFingerprint(event), event);
 
             const debounceMs = debounceMsRef.current;

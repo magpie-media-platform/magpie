@@ -8,7 +8,7 @@ namespace Magpie.Sdk.Integrations;
 public interface IRuntimeIndexerIntegrationFactory
 {
     /// <summary>
-    /// The definition type.
+    /// The indexer definition type that this factory handles.
     /// </summary>
     string DefinitionType { get; }
 

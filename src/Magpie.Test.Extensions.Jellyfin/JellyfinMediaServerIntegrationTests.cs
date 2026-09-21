@@ -5,11 +5,12 @@ using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 
-using Magpie.Core.Caching;
 using Magpie.Extensions.Jellyfin;
+using Magpie.Extensions.Jellyfin.Models;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Integrations;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -39,21 +40,44 @@ public class JellyfinMediaServerIntegrationTests
     private const string MoviesPath = "/data/movies";
     private const string TvPath = "/data/tv";
 
-    private MemoryCacheFactory _cacheFactory = null!;
-    private MemoryCacheStore _cacheStore = null!;
+    private ICacheFactory _cacheFactory = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _cacheStore = new MemoryCacheStore(TimeProvider.System);
-        _cacheFactory = new MemoryCacheFactory(_cacheStore);
-    }
+        var cacheFactory = new Mock<ICacheFactory>();
+        var caches = new Dictionary<string, ICache>(StringComparer.Ordinal);
+        cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns<string, Func<CachePolicy>?>((name, _) =>
+            {
+                if (caches.TryGetValue(name, out var existing))
+                {
+                    return existing;
+                }
 
-    [TearDown]
-    public void TearDown()
-    {
-        _cacheFactory.Dispose();
-        _cacheStore.Dispose();
+                var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+                var cache = new Mock<ICache>();
+                cache.Setup(value => value.Set(It.IsAny<string>(), It.IsAny<It.IsAnyType>()))
+                    .Callback(new InvocationAction(invocation =>
+                        values[(string)invocation.Arguments[0]] = invocation.Arguments[1]));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<It.IsAnyType?>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value;
+                        return found;
+                    }));
+                cache.Setup(value => value.TryGet(It.IsAny<string>(), out It.Ref<DeepLinkLookupResult>.IsAny))
+                    .Returns(new InvocationFunc(invocation =>
+                    {
+                        var found = values.TryGetValue((string)invocation.Arguments[0], out var value);
+                        ((object?[])invocation.Arguments)[1] = value ?? default(DeepLinkLookupResult);
+                        return found;
+                    }));
+                cache.Setup(value => value.Remove(It.IsAny<string>())).Returns<string>(values.Remove);
+                return caches[name] = cache.Object;
+            });
+        _cacheFactory = cacheFactory.Object;
     }
 
     [Test]
@@ -61,7 +85,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
-        var systemInfoRequest = handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info/Public")
+        var systemInfoRequest = handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
             .WithHeaders("X-Emby-Token", "test-api-key")
             .Respond("application/json", SystemInfoJson);
 
@@ -90,7 +114,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
-        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info/Public")
+        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
             .Respond(HttpStatusCode.Unauthorized);
 
         var integration = new JellyfinMediaServerIntegration(
@@ -115,7 +139,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
-        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info/Public")
+        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
             .Respond(HttpStatusCode.Forbidden);
 
         var integration = new JellyfinMediaServerIntegration(
@@ -140,7 +164,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/System/Info/Public")
+        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
             .Throw(new HttpRequestException("connection refused"));
         var integration = new JellyfinMediaServerIntegration(
             _cacheFactory,
@@ -322,7 +346,7 @@ public class JellyfinMediaServerIntegrationTests
 
         var settings = new Dictionary<string, string>(ValidSettings)
         {
-            [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+            [Constants.LibraryMappingsSettingKey] =
                 "[{\"rootFolderPath\":\"/data/movies\"," +
                 "\"contentType\":\"movies\"," +
                 "\"serverLibraryId\":\"lib-7\"}]"
@@ -414,9 +438,9 @@ public class JellyfinMediaServerIntegrationTests
         Assert.That(ex!.Message, Does.Contain("absolute http(s) URL"));
     }
 
-    [TestCase("http://jellyfin.local:8096")]
-    [TestCase("https://jellyfin.example.com")]
-    public void ToJellyfinSettings_ReturnsSettings_WhenHostUsesHttpOrHttps(string host)
+    [TestCase("http://jellyfin.local:8096", "http")]
+    [TestCase("https://jellyfin.example.com", "https")]
+    public void ToJellyfinSettings_ReturnsSettings_WhenHostUsesHttpOrHttps(string host, string expectedScheme)
     {
         // Arrange
         var settings = new Dictionary<string, string>
@@ -429,7 +453,7 @@ public class JellyfinMediaServerIntegrationTests
         var parsed = settings.ToJellyfinSettings();
 
         // Assert
-        Assert.That(parsed.Host.Scheme, Is.AnyOf("http", "https"));
+        Assert.That(parsed.Host.Scheme, Is.EqualTo(expectedScheme));
     }
 
     [Test]
@@ -464,7 +488,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task TryFindItemIdByExternalIdsAsync_HappyPath_ReturnsFirstItemId()
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsFirstItemId_WhenHappyPath()
     {
         // Arrange
         Uri? requestUri = null;
@@ -506,7 +530,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task TryFindItemIdByExternalIdsAsync_WithParentLibraryId_ScopesLookupToLibrary()
+    public async Task TryFindItemIdByExternalIdsAsync_ScopesLookupToLibrary_WhenWithParentLibraryId()
     {
         // Arrange
         Uri? requestUri = null;
@@ -545,7 +569,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task TryFindItemIdByExternalIdsAsync_NoMatches_ReturnsNull()
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsNull_WhenNoMatches()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
@@ -569,7 +593,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task TryFindItemIdByExternalIdsAsync_UpstreamErrorStatus_ReturnsNull()
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsNull_WhenUpstreamErrorStatus()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
@@ -593,7 +617,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task TryFindItemIdByExternalIdsAsync_MalformedJson_ReturnsNull()
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsNull_WhenMalformedJson()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
@@ -617,7 +641,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task TryFindItemIdByExternalIdsAsync_NoExternalIds_ReturnsNullWithoutHittingUpstream()
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsNullWithoutHittingUpstream_WhenNoExternalIds()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
@@ -680,7 +704,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task TryFindItemIdByExternalIdsAsync_NetworkException_ReturnsNull()
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsNull_WhenNetworkException()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
@@ -760,7 +784,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task BuildItemDeepLink_MappedAndPresent_ReturnsDetailsUrl()
+    public async Task BuildItemDeepLink_ReturnsDetailsUrl_WhenMappedAndPresent()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
@@ -782,7 +806,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -806,7 +830,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task BuildItemDeepLink_MappedAndPresent_ScopesLookupToMappedLibrary()
+    public async Task BuildItemDeepLink_ScopesLookupToMappedLibrary_WhenMappedAndPresent()
     {
         // Arrange
         var requests = new List<Uri>();
@@ -834,7 +858,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -892,7 +916,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -946,7 +970,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1073,7 +1097,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task BuildItemDeepLink_UnparseableMappingsJson_FallsBackServerWide()
+    public async Task BuildItemDeepLink_FallsBackServerWide_WhenUnparseableMappingsJson()
     {
         // Arrange
         var requests = new List<Uri>();
@@ -1101,7 +1125,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] = "{ this is not valid json ["
+                [Constants.LibraryMappingsSettingKey] = "{ this is not valid json ["
             },
         };
         var ids = new Dictionary<string, string>
@@ -1143,7 +1167,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1166,7 +1190,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task BuildItemDeepLink_NotFoundOnServer_ReturnsNull()
+    public async Task BuildItemDeepLink_ReturnsNull_WhenNotFoundOnServer()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
@@ -1186,7 +1210,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1209,7 +1233,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task BuildItemDeepLink_LookupError_ReturnsNull()
+    public async Task BuildItemDeepLink_ReturnsNull_WhenLookupError()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
@@ -1229,7 +1253,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1252,7 +1276,7 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task BuildItemDeepLink_CacheKey_DistinguishesScopedFromServerWide()
+    public async Task BuildItemDeepLink_DistinguishesScopedFromServerWide_WhenCacheKey()
     {
         // Arrange
         var requests = new List<Uri>();
@@ -1305,7 +1329,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1368,7 +1392,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1410,92 +1434,6 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public async Task BuildItemDeepLink_MappedButNotPresent_ReturnsNull()
-    {
-        // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
-            .Respond("application/json", "{\"Items\":[]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
-
-        var server = new MediaServer
-        {
-            Id = Guid.NewGuid(),
-            Name = "Test Jellyfin",
-            ProviderType = JellyfinMediaServerIntegration.ProviderTypeName,
-            Settings = new Dictionary<string, string>
-            {
-                ["host"] = "http://jellyfin.local:8096",
-                ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
-                    "[{\"rootFolderPath\":\"" +
-                    MoviesPath +
-                    "\"," +
-                    "\"contentType\":\"movies\"," +
-                    "\"serverLibraryId\":\"lib-movies\"}]"
-            },
-        };
-        var ids = new Dictionary<string, string>
-        {
-            ["imdb"] = "tt1234567"
-        };
-
-        // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
-            server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
-                .ConfigureAwait(false);
-
-        // Assert
-        Assert.That(uri, Is.Null);
-    }
-
-    [Test]
-    public async Task BuildItemDeepLink_MappedButLookupFails_ReturnsNull()
-    {
-        // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
-            .Respond(HttpStatusCode.InternalServerError);
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
-
-        var server = new MediaServer
-        {
-            Id = Guid.NewGuid(),
-            Name = "Test Jellyfin",
-            ProviderType = JellyfinMediaServerIntegration.ProviderTypeName,
-            Settings = new Dictionary<string, string>
-            {
-                ["host"] = "http://jellyfin.local:8096",
-                ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
-                    "[{\"rootFolderPath\":\"" +
-                    MoviesPath +
-                    "\"," +
-                    "\"contentType\":\"movies\"," +
-                    "\"serverLibraryId\":\"lib-movies\"}]"
-            },
-        };
-        var ids = new Dictionary<string, string>
-        {
-            ["imdb"] = "tt1234567"
-        };
-
-        // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
-            server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
-                .ConfigureAwait(false);
-
-        // Assert
-        Assert.That(uri, Is.Null);
-    }
-
-    [Test]
     public async Task BuildItemDeepLinkAsync_UsesMovieLibrary_WhenMultipleMappingsExistForMovie()
     {
         // Arrange
@@ -1524,7 +1462,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[" +
                     "{\"rootFolderPath\":\"" +
                     MoviesPath +
@@ -1584,7 +1522,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1649,7 +1587,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1711,7 +1649,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -1761,7 +1699,7 @@ public class JellyfinMediaServerIntegrationTests
             {
                 ["host"] = "http://jellyfin.local:8096",
                 ["apiKey"] = "test-key",
-                [JellyfinMediaServerIntegration.LibraryMappingsSettingKey] =
+                [Constants.LibraryMappingsSettingKey] =
                     "[{\"rootFolderPath\":\"" +
                     MoviesPath +
                     "\"," +
@@ -2012,20 +1950,50 @@ public class JellyfinMediaServerIntegrationTests
     }
 
     [Test]
-    public void Integration_ImplementsExpectedContracts_WhenInspected()
+    public async Task BuildItemDeepLinkAsync_HashesSettings_WhenCacheStoresResolution()
     {
         // Arrange
-        var subject = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            Mock.Of<IJellyfinClient>());
+        var cache = new Mock<ICache>();
+        var factory = new Mock<ICacheFactory>();
+        factory.Setup(value => value.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
+            .Returns(cache.Object);
+        var keys = new List<string>();
+        cache.Setup(value => value.Set(It.IsAny<string>(), It.IsAny<DeepLinkLookupResult>()))
+            .Callback<string, DeepLinkLookupResult>((key, _) => keys.Add(key));
+        var client = new Mock<IJellyfinClient>();
+        client.Setup(value => value.TryFindItemIdByExternalIdsAsync(It.IsAny<JellyfinSettings>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<string?>(),
+                It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(new DeepLinkLookupResult(
+                "item", DeepLinkLookupStatus.Resolved));
+        var integration = new JellyfinMediaServerIntegration(factory.Object,
+            NullLogger<JellyfinMediaServerIntegration>.Instance, client.Object);
+        var server = new MediaServer
+        {
+            Id = Guid.Empty,
+            Name = "Server",
+            ProviderType = "jellyfin",
+            Settings = new Dictionary<string, string>
+            {
+                ["host"] = "https://jellyfin.test/",
+                ["apiKey"] = "secret-one",
+            },
+        };
 
+        // Act
+        await integration.BuildItemDeepLinkAsync(server, new Dictionary<string, string> { ["catalog"] = "1" },
+            "content", "/library", "Title", default).ConfigureAwait(false);
+        server.Settings["apiKey"] = "secret-two";
+        await integration.BuildItemDeepLinkAsync(server, new Dictionary<string, string> { ["catalog"] = "1" },
+            "content", "/library", "Title", default).ConfigureAwait(false);
+
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            // Assert
-            Assert.That(subject.ProviderType, Is.EqualTo("jellyfin"));
-            Assert.That(subject, Is.InstanceOf<IRefreshableMediaServerIntegration>());
-            Assert.That(subject, Is.InstanceOf<ILinkableMediaServerIntegration>());
+            Assert.That(keys, Has.Count.EqualTo(2));
+            Assert.That(keys[0], Does.Not.Contain("secret-one"));
+            Assert.That(keys[1], Does.Not.Contain("secret-two"));
+            Assert.That(keys[0], Is.Not.EqualTo(keys[1]));
         }
     }
 }

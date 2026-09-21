@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -10,6 +11,7 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -17,12 +19,14 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
+using Moq;
+
 using NUnit.Framework;
 
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class ReleaseRepositoryTests
+public sealed class ReleaseRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IReleaseRepository _subject = null!;
@@ -68,9 +72,11 @@ public class ReleaseRepositoryTests
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
@@ -78,7 +84,8 @@ public class ReleaseRepositoryTests
             _context,
             auditRecordRepository,
             transactionManager,
-            loggerFactory.CreateLogger<ReleaseRepository>());
+            loggerFactory.CreateLogger<ReleaseRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -969,7 +976,7 @@ public class ReleaseRepositoryTests
     public async Task MarkObservedAsync_UpdatesMatchingReleases_WhenReleaseIdsAreProvided()
     {
         // Arrange
-        var now = DateTime.UtcNow;
+        var now = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc);
         var observed = new Release
         {
             IndexerId = _indexerId,
@@ -1002,8 +1009,12 @@ public class ReleaseRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Is.EqualTo(1));
-            Assert.That(rows.Single(r => r.Id == observed.Id).ObservedAt, Is.GreaterThan(now.AddMinutes(-1)));
-            Assert.That(rows.Single(r => r.Id == untouched.Id).ObservedAt, Is.LessThan(now.AddDays(-1)));
+            Assert.That(
+                rows.Single(r => r.Id == observed.Id).ObservedAt,
+                Is.EqualTo(new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(
+                rows.Single(r => r.Id == untouched.Id).ObservedAt,
+                Is.EqualTo(new DateTime(2026, 9, 6, 12, 0, 0, DateTimeKind.Utc)));
         }
     }
 
@@ -1275,6 +1286,67 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
+    public async Task DeleteAsync_ClearsSourceReference_WhenDownloadReferencesReleaseSource()
+    {
+        // Arrange
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            Title = "WithDownload",
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release);
+        var downloadClient = new DownloadClient
+        {
+            ProviderType = "qbittorrent",
+            Name = "TestClient",
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.DownloadClients.Add(downloadClient);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var source = new ReleaseSource
+        {
+            ReleaseId = release.Id,
+            Key = "source",
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "ext-source",
+            Title = "WithDownload",
+            CreatedAt = DateTime.UtcNow,
+            ObservedAt = DateTime.UtcNow
+        };
+        _context.ReleaseSources.Add(source);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var download = new Download
+        {
+            ReleaseId = release.Id,
+            ReleaseSourceId = source.Id,
+            DownloadClientId = downloadClient.Id,
+            ExternalId = "ext-download",
+            Title = "WithDownload",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.DeleteAsync(release.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        var persisted = await _context.Downloads.AsNoTracking()
+            .SingleAsync(d => d.Id == download.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(persisted.ReleaseId, Is.Null);
+            Assert.That(persisted.ReleaseSourceId, Is.Null);
+        }
+    }
+
+    [Test]
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
@@ -1354,7 +1426,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_ReturnsAgedRelease_AndExcludesFreshRelease()
+    public async Task QueryAsync_ReturnsOnlyAgedReleases_WhenTheAgeFilterIsSet()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -1363,9 +1435,11 @@ public class ReleaseRepositoryTests
             _context,
             new AuditRecordRepository(
                 _context,
-                Moq.Mock.Of<Sdk.Services.IEventBus>(),
+                Mock.Of<IEventBus>(),
                 NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
-                new TransactionManager(_context, NullLogger<TransactionManager>.Instance)),
+                new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+                Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             NullLoggerFactory.Instance.CreateLogger<ReleaseRepository>(),
             agedTime);
@@ -1411,9 +1485,11 @@ public class ReleaseRepositoryTests
             _context,
             new AuditRecordRepository(
                 _context,
-                Moq.Mock.Of<Sdk.Services.IEventBus>(),
+                Mock.Of<IEventBus>(),
                 NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
-                new TransactionManager(_context, NullLogger<TransactionManager>.Instance)),
+                new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+                Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             NullLoggerFactory.Instance.CreateLogger<ReleaseRepository>(),
             agedTime);

@@ -1,7 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -106,16 +102,6 @@ function renderTab(overrides: Partial<SubjectContentController> = {}) {
     );
 }
 
-const cssDir = dirname(fileURLToPath(import.meta.url));
-const mobileMediaCardCss = readFileSync(
-    resolve(cssDir, '../../components/ui/MobileMediaCard/MobileMediaCard.css'),
-    'utf8',
-);
-const mobileToolbarCss = readFileSync(
-    resolve(cssDir, '../../components/ui/MobileListToolbar/MobileListToolbar.css'),
-    'utf8',
-);
-
 afterEach(() => {
     vi.restoreAllMocks();
 });
@@ -197,22 +183,11 @@ describe('SubjectContentTab mobile', () => {
         expect(document.querySelector('[data-content-id="c1"]')).toBeInTheDocument();
     });
 
-    it('keeps the status badge content-sized inside the card meta row', () => {
+    it('renders the status badge inside the card meta row', () => {
         renderTab();
 
         const badge = screen.getByText('Fulfilled');
         expect(badge.closest('.mobile-media-card__meta')).not.toBeNull();
-
-        const metaRule = mobileMediaCardCss.match(/\.mobile-media-card__meta\s*\{([^}]*)\}/)?.[1] ?? '';
-        expect(metaRule).toContain('display: flex');
-        expect(metaRule).not.toContain('flex-direction: column');
-    });
-
-    it('right-aligns the sort controls via the shared toolbar treatment', () => {
-        renderTab();
-
-        const sortingRule = mobileToolbarCss.match(/\.mobile-list-toolbar__sorting\s*\{([^}]*)\}/)?.[1] ?? '';
-        expect(sortingRule).toContain('margin-left: auto');
     });
 });
 

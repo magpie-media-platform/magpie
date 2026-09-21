@@ -34,6 +34,14 @@ const tierLists: ApiQualityTierList[] = [
         upgradeAllowed: true,
         createdAt: '2026-01-01T00:00:00Z',
         modifiedAt: '2026-02-01T00:00:00Z',
+        rules: [
+            {
+                id: 'rule-1',
+                name: 'No CAM',
+                kind: 'Exclude',
+                criteria: { and: [{ items: { source: { operator: 'Equals', value: 'CAM' } } }] },
+            },
+        ],
         qualityTierRanks: [
             {
                 qualityTierListId: 'video-list',
@@ -224,7 +232,18 @@ describe('QualityTiersPage', () => {
         await waitFor(() =>
             expect(apiPost).toHaveBeenCalledWith(
                 '/quality-tier-lists',
-                expect.objectContaining({ name: 'HD Standard (Copy)', mimeTypes: ['video/*'] }),
+                expect.objectContaining({
+                    name: 'HD Standard (Copy)',
+                    mimeTypes: ['video/*'],
+                    rules: [
+                        {
+                            id: 'rule-1',
+                            name: 'No CAM',
+                            kind: 'Exclude',
+                            criteria: { and: [{ items: { source: { operator: 'Equals', value: 'CAM' } } }] },
+                        },
+                    ],
+                }),
             ),
         );
 
@@ -293,6 +312,128 @@ describe('QualityTiersPage', () => {
         );
     });
 
+    it('assigns the tags picked on the create form to the new list', async () => {
+        const user = userEvent.setup();
+        await renderPage(Role.Manager);
+
+        await user.click(document.querySelector('[data-action="add-tier-list"]') as HTMLElement);
+        await user.type(screen.getByLabelText(/^Name/), 'Books');
+        await user.click(screen.getByRole('button', { name: 'Movies' }));
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+
+        await waitFor(() =>
+            expect(apiPatch).toHaveBeenCalledWith('/quality-tier-lists/created-list', {
+                tags: { add: ['Movies'] },
+            }),
+        );
+    });
+
+    it('opens the created list and closes the create form when only tag assignment fails', async () => {
+        vi.mocked(apiPatch).mockRejectedValueOnce(new Error('Tag assignment failed'));
+        const user = userEvent.setup();
+        await renderPage(Role.Manager);
+
+        await user.click(document.querySelector('[data-action="add-tier-list"]') as HTMLElement);
+        await user.type(screen.getByLabelText(/^Name/), 'Books');
+        await user.click(screen.getByRole('button', { name: 'Movies' }));
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+
+        expect(await screen.findByText('Tags not saved')).toBeInTheDocument();
+        expect(screen.getByText('Created "Books", but failed to assign its tags.')).toBeInTheDocument();
+        expect(screen.getByText('Created')).toBeInTheDocument();
+        expect(screen.queryByText('Create failed')).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument());
+        await waitFor(() =>
+            expect(screen.getByTestId('location')).toHaveTextContent('/admin/quality-tiers/created-list'),
+        );
+        expect(apiPost).toHaveBeenCalledTimes(1);
+        expect(apiPatch).toHaveBeenCalledWith('/quality-tier-lists/created-list', { tags: { add: ['Movies'] } });
+    });
+
+    it('keeps the create form available for retry when creation fails', async () => {
+        vi.mocked(apiPost).mockRejectedValueOnce(new Error('Creation failed'));
+        const user = userEvent.setup();
+        await renderPage(Role.Manager);
+
+        await user.click(document.querySelector('[data-action="add-tier-list"]') as HTMLElement);
+        await user.type(screen.getByLabelText(/^Name/), 'Books');
+        await user.click(screen.getByRole('button', { name: 'Movies' }));
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+
+        expect(await screen.findByText('Create failed')).toBeInTheDocument();
+        expect(screen.queryByText('Created')).not.toBeInTheDocument();
+        expect(screen.queryByText('Tags not saved')).not.toBeInTheDocument();
+        expect(screen.getByLabelText(/^Name/)).toHaveValue('Books');
+        expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+        expect(screen.getByTestId('location').textContent).toBe('/admin/quality-tiers');
+        expect(apiPatch).not.toHaveBeenCalled();
+    });
+
+    it('edits the name and upgrade flag of an existing list from the row action', async () => {
+        const user = userEvent.setup();
+        await renderPage(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: 'Edit HD Standard' }));
+
+        expect(screen.getByText('Edit Tier List')).toBeInTheDocument();
+        expect(screen.getByLabelText(/^Name/)).toHaveValue('HD Standard');
+
+        await user.clear(screen.getByLabelText(/^Name/));
+        await user.type(screen.getByLabelText(/^Name/), 'UHD Standard');
+        await user.click(screen.getByLabelText('Upgrade Allowed'));
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+
+        await waitFor(() =>
+            expect(apiPatch).toHaveBeenCalledWith('/quality-tier-lists/video-list', {
+                name: { value: 'UHD Standard' },
+                mimeTypes: { value: ['video/*'] },
+                upgradeAllowed: { value: false },
+            }),
+        );
+    });
+
+    it('waits for the loaded list tags before opening the edit sheet and keeps them on save', async () => {
+        let resolveEntityTags: (tags: { name: string }[]) => void = () => {};
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/quality-tier-lists')) {
+                return Promise.resolve(tierLists);
+            }
+            if (url.includes('entityId=')) {
+                return new Promise<{ name: string }[]>((resolve) => {
+                    resolveEntityTags = resolve;
+                });
+            }
+            if (url.startsWith('/tags')) {
+                return Promise.resolve([{ name: 'Movies' }]);
+            }
+            return Promise.reject(new Error(`Unexpected request: ${url}`));
+        });
+        const user = userEvent.setup();
+        await renderPage(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: 'Edit HD Standard' }));
+        expect(screen.queryByText('Edit Tier List')).not.toBeInTheDocument();
+
+        resolveEntityTags([{ name: 'Movies' }]);
+
+        expect(await screen.findByText('Edit Tier List')).toBeInTheDocument();
+        await waitFor(() =>
+            expect(screen.getByRole('button', { name: 'Movies' })).toHaveAttribute('aria-pressed', 'true'),
+        );
+
+        await user.clear(screen.getByLabelText(/^Name/));
+        await user.type(screen.getByLabelText(/^Name/), 'UHD Standard');
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+
+        await waitFor(() =>
+            expect(apiPatch).toHaveBeenCalledWith('/quality-tier-lists/video-list', {
+                name: { value: 'UHD Standard' },
+                mimeTypes: { value: ['video/*'] },
+                upgradeAllowed: { value: true },
+            }),
+        );
+    });
+
     it('shows the empty state', async () => {
         vi.mocked(apiGet).mockImplementation((url: string) =>
             Promise.resolve(url.startsWith('/quality-tier-lists') ? [] : [{ name: 'Movies' }]),
@@ -338,5 +479,34 @@ describe('QualityTiersPage', () => {
         );
 
         expect(screen.getByRole('status')).toHaveTextContent('Loading tier lists...');
+    });
+
+    it('shows selection only for managers, marking the select column hidden (no layout-participating checkbox)', async () => {
+        await renderPage(Role.Manager);
+
+        expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
+        expect(screen.getByRole('button', { name: 'Select' })).toBeInTheDocument();
+    });
+
+    it('hides the select toggle and column entirely from viewers', async () => {
+        await renderPage(Role.Viewer);
+
+        expect(document.querySelector('td[data-column="select"]')).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Select' })).not.toBeInTheDocument();
+    });
+
+    it('bulk-deletes every selected tier list', async () => {
+        const user = userEvent.setup();
+        await renderPage(Role.Manager);
+
+        await user.click(screen.getByLabelText('Select HD Standard'));
+        await user.click(screen.getByLabelText('Select Audio Policy'));
+        await user.click(screen.getByRole('button', { name: 'Delete selected tier lists' }));
+        await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(apiDelete).toHaveBeenCalledWith('/quality-tier-lists/video-list');
+            expect(apiDelete).toHaveBeenCalledWith('/quality-tier-lists/audio-list');
+        });
     });
 });

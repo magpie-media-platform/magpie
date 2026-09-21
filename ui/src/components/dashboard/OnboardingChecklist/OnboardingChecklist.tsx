@@ -7,6 +7,7 @@ import {
     CompassIcon,
     DownloadSimpleIcon,
     MagnifyingGlassIcon,
+    WarningCircleIcon,
     XIcon,
 } from '@phosphor-icons/react';
 
@@ -33,32 +34,49 @@ const SkeletonStep = () => (
     </li>
 );
 
-const StepRow = ({ step }: { step: OnboardingStep }) => (
-    <li className="onboarding-checklist__step" data-step={step.key} data-done={step.done || undefined}>
-        <span className="onboarding-checklist__status" aria-hidden="true">
-            {step.done ? (
-                <CheckCircleIcon weight="fill" className="onboarding-checklist__status-icon--done" />
-            ) : (
-                <CircleIcon weight="duotone" className="onboarding-checklist__status-icon--todo" />
-            )}
-        </span>
-        <span className="onboarding-checklist__step-body">
-            <span className="onboarding-checklist__step-title">
-                {step.title}
-                <span className="onboarding-checklist__sr-only">{step.done ? ' (done)' : ' (to do)'}</span>
+const StepRow = ({ step }: { step: OnboardingStep }) => {
+    const state = step.failed ? 'unknown' : step.done ? 'done' : 'todo';
+
+    return (
+        <li
+            className="onboarding-checklist__step"
+            data-step={step.key}
+            data-done={step.done || undefined}
+            data-state={state}
+        >
+            <span className="onboarding-checklist__status" aria-hidden="true">
+                {state === 'unknown' && (
+                    <WarningCircleIcon weight="fill" className="onboarding-checklist__status-icon--unknown" />
+                )}
+                {state === 'done' && (
+                    <CheckCircleIcon weight="fill" className="onboarding-checklist__status-icon--done" />
+                )}
+                {state === 'todo' && (
+                    <CircleIcon weight="duotone" className="onboarding-checklist__status-icon--todo" />
+                )}
             </span>
-            <span className="onboarding-checklist__step-reason">{step.reason}</span>
-        </span>
-        {!step.done && (
-            <Button asChild variant="ghost" size="sm" className="onboarding-checklist__step-action">
-                <Link to={step.to} aria-label={`Set up: ${step.title}`}>
-                    Set up
-                    <ArrowRightIcon weight="bold" aria-hidden="true" />
-                </Link>
-            </Button>
-        )}
-    </li>
-);
+            <span className="onboarding-checklist__step-body">
+                <span className="onboarding-checklist__step-title">
+                    {step.title}
+                    <span className="onboarding-checklist__sr-only">
+                        {state === 'unknown' ? ' (not checked)' : state === 'done' ? ' (done)' : ' (to do)'}
+                    </span>
+                </span>
+                <span className="onboarding-checklist__step-reason">
+                    {step.failed ? 'Magpie could not check this step. It may already be done.' : step.reason}
+                </span>
+            </span>
+            {!step.done && (
+                <Button asChild variant="ghost" size="sm" className="onboarding-checklist__step-action">
+                    <Link to={step.to} aria-label={`Set up: ${step.title}`}>
+                        Set up
+                        <ArrowRightIcon weight="bold" aria-hidden="true" />
+                    </Link>
+                </Button>
+            )}
+        </li>
+    );
+};
 
 export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklistProps>(
     ({ steps, completedCount, onDismiss, className, ...props }, ref) => {

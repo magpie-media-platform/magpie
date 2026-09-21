@@ -20,18 +20,9 @@ internal sealed class CardigannFeedProvider(
     ICardigannLoader loader,
     ILogger<CardigannFeedProvider> logger) : IIndexerFeedProvider
 {
-    public const string ProviderTypeName = "cardigann";
-    public const string DefaultFeedName = "Cardigann community definitions";
-    public const string GitUrlSettingKey = "gitUrl";
-    public const string BranchSettingKey = "branch";
-    public const string DefinitionsPathSettingKey = "definitionsPath";
-    public const string DefaultGitUrl = "https://github.com/Jackett/Jackett.git";
-    public const string DefaultBranch = "master";
-    public const string DefaultDefinitionsPath = "src/Jackett.Common/Definitions";
-
     private const string TokenSettingKey = "token";
 
-    public string ProviderType => ProviderTypeName;
+    public string ProviderType => Constants.ProviderTypeName;
 
     public IReadOnlyList<SettingSchemaDefinition> SettingsSchema
     {
@@ -41,31 +32,31 @@ internal sealed class CardigannFeedProvider(
             [
                 new()
                 {
-                    Key = GitUrlSettingKey,
+                    Key = Constants.GitUrlSettingKey,
                     Type = DataType.String,
                     DisplayName = "Git URL",
                     Description =
                         "Full HTTPS git URL to read definitions from (GitHub, GitLab, Gitea, Forgejo, self-hosted).",
-                    DefaultValue = DefaultGitUrl,
-                    Placeholder = DefaultGitUrl,
+                    DefaultValue = Constants.DefaultGitUrl,
+                    Placeholder = Constants.DefaultGitUrl,
                 },
                 new()
                 {
-                    Key = BranchSettingKey,
+                    Key = Constants.BranchSettingKey,
                     Type = DataType.String,
                     DisplayName = "Branch",
                     Description = "The git branch to read definitions from.",
-                    DefaultValue = DefaultBranch,
-                    Placeholder = DefaultBranch,
+                    DefaultValue = Constants.DefaultBranch,
+                    Placeholder = Constants.DefaultBranch,
                 },
                 new()
                 {
-                    Key = DefinitionsPathSettingKey,
+                    Key = Constants.DefinitionsPathSettingKey,
                     Type = DataType.String,
                     DisplayName = "Definitions path",
                     Description = "Path inside the repository that holds the *.yml definition files.",
-                    DefaultValue = DefaultDefinitionsPath,
-                    Placeholder = DefaultDefinitionsPath,
+                    DefaultValue = Constants.DefaultDefinitionsPath,
+                    Placeholder = Constants.DefaultDefinitionsPath,
                 },
                 new()
                 {
@@ -101,7 +92,7 @@ internal sealed class CardigannFeedProvider(
             ProviderType = definition.Id,
             Name = definition.Name,
             Description = definition.Description,
-            DefinitionType = CardigannRuntimeIntegrationFactory.DefinitionTypeName,
+            DefinitionType = Constants.ProviderTypeName,
             SchemaData = rawYaml,
             Availability = availability,
             Categories = categories,
@@ -183,10 +174,10 @@ internal sealed class CardigannFeedProvider(
                 : fallback;
         }
 
-        var branch = Read(BranchSettingKey, DefaultBranch);
-        var definitionsPath = Read(DefinitionsPathSettingKey, DefaultDefinitionsPath).Trim('/');
+        var branch = Read(Constants.BranchSettingKey, Constants.DefaultBranch);
+        var definitionsPath = Read(Constants.DefinitionsPathSettingKey, Constants.DefaultDefinitionsPath).Trim('/');
         var token = Read(TokenSettingKey, string.Empty);
-        var gitUrl = Read(GitUrlSettingKey, DefaultGitUrl);
+        var gitUrl = Read(Constants.GitUrlSettingKey, Constants.DefaultGitUrl);
 
         return (gitUrl, branch, definitionsPath, token.Length == 0 ? null : token);
     }

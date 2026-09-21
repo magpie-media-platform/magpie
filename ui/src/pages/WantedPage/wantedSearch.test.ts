@@ -91,7 +91,7 @@ describe('countMissingDescendants', () => {
         });
 
         const result = await countMissingDescendants(
-            show,
+            show.id,
             (candidate) => candidate.level === 'show' || candidate.level === 'season',
             loadChildren,
         );

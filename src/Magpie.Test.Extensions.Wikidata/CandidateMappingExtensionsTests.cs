@@ -125,7 +125,7 @@ internal sealed class CandidateMappingExtensionsTests
     }
 
     [Test]
-    public void ToSearchHit_EndPropertyExistsWithoutParsedDate_MarksEndDatePresence()
+    public void ToSearchHit_MarksEndDatePresence_WhenEndPropertyExistsWithoutParsedDate()
     {
         // Arrange
         var binding = new Dictionary<string, SparqlBindingDto>
@@ -156,7 +156,7 @@ internal sealed class CandidateMappingExtensionsTests
     }
 
     [Test]
-    public void ToSearchHit_CommonsFilePathIri_MapsSingleEscapedThumbnail()
+    public void ToSearchHit_MapsSingleEscapedThumbnail_WhenCommonsFilePathIri()
     {
         // Arrange
         var binding = new Dictionary<string, SparqlBindingDto>
@@ -196,7 +196,7 @@ internal sealed class CandidateMappingExtensionsTests
     }
 
     [Test]
-    public void ToSearchHit_MoreThanThirtyGenres_PreservesEveryProjectedLabel()
+    public void ToSearchHit_PreservesEveryProjectedLabel_WhenMoreThanThirtyGenres()
     {
         // Arrange
         var genres = Enumerable.Range(1, 31).Select(value => "Genre " + value).ToArray();
@@ -229,6 +229,37 @@ internal sealed class CandidateMappingExtensionsTests
             Assert.That(result!.Genres, Has.Count.EqualTo(31));
             Assert.That(result.Genres[^1], Is.EqualTo("Genre 31"));
         }
+    }
+
+    [Test]
+    public void ToMetadataSearchCandidate_MergesTheSeedExternalIds_WhenTheContributionHasItsOwn()
+    {
+        // Arrange
+        var contribution = new MetadataContribution { ProviderType = Constants.ProviderType, Title = "The Matrix" };
+        contribution.ExternalIds.Add(new ExternalId { Source = Constants.ProviderType, Value = "Q83495" });
+        contribution.ExternalIds.Add(new ExternalId { Source = "imdb", Value = "tt0133093" });
+        var seed = new MetadataSearchCandidate
+        {
+            ProviderType = "seed-provider",
+            ExternalIdSource = "seed-source",
+            ExternalId = "seed-id",
+            ContentType = "seed-content",
+            Level = Constants.MovieLevel,
+            Title = "The Matrix",
+            AdditionalExternalIds =
+            [
+                new MetadataSearchCandidateExternalId { Source = "tmdb", Value = "603" },
+                new MetadataSearchCandidateExternalId { Source = "IMDB", Value = "tt0000000" }
+            ]
+        };
+
+        // Act
+        var result = contribution.ToMetadataSearchCandidate(seed, EntityKind.Movie);
+
+        // Assert
+        Assert.That(
+            result!.AdditionalExternalIds.Select(id => (id.Source, id.Value)),
+            Is.EqualTo([("imdb", "tt0133093"), ("tmdb", "603")]));
     }
 
     [Test]
@@ -283,11 +314,11 @@ internal sealed class CandidateMappingExtensionsTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.Not.Null);
-            Assert.That(result!.ProviderType, Is.EqualTo(Constants.ProviderType));
-            Assert.That(result.ExternalIdSource, Is.EqualTo(Constants.ProviderType));
+            Assert.That(result!.ProviderType, Is.EqualTo("wikidata"));
+            Assert.That(result.ExternalIdSource, Is.EqualTo("wikidata"));
             Assert.That(result.ExternalId, Is.EqualTo("Q12345"));
-            Assert.That(result.ContentType, Is.EqualTo(Constants.TvContentType));
-            Assert.That(result.Level, Is.EqualTo(Constants.ShowLevel));
+            Assert.That(result.ContentType, Is.EqualTo("tv"));
+            Assert.That(result.Level, Is.EqualTo("show"));
             Assert.That(result.Title, Is.EqualTo("Seed title"));
             Assert.That(result.Year, Is.EqualTo(2001));
             Assert.That(

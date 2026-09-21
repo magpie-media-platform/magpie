@@ -1,3 +1,5 @@
+import type { DictionaryPatch } from '@/types/patch';
+import { EXTENSION_CATALOG_EVENTS } from '@/lib/extensionCatalogEvents';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPatch, apiPost } from '@/lib/api';
@@ -54,27 +56,15 @@ export interface ApiSettingsGroup {
 }
 
 interface SettingsGroupPatch {
-    settings: {
-        add?: Record<string, string>;
-        remove?: string[];
-        update?: Record<string, string>;
-    };
+    settings: DictionaryPatch<string, string>;
 }
 
 export const settingsQueryKeys = {
     all: ['settings'] as const,
-    systemGroup: (name: string) => ['settings', 'system', name] as const,
-    extensionGroups: (extensionId: string) => ['settings', 'extension', extensionId] as const,
+    groups: ['settings', 'groups'] as const,
 };
 
-const SETTINGS_CHANGE_EVENTS = [
-    'settingsGroup.updated',
-    'extension.installed',
-    'extension.enabled',
-    'extension.disabled',
-    'extension.uninstalled',
-    'extension.upgraded',
-] as const;
+const SETTINGS_CHANGE_EVENTS = ['settingsGroup.updated', ...EXTENSION_CATALOG_EVENTS] as const;
 
 export function hasConfiguredExtensionSettings(group: ApiSettingsGroup): boolean {
     const hasExtension = group.extensionId !== undefined && group.extensionId !== null;
@@ -82,11 +72,6 @@ export function hasConfiguredExtensionSettings(group: ApiSettingsGroup): boolean
     const hasSecretSettings = Object.values(group.secretSettings ?? {}).some((state) => state.isSet);
 
     return hasExtension && (hasVisibleSettings || hasSecretSettings);
-}
-
-async function fetchSystemSettingsGroup(name: string): Promise<ApiSettingsGroup | null> {
-    const groups = await apiGet<ApiSettingsGroup[]>('/settings/groups');
-    return groups.find((group) => group.extensionId == null && group.name === name) ?? null;
 }
 
 async function updateSystemSettingsGroup(name: string, patch: SettingsGroupPatch): Promise<void> {
@@ -114,19 +99,20 @@ export function settingsToRecord(settings: ApiSetting[]): Record<string, string>
 }
 
 export function useSystemSettingsGroup(name: string) {
-    useInvalidateQueriesOnEvents(SETTINGS_CHANGE_EVENTS, [settingsQueryKeys.systemGroup(name)], {
-        context: { 'settingsGroup.name': name },
+    useInvalidateQueriesOnEvents(SETTINGS_CHANGE_EVENTS, [settingsQueryKeys.groups], {
         exact: true,
         owner: 'system-settings-group',
     });
     const query = useQuery({
-        queryKey: settingsQueryKeys.systemGroup(name),
-        queryFn: () => fetchSystemSettingsGroup(name),
+        queryKey: settingsQueryKeys.groups,
+        queryFn: fetchAllSettingsGroups,
+        select: (groups) => groups.find((group) => group.extensionId == null && group.name === name) ?? null,
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 
     return {
         group: query.data ?? null,
+        refetch: query.refetch,
         isLoading: query.isLoading,
         error: query.error ?? null,
         dataUpdatedAt: query.dataUpdatedAt,
@@ -167,7 +153,7 @@ export function useUpdateSystemSettingsGroup(name: string) {
     const mutation = useMutation({
         mutationFn: (vars: UpdateSettingsVars) => updateSystemSettingsGroup(name, buildSettingsPatch(vars)),
         onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: settingsQueryKeys.systemGroup(name) });
+            void queryClient.invalidateQueries({ queryKey: settingsQueryKeys.groups });
         },
     });
 
@@ -179,21 +165,16 @@ export function useUpdateSystemSettingsGroup(name: string) {
 }
 
 export function useExtensionSettingsGroups(extensionId: string | null) {
-    useInvalidateQueriesOnEvents(
-        extensionId ? SETTINGS_CHANGE_EVENTS : [],
-        [settingsQueryKeys.extensionGroups(extensionId ?? '')],
-        {
-            context: { 'settingsGroup.extensionId': extensionId ?? '' },
-            exact: true,
-            owner: 'extension-settings-groups',
-        },
-    );
+    useInvalidateQueriesOnEvents(extensionId ? SETTINGS_CHANGE_EVENTS : [], [settingsQueryKeys.groups], {
+        exact: true,
+        owner: 'extension-settings-groups',
+    });
     const query = useQuery({
-        queryKey: settingsQueryKeys.extensionGroups(extensionId ?? ''),
+        queryKey: settingsQueryKeys.groups,
         queryFn: fetchAllSettingsGroups,
         enabled: !!extensionId,
         staleTime: POLLING_INTERVALS.slow / 2,
-        select: (groups) => groups.filter((g) => g.extensionId === extensionId),
+        select: (groups) => (extensionId ? groups.filter((g) => g.extensionId === extensionId) : []),
     });
 
     return {

@@ -13,7 +13,6 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Diagnostics;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
@@ -50,17 +49,13 @@ public sealed class DiagnosticCheckJobTests
         var findingRepository = new Mock<IDiagnosticFindingRepository>(MockBehavior.Strict);
         findingRepository.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(_storedFindings);
-        findingRepository.Setup(repository => repository.QueryAsync(
+        findingRepository.Setup(repository => repository.QueryAllAsync(
             It.IsAny<DiagnosticFindingQuery>(),
-            It.IsAny<PagingParameter>(),
             null,
             It.IsAny<CancellationToken>()))
-            .Returns((DiagnosticFindingQuery query, PagingParameter _, SortParameter? _, CancellationToken _) =>
-                Task.FromResult(new PagedList<DiagnosticFinding>
-                {
-                    Items = _storedFindings.Where(finding =>
-                        finding.DiagnosticCheckId == query.DiagnosticCheckId).ToList()
-                }));
+            .Returns((DiagnosticFindingQuery query, SortParameter? _, CancellationToken _) =>
+                Task.FromResult<IReadOnlyList<DiagnosticFinding>>(_storedFindings.Where(finding =>
+                    finding.DiagnosticCheckId == query.DiagnosticCheckId).ToList()));
         findingRepository.Setup(repository => repository.DeleteAsync(
             It.IsAny<Guid>(),
             null,
@@ -165,7 +160,7 @@ public sealed class DiagnosticCheckJobTests
 
         // Assert
         var persisted = (await _findingRepository.ListAllAsync().ConfigureAwait(false)).ToList();
-        var completed = _publishedEvents.Single(e => e.Name == MagpieEvents.Names.DiagnosticScanCompleted);
+        var completed = _publishedEvents.Single(e => e.Name == "diagnostic.scan.completed");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(persisted, Has.Count.EqualTo(2));
@@ -173,15 +168,23 @@ public sealed class DiagnosticCheckJobTests
             Assert.That(persisted.Select(f => f.Title), Is.EquivalentTo(["alpha", "beta"]));
             Assert.That(persisted.All(f => f.Id != Guid.Empty), Is.True);
             Assert.That(persisted.All(f => f.DetectedAt != default), Is.True);
-            Assert.That(completed.Context[MagpieEvents.Keys.DiagnosticFindingCount], Is.EqualTo("2"));
+            Assert.That(completed.Context["diagnostic.findingCount"], Is.EqualTo("2"));
             Assert.That(_publishedEvents[^1], Is.SameAs(completed));
         }
     }
 
     [Test]
-    public async Task ExecuteAsync_IsolatesThrowingDiagnostic_AndPersistsTheRest()
+    public async Task ExecuteAsync_PreservesPriorFindings_WhenOneDiagnosticThrows()
     {
         // Arrange
+        _storedFindings.Add(new DiagnosticFinding
+        {
+            DiagnosticCheckId = "test.bad",
+            Severity = DiagnosticFindingSeverity.Warning,
+            Title = "Unresolved configuration",
+            Detail = "The setting is missing.",
+            DetectedAt = new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc)
+        });
         var throwing = new Mock<IDiagnosticCheck>();
         throwing.SetupGet(c => c.DiagnosticCheckId).Returns("test.bad");
         throwing
@@ -222,13 +225,17 @@ public sealed class DiagnosticCheckJobTests
         var persisted = (await _findingRepository.ListAllAsync().ConfigureAwait(false)).ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(persisted, Has.Count.EqualTo(1));
-            Assert.That(persisted[0].DiagnosticCheckId, Is.EqualTo("test.good"));
+            Assert.That(persisted, Has.Count.EqualTo(2));
+            Assert.That(persisted[0].DiagnosticCheckId, Is.EqualTo("test.bad"));
+            Assert.That(persisted[0].Title, Is.EqualTo("Unresolved configuration"));
+            Assert.That(persisted[0].Detail, Is.EqualTo("The setting is missing."));
+            Assert.That(persisted[0].DetectedAt, Is.EqualTo(new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(persisted[1].DiagnosticCheckId, Is.EqualTo("test.good"));
         }
     }
 
     [Test]
-    public async Task ExecuteAsync_SupersedesPriorFindings_ForEachDiagnosticIndependently()
+    public async Task ExecuteAsync_SupersedesPriorFindings_WhenMultipleDiagnosticsRun()
     {
         // Arrange
         var seed = new DiagnosticCheckJob(

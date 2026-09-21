@@ -30,9 +30,6 @@ import {
     useJobExecution,
     useJobSpecs,
     isTerminalJobExecutionStatus,
-    jobExecutionStatusLabels,
-    jobExecutionStatusVariants,
-    jobScopeLabels,
     terminalJobExecutionStatuses,
     type ApiJobExecution,
     type ApiJobSpec,
@@ -438,33 +435,6 @@ describe('useJobs', () => {
 
             expect(result.current.jobs[0].scheduleTriggerId).toBeUndefined();
             expect(result.current.jobs[0].progress).toBeUndefined();
-        });
-    });
-
-    describe('status labels and variants', () => {
-        it('should export status labels for all values', () => {
-            expect(jobExecutionStatusLabels.Queued).toBe('Queued');
-            expect(jobExecutionStatusLabels.Running).toBe('Running');
-            expect(jobExecutionStatusLabels.Completed).toBe('Completed');
-            expect(jobExecutionStatusLabels.Failed).toBe('Failed');
-            expect(jobExecutionStatusLabels.Cancelled).toBe('Cancelled');
-            expect(jobExecutionStatusLabels.CancellationRequested).toBe('Cancellation Requested');
-        });
-
-        it('should export status variants for all values', () => {
-            expect(jobExecutionStatusVariants.Queued).toBe('queued');
-            expect(jobExecutionStatusVariants.Running).toBe('running');
-            expect(jobExecutionStatusVariants.Completed).toBe('completed');
-            expect(jobExecutionStatusVariants.Failed).toBe('failed');
-            expect(jobExecutionStatusVariants.Cancelled).toBe('cancelled');
-            expect(jobExecutionStatusVariants.CancellationRequested).toBe('cancelling');
-        });
-
-        it('should export scope labels for all values', () => {
-            expect(jobScopeLabels.System).toBe('System');
-            expect(jobScopeLabels.Administrative).toBe('Administrative');
-            expect(jobScopeLabels.Content).toBe('Content');
-            expect(jobScopeLabels.User).toBe('User');
         });
     });
 });

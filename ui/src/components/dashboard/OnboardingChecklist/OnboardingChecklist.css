@@ -94,6 +94,10 @@
         color: var(--text-muted);
     }
 
+    .onboarding-checklist__status-icon--unknown {
+        color: var(--status-degraded);
+    }
+
     .onboarding-checklist__step-body {
         display: flex;
         flex-direction: column;

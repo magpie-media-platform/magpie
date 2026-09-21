@@ -15,10 +15,7 @@ export interface DiskSpaceWidgetProps extends HTMLAttributes<HTMLDivElement> {
 
     folders: DiskSpaceInfo[];
 
-    /**
-     * Pre-computed grand totals, with each underlying volume counted once. When omitted, totals
-     * fall back to summing the per-folder figures, which double-counts folders sharing a volume.
-     */
+    /** Pre-computed grand totals, each volume counted once; the per-folder fallback double-counts shared volumes. */
     totals?: DiskSpaceTotals;
 
     loading?: boolean;
@@ -53,6 +50,7 @@ interface DiskSpaceRowProps {
 }
 
 const DiskSpaceRow = ({ folder, onClick }: DiskSpaceRowProps) => {
+    const isUnavailable = folder.totalBytes === 0;
     const usedPercent = calculateUsagePercent(folder.usedBytes, folder.totalBytes);
     const status = getUsageStatus(usedPercent);
     const isClickable = onClick !== undefined;
@@ -76,33 +74,43 @@ const DiskSpaceRow = ({ folder, onClick }: DiskSpaceRowProps) => {
             aria-label={isClickable ? `View root folder ${folder.name}` : undefined}
             data-folder-id={folder.id}
             data-clickable={isClickable || undefined}
-            data-usage-status={status}
+            data-usage-status={isUnavailable ? 'unavailable' : status}
         >
             <div className="disk-space-widget__row-header">
                 <span className="disk-space-widget__folder-name">{folder.name}</span>
-                <span className={`disk-space-widget__usage-percent disk-space-widget__usage-percent--${status}`}>
-                    {usedPercent}%
-                </span>
+                {isUnavailable ? (
+                    <span className="disk-space-widget__usage-percent disk-space-widget__usage-percent--unavailable">
+                        Unavailable
+                    </span>
+                ) : (
+                    <span className={`disk-space-widget__usage-percent disk-space-widget__usage-percent--${status}`}>
+                        {usedPercent}%
+                    </span>
+                )}
             </div>
-            <div className="disk-space-widget__progress-track">
-                <div
-                    className={`disk-space-widget__progress-bar disk-space-widget__progress-bar--${status}`}
-                    style={{ width: `${usedPercent}%` }}
-                    role="progressbar"
-                    aria-valuenow={usedPercent}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label={`${usedPercent}% used`}
-                />
-            </div>
-            <div className="disk-space-widget__row-details">
-                <span className="disk-space-widget__used">{formatDiskSpaceSize(folder.usedBytes)} used</span>
-                <span className="disk-space-widget__free">{formatDiskSpaceSize(folder.freeBytes)} free</span>
-                <span className="disk-space-widget__total">{formatDiskSpaceSize(folder.totalBytes)} total</span>
-            </div>
-            <div className="disk-space-widget__row-compact">
-                {formatDiskSpaceSize(folder.usedBytes)} / {formatDiskSpaceSize(folder.totalBytes)}
-            </div>
+            {!isUnavailable && (
+                <>
+                    <div className="disk-space-widget__progress-track">
+                        <div
+                            className={`disk-space-widget__progress-bar disk-space-widget__progress-bar--${status}`}
+                            style={{ width: `${usedPercent}%` }}
+                            role="progressbar"
+                            aria-valuenow={usedPercent}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-label={`${usedPercent}% used`}
+                        />
+                    </div>
+                    <div className="disk-space-widget__row-details">
+                        <span className="disk-space-widget__used">{formatDiskSpaceSize(folder.usedBytes)} used</span>
+                        <span className="disk-space-widget__free">{formatDiskSpaceSize(folder.freeBytes)} free</span>
+                        <span className="disk-space-widget__total">{formatDiskSpaceSize(folder.totalBytes)} total</span>
+                    </div>
+                    <div className="disk-space-widget__row-compact">
+                        {formatDiskSpaceSize(folder.usedBytes)} / {formatDiskSpaceSize(folder.totalBytes)}
+                    </div>
+                </>
+            )}
             <div className="disk-space-widget__path" title={folder.path}>
                 {folder.path}
             </div>

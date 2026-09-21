@@ -1,4 +1,4 @@
-import { useState, useCallback, type ReactNode } from 'react';
+import { useState, useId, useCallback, type ReactNode } from 'react';
 import { FunnelIcon, XIcon } from '@phosphor-icons/react';
 
 import {
@@ -148,6 +148,7 @@ function FacetBody({
 }
 
 function TextBody({ value, onChange, placeholder, label, onClose }: TextFilterProps & { onClose: () => void }) {
+    const inputId = useId();
     const [draft, setDraft] = useState(value);
 
     const apply = useCallback(() => {
@@ -157,9 +158,9 @@ function TextBody({ value, onChange, placeholder, label, onClose }: TextFilterPr
 
     return (
         <div className="column-header-filter__form">
-            <Label htmlFor="column-header-filter-text">{label}</Label>
+            <Label htmlFor={inputId}>{label}</Label>
             <Input
-                id="column-header-filter-text"
+                id={inputId}
                 size="sm"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -193,6 +194,7 @@ function TextBody({ value, onChange, placeholder, label, onClose }: TextFilterPr
 }
 
 function DateRangeBody({ from, to, onChange, label, onClose }: DateRangeFilterProps & { onClose: () => void }) {
+    const inputId = useId();
     const [draftFrom, setDraftFrom] = useState(from);
     const [draftTo, setDraftTo] = useState(to);
 
@@ -203,17 +205,17 @@ function DateRangeBody({ from, to, onChange, label, onClose }: DateRangeFilterPr
 
     return (
         <div className="column-header-filter__form">
-            <Label htmlFor="column-header-filter-from">{label} from</Label>
+            <Label htmlFor={`${inputId}-from`}>{label} from</Label>
             <Input
-                id="column-header-filter-from"
+                id={`${inputId}-from`}
                 size="sm"
                 type="date"
                 value={draftFrom}
                 onChange={(e) => setDraftFrom(e.target.value)}
             />
-            <Label htmlFor="column-header-filter-to">{label} to</Label>
+            <Label htmlFor={`${inputId}-to`}>{label} to</Label>
             <Input
-                id="column-header-filter-to"
+                id={`${inputId}-to`}
                 size="sm"
                 type="date"
                 value={draftTo}
@@ -249,6 +251,7 @@ function NumberRangeBody({
     label,
     onClose,
 }: NumberRangeFilterProps & { onClose: () => void }) {
+    const inputId = useId();
     const [draftMin, setDraftMin] = useState(min);
     const [draftMax, setDraftMax] = useState(max);
 
@@ -259,22 +262,22 @@ function NumberRangeBody({
 
     return (
         <div className="column-header-filter__form">
-            <Label htmlFor="column-header-filter-min">
+            <Label htmlFor={`${inputId}-min`}>
                 {label} minimum{unit ? ` (${unit})` : ''}
             </Label>
             <Input
-                id="column-header-filter-min"
+                id={`${inputId}-min`}
                 size="sm"
                 type="number"
                 min="0"
                 value={draftMin}
                 onChange={(e) => setDraftMin(e.target.value)}
             />
-            <Label htmlFor="column-header-filter-max">
+            <Label htmlFor={`${inputId}-max`}>
                 {label} maximum{unit ? ` (${unit})` : ''}
             </Label>
             <Input
-                id="column-header-filter-max"
+                id={`${inputId}-max`}
                 size="sm"
                 type="number"
                 min="0"

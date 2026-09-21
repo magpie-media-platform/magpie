@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     getFulfillmentClass,
+    formatDateKey,
     formatDate,
     formatTime,
     getDayOfMonth,
@@ -81,6 +82,22 @@ describe('getWeekStart', () => {
 });
 
 describe('getMonthDays', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it.each([
+        { locale: 'en-US', first: '2024-09-01', last: '2024-10-05' },
+        { locale: 'fr-FR', first: '2024-08-26', last: '2024-10-06' },
+    ])('pads September for $locale', ({ locale, first, last }) => {
+        vi.spyOn(navigator, 'language', 'get').mockReturnValue(locale);
+
+        const days = getMonthDays(2024, 8);
+
+        expect(formatDateKey(days[0])).toBe(first);
+        expect(formatDateKey(days[days.length - 1])).toBe(last);
+    });
+
     it('returns an array of dates covering the full calendar grid', () => {
         const days = getMonthDays(2024, 0);
         expect(days[0].getDay()).toBe(0);

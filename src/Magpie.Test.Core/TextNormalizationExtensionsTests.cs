@@ -21,7 +21,7 @@ public sealed class TextNormalizationExtensionsTests
     [TestCase("", "")]
     public void NormalizeExternalIdentifierName_ReturnsCanonicalKey_WhenSpellingVaries(string input, string expected)
     {
-        // Arrange & Act
+        // Act
         var actual = input.NormalizeExternalIdentifierName();
 
         // Assert
@@ -37,7 +37,7 @@ public sealed class TextNormalizationExtensionsTests
     [TestCase("  {a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d}  ")]
     public void NormalizeExternalIdentifierValue_ReturnsCanonicalGuid_WhenSpellingVaries(string input)
     {
-        // Arrange & Act
+        // Act
         var actual = input.NormalizeExternalIdentifierValue();
 
         // Assert
@@ -50,7 +50,7 @@ public sealed class TextNormalizationExtensionsTests
     [TestCase("0", "0")]
     public void NormalizeExternalIdentifierValue_DropsZeroPadding_WhenValueIsAnInteger(string input, string expected)
     {
-        // Arrange & Act
+        // Act
         var actual = input.NormalizeExternalIdentifierValue();
 
         // Assert
@@ -71,7 +71,7 @@ public sealed class TextNormalizationExtensionsTests
         string input,
         string expected)
     {
-        // Arrange & Act
+        // Act
         var actual = input.NormalizeExternalIdentifierValue();
 
         // Assert

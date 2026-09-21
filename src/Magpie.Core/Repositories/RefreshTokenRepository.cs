@@ -19,9 +19,9 @@ internal sealed class RefreshTokenRepository(
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     ILogger<RefreshTokenRepository> logger,
-    TimeProvider? timeProvider = null) : IRefreshTokenRepository
+    TimeProvider timeProvider) : IRefreshTokenRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     public async Task<RefreshToken> CreateAsync(RefreshToken token, CancellationToken cancellationToken = default)
     {
@@ -147,6 +147,47 @@ internal sealed class RefreshTokenRepository(
         catch (Exception ex)
         {
             logger.LogError(ex, "The refresh token repository failed to consume the refresh token.");
+            throw;
+        }
+    }
+
+    public async Task<int> DeleteByUserAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var deleted = await context.RefreshTokens
+                        .Where(rt => rt.UserId == userId)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (deleted > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Security,
+                                Operation = "Delete",
+                                EntityId = userId.ToString(),
+                                ParentEntityId = userId.ToString(),
+                                EntityType = nameof(RefreshToken),
+                                Detail = $"Deleted {deleted} refresh tokens for user {userId}",
+                                Timestamp = _time.GetUtcNow().UtcDateTime,
+                                UserId = userId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return deleted;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The refresh token repository failed to delete the refresh tokens of user " +
+                "{UserId}.", userId);
             throw;
         }
     }

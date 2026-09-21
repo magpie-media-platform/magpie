@@ -49,6 +49,11 @@ public record Wishlist
     public bool Enabled { get; set; }
 
     /// <summary>
+    /// Whether added content is monitored, or <see langword="null"/> to inherit.
+    /// </summary>
+    public bool? Monitoring { get; set; }
+
+    /// <summary>
     /// The UTC time of the last refresh of the wishlist.
     /// </summary>
     public DateTime? LastSyncedAt { get; set; }

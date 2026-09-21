@@ -8,26 +8,6 @@ export interface AdminSlotProps {
     className?: string;
 }
 
-export function AdminUsersSlot({ children, className }: AdminSlotProps) {
-    return (
-        <Slot slot="admin.users" className={className}>
-            {children}
-        </Slot>
-    );
-}
-
-AdminUsersSlot.displayName = 'AdminUsersSlot';
-
-export function AdminProvidersSlot({ children, className }: AdminSlotProps) {
-    return (
-        <Slot slot="admin.providers" className={className}>
-            {children}
-        </Slot>
-    );
-}
-
-AdminProvidersSlot.displayName = 'AdminProvidersSlot';
-
 export function AdminExtensionsSlot({ children, className }: AdminSlotProps) {
     return (
         <Slot slot="admin.extensions" className={className}>

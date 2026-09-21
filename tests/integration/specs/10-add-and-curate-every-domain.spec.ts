@@ -615,7 +615,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
             await test.step('the audit trail names who changed what', async () => {
                 const changedName = `${movieRoot.name} Curated`;
                 const book = domainByType(added, 'book');
-                await api.patch(`/api/root-folders/${movieRoot.id}`, { name: changedName });
+                await api.patch(`/api/root-folders/${movieRoot.id}`, { name: { value: changedName } });
                 await api.patch(`/api/content/${book.topId}`, { monitoring: { value: false } });
                 const admin = (await api.get<Paged<User>>('/api/users?pageSize=100')).items.find(
                     (user) => user.username === ADMIN_USERNAME,
@@ -624,7 +624,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 expect(history.items).toContainEqual(
                     expect.objectContaining({
                         kind: 'AuditRecord',
-                        label: 'Update',
+                        label: 'Patch',
                         category: 'System',
                         entityId: movieRoot.id,
                         entityType: 'RootFolder',
@@ -1014,7 +1014,9 @@ async function acquireRelease(
     const candidate = candidates.find(
         (item) => item.release.externalId === fixture.releaseExternalId,
     )!;
-    expect(await api.post<unknown>(`/api/interactive-search/${fixture.contentId}/grab`, candidate.release)).toBe('');
+    expect(await api.post<string>(`/api/interactive-search/${fixture.contentId}/grab`, candidate.release)).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
 
     const queued = await until(
         `${fixture.downloadExternalId} queued download`,
@@ -1197,7 +1199,9 @@ async function proveRejectedConcurrentGrab(api: ApiClient, hierarchyItemId: stri
     const candidates = await api.post<InteractiveCandidate[]>(`/api/interactive-search/${hierarchyItemId}`);
     const candidate = candidates.find((entry) => entry.release.externalId === guardReleaseExternalId)!;
     const callsBefore = (await mocks.downloadClient.calls('DownloadReleaseAsync')).length;
-    expect(await api.post<unknown>(`/api/interactive-search/${hierarchyItemId}/grab`, candidate.release)).toBe('');
+    expect(await api.post<string>(`/api/interactive-search/${hierarchyItemId}/grab`, candidate.release)).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
     await until(
         'the guard download to remain in flight',
         async () => {
@@ -1212,8 +1216,6 @@ async function proveRejectedConcurrentGrab(api: ApiClient, hierarchyItemId: stri
         250,
     );
 
-    // the enqueue can coalesce onto an in-flight execution and return its id, so the proof
-    // rests on the outcome assertions rather than execution-id freshness
     const executionId = await api.post<string>('/api/jobs/enqueue', {
         jobType: 'ReleaseAutoGrabItem',
         parameters: { contentItemId: item.contentItem!.id },

@@ -23,7 +23,7 @@ public interface IIndexerFeedProvider
     IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; }
 
     /// <summary>
-    /// Gets the indexers that a feed offers.
+    /// Syncs the indexers that a feed offers.
     /// </summary>
     /// <param name="feed">The feed to read</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

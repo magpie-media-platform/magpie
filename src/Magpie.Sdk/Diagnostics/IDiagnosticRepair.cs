@@ -12,7 +12,7 @@ namespace Magpie.Sdk.Diagnostics;
 public interface IDiagnosticRepair
 {
     /// <summary>
-    /// The repair id.
+    /// The stable id that identifies this repair to the findings it can fix.
     /// </summary>
     string RepairId { get; }
 

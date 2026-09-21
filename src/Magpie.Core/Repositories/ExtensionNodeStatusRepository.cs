@@ -38,8 +38,6 @@ internal sealed class ExtensionNodeStatusRepository(
         ExtensionNodeStatus status,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(status);
-
         try
         {
             var existing = await context.ExtensionNodeStatuses

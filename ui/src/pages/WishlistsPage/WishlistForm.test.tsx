@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -43,9 +43,9 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiGet } from '@/lib/api';
-import type { QualityTierListOption, RootFolderOption, TagOption, WishlistFormValues } from '@/types';
+import type { QualityTierListOption, RootFolderOption, TagOption } from '@/types';
+import type { WishlistFormValues } from './WishlistForm';
 import { WishlistForm } from './WishlistForm';
-import { valuesEqual } from './wishlistFormUtils';
 
 function createTestQueryClient() {
     return new QueryClient({
@@ -92,7 +92,8 @@ const baseInitialValues: WishlistFormValues = {
     criteria: {},
     qualityTierListId: null,
     rootFolderId: null,
-    monitored: true,
+    enabled: true,
+    monitoring: null,
     tagIds: [],
 };
 
@@ -257,7 +258,7 @@ describe('WishlistForm', () => {
         await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     });
 
-    it('blocks submit when monitored is on but criteria is empty', async () => {
+    it('blocks submit when enabled is on but criteria is empty', async () => {
         const user = userEvent.setup();
         const onSubmit = vi.fn();
         renderForm({ onSubmit });
@@ -269,17 +270,34 @@ describe('WishlistForm', () => {
         expect(onSubmit).not.toHaveBeenCalled();
     });
 
-    it('allows submit with empty criteria when monitored is off', async () => {
+    it('allows submit with empty criteria when enabled is off', async () => {
         const user = userEvent.setup();
         const onSubmit = vi.fn();
         renderForm({ onSubmit });
 
         await user.type(screen.getByLabelText(/name/i), 'Unmonitored');
-        await user.click(screen.getByLabelText(/monitored/i));
+        await user.click(screen.getByLabelText(/enabled/i));
         await user.click(saveButton());
 
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-        expect(onSubmit.mock.calls[0][0].monitored).toBe(false);
+        expect(onSubmit.mock.calls[0][0].enabled).toBe(false);
+    });
+
+    it('renders enabled and monitoring controls and submits both values', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        renderForm({
+            onSubmit,
+            initialValues: { ...baseInitialValues, criteria: sampleCriteria },
+        });
+
+        expect(screen.getByLabelText('Enabled')).toBeChecked();
+        expect(screen.getByRole('radiogroup', { name: 'Monitoring override' })).toBeInTheDocument();
+        await user.click(screen.getByRole('radio', { name: /^Do not monitor:/ }));
+        await user.click(saveButton());
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0]).toMatchObject({ enabled: true, monitoring: false });
     });
 
     it('labels the inherit quality option "Inherit" and not "Default quality"', async () => {
@@ -371,7 +389,7 @@ describe('WishlistForm', () => {
         const onSubmit = vi.fn();
         renderForm({
             onSubmit,
-            initialValues: { ...baseInitialValues, name: 'Rooted', monitored: false },
+            initialValues: { ...baseInitialValues, name: 'Rooted', enabled: false },
         });
 
         await user.click(document.querySelector('[data-field="rootFolderId"]') as HTMLElement);
@@ -387,7 +405,7 @@ describe('WishlistForm', () => {
         const onSubmit = vi.fn();
         renderForm({
             onSubmit,
-            initialValues: { ...baseInitialValues, name: 'Root Reset', rootFolderId: 'rf-1', monitored: false },
+            initialValues: { ...baseInitialValues, name: 'Root Reset', rootFolderId: 'rf-1', enabled: false },
         });
 
         await user.click(document.querySelector('[data-field="rootFolderId"]') as HTMLElement);
@@ -407,7 +425,7 @@ describe('WishlistForm', () => {
                 ...baseInitialValues,
                 name: 'Quality Reset',
                 qualityTierListId: 'qtl-1',
-                monitored: false,
+                enabled: false,
             },
         });
 
@@ -491,7 +509,8 @@ describe('WishlistForm', () => {
                                 criteria: sampleCriteria,
                                 qualityTierListId: null,
                                 rootFolderId: null,
-                                monitored: true,
+                                enabled: true,
+                                monitoring: null,
                                 tagIds: [],
                             }}
                         />
@@ -521,7 +540,7 @@ describe('WishlistForm', () => {
         expect(screen.queryByText('Select a content type to monitor this wishlist')).not.toBeInTheDocument();
     });
 
-    it('blocks submit when monitored is on but no content type is selected, surfacing the error on the filter', async () => {
+    it('blocks submit when enabled is on but no content type is selected, surfacing the error on the filter', async () => {
         const user = userEvent.setup();
         const onSubmit = vi.fn();
         renderForm({
@@ -595,7 +614,10 @@ describe('WishlistForm', () => {
         expect(screen.getByText('Newest 3 of 5')).toBeInTheDocument();
     });
 
-    it('runs Preview through content search and renders candidates', async () => {
+    it.each([
+        { thumbnailUrl: null, childCount: 0 },
+        { thumbnailUrl: '/broken.jpg', childCount: 1 },
+    ])('renders preview artwork state for $thumbnailUrl', async ({ thumbnailUrl, childCount }) => {
         const user = userEvent.setup();
         vi.mocked(apiGet).mockResolvedValue({
             matches: [
@@ -607,7 +629,7 @@ describe('WishlistForm', () => {
                         contentType: 'movie',
                         title: 'Inception',
                         year: 2010,
-                        thumbnailUrl: null,
+                        thumbnailUrl,
                     },
                     inLibrary: false,
                 },
@@ -626,7 +648,18 @@ describe('WishlistForm', () => {
                 '/content-search?query=genre+has+%22Action%22&contentType=movie&page=1',
             );
         });
-        expect(await screen.findByTestId('wishlist-form__preview-list')).toBeInTheDocument();
+        const previewList = await screen.findByTestId('wishlist-form__preview-list');
+        const image = previewList.querySelector('img');
+        if (thumbnailUrl) {
+            expect(image).toHaveAttribute('src', thumbnailUrl);
+            fireEvent.error(image!);
+        }
+        expect(previewList.querySelector('img')).not.toBeInTheDocument();
+        const placeholder = previewList.querySelector('.wishlist-form__preview-thumb--placeholder');
+        expect(placeholder).toHaveClass('wishlist-form__preview-thumb');
+        expect(placeholder).toHaveAttribute('aria-hidden', 'true');
+        expect(placeholder?.children).toHaveLength(childCount);
+        expect(placeholder?.querySelectorAll('svg')).toHaveLength(childCount);
         expect(screen.getByText('Inception')).toBeInTheDocument();
     });
 
@@ -672,7 +705,7 @@ describe('WishlistForm', () => {
         const onSubmit = vi.fn();
         renderForm({ onSubmit });
 
-        await user.click(screen.getByLabelText(/monitored/i));
+        await user.click(screen.getByLabelText(/enabled/i));
         await user.click(saveButton());
 
         expect(await screen.findByText('Name is required')).toBeInTheDocument();
@@ -696,7 +729,7 @@ describe('WishlistForm', () => {
         const onSubmit = vi.fn();
         mockFormatMagpieQlCriteria.mockResolvedValue({ query: 'contentType = "movie" and genre has "Action"' });
         renderForm({
-            initialValues: { ...baseInitialValues, name: 'Monitored Edit', criteria: sampleCriteria, monitored: true },
+            initialValues: { ...baseInitialValues, name: 'Monitored Edit', criteria: sampleCriteria, enabled: true },
             onSubmit,
         });
 
@@ -707,7 +740,7 @@ describe('WishlistForm', () => {
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
         expect(screen.queryByText('Add filter criteria to monitor this wishlist')).not.toBeInTheDocument();
         expect(screen.queryByText('Select a content type to monitor this wishlist')).not.toBeInTheDocument();
-        expect(onSubmit.mock.calls[0][0]).toMatchObject({ monitored: true, contentType: 'movie' });
+        expect(onSubmit.mock.calls[0][0]).toMatchObject({ enabled: true, contentType: 'movie' });
     });
 });
 
@@ -821,30 +854,5 @@ describe('WishlistForm unsaved-changes guard', () => {
         await user.click(screen.getByRole('button', { name: /discard changes/i }));
 
         await waitFor(() => expect(guard.active).toBe(0));
-    });
-});
-
-describe('valuesEqual', () => {
-    const base: WishlistFormValues = {
-        name: 'Test',
-        filterId: null,
-        contentType: 'movie',
-        criteria: {},
-        qualityTierListId: null,
-        rootFolderId: null,
-        monitored: true,
-        tagIds: ['a', 'b', 'c'],
-    };
-
-    it('returns true when tagIds match in any order', () => {
-        expect(valuesEqual(base, { ...base, tagIds: ['c', 'a', 'b'] })).toBe(true);
-    });
-
-    it('returns false when tagIds differ', () => {
-        expect(valuesEqual(base, { ...base, tagIds: ['a', 'b', 'd'] })).toBe(false);
-    });
-
-    it('returns false when contentType differs', () => {
-        expect(valuesEqual(base, { ...base, contentType: 'episode' })).toBe(false);
     });
 });

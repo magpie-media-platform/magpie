@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { useAuth } from './useAuth';
-import { Role, RoleName } from './types';
+import type { Role } from './types';
 
 export interface RequireRoleProps {
     min: Role;
@@ -22,12 +22,3 @@ export function RequireRole({ min, children, fallback = null }: RequireRoleProps
 }
 
 RequireRole.displayName = 'RequireRole';
-
-export function useRequireRole(min: Role): { allowed: boolean; requiredRoleName: string } {
-    const { hasRole } = useAuth();
-
-    return {
-        allowed: hasRole(min),
-        requiredRoleName: RoleName[min],
-    };
-}

@@ -17,7 +17,6 @@ internal sealed class SetupRedirectMiddleware(
     [
         "/api/system/health",
         "/api/system/ready",
-        "/api/system/info",
         "/api/system/setup",
         "/api/auth",
     ];
@@ -28,6 +27,8 @@ internal sealed class SetupRedirectMiddleware(
 
     private const string SetupCompleteSettingKey = "complete";
 
+    private bool _setupComplete;
+
     private static bool IsApiRoute(string path)
     {
         return path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) ||
@@ -37,13 +38,13 @@ internal sealed class SetupRedirectMiddleware(
     private static bool IsAlwaysAllowed(string path)
     {
         return AlwaysAllowedApiPrefixes.Any(prefix =>
-            path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            new PathString(path).StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     public async Task InvokeAsync(HttpContext context, ISettingsService settingsService)
     {
         var path = context.Request.Path.Value;
-        if (string.IsNullOrEmpty(path) || !IsApiRoute(path) || IsAlwaysAllowed(path))
+        if (_setupComplete || string.IsNullOrEmpty(path) || !IsApiRoute(path) || IsAlwaysAllowed(path))
         {
             await next(context).ConfigureAwait(false);
             return;
@@ -55,6 +56,7 @@ internal sealed class SetupRedirectMiddleware(
         var completeValue = setupGroup?.Group.Settings
             .FirstOrDefault(s => s.Key == SetupCompleteSettingKey)?.Value;
         var isComplete = string.Equals(completeValue, "true", StringComparison.OrdinalIgnoreCase);
+        _setupComplete = isComplete;
         if (isComplete)
         {
             await next(context).ConfigureAwait(false);
@@ -67,7 +69,7 @@ internal sealed class SetupRedirectMiddleware(
             return;
         }
 
-        logger.LogDebug("The middleware blocked the API request to {Path}. The setup is not complete", path);
+        logger.LogDebug("The middleware blocked the API request to {Path} because the setup is not complete", path);
 
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         context.Response.Headers[SetupRequiredHeader] = "true";

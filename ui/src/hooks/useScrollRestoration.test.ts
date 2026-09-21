@@ -52,7 +52,7 @@ describe('useScrollRestoration', () => {
         wrapper = createMockWrapper();
 
         vi.spyOn(document, 'querySelector').mockImplementation((selector: string) => {
-            if (selector === '.app-shell__main-wrapper, .admin-shell__main-wrapper') {
+            if (selector === '[data-component="app-shell-main-wrapper"], [data-component="admin-shell-main-wrapper"]') {
                 return wrapper as unknown as HTMLElement;
             }
             return null;

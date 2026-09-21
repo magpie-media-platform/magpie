@@ -1,3 +1,4 @@
+import { escapeQueryString } from '@/lib/simpleFilterQuery';
 import { useUpdateContent } from '@/hooks/useContent';
 import { useTagsByEntity } from '@/hooks/useTags';
 import {
@@ -11,12 +12,8 @@ interface TagsChipStripProps {
     canEdit: boolean;
 }
 
-function escapeFilterString(value: string): string {
-    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
 function tagFilterHref(tagName: string): string {
-    const filter = `tag has "${escapeFilterString(tagName)}"`;
+    const filter = `tag has "${escapeQueryString(tagName)}"`;
     return `/library/all?filter=${encodeURIComponent(filter)}`;
 }
 

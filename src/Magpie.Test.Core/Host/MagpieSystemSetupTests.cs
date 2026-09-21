@@ -23,7 +23,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Host;
 
 [TestFixture]
-public class MagpieSystemSetupTests
+public sealed class MagpieSystemSetupTests
 {
     private Mock<ISettingsService> _settingsService = null!;
     private Mock<IUserService> _userService = null!;
@@ -69,7 +69,7 @@ public class MagpieSystemSetupTests
     }
 
     [Test]
-    public async Task ConfigureDatabaseAsync_Result_WhenConfigurationIsStored()
+    public async Task ConfigureDatabaseAsync_PersistsDatabaseConfiguration_WhenConfigurationIsStored()
     {
         // Arrange
         var configurationPath = Path.Combine("/tmp/magpie/config", "appsettings.json");
@@ -99,7 +99,8 @@ public class MagpieSystemSetupTests
     [TestCase("sqlserver")]
     public void ConfigureDatabaseAsync_Throws_WhenConnectionStringIsRequired(string provider)
     {
-        // Act / Assert
+        // Act
+        // Assert
         Assert.That(
             async () => await _subject.ConfigureDatabaseAsync(provider, null).ConfigureAwait(false),
             Throws.TypeOf<MagpieException>().With.Message.EqualTo("A connection string is required."));
@@ -108,7 +109,8 @@ public class MagpieSystemSetupTests
     [Test]
     public void ConfigureDatabaseAsync_Throws_WhenProviderIsUnknown()
     {
-        // Act / Assert
+        // Act
+        // Assert
         Assert.That(
             async () => await _subject.ConfigureDatabaseAsync("unknown", null).ConfigureAwait(false),
             Throws.TypeOf<MagpieException>().With.Message.EqualTo("The database provider is not supported."));
@@ -168,7 +170,7 @@ public class MagpieSystemSetupTests
         // Arrange
         var created = new User
         {
-            Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            Id = Guid.NewGuid(),
             Username = "admin",
             ProviderType = "local",
             Enabled = true,
@@ -232,7 +234,8 @@ public class MagpieSystemSetupTests
                 TotalItems = 1
             });
 
-        // Act / Assert
+        // Act
+        // Assert
         Assert.That(
             async () => await _subject.CreateAdministratorAsync("admin", "password123").ConfigureAwait(false),
             Throws.TypeOf<MagpieException>()
@@ -291,12 +294,115 @@ public class MagpieSystemSetupTests
     [Test]
     public void CompleteSetupAsync_Throws_WhenAdminMissing()
     {
-        // Act / Assert
+        // Act
+        // Assert
         Assert.That(
             async () => await _subject.CompleteAsync().ConfigureAwait(false),
             Throws.TypeOf<MagpieException>()
                 .With.Message.EqualTo(
                     "An administrator account must be created before setup can be marked complete."));
+    }
+
+    [Test]
+    public void ConfigureDatabaseAsync_Throws_WhenSetupStatusCannotBeRead()
+    {
+        // Arrange
+        _settingsService
+            .Setup(service => service.GetSystemGroupAsync("setup", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("offline"));
+
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                async () => await _subject.ConfigureDatabaseAsync("sqlite", null).ConfigureAwait(false),
+                Throws.TypeOf<InvalidOperationException>());
+            _fileSystem.Verify(
+                fileSystem => fileSystem.Move(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public void CreateSetupAdminAsync_Throws_WhenSetupStatusCannotBeRead()
+    {
+        // Arrange
+        _settingsService
+            .Setup(service => service.GetSystemGroupAsync("setup", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("offline"));
+
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                async () => await _subject.CreateAdministratorAsync("admin", "password123").ConfigureAwait(false),
+                Throws.TypeOf<InvalidOperationException>());
+            _userService.Verify(
+                service => service.CreateAsync(
+                    It.IsAny<LocalUserCreate>(),
+                    It.IsAny<Guid>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public void CreateSetupAdminAsync_Throws_WhenAdministratorListCannotBeRead()
+    {
+        // Arrange
+        _userService
+            .Setup(service => service.QueryAsync(
+                It.IsAny<UserQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("offline"));
+
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                async () => await _subject.CreateAdministratorAsync("admin", "password123").ConfigureAwait(false),
+                Throws.TypeOf<InvalidOperationException>());
+            _userService.Verify(
+                service => service.CreateAsync(
+                    It.IsAny<LocalUserCreate>(),
+                    It.IsAny<Guid>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public void CompleteSetupAsync_Throws_WhenAdministratorListCannotBeRead()
+    {
+        // Arrange
+        _userService
+            .Setup(service => service.QueryAsync(
+                It.IsAny<UserQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("offline"));
+
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                async () => await _subject.CompleteAsync().ConfigureAwait(false),
+                Throws.TypeOf<InvalidOperationException>());
+            _settingsService.Verify(
+                service => service.PatchSystemGroupAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<SettingsGroupPatch>(),
+                    It.IsAny<Guid>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 
     [Test]

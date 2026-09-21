@@ -21,7 +21,7 @@ public interface IRootFolderService
     Task<IReadOnlyList<RootFolder>> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a root folder by id, or <see langword="null"/> when absent.
+    /// A root folder by id, or <see langword="null"/> when absent.
     /// </summary>
     /// <param name="rootFolderId">The id of the root folder to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

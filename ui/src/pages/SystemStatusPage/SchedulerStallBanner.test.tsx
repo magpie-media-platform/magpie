@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -82,6 +82,30 @@ describe('SchedulerStallBanner', () => {
         render(<SchedulerStallBanner />, { wrapper: Wrap });
 
         expect(screen.getByTestId('scheduler-recovered-banner')).toBeInTheDocument();
+    });
+
+    it('dismisses recovery without another scheduler event and resets for a later recovery', async () => {
+        // Arrange
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-05-18T10:00:30.000Z'));
+        mockUseSchedulerStatus.mockReturnValue({
+            data: { isStalled: false, recoveredAtUtc: '2026-05-18T10:00:00.000Z' },
+        });
+        const { rerender } = render(<SchedulerStallBanner />);
+        expect(screen.getByTestId('scheduler-recovered-banner')).toBeInTheDocument();
+
+        // Act
+        await act(() => vi.advanceTimersByTime(30_000));
+
+        // Assert
+        expect(screen.queryByTestId('scheduler-recovered-banner')).not.toBeInTheDocument();
+        mockUseSchedulerStatus.mockReturnValue({
+            data: { isStalled: false, recoveredAtUtc: '2026-05-18T10:01:00.000Z' },
+        });
+        rerender(<SchedulerStallBanner />);
+        expect(screen.getByTestId('scheduler-recovered-banner')).toBeInTheDocument();
+        await act(() => vi.advanceTimersByTime(60_000));
+        expect(screen.queryByTestId('scheduler-recovered-banner')).not.toBeInTheDocument();
     });
 
     it('suppresses the success banner after the 60s window', () => {

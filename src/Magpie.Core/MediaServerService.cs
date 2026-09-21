@@ -30,12 +30,121 @@ internal sealed class MediaServerService(
     TimeProvider timeProvider,
     ILogger<MediaServerService> logger) : IMediaServerService
 {
-    private const int UnhealthyFailureThreshold = 3;
-
     private readonly Dictionary<string, IMediaServerIntegration> _integrations =
-        mediaServerIntegrations
-            .GroupBy(integration => integration.ProviderType, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        BuildIntegrationMap(mediaServerIntegrations, logger);
+
+    private static Dictionary<string, string> MergedOver(
+        IReadOnlyDictionary<string, string> incoming,
+        IReadOnlyDictionary<string, string>? stored)
+    {
+        var merged = stored is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(stored, StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in incoming)
+        {
+            merged[entry.Key] = entry.Value;
+        }
+
+        return merged;
+    }
+
+    private static int NextConsecutiveFailures(ConfigurationTestResult result, int currentFailures) =>
+        result.Success ? 0 : Math.Max(0, currentFailures) + 1;
+
+    private static IntegrationHealthStatus ToHealthStatus(ConfigurationFailureKind failureKind, int failures)
+    {
+        const int unhealthyFailureThreshold = 3;
+        var unhealthy = failures >= unhealthyFailureThreshold ||
+            failureKind is ConfigurationFailureKind.Auth
+                or ConfigurationFailureKind.Fatal
+                or ConfigurationFailureKind.NotFound;
+        return unhealthy ? IntegrationHealthStatus.Unhealthy : IntegrationHealthStatus.Degraded;
+    }
+
+    private static ConfigurationTestResult ToFailureResult(IntegrationSettingsValidationResult validation) =>
+        new()
+        {
+            Success = false,
+            Message = string.Join("; ", validation.Issues.Select(issue => issue.Message)),
+            FailureKind = ConfigurationFailureKind.Fatal
+        };
+
+    private static async Task<ConfigurationTestResult> WithConnectionTimeoutAsync(
+        Func<CancellationToken, Task<ConfigurationTestResult>> test,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutSource = timeout is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource?.CancelAfter(timeout.GetValueOrDefault());
+
+        try
+        {
+            var pending = test(timeoutSource?.Token ?? cancellationToken);
+            return timeout is { } limit
+                ? await pending.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
+                : await pending.ConfigureAwait(false);
+        }
+        catch (TimeoutException) when (timeout is not null)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "Connection test timed out.",
+                FailureKind = ConfigurationFailureKind.Transient
+            };
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
+            timeoutSource is { IsCancellationRequested: true })
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "Connection test timed out.",
+                FailureKind = ConfigurationFailureKind.Transient
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = ex.Message,
+                FailureKind = ConfigurationFailureKind.Fatal
+            };
+        }
+    }
+
+    private static Dictionary<string, IMediaServerIntegration> BuildIntegrationMap(
+        IEnumerable<IMediaServerIntegration> integrations,
+        ILogger logger)
+    {
+        var map = new Dictionary<string, IMediaServerIntegration>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in integrations
+            .Where(integration => !string.IsNullOrWhiteSpace(integration.ProviderType))
+            .GroupBy(integration => integration.ProviderType, StringComparer.OrdinalIgnoreCase))
+        {
+            var members = group.ToList();
+            if (members.Count > 1)
+            {
+                logger.LogWarning(
+                    "Multiple media server integrations declared provider type {ProviderType}; the " +
+                    "registry used {Winner} and ignored {Displaced}",
+                    group.Key,
+                    members[^1].GetType().FullName,
+                    string.Join(", ", members.Take(members.Count - 1).Select(member => member.GetType().FullName)));
+            }
+
+            map[group.Key] = members[^1];
+        }
+
+        return map;
+    }
 
     private static IReadOnlyDictionary<string, string> BuildExternalIdMap(MaterializedMetadata? metadata)
     {
@@ -58,21 +167,6 @@ internal sealed class MediaServerService(
         return map;
     }
 
-    private static Dictionary<string, string> MergeSettings(
-        IReadOnlyDictionary<string, string>? stored,
-        IReadOnlyDictionary<string, string> incoming)
-    {
-        var merged = stored is null
-            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            : new Dictionary<string, string>(stored, StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in incoming)
-        {
-            merged[entry.Key] = entry.Value;
-        }
-
-        return merged;
-    }
-
     private static ConfigurationTestResult Unresolved(string? providerType)
     {
         return new()
@@ -81,28 +175,6 @@ internal sealed class MediaServerService(
             Message = $"No media server integration is available for provider type {providerType ?? "(unknown)"}.",
             FailureKind = ConfigurationFailureKind.Fatal
         };
-    }
-
-    private static ConfigurationTestResult ValidationFailure(IntegrationSettingsValidationResult validation)
-    {
-        return new()
-        {
-            Success = false,
-            Message = string.Join("; ", validation.Issues.Select(issue => issue.Message)),
-            FailureKind = ConfigurationFailureKind.Fatal
-        };
-    }
-
-    private static int ResolveConsecutiveFailures(int currentFailures, ConfigurationTestResult result)
-        => result.Success ? 0 : Math.Max(0, currentFailures) + 1;
-
-    private static IntegrationHealthStatus ResolveFailureStatus(ConfigurationFailureKind failureKind, int failures)
-    {
-        var unhealthy = failures >= UnhealthyFailureThreshold ||
-            failureKind is ConfigurationFailureKind.Auth
-                or ConfigurationFailureKind.Fatal
-                or ConfigurationFailureKind.NotFound;
-        return unhealthy ? IntegrationHealthStatus.Unhealthy : IntegrationHealthStatus.Degraded;
     }
 
     private void ValidateProviderType(string? providerType)
@@ -215,14 +287,14 @@ internal sealed class MediaServerService(
             return Unresolved(resolvedType);
         }
 
-        var merged = MergeSettings(existing?.Settings, settings);
+        var merged = MergedOver(settings, existing?.Settings);
 
         var validation = await settingsService
             .ValidateAsync(integration.SettingsSchema, merged, integration, cancellationToken)
             .ConfigureAwait(false);
         if (!validation.IsValid)
         {
-            return ValidationFailure(validation);
+            return ToFailureResult(validation);
         }
 
         var transient = existing is not null
@@ -243,7 +315,7 @@ internal sealed class MediaServerService(
             ? await mediaServerRepository.GetByIdAsync(serverId, cancellationToken).ConfigureAwait(false)
             : null;
 
-        return MergeSettings(existing?.Settings, overlay);
+        return MergedOver(overlay, existing?.Settings);
     }
 
     public Task<ConfigurationTestResult> TestAsync(Guid id, CancellationToken cancellationToken = default)
@@ -318,8 +390,10 @@ internal sealed class MediaServerService(
         }
 
         var contentType = hierarchy.ContentType;
-        var rootFolderPath = await ResolveRootFolderPathAsync(contentHierarchyItemId, cancellationToken)
+        var rootFolder = await rootFolderRepository
+            .GetByIdAsync(hierarchy.EffectiveRootFolderId, cancellationToken)
             .ConfigureAwait(false);
+        var rootFolderPath = rootFolder?.Path ?? string.Empty;
         var title = !string.IsNullOrWhiteSpace(metadata?.Title) ? metadata!.Title! : hierarchy.Name;
 
         var enabledServers = (await mediaServerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
@@ -373,22 +447,6 @@ internal sealed class MediaServerService(
         return links;
     }
 
-    private async Task<string> ResolveRootFolderPathAsync(
-        Guid contentHierarchyItemId,
-        CancellationToken cancellationToken)
-    {
-        var item = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
-        if (item is null)
-        {
-            return string.Empty;
-        }
-
-        var rootFolder = await rootFolderRepository.GetByIdAsync(item.EffectiveRootFolderId, cancellationToken)
-            .ConfigureAwait(false);
-        return rootFolder?.Path ?? string.Empty;
-    }
-
     private IMediaServerIntegration? ResolveIntegration(string? providerType)
     {
         if (providerType is null)
@@ -407,10 +465,10 @@ internal sealed class MediaServerService(
         var result = await TestMediaServerCoreAsync(mediaServer, timeout, cancellationToken)
             .ConfigureAwait(false);
 
-        var failures = ResolveConsecutiveFailures(mediaServer.ConsecutiveFailures, result);
+        var failures = NextConsecutiveFailures(result, mediaServer.ConsecutiveFailures);
         var status = result.Success
             ? IntegrationHealthStatus.Healthy
-            : ResolveFailureStatus(result.FailureKind, failures);
+            : ToHealthStatus(result.FailureKind, failures);
 
         await mediaServerRepository.PatchAsync(
             new MediaServerPatch
@@ -438,50 +496,7 @@ internal sealed class MediaServerService(
             return Unresolved(mediaServer.ProviderType);
         }
 
-        using var timeoutSource = timeout is null
-            ? null
-            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource?.CancelAfter(timeout.GetValueOrDefault());
-        var testCancellationToken = timeoutSource?.Token ?? cancellationToken;
-
-        try
-        {
-            var test = integration.TestConnectionAsync(mediaServer.Settings, testCancellationToken);
-            return timeout is { } limit
-                ? await test.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
-                : await test.ConfigureAwait(false);
-        }
-        catch (TimeoutException) when (timeout is not null)
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
-            timeoutSource is { IsCancellationRequested: true })
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = ex.Message,
-                FailureKind = ConfigurationFailureKind.Fatal
-            };
-        }
+        var test = (CancellationToken ct) => integration.TestConnectionAsync(mediaServer.Settings, ct);
+        return await WithConnectionTimeoutAsync(test, timeout, cancellationToken).ConfigureAwait(false);
     }
 }

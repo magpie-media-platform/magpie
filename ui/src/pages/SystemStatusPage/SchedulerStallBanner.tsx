@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { WarningIcon } from '@phosphor-icons/react';
 
@@ -30,6 +30,17 @@ export function SchedulerStallBanner() {
         return at;
     }, [data?.recoveredAtUtc]);
 
+    const [showRecovery, setShowRecovery] = useState(false);
+    useEffect(() => {
+        const remaining = recoveredAt ? recoveredAt.getTime() + 60_000 - Date.now() : 0;
+        setShowRecovery(remaining > 0);
+        if (remaining <= 0) {
+            return;
+        }
+        const timer = setTimeout(() => setShowRecovery(false), remaining);
+        return () => clearTimeout(timer);
+    }, [recoveredAt]);
+
     if (!data) {
         return null;
     }
@@ -49,7 +60,7 @@ export function SchedulerStallBanner() {
         );
     }
 
-    if (recoveredAt && Date.now() - recoveredAt.getTime() < 60_000) {
+    if (recoveredAt && showRecovery) {
         return (
             <Alert variant="success" title="Scheduler recovered" data-testid="scheduler-recovered-banner">
                 Eligibility returned at {recoveredAt.toLocaleString()}.

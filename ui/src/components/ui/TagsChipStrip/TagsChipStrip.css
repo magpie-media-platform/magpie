@@ -16,6 +16,11 @@
         list-style: none;
     }
 
+    .tags-chip-strip__empty {
+        font-size: var(--text-sm);
+        color: var(--text-muted);
+    }
+
     .tags-chip-strip__chip {
         display: inline-flex;
         align-items: center;

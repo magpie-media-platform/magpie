@@ -13,6 +13,11 @@
         gap: var(--space-xs);
     }
 
+    .tier-form__error {
+        font-size: var(--text-sm);
+        color: var(--status-unhealthy);
+    }
+
     .tier-form__help-icon {
         flex-shrink: 0;
         margin-top: var(--space-2xs);

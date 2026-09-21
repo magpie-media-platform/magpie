@@ -1,4 +1,4 @@
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { act, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter, useSearchParams } from 'react-router-dom';
@@ -190,9 +190,6 @@ beforeEach(() => {
     vi.clearAllMocks();
 
     vi.mocked(apiGet).mockImplementation((url: string) => {
-        if (url === '/auth-providers') {
-            return Promise.resolve(['ldap']);
-        }
         if (url === '/api-keys' || url === '/api-keys/my' || url.startsWith('/api-keys/')) {
             return Promise.resolve([]);
         }
@@ -247,9 +244,6 @@ describe('UsersPage', () => {
             username: 'later_user',
         };
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys' || url === '/api-keys/my' || url.startsWith('/api-keys/')) {
                 return Promise.resolve([]);
             }
@@ -345,7 +339,7 @@ describe('UsersPage', () => {
             expect(apiPost).toHaveBeenCalledWith('/users', {
                 username: 'disabled_new',
                 password: 'password123',
-                role: Role.Viewer,
+                role: 'Viewer',
                 enabled: false,
             });
         });
@@ -1026,13 +1020,16 @@ describe('UsersPage API Keys Mine/All toggle', () => {
         expect(screen.getByText('No API keys')).toBeInTheDocument();
     });
 
-    it('fetches every users keys and labels owners when switching to All', async () => {
+    it.each([
+        ['user-2', 'manager'],
+        ['user-26', 'Unknown owner'],
+    ])('labels key owner %s as %s in All scope', async (ownerId, ownerLabel) => {
         const user = userEvent.setup();
 
         const allKeys = [
             {
                 id: 'key-all-1',
-                userId: 'user-2',
+                userId: ownerId,
                 name: 'Manager Key',
                 keyPrefix: 'mgp_mgr',
                 enabled: true,
@@ -1046,9 +1043,6 @@ describe('UsersPage API Keys Mine/All toggle', () => {
         ];
 
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys') {
                 return Promise.resolve(allKeys);
             }
@@ -1079,7 +1073,62 @@ describe('UsersPage API Keys Mine/All toggle', () => {
         });
 
         expect(await screen.findByText('Manager Key')).toBeInTheDocument();
-        expect(screen.getByTestId('api-key-owner-badge')).toHaveTextContent('manager');
+        expect(screen.getByTestId('api-key-owner-badge')).toHaveTextContent(ownerLabel);
+    });
+
+    it('labels no owner unknown while the user list is still loading', async () => {
+        const user = userEvent.setup();
+        let sendUsers!: (users: typeof mockPagedResponse) => void;
+        const pendingUsers = new Promise<typeof mockPagedResponse>((resolve) => {
+            sendUsers = resolve;
+        });
+
+        const allKeys = [
+            {
+                id: 'key-all-1',
+                userId: 'user-26',
+                name: 'Manager Key',
+                keyPrefix: 'mgp_mgr',
+                enabled: true,
+                expiresAt: null,
+                lastUsedAt: null,
+                createdAt: '2024-01-01T00:00:00Z',
+                createdByUserId: 'user-2',
+                modifiedAt: null,
+                modifiedByUserId: null,
+            },
+        ];
+
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/api-keys') {
+                return Promise.resolve(allKeys);
+            }
+            if (url === '/api-keys/my' || url.startsWith('/api-keys/')) {
+                return Promise.resolve([]);
+            }
+            return pendingUsers;
+        });
+
+        render(
+            <TestWrapper>
+                <UsersPage />
+            </TestWrapper>,
+        );
+
+        const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
+        await user.click(apiKeysTab);
+
+        const allToggle = document.querySelector('[data-filter="scope"][data-value="all"]') as HTMLElement;
+        await user.click(allToggle);
+
+        expect(await screen.findByText('Manager Key')).toBeInTheDocument();
+        expect(screen.queryByTestId('api-key-owner-badge')).not.toBeInTheDocument();
+
+        await act(async () => {
+            sendUsers(mockPagedResponse);
+        });
+
+        expect(await screen.findByTestId('api-key-owner-badge')).toHaveTextContent('Unknown owner');
     });
 
     it('updates the API Keys tab count when switching from Mine to All', async () => {
@@ -1115,9 +1164,6 @@ describe('UsersPage API Keys Mine/All toggle', () => {
         ];
 
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys') {
                 return Promise.resolve(allKeys);
             }
@@ -1185,9 +1231,6 @@ describe('UsersPage API key enable toggle', () => {
         const user = userEvent.setup();
         vi.mocked(apiPatch).mockResolvedValue(undefined);
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys/my') {
                 return Promise.resolve(disabledKey);
             }
@@ -1220,9 +1263,6 @@ describe('UsersPage API key enable toggle', () => {
         const user = userEvent.setup();
         vi.mocked(apiPatch).mockResolvedValue(undefined);
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys/my') {
                 return Promise.resolve(enabledKey);
             }
@@ -1255,9 +1295,6 @@ describe('UsersPage API key enable toggle', () => {
         const user = userEvent.setup();
         vi.mocked(apiPatch).mockRejectedValue(new ApiError(403, 'That API key belongs to another user.'));
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys/my') {
                 return Promise.resolve(enabledKey);
             }
@@ -1337,9 +1374,6 @@ describe('UsersPage delete confirmations', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys' || url === '/api-keys/my' || url.startsWith('/api-keys/')) {
                 return Promise.resolve([]);
             }
@@ -1450,9 +1484,6 @@ describe('UsersPage delete confirmations', () => {
         ];
 
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys/my') {
                 return Promise.resolve(mockApiKeys);
             }
@@ -1488,7 +1519,12 @@ describe('UsersPage delete confirmations', () => {
 
     it('calls deleteApiKey after confirming in the dialog', async () => {
         const user = userEvent.setup();
-        vi.mocked(apiDelete).mockResolvedValue(undefined);
+        let completeDeletion!: () => void;
+        vi.mocked(apiDelete).mockReturnValue(
+            new Promise<void>((resolve) => {
+                completeDeletion = resolve;
+            }),
+        );
 
         const mockApiKeys = [
             {
@@ -1507,11 +1543,8 @@ describe('UsersPage delete confirmations', () => {
         ];
 
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys/my') {
-                return Promise.resolve(mockApiKeys);
+                return Promise.resolve([...mockApiKeys, { ...mockApiKeys[0], id: 'key-2', name: 'Other Key' }]);
             }
             if (url.startsWith('/api-keys/')) {
                 return Promise.resolve([]);
@@ -1545,6 +1578,9 @@ describe('UsersPage delete confirmations', () => {
         await waitFor(() => {
             expect(apiDelete).toHaveBeenCalledWith('/api-keys/key-1');
         });
+        expect(document.querySelector('[data-action="delete"][data-target="key-1"]')).toBeDisabled();
+        expect(document.querySelector('[data-action="delete"][data-target="key-2"]')).toBeEnabled();
+        await act(async () => completeDeletion());
     });
 
     it('does not call deleteApiKey when cancel is clicked', async () => {
@@ -1567,9 +1603,6 @@ describe('UsersPage delete confirmations', () => {
         ];
 
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/auth-providers') {
-                return Promise.resolve(['ldap']);
-            }
             if (url === '/api-keys/my') {
                 return Promise.resolve(mockApiKeys);
             }

@@ -14,11 +14,11 @@ internal sealed record PlannedCriterion
 
     public IReadOnlyList<AuthorDateResidual> Residuals { get; init; } = [];
 
-    public string? Warning { get; init; }
-
     public bool NeedsIndependentSeed { get; init; }
 
     public bool RecallBoundedSource { get; init; }
 
     public bool MatchesNothing { get; init; }
+
+    public bool CannotFulfill { get; init; }
 }

@@ -1,4 +1,25 @@
 @layer components {
+    .health-card .status-row[data-status='healthy'] {
+        color: var(--status-healthy);
+    }
+
+    .health-card .status-row[data-status='unhealthy'] {
+        color: var(--status-unhealthy);
+    }
+
+    .health-card .status-row[data-status='degraded'],
+    .health-card .status-row[data-status='stale'] {
+        color: var(--status-degraded);
+    }
+
+    .health-card .status-row[data-status='stabilizing'] {
+        color: var(--status-stabilizing);
+    }
+
+    .health-card .status-row[data-status='unknown'] {
+        color: var(--status-unknown);
+    }
+
     .health-card {
         min-width: 0;
         background-color: var(--bg-secondary);
@@ -45,128 +66,10 @@
         padding: var(--space-sm) 0;
     }
 
-    .health-card__row {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-        padding: var(--space-sm) var(--space-lg);
-        transition: background-color var(--duration-fast) var(--easing-default);
-        text-decoration: none;
-        color: inherit;
-    }
-
-    .health-card__row--clickable {
-        cursor: pointer;
-
-        &:hover {
-            background-color: var(--bg-tertiary);
-        }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: calc(-1 * var(--focus-ring-offset));
-        }
-    }
-
-    .health-card__indicator {
-        width: 8px;
-        height: 8px;
-        border-radius: var(--radius-full);
-        flex-shrink: 0;
-    }
-
-    .health-card__row--healthy .health-card__indicator {
-        background-color: var(--status-healthy);
-    }
-
-    .health-card__row--unhealthy .health-card__indicator {
-        background-color: var(--status-unhealthy);
-    }
-
-    .health-card__row--degraded .health-card__indicator {
-        background-color: var(--status-degraded);
-    }
-
-    .health-card__row--stabilizing .health-card__indicator {
-        background-color: var(--status-stabilizing);
-    }
-
-    .health-card__row--stale .health-card__indicator {
-        background-color: var(--status-degraded);
-    }
-
-    .health-card__row--unknown .health-card__indicator {
-        background-color: var(--status-unknown);
-    }
-
-    .health-card__label {
-        flex: 1;
-        font-size: var(--text-sm);
-        color: var(--text-secondary);
-    }
-
-    .health-card__row--healthy .health-card__label {
-        color: var(--status-healthy);
-    }
-
-    .health-card__row--unhealthy .health-card__label {
-        color: var(--status-unhealthy);
-    }
-
-    .health-card__row--degraded .health-card__label {
-        color: var(--status-degraded);
-    }
-
-    .health-card__row--stabilizing .health-card__label {
-        color: var(--status-stabilizing);
-    }
-
-    .health-card__row--stale .health-card__label {
-        color: var(--status-degraded);
-    }
-
-    .health-card__row--unknown .health-card__label {
-        color: var(--status-unknown);
-    }
-
-    .health-card__count {
-        font-size: var(--text-sm);
-        font-weight: var(--weight-semibold);
-        font-family: var(--font-mono);
-        color: var(--text-primary);
-        min-width: 2ch;
-        text-align: right;
-    }
-
     .health-card__empty {
         padding: var(--space-sm) var(--space-lg);
         font-size: var(--text-sm);
         color: var(--text-muted);
-    }
-
-    .health-card__row--skeleton {
-        pointer-events: none;
-    }
-
-    .health-card__indicator--skeleton {
-        background-color: var(--bg-tertiary);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
-    }
-
-    .health-card__label--skeleton {
-        width: 60px;
-        height: 14px;
-        background-color: var(--bg-tertiary);
-        border-radius: var(--radius-sm);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
-    }
-
-    .health-card__count--skeleton {
-        width: 20px;
-        height: 14px;
-        background-color: var(--bg-tertiary);
-        border-radius: var(--radius-sm);
-        animation: pulse var(--duration-pulse) ease-in-out infinite;
     }
 
     @media (min-width: 640px) and (max-width: 1099px) {

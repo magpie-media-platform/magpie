@@ -15,9 +15,24 @@ public sealed record AuthenticationAttempt(
     string? RejectionReason)
 {
     /// <summary>
+    /// The status of the attempt.
+    /// </summary>
+    public AuthenticationAttemptStatus Status { get; set; } = Status;
+
+    /// <summary>
+    /// The authenticated principal, or null.
+    /// </summary>
+    public ClaimsPrincipal? Principal { get; set; } = Principal;
+
+    /// <summary>
+    /// The reason for the rejected credential, or null.
+    /// </summary>
+    public string? RejectionReason { get; set; } = RejectionReason;
+
+    /// <summary>
     /// The attempt for a request that presented no credential.
     /// </summary>
-    public static AuthenticationAttempt None { get; } = new(AuthenticationAttemptStatus.NoCredentials, null, null);
+    public static AuthenticationAttempt None => new(AuthenticationAttemptStatus.NoCredentials, null, null);
 
     /// <summary>
     /// Creates the attempt for a request whose credential was rejected.

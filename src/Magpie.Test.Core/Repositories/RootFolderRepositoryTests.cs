@@ -4,19 +4,21 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -25,7 +27,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class RootFolderRepositoryTests
+public sealed class RootFolderRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IRootFolderRepository _subject = null!;
@@ -64,7 +66,9 @@ public class RootFolderRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _publishedEvents = [];
         var events = new Mock<IEventBus>(MockBehavior.Strict);
@@ -81,7 +85,8 @@ public class RootFolderRepositoryTests
             transactionManager,
             _contentHierarchyItems.Object,
             events.Object,
-            loggerFactory.CreateLogger<RootFolderRepository>());
+            loggerFactory.CreateLogger<RootFolderRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -457,6 +462,112 @@ public class RootFolderRepositoryTests
     }
 
     [Test]
+    public async Task DeleteAsync_PromotesTheOldestRemainingFolder_WhenTheDeletedFolderWasTheDefault()
+    {
+        // Arrange
+        var first = new RootFolder
+        {
+            Name = "First",
+            Path = "/media/first",
+            ContentType = _contentType,
+            IsDefault = true,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        var second = new RootFolder
+        {
+            Name = "Second",
+            Path = "/media/second",
+            ContentType = _contentType,
+            IsDefault = false,
+            CreatedAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        var third = new RootFolder
+        {
+            Name = "Third",
+            Path = "/media/third",
+            ContentType = _contentType,
+            IsDefault = false,
+            CreatedAt = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        _context.RootFolders.AddRange(first, second, third);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.DeleteAsync(first.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        var defaults = await _context.RootFolders
+            .AsNoTracking()
+            .Where(folder => folder.ContentType == _contentType && folder.IsDefault)
+            .Select(folder => folder.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(defaults, Is.EqualTo([second.Id]));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_PromotesTheOldestRemainingFolder_WhenTheDefaultLeavesItsContentType()
+    {
+        // Arrange
+        var moved = new RootFolder
+        {
+            Name = "Moved",
+            Path = "/media/moved",
+            ContentType = _contentType,
+            IsDefault = true,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        var stayed = new RootFolder
+        {
+            Name = "Stayed",
+            Path = "/media/stayed",
+            ContentType = _contentType,
+            IsDefault = false,
+            CreatedAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        _context.RootFolders.AddRange(moved, stayed);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.UpdateAsync(
+            new RootFolder
+            {
+                Id = moved.Id,
+                Name = "Moved",
+                Path = "/media/moved",
+                ContentType = "type-b",
+                IsDefault = true,
+                CreatedAt = moved.CreatedAt
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var defaults = await _context.RootFolders
+            .AsNoTracking()
+            .Where(folder => folder.ContentType == _contentType && folder.IsDefault)
+            .Select(folder => folder.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(defaults, Is.EqualTo([stayed.Id]));
+        }
+    }
+
+    [Test]
     public async Task DeleteAsync_ReturnsFalse_WhenRootFolderDoesNotExist()
     {
         // Act
@@ -467,7 +578,7 @@ public class RootFolderRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_WithNullUserId_CreatesRootFolder()
+    public async Task CreateAsync_CreatesRootFolder_WhenNullUserIdIsProvided()
     {
         // Arrange
         var model = new RootFolder
@@ -543,12 +654,12 @@ public class RootFolderRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
-            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.RootFolderCreated));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("library.rootFolder.created"));
             Assert.That(
-                _publishedEvents[0].Context[MagpieEvents.Keys.RootFolderId],
+                _publishedEvents[0].Context["rootFolder.id"],
                 Is.EqualTo(result.Id.ToString("D")));
-            Assert.That(_publishedEvents[0].Context[MagpieEvents.Keys.RootFolderPath], Is.EqualTo("/media/movies"));
-            Assert.That(_publishedEvents[0].Context[MagpieEvents.Keys.RootFolderContentType], Is.EqualTo(_contentType));
+            Assert.That(_publishedEvents[0].Context["rootFolder.path"], Is.EqualTo("/media/movies"));
+            Assert.That(_publishedEvents[0].Context["rootFolder.contentType"], Is.EqualTo(_contentType));
         }
     }
 
@@ -561,7 +672,9 @@ public class RootFolderRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         var failing = new Mock<IEventBus>();
         failing
@@ -573,7 +686,8 @@ public class RootFolderRepositoryTests
             transactionManager,
             Mock.Of<IContentHierarchyItemRepository>(),
             failing.Object,
-            loggerFactory.CreateLogger<RootFolderRepository>());
+            loggerFactory.CreateLogger<RootFolderRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var model = new RootFolder
         {
             Name = "Movies",
@@ -652,7 +766,17 @@ public class RootFolderRepositoryTests
             CreatedAt = DateTime.UtcNow,
             CreatedByUserId = _userId
         };
-        _context.LibraryImportCandidates.AddRange(orphaned, stillValid, alreadyResolved);
+        var orphanedMatchingPending = new LibraryImportCandidate
+        {
+            RootFolderId = movies.Id,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = @"\\mediahost\movies\Speed (1994)\speed.mkv",
+            ContentType = _contentType,
+            Status = LibraryImportCandidateStatus.MatchingPending,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        _context.LibraryImportCandidates.AddRange(orphaned, stillValid, alreadyResolved, orphanedMatchingPending);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
@@ -666,6 +790,8 @@ public class RootFolderRepositoryTests
             .SingleAsync(m => m.Id == stillValid.Id).ConfigureAwait(false);
         var resolvedAfter = await _context.LibraryImportCandidates.AsNoTracking()
             .SingleAsync(m => m.Id == alreadyResolved.Id).ConfigureAwait(false);
+        var orphanedMatchingPendingAfter = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(m => m.Id == orphanedMatchingPending.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Is.True);
@@ -673,13 +799,12 @@ public class RootFolderRepositoryTests
             Assert.That(orphanedAfter.ModifiedByUserId, Is.EqualTo(_userId));
             Assert.That(stillValidAfter.Status, Is.EqualTo(LibraryImportCandidateStatus.Pending));
             Assert.That(resolvedAfter.Status, Is.EqualTo(LibraryImportCandidateStatus.Queued));
+            Assert.That(orphanedMatchingPendingAfter.Status, Is.EqualTo(LibraryImportCandidateStatus.Invalidated));
             Assert.That(
-                _publishedEvents,
-                Has.One.Property(nameof(MagpieEvent.Name)).EqualTo(MagpieEvents.Names.LibraryImportCandidateUpdated));
-            Assert.That(
-                _publishedEvents.Single(magpieEvent =>
-                    magpieEvent.Name == MagpieEvents.Names.LibraryImportCandidateUpdated).Context.Values,
-                Does.Contain(orphaned.Id.ToString("D")));
+                _publishedEvents
+                    .Where(magpieEvent => magpieEvent.Name == "library.importCandidate.updated")
+                    .Select(magpieEvent => magpieEvent.Context["library.importCandidateId"]),
+                Is.EquivalentTo([orphaned.Id.ToString("D"), orphanedMatchingPending.Id.ToString("D")]));
         }
     }
 
@@ -740,6 +865,7 @@ public class RootFolderRepositoryTests
             Name = "Books",
             Path = "/books",
             ContentType = _contentType,
+            IsDefault = true,
             CreatedAt = DateTime.UtcNow,
         };
         _context.QualityTierLists.AddRange(firstTierList, secondTierList);
@@ -771,13 +897,13 @@ public class RootFolderRepositoryTests
         var stored = (await _context.RootFolders.AsNoTracking().SingleAsync().ConfigureAwait(false))
             .Defaults["book"];
         var published = _publishedEvents.Single(magpieEvent =>
-            magpieEvent.Name == MagpieEvents.Names.RootFolderUpdated);
+            magpieEvent.Name == "library.rootFolder.updated");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
             Assert.That(stored.QualityTierListId, Is.EqualTo(secondTierList.Id));
             Assert.That(
-                published.Context[MagpieEvents.Keys.RootFolderChangedFields],
+                published.Context["rootFolder.changedFields"],
                 Does.Contain("defaults"));
         }
 
@@ -787,7 +913,7 @@ public class RootFolderRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_AppliesDefaultRadioSemantics_AndTriggersEffectiveRecompute()
+    public async Task CreateAsync_ReplacesTheDefaultAndRecomputes_WhenANewDefaultIsCreated()
     {
         // Arrange
         var first = await _subject.CreateAsync(
@@ -823,5 +949,246 @@ public class RootFolderRepositoryTests
         _contentHierarchyItems.Verify(
             items => items.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
+    }
+
+    [Test]
+    public async Task PatchAsync_LeavesUnnamedColumnsUnchanged_WhenOnlyTheNameChanges()
+    {
+        // Arrange
+        var tierList = new QualityTierList
+        {
+            Name = "Tiers",
+            CreatedAt = DateTime.UtcNow,
+        };
+        var rootFolder = new RootFolder
+        {
+            Name = "Old name",
+            Path = "/library/books",
+            ContentType = _contentType,
+            IsDefault = true,
+            DefaultMonitoring = true,
+            RenameTemplate = "{Title}.{Ext}",
+            UpgradeFileHandling = UpgradeFileHandling.KeepBoth,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        _context.QualityTierLists.Add(tierList);
+        rootFolder.Defaults = new()
+        {
+            ["book"] = new RootFolderDefault
+            {
+                QualityTierListId = tierList.Id,
+            },
+        };
+        _context.RootFolders.Add(rootFolder);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.PatchAsync(
+            new RootFolderPatch
+            {
+                Id = rootFolder.Id,
+                Name = new() { Value = "New name" }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.RootFolders.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        var published = _publishedEvents.Single(magpieEvent =>
+            magpieEvent.Name == "library.rootFolder.updated");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(stored.Name, Is.EqualTo("New name"));
+            Assert.That(stored.Path, Is.EqualTo("/library/books"));
+            Assert.That(stored.ContentType, Is.EqualTo(_contentType));
+            Assert.That(stored.IsDefault, Is.True);
+            Assert.That(stored.DefaultMonitoring, Is.True);
+            Assert.That(stored.RenameTemplate, Is.EqualTo("{Title}.{Ext}"));
+            Assert.That(stored.UpgradeFileHandling, Is.EqualTo(UpgradeFileHandling.KeepBoth));
+            Assert.That(stored.Defaults["book"].QualityTierListId, Is.EqualTo(tierList.Id));
+            Assert.That(
+                published.Context["rootFolder.changedFields"],
+                Is.EqualTo("name"));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_PromotesTheOldestRemainingFolder_WhenTheDefaultLeavesItsContentType()
+    {
+        // Arrange
+        var moved = new RootFolder
+        {
+            Name = "Moved",
+            Path = "/media/moved",
+            ContentType = _contentType,
+            IsDefault = true,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        var stayed = new RootFolder
+        {
+            Name = "Stayed",
+            Path = "/media/stayed",
+            ContentType = _contentType,
+            IsDefault = false,
+            CreatedAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        _context.RootFolders.AddRange(moved, stayed);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.PatchAsync(
+            new RootFolderPatch
+            {
+                Id = moved.Id,
+                ContentType = new() { Value = "type-b" }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var defaults = await _context.RootFolders
+            .AsNoTracking()
+            .Where(folder => folder.ContentType == _contentType && folder.IsDefault)
+            .Select(folder => folder.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(defaults, Is.EqualTo([stayed.Id]));
+        }
+
+        _contentHierarchyItems.Verify(
+            items => items.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task PatchAsync_UnmarksTheOtherDefault_WhenTheFolderBecomesTheDefault()
+    {
+        // Arrange
+        var incumbent = new RootFolder
+        {
+            Name = "Incumbent",
+            Path = "/media/incumbent",
+            ContentType = _contentType,
+            IsDefault = true,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        var challenger = new RootFolder
+        {
+            Name = "Challenger",
+            Path = "/media/challenger",
+            ContentType = _contentType,
+            IsDefault = false,
+            CreatedAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByUserId = _userId
+        };
+        _context.RootFolders.AddRange(incumbent, challenger);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.PatchAsync(
+            new RootFolderPatch
+            {
+                Id = challenger.Id,
+                IsDefault = new() { Value = true }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var defaults = await _context.RootFolders
+            .AsNoTracking()
+            .Where(folder => folder.ContentType == _contentType && folder.IsDefault)
+            .Select(folder => folder.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(defaults, Is.EqualTo([challenger.Id]));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_InvalidatesImportCandidatesLeftOutsideAllRoots_WhenTheRootIsRepointed()
+    {
+        // Arrange
+        var movies = new RootFolder
+        {
+            Name = "Movies",
+            Path = @"\\mediahost\movies",
+            ContentType = _contentType,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        var shows = new RootFolder
+        {
+            Name = "Shows",
+            Path = @"D:\shows",
+            ContentType = _contentType,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        _context.RootFolders.AddRange(movies, shows);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var orphaned = new LibraryImportCandidate
+        {
+            RootFolderId = movies.Id,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = @"\\mediahost\movies\Heat (1995)\heat.mkv",
+            ContentType = _contentType,
+            Status = LibraryImportCandidateStatus.Pending,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        var stillValid = new LibraryImportCandidate
+        {
+            RootFolderId = shows.Id,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = @"D:\shows\The Wire\s01e01.mkv",
+            ContentType = _contentType,
+            Status = LibraryImportCandidateStatus.Pending,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        _context.LibraryImportCandidates.AddRange(orphaned, stillValid);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.PatchAsync(
+            new RootFolderPatch
+            {
+                Id = movies.Id,
+                Path = new() { Value = @"D:\movies" }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var orphanedAfter = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == orphaned.Id).ConfigureAwait(false);
+        var stillValidAfter = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == stillValid.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(orphanedAfter.Status, Is.EqualTo(LibraryImportCandidateStatus.Invalidated));
+            Assert.That(orphanedAfter.ModifiedByUserId, Is.EqualTo(_userId));
+            Assert.That(stillValidAfter.Status, Is.EqualTo(LibraryImportCandidateStatus.Pending));
+            Assert.That(
+                _publishedEvents.Count(magpieEvent =>
+                    magpieEvent.Name == "library.importCandidate.updated"),
+                Is.EqualTo(1));
+        }
     }
 }

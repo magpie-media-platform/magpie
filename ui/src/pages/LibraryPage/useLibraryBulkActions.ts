@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { type BulkTagItem, type BulkTagAssignmentResult } from '@/components/ui/BulkTagAssignment';
@@ -13,7 +13,7 @@ import { getErrorMessage } from '@/lib/errors';
 
 interface UseLibraryBulkActionsArgs {
     selection: BulkSelection;
-    bulkFilter: string | null;
+    bulkFilter: string;
     contentType?: string;
     level?: string;
 }
@@ -29,11 +29,7 @@ const UNSUPPORTED_TARGET_TOAST = {
     variant: 'error',
 } as const;
 
-function resolveBulkTarget(selection: BulkSelection, bulkFilter: string | null): BulkTargetResolution {
-    if (bulkFilter === null) {
-        return { kind: 'empty' };
-    }
-
+function resolveBulkTarget(selection: BulkSelection, bulkFilter: string): BulkTargetResolution {
     const resolved = selection.resolve();
 
     if (resolved.mode === 'ids') {
@@ -53,6 +49,7 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
 
     const [bulkTagsOpen, , openBulkTags, closeBulkTags] = useToggle();
     const [bulkDeleteConfirmOpen, , openBulkDeleteConfirm, closeBulkDeleteConfirm] = useToggle();
+    const [bulkDeleteFiles, setBulkDeleteFiles] = useState(false);
     const [bulkRootFolderOpen, , openBulkRootFolder, closeBulkRootFolder] = useToggle();
     const [bulkQualityTierListOpen, , openBulkQualityTierList, closeBulkQualityTierList] = useToggle();
 
@@ -72,13 +69,11 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
 
     const qualityTierListOptions: BulkValuePickerOption[] = useMemo(
         () =>
-            qualityTierLists
-                .filter((list) => contentType || list.mimeTypes.length === 0)
-                .map((list) => ({
-                    id: list.id,
-                    label: `${list.name} - ${list.mimeTypes.length > 0 ? list.mimeTypes.join(', ') : 'Any MIME type'}`,
-                })),
-        [contentType, qualityTierLists],
+            qualityTierLists.map((list) => ({
+                id: list.id,
+                label: `${list.name} - ${list.mimeTypes.length > 0 ? list.mimeTypes.join(', ') : 'Any MIME type'}`,
+            })),
+        [qualityTierLists],
     );
 
     const { data: apiTags } = useContentTags();
@@ -207,6 +202,11 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
         [bulkSetMonitoringMutation, selection, bulkFilter, toast],
     );
 
+    const handleOpenBulkDelete = useCallback(() => {
+        setBulkDeleteFiles(false);
+        openBulkDeleteConfirm();
+    }, [openBulkDeleteConfirm]);
+
     const handleConfirmBulkDelete = useCallback(async () => {
         const resolution = resolveBulkTarget(selection, bulkFilter);
         if (resolution.kind === 'empty') {
@@ -219,7 +219,10 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
         }
 
         try {
-            const result = await bulkDeleteMutation.mutateAsync(resolution.target);
+            const result = await bulkDeleteMutation.mutateAsync({
+                ...resolution.target,
+                deleteFromLibrary: bulkDeleteFiles,
+            });
 
             if (result.error) {
                 toast({
@@ -244,7 +247,7 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
                 variant: 'error',
             });
         }
-    }, [bulkDeleteMutation, closeBulkDeleteConfirm, selection, bulkFilter, toast]);
+    }, [bulkDeleteMutation, bulkDeleteFiles, closeBulkDeleteConfirm, selection, bulkFilter, toast]);
 
     const handleApplyRootFolder = useCallback(
         async (rootFolderId: string | null) => {
@@ -350,7 +353,7 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
         handleApplyQualityTierList,
         openBulkRootFolder,
         openBulkQualityTierList,
-        openBulkDeleteConfirm,
+        openBulkDeleteConfirm: handleOpenBulkDelete,
         bulkTagsOpen,
         closeBulkTags,
         bulkRootFolderOpen,
@@ -358,6 +361,8 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
         bulkQualityTierListOpen,
         closeBulkQualityTierList,
         bulkDeleteConfirmOpen,
+        bulkDeleteFiles,
+        setBulkDeleteFiles,
         closeBulkDeleteConfirm,
         isApplyingTags: bulkTagsMutation.isPending,
         isSettingMonitoring: bulkSetMonitoringMutation.isPending,

@@ -179,12 +179,14 @@ internal static class FilterFieldRegistryExtensions
                     })),
             [nameof(ContentHierarchyItemCriteria.PendingMetadataRefresh)] =
                 new BooleanField<ContentTransformContext>(
+                    ctx => ctx.ContentItem.PendingMetadataRefresh,
                     (ctx, value) => ctx.SetContentItem(ctx.ContentItem with
                     {
                         PendingMetadataRefresh = value
                     })),
             [nameof(ContentHierarchyItemCriteria.HasSearchableTitle)] =
                 new BooleanField<ContentTransformContext>(
+                    ctx => ctx.ContentItem.HasSearchableTitle,
                     (ctx, value) => ctx.SetContentItem(ctx.ContentItem with
                     {
                         HasSearchableTitle = value
@@ -846,24 +848,33 @@ internal static class FilterFieldRegistryExtensions
         }
     }
 
-    private sealed class BooleanField<TContext>(Action<TContext, bool?> setValue)
+    private sealed class BooleanField<TContext>(Func<TContext, bool?> getValue, Action<TContext, bool?> setValue)
         : ScalarFieldInfo<TContext>(typeof(bool))
     {
+        public override bool SupportsOperator(CriteriaValueOperator op)
+        {
+            return op is CriteriaValueOperator.Equals or CriteriaValueOperator.NotEquals;
+        }
+
+        public override bool ConflictsWithExisting(TContext context, CriteriaValueOperator op, object? value)
+        {
+            return getValue(context) is { } existing && existing != Resolve(op, value);
+        }
+
         public override void AddCriterion(
             TContext context,
             CriteriaValueOperator op,
             object? value,
             IEnumerable<object>? values)
         {
+            setValue(context, Resolve(op, value));
+        }
+
+        private static bool? Resolve(CriteriaValueOperator op, object? value)
+        {
             var boolean = value as bool?;
-            setValue(
-                context,
-                op switch
-                {
-                    CriteriaValueOperator.Equals => boolean,
-                    CriteriaValueOperator.NotEquals => boolean is { } typed ? !typed : null,
-                    _ => null
-                });
+
+            return op == CriteriaValueOperator.NotEquals && boolean is { } typed ? !typed : boolean;
         }
     }
 

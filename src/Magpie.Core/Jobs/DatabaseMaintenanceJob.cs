@@ -20,12 +20,12 @@ internal sealed class DatabaseMaintenanceJob(
     TimeProvider timeProvider,
     ILogger<DatabaseMaintenanceJob> logger,
     IEventBus eventBus,
-    IDatabaseManagementProvider? databaseProvider = null,
-    IProgressReporter? progressReporter = null) : IJob
+    IProgressReporter progressReporter,
+    IDatabaseManagementProvider? databaseProvider = null) : IJob
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "DatabaseMaintenance",
+        JobType = MagpieJobs.Types.DatabaseMaintenance,
         DisplayName = "Database maintenance",
         Description = "Runs scheduled backups, removes expired backups, and optimizes the database.",
         Category = "System",
@@ -38,43 +38,37 @@ internal sealed class DatabaseMaintenanceJob(
         Parameters =
         [
             new(
-                BackupEnabledParameter,
+                MagpieJobs.Parameters.BackupEnabled,
                 "Whether scheduled database backups are enabled.",
                 DataType.Boolean,
                 false,
                 DefaultBackupEnabled.ToString().ToLowerInvariant()),
             new(
-                BackupIntervalDaysParameter,
+                MagpieJobs.Parameters.BackupIntervalDays,
                 "Minimum days between scheduled database backups.",
                 DataType.Number,
                 false,
                 DefaultBackupIntervalDays.ToString(CultureInfo.InvariantCulture)),
             new(
-                BackupRetentionCountParameter,
+                MagpieJobs.Parameters.BackupRetentionCount,
                 "Scheduled database backups to retain.",
                 DataType.Number,
                 false,
                 DefaultBackupRetentionCount.ToString(CultureInfo.InvariantCulture)),
             new(
-                OptimizeEnabledParameter,
+                MagpieJobs.Parameters.OptimizeEnabled,
                 "Whether scheduled database optimization is enabled.",
                 DataType.Boolean,
                 false,
                 DefaultOptimizeEnabled.ToString().ToLowerInvariant()),
             new(
-                OptimizeIntervalDaysParameter,
+                MagpieJobs.Parameters.OptimizeIntervalDays,
                 "Minimum days between database optimizations.",
                 DataType.Number,
                 false,
                 DefaultOptimizeIntervalDays.ToString(CultureInfo.InvariantCulture))
         ],
     };
-
-    private const string BackupEnabledParameter = "backupEnabled";
-    private const string BackupIntervalDaysParameter = "backupIntervalDays";
-    private const string BackupRetentionCountParameter = "backupRetentionCount";
-    private const string OptimizeEnabledParameter = "optimizeEnabled";
-    private const string OptimizeIntervalDaysParameter = "optimizeIntervalDays";
 
     private const bool DefaultBackupEnabled = false;
     private const int DefaultBackupIntervalDays = 1;
@@ -84,22 +78,24 @@ internal sealed class DatabaseMaintenanceJob(
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
-        var progress = progressReporter;
         var now = timeProvider.GetUtcNow().UtcDateTime;
-        var backupEnabled = ReadBooleanParameter(jobContext.Parameters, BackupEnabledParameter, DefaultBackupEnabled);
+        var backupEnabled = ReadBooleanParameter(
+            jobContext.Parameters,
+            MagpieJobs.Parameters.BackupEnabled,
+            DefaultBackupEnabled);
         var optimizeEnabled = ReadBooleanParameter(
             jobContext.Parameters,
-            OptimizeEnabledParameter,
+            MagpieJobs.Parameters.OptimizeEnabled,
             DefaultOptimizeEnabled);
 
-        progress?.Report(0, "The maintenance job will read the database capabilities.");
+        progressReporter.Report(0, "The maintenance job will read the database capabilities.");
 
         if (backupEnabled)
         {
             await RunBackupMaintenanceAsync(
                 jobContext.Parameters,
                 now,
-                progress,
+                progressReporter,
                 cancellationToken).ConfigureAwait(false);
         }
         else
@@ -112,7 +108,7 @@ internal sealed class DatabaseMaintenanceJob(
             await RunOptimizationMaintenanceAsync(
                 jobContext.Parameters,
                 now,
-                progress,
+                progressReporter,
                 cancellationToken).ConfigureAwait(false);
         }
         else
@@ -120,21 +116,21 @@ internal sealed class DatabaseMaintenanceJob(
             logger.LogInformation("Scheduled database optimization is disabled");
         }
 
-        progress?.Report(1, "The database maintenance completed.");
+        progressReporter.Report(1, "The database maintenance completed.");
     }
 
     private async Task RunBackupMaintenanceAsync(
         IReadOnlyDictionary<string, string> parameters,
         DateTime now,
-        IProgressReporter? progress,
+        IProgressReporter progress,
         CancellationToken cancellationToken)
     {
         if (databaseProvider is not IRecoverableDatabaseManagementProvider backupProvider)
         {
             logger.LogInformation(
-                "Provider {Provider} does not support backups. The database backup maintenance did not run",
+                "Provider {Provider} does not support backups, so the database backup maintenance did not run",
                 databaseProvider?.Provider ?? "none");
-            progress?.Report(
+            progress.Report(
                 null,
                 "The maintenance job skipped database backups because the provider does not support them.");
             return;
@@ -142,14 +138,14 @@ internal sealed class DatabaseMaintenanceJob(
 
         var interval = TimeSpan.FromDays(ReadPositiveIntParameter(
             parameters,
-            BackupIntervalDaysParameter,
+            MagpieJobs.Parameters.BackupIntervalDays,
             DefaultBackupIntervalDays));
         var retentionCount = ReadPositiveIntParameter(
             parameters,
-            BackupRetentionCountParameter,
+            MagpieJobs.Parameters.BackupRetentionCount,
             DefaultBackupRetentionCount);
 
-        progress?.Report(null, "The maintenance job will load the scheduled database backups.");
+        progress.Report(null, "The maintenance job will load the scheduled database backups.");
         var scheduledBackups = (await backupProvider.ListBackupsAsync(cancellationToken).ConfigureAwait(false))
             .Where(backup => backup.Kind == BackupKind.Scheduled)
             .OrderByDescending(backup => backup.CreatedAt)
@@ -157,7 +153,7 @@ internal sealed class DatabaseMaintenanceJob(
 
         if (scheduledBackups.FirstOrDefault() is not { } latest || latest.CreatedAt <= now - interval)
         {
-            progress?.Report(null, "The maintenance job will create a scheduled database backup.");
+            progress.Report(null, "The maintenance job will create a scheduled database backup.");
             var backupId = await backupProvider.BackupAsync(
                 new BackupCreateOptions { Kind = BackupKind.Scheduled },
                 cancellationToken).ConfigureAwait(false);
@@ -181,7 +177,7 @@ internal sealed class DatabaseMaintenanceJob(
         for (var i = 0; i < backupsToDelete.Count; i++)
         {
             var backup = backupsToDelete[i];
-            progress?.ReportFraction(
+            progress.ReportFraction(
                 i,
                 backupsToDelete.Count,
                 "The maintenance job will delete old scheduled database backups.");
@@ -198,15 +194,15 @@ internal sealed class DatabaseMaintenanceJob(
     private async Task RunOptimizationMaintenanceAsync(
         IReadOnlyDictionary<string, string> parameters,
         DateTime now,
-        IProgressReporter? progress,
+        IProgressReporter progress,
         CancellationToken cancellationToken)
     {
         if (databaseProvider is not IOptimizingDatabaseManagementProvider optimizingProvider)
         {
             logger.LogInformation(
-                "Provider {Provider} does not support optimization. The database optimization did not run",
+                "Provider {Provider} does not support optimization, so the database optimization did not run",
                 databaseProvider?.Provider ?? "none");
-            progress?.Report(
+            progress.Report(
                 null,
                 "The maintenance job skipped database optimization because the provider does not support it.");
             return;
@@ -214,7 +210,7 @@ internal sealed class DatabaseMaintenanceJob(
 
         var interval = TimeSpan.FromDays(ReadPositiveIntParameter(
             parameters,
-            OptimizeIntervalDaysParameter,
+            MagpieJobs.Parameters.OptimizeIntervalDays,
             DefaultOptimizeIntervalDays));
         var lastOptimized = await optimizingProvider.GetLastOptimizedAsync(cancellationToken).ConfigureAwait(false);
         if (lastOptimized is { } optimizedAt && optimizedAt > now - interval)
@@ -226,7 +222,7 @@ internal sealed class DatabaseMaintenanceJob(
             return;
         }
 
-        progress?.Report(null, "The maintenance job will optimize the database.");
+        progress.Report(null, "The maintenance job will optimize the database.");
         await optimizingProvider.OptimizeAsync(cancellationToken).ConfigureAwait(false);
         logger.LogInformation("The provider completed the database optimization");
     }
@@ -247,7 +243,8 @@ internal sealed class DatabaseMaintenanceJob(
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Value} is not a positive integer. The job will use the default {Default}",
+            "Parameter {Parameter} value {Value} is not a positive integer, so the job will use the default" +
+            " {Default}",
             parameterName,
             raw,
             defaultValue);
@@ -271,8 +268,8 @@ internal sealed class DatabaseMaintenanceJob(
         }
 
         logger.LogWarning(
-            "Database maintenance parameter {Parameter} value {Value} is not boolean. " +
-            "The job will use the default {Default}",
+            "Database maintenance parameter {Parameter} value {Value} is not boolean, so the job will use " +
+            "the default {Default}",
             parameterName,
             raw,
             defaultValue);

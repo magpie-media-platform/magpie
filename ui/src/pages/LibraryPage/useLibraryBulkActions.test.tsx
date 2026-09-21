@@ -47,7 +47,7 @@ function createWrapper(queryClient: QueryClient) {
     };
 }
 
-function renderBulkActions(contentType?: string, level?: string, bulkFilter: string | null = SCOPE_FILTER) {
+function renderBulkActions(contentType?: string, level?: string, bulkFilter: string = SCOPE_FILTER) {
     const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
     });
@@ -88,7 +88,7 @@ describe('useLibraryBulkActions', () => {
         ]);
     });
 
-    it('offers only universal tier lists when the selection spans content types', () => {
+    it('offers every tier list with its MIME scope in the label when the route has no content type', () => {
         mockUseQualityTierLists.mockReturnValue({
             tierLists: [
                 { id: 'video', name: 'Video', mimeTypes: ['video/*'] },
@@ -99,15 +99,15 @@ describe('useLibraryBulkActions', () => {
         const { result } = renderBulkActions();
 
         expect(result.current.actions.qualityTierListOptions).toEqual([
+            { id: 'video', label: 'Video - video/*' },
             { id: 'universal', label: 'Universal - Any MIME type' },
         ]);
     });
 
     describe('explicit ids', () => {
-        it('does nothing when the route has no safe bulk scope', async () => {
-            const { result } = renderBulkActions(undefined, undefined, null);
+        it('does nothing when no row is selected', async () => {
+            const { result } = renderBulkActions();
 
-            act(() => result.current.selection.toggleRow('content-1', true));
             await act(async () => {
                 await result.current.actions.handleBulkSetMonitoring(true);
             });
@@ -197,7 +197,10 @@ describe('useLibraryBulkActions', () => {
                 await result.current.actions.handleConfirmBulkDelete();
             });
 
-            expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete', { ids: ['content-1'] });
+            expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete', {
+                ids: ['content-1'],
+                deleteFromLibrary: false,
+            });
         });
     });
 
@@ -266,7 +269,10 @@ describe('useLibraryBulkActions', () => {
                 await result.current.actions.handleConfirmBulkDelete();
             });
 
-            expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete', { filter: SCOPE_FILTER });
+            expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete', {
+                filter: SCOPE_FILTER,
+                deleteFromLibrary: false,
+            });
         });
 
         it('refuses to widen the target set when rows were deselected inside a select-all', async () => {

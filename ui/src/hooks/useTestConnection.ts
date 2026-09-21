@@ -18,13 +18,6 @@ interface UseTestConnectionResult<TTarget = string> {
     error: Error | null;
 }
 
-type IndexerTestTarget =
-    | string
-    | {
-          indexerId: string;
-          connectionId: string;
-      };
-
 export interface IntegrationSettingsTestRequest {
     providerType?: string;
 
@@ -93,14 +86,6 @@ function useTestConnection<TTarget>(
 
 export function useTestDownloadClient(): UseTestConnectionResult {
     return useTestConnection('download-clients', (id: string) => `/download-clients/${id}/test`);
-}
-
-export function useTestIndexer(): UseTestConnectionResult<IndexerTestTarget> {
-    return useTestConnection('indexers', (target: IndexerTestTarget) =>
-        typeof target === 'string'
-            ? `/indexers/${target}/test`
-            : `/indexers/${target.indexerId}/connections/${target.connectionId}/test`,
-    );
 }
 
 export function useTestMediaServer(): UseTestConnectionResult {

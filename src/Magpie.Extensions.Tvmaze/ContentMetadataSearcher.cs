@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -8,7 +7,6 @@ using Magpie.Extensions.Tvmaze.Mapping;
 using Magpie.Extensions.Tvmaze.Pipeline;
 using Magpie.Models;
 using Magpie.Models.Data;
-using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
 using Magpie.Sdk.Content;
 
@@ -24,7 +22,6 @@ internal sealed class ContentMetadataSearcher(
 {
     private const string TvContentType = "tv";
     private const string ShowLevelSlug = "show";
-    private const int DefaultPageSize = 25;
 
     public string ProviderType => Constants.ProviderType;
 
@@ -87,36 +84,6 @@ internal sealed class ContentMetadataSearcher(
         return await executor.ExecuteAsync(plan, cancellationToken).ConfigureAwait(false);
     }
 
-    internal Task<MetadataSearchPage> AdvancedSearchAsync(
-        ContentHierarchyLevelDefinition levelDefinition,
-        MetadataCriteria criteria,
-        int page,
-        string defaultLanguagePreference,
-        CancellationToken cancellationToken = default)
-    {
-        if (levelDefinition.Slug != ShowLevelSlug)
-        {
-            logger.LogDebug(
-                "The TVmaze searcher does not support advanced search for level slug {Slug}.",
-                levelDefinition.Slug);
-            return Task.FromResult(MetadataSearchPage.NotSupported);
-        }
-
-        return AdvancedSearchAsync(
-            TvContentType,
-            new ContentHierarchyItemCriteria
-            {
-                Level = new CriteriaSet<PropertyCriterion<string>>
-                {
-                    And = [new PropertyCriterion<string> { Value = levelDefinition.Slug }]
-                },
-                Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
-            },
-            (int)Math.Min((long)Math.Max(1, page) * DefaultPageSize, int.MaxValue - 1L),
-            defaultLanguagePreference,
-            cancellationToken);
-    }
-
     public async Task<MetadataSearchCandidate?> HydrateAsync(
         MetadataSearchCandidate candidate,
         string defaultLanguagePreference,
@@ -131,7 +98,7 @@ internal sealed class ContentMetadataSearcher(
             return null;
         }
 
-        var show = await client.GetShowWithCreditsAsync(id, cancellationToken).ConfigureAwait(false);
+        var show = await client.GetShowWithEmbedsAsync(id, ["cast", "crew"], cancellationToken).ConfigureAwait(false);
         return show.ToMetadataSearchCandidate();
     }
 }

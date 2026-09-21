@@ -14,7 +14,7 @@ namespace Magpie.Test.Extensions.Qbittorrent;
 public class TorrentBytesExtensionsTests
 {
     [Test]
-    public void ComputeInfoHash_SingleFileTorrent_MatchesSha1OfInfoDict()
+    public void ComputeInfoHash_MatchesSha1OfInfoDict_WhenSingleFileTorrent()
     {
         // Arrange
         var pieces = Enumerable.Range(0, 20).Select(index => (byte)index).ToArray();
@@ -40,7 +40,7 @@ public class TorrentBytesExtensionsTests
     }
 
     [Test]
-    public void ComputeInfoHash_MultiFileTorrent_MatchesSha1OfInfoDict()
+    public void ComputeInfoHash_MatchesSha1OfInfoDict_WhenMultiFileTorrent()
     {
         // Arrange
         var pieces = Enumerable.Range(0, 60).Select(index => (byte)index).ToArray();
@@ -66,7 +66,7 @@ public class TorrentBytesExtensionsTests
     }
 
     [Test]
-    public void ComputeInfoHash_TorrentWithNestedDictsBeforeInfo_StillFindsInfo()
+    public void ComputeInfoHash_StillFindsInfo_WhenTorrentWithNestedDictsBeforeInfo()
     {
         // Arrange
         const string primary = "http://primary.example/announce";
@@ -94,7 +94,7 @@ public class TorrentBytesExtensionsTests
     }
 
     [Test]
-    public void ComputeInfoHash_MissingInfoKey_Throws()
+    public void ComputeInfoHash_Throws_WhenMissingInfoKey()
     {
         // Arrange
         var torrent = Encoding.ASCII.GetBytes("d8:announce23:http://example/announcee");
@@ -107,7 +107,7 @@ public class TorrentBytesExtensionsTests
     }
 
     [Test]
-    public void ComputeInfoHash_NotADictionary_Throws()
+    public void ComputeInfoHash_Throws_WhenNotADictionary()
     {
         // Arrange
         var torrent = Encoding.ASCII.GetBytes("l5:helloe");
@@ -120,7 +120,7 @@ public class TorrentBytesExtensionsTests
     }
 
     [Test]
-    public void ComputeInfoHash_MalformedString_Throws()
+    public void ComputeInfoHash_Throws_WhenMalformedString()
     {
         // Arrange
         var torrent = Encoding.ASCII.GetBytes("d100:abce");
@@ -133,28 +133,20 @@ public class TorrentBytesExtensionsTests
     }
 
     [Test]
-    public void ComputeInfoHash_NestingBeyondCap_ThrowsCatchableInvalidDataException()
+    public void ComputeInfoHash_Throws_WhenNestingBeyondCap()
     {
         // Arrange
         var torrent = Encoding.ASCII.GetBytes("d4:info" + new string('l', 500) + new string('e', 501));
 
         // Act
-        var caught = false;
-        try
-        {
-            torrent.ComputeInfoHash();
-        }
-        catch (InvalidDataException)
-        {
-            caught = true;
-        }
+        var action = new TestDelegate(() => torrent.ComputeInfoHash());
 
         // Assert
-        Assert.That(caught, Is.True);
+        Assert.Throws<InvalidDataException>(action);
     }
 
     [Test]
-    public void ComputeInfoHash_DeeplyButValidlyNestedWithinCap_StillParses()
+    public void ComputeInfoHash_StillParses_WhenDeeplyButValidlyNestedWithinCap()
     {
         // Arrange
         var pieces = Enumerable.Range(0, 20).Select(index => (byte)index).ToArray();

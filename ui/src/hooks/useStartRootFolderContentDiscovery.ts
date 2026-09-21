@@ -4,7 +4,7 @@ import { libraryImportCandidateQueryKeys } from '@/hooks/useLibraryImportCandida
 import { useJobAction } from '@/hooks/useJobAction';
 import type { RunJobRequest } from '@/hooks/useJobs';
 import { useScanCompletionTracker, type ScanBatchInfo } from '@/hooks/useScanCompletionTracker';
-import { executeImmediateJobRequest, requireJobActionExecutionId, type JobActionDisposition } from '@/lib/jobActions';
+import { executeJobRequest, requireJobActionExecutionId, type JobActionDisposition } from '@/lib/jobActions';
 
 interface StartRootFolderContentDiscoveryVariables {
     rootFolderId: string;
@@ -17,11 +17,13 @@ type StartRootFolderContentDiscoveryResult = JobActionDisposition;
 async function startRootFolderContentDiscovery({
     rootFolderId,
 }: StartRootFolderContentDiscoveryVariables): Promise<StartRootFolderContentDiscoveryResult> {
+    // Immediate mode holds the HTTP request open for the full scan, so a large root folder times out.
     const request: RunJobRequest = {
         jobType: 'RootFolderContentDiscovery',
+        mode: 'Queue',
         parameters: { rootFolderId },
     };
-    const disposition = await executeImmediateJobRequest(request);
+    const disposition = await executeJobRequest(request);
     requireJobActionExecutionId(disposition, 'Root folder content discovery');
     return disposition;
 }

@@ -1,4 +1,4 @@
-import { forwardRef, type InputHTMLAttributes, type ReactNode } from 'react';
+import { forwardRef, useId, type InputHTMLAttributes, type ReactNode } from 'react';
 
 import './Input.css';
 
@@ -35,7 +35,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
         },
         ref,
     ) => {
-        const errorId = errorMessage && id ? `${id}-error` : undefined;
+        const generatedId = useId();
+        const inputId = id ?? generatedId;
+        const errorId = errorMessage ? `${inputId}-error` : undefined;
         const describedBy = [ariaDescribedBy, errorId].filter(Boolean).join(' ') || undefined;
 
         const hasTrailing = !!trailingIcon || !!trailingAction;
@@ -69,7 +71,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
                     )}
                     <input
                         ref={ref}
-                        id={id}
+                        id={inputId}
                         className="input"
                         disabled={disabled}
                         aria-invalid={error}

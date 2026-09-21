@@ -15,7 +15,7 @@ public interface ICredentialAuthenticationProvider : IAuthenticationProvider
     /// </summary>
     /// <param name="username">The username</param>
     /// <param name="password">The password</param>
-    /// <param name="cancellationToken">The cancellation token</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The authenticated user, or <see langword="null"/> when verification fails</returns>
     Task<User?> VerifyCredentialsAsync(string username, string password, CancellationToken cancellationToken = default);
 }

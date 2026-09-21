@@ -31,7 +31,7 @@ public interface IContentService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a content hierarchy item by id.
+    /// A content hierarchy item by id.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the item to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -40,7 +40,7 @@ public interface IContentService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets or creates the content item for a hierarchy item.
+    /// Gets the content item for a hierarchy item, creating one when absent.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the hierarchy item</param>
     /// <param name="now">The UTC time to record</param>
@@ -55,7 +55,7 @@ public interface IContentService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a page of the children of a content hierarchy item, or <see langword="null"/> when the parent is absent.
+    /// A page of the children of a content hierarchy item, or <see langword="null"/> when the parent is absent.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the parent item</param>
     /// <param name="paging">The page number and page size</param>
@@ -152,10 +152,12 @@ public interface IContentService
     /// Deletes every content hierarchy item the action selects.
     /// </summary>
     /// <param name="action">The selection of items to act on</param>
+    /// <param name="deleteFromLibrary">Whether the delete also removes the files from disk</param>
     /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<BulkResult> BulkDeleteAsync(
         BulkAction<ContentFilterCriteria> action,
+        bool deleteFromLibrary,
         Guid? actingUserId,
         CancellationToken cancellationToken = default);
 
@@ -182,6 +184,37 @@ public interface IContentService
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The hydration result, or <see langword="null"/> when a resolver reports not-found</returns>
     Task<ContentHierarchyItem?> HydrateFromExternalIdAsync(
+        string providerType,
+        string externalIdKey,
+        string externalId,
+        string contentType,
+        string? levelSlug,
+        Guid? rootFolderId,
+        bool? monitoring,
+        Guid? qualityTierListId,
+        Guid? requestedViaWishlistId,
+        IReadOnlyCollection<string>? tags,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hydrates content from an external provider id, with the descendant structure the provider declares.
+    /// </summary>
+    /// <param name="providerType">The metadata provider type</param>
+    /// <param name="externalIdKey">The external id source</param>
+    /// <param name="externalId">The external id value</param>
+    /// <param name="contentType">The content type slug</param>
+    /// <param name="levelSlug">The target root level slug</param>
+    /// <param name="rootFolderId">The target root folder id</param>
+    /// <param name="monitoring">The monitoring override</param>
+    /// <param name="qualityTierListId">The quality tier list id</param>
+    /// <param name="requestedViaWishlistId">The requesting wishlist id</param>
+    /// <param name="tags">The tags to apply</param>
+    /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The root item and the ids created by this hydration, or <see langword="null"/> when a resolver reports not-found</returns>
+    Task<(ContentHierarchyItem Root, IReadOnlyCollection<Guid> CreatedHierarchyItemIds)?>
+        HydrateWithDescendantsFromExternalIdAsync(
         string providerType,
         string externalIdKey,
         string externalId,

@@ -14,7 +14,6 @@ using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -33,7 +32,6 @@ public class MagpieAuthHandlerTests
     private Mock<IAuthenticationProvider> _provider2 = null!;
     private MagpieAuthenticationHandler _subject = null!;
     private DefaultHttpContext _httpContext = null!;
-    private ILoggerFactory _loggerFactory = null!;
 
     [SetUp]
     public async Task SetUp()
@@ -53,11 +51,9 @@ public class MagpieAuthHandlerTests
             .Setup(m => m.Get(MagpieAuthenticationHandler.SchemeName))
             .Returns(options);
 
-        _loggerFactory = NullLoggerFactory.Instance;
-
         _subject = new MagpieAuthenticationHandler(
             optionsMonitor.Object,
-            _loggerFactory,
+            NullLoggerFactory.Instance,
             UrlEncoder.Default,
             _apiKeyService.Object,
             _userService.Object,
@@ -71,12 +67,6 @@ public class MagpieAuthHandlerTests
             typeof(MagpieAuthenticationHandler));
 
         await _subject.InitializeAsync(scheme, _httpContext).ConfigureAwait(false);
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        _loggerFactory?.Dispose();
     }
 
     [Test]
@@ -120,7 +110,7 @@ public class MagpieAuthHandlerTests
             .Returns(new MagpieSchemeOptions());
         _subject = new MagpieAuthenticationHandler(
             optionsMonitor.Object,
-            _loggerFactory,
+            NullLoggerFactory.Instance,
             UrlEncoder.Default,
             _apiKeyService.Object,
             _userService.Object,
@@ -212,7 +202,7 @@ public class MagpieAuthHandlerTests
     }
 
     [Test]
-    public async Task AuthenticateAsync_ApiKeyTakesPrecedence_OverProviders()
+    public async Task AuthenticateAsync_UsesApiKey_WhenApiKeyAndProvidersArePresent()
     {
         // Arrange
         var userId = Guid.NewGuid();
@@ -409,16 +399,14 @@ public class MagpieAuthHandlerTests
         var result = await _subject.AuthenticateAsync().ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            _provider1.Verify(
-                h => h.TryAuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<CancellationToken>()),
-                Times.Once);
-            _provider2.Verify(
-                h => h.TryAuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<CancellationToken>()),
-                Times.Once);
-            Assert.That(result, Has.Property(nameof(result.Succeeded)).True);
-        }
+        Assert.That(result, Has.Property(nameof(result.Succeeded)).True);
+
+        _provider1.Verify(
+            h => h.TryAuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _provider2.Verify(
+            h => h.TryAuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -577,16 +565,14 @@ public class MagpieAuthHandlerTests
         var result = await _subject.AuthenticateAsync().ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Has.Property(nameof(result.Succeeded)).True);
-            _provider1.Verify(
-                h => h.TryAuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<CancellationToken>()),
-                Times.Once);
-            _provider2.Verify(
-                h => h.TryAuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<CancellationToken>()),
-                Times.Once);
-        }
+        Assert.That(result, Has.Property(nameof(result.Succeeded)).True);
+
+        _provider1.Verify(
+            h => h.TryAuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _provider2.Verify(
+            h => h.TryAuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]

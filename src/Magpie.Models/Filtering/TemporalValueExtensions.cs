@@ -12,13 +12,13 @@ namespace Magpie.Models.Filtering;
 public static class TemporalValueExtensions
 {
     /// <summary>
-    /// Returns the inclusive start instant of the period of a value.
+    /// Gets the inclusive start instant of the period of a value.
     /// </summary>
     /// <param name="value">The value that gives the period</param>
     public static DateTime PeriodStart(this TemporalValue value) => value.Value;
 
     /// <summary>
-    /// Returns the exclusive end instant of the period of a value.
+    /// Gets the exclusive end instant of the period of a value.
     /// </summary>
     /// <param name="value">The value that gives the period</param>
     public static DateTime PeriodEndExclusive(this TemporalValue value) => value.Precision switch

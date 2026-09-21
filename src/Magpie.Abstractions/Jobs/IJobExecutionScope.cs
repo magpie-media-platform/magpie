@@ -15,10 +15,11 @@ public interface IJobExecutionScope : IAsyncDisposable
     /// Sets the parent execution for the jobs that this scope enqueues.
     /// </summary>
     /// <param name="executionId">The id of the parent job execution</param>
-    void SetParentContext(Guid executionId);
+    /// <param name="correlationId">The correlation of the parent job execution</param>
+    void SetParentContext(Guid executionId, Guid? correlationId);
 
     /// <summary>
-    /// Gets the handler that is registered for a job specification.
+    /// Gets the handler that is registered for a job specification, if one exists.
     /// </summary>
     /// <param name="spec">The specification of the job to run</param>
     /// <param name="handler">The registered handler, set only when the method returns true</param>

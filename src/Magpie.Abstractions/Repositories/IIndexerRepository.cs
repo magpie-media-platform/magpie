@@ -10,4 +10,5 @@ namespace Magpie.Abstractions.Repositories;
 /// </summary>
 public interface IIndexerRepository :
     IQueryRepository<Indexer, IndexerQuery>,
-    ICrudRepository<Guid, Indexer>;
+    ICrudRepository<Guid, Indexer>,
+    IPatchRepository<Guid, Indexer, IndexerPatch>;

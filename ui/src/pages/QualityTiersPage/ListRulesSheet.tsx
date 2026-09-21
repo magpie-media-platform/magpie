@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import { FloppyDiskIcon, XIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
@@ -5,6 +6,7 @@ import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/co
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 
 import { CriteriaEditor, type Criterion } from './CriteriaEditor';
+import { hasBlankField } from './criteriaEditorUtils';
 import { ExclusionsEditor, type ExclusionDraft } from './RulesEditor';
 
 interface ListRulesSheetProps {
@@ -40,6 +42,19 @@ export function ListRulesSheet({
     onCancelStaleSave,
     onConfirmStaleSave,
 }: ListRulesSheetProps) {
+    const [showBlankFieldError, setShowBlankFieldError] = useState(false);
+    const hasBlankCriterionField =
+        criteria.some(hasBlankField) || exclusions.some((exclusion) => exclusion.criteria.some(hasBlankField));
+
+    const handleSave = useCallback(() => {
+        if (hasBlankCriterionField) {
+            setShowBlankFieldError(true);
+            return;
+        }
+        setShowBlankFieldError(false);
+        onSave();
+    }, [hasBlankCriterionField, onSave]);
+
     return (
         <Sheet open={open} onOpenChange={onOpenChange}>
             <SheetContent side="right" className="tier-form__sheet" data-component="list-rules-form">
@@ -75,6 +90,11 @@ export function ListRulesSheet({
                         helpText="Matching any exclusion rejects the release before any tier in this list is evaluated."
                         disabled={isSubmitting}
                     />
+                    {showBlankFieldError && hasBlankCriterionField && (
+                        <p className="tier-form__error" role="alert">
+                            Every criterion needs a field name
+                        </p>
+                    )}
                 </div>
 
                 <SheetFooter>
@@ -93,7 +113,7 @@ export function ListRulesSheet({
                         variant="primary"
                         loading={isSubmitting}
                         disabled={conflictState === 'deleted'}
-                        onClick={onSave}
+                        onClick={handleSave}
                         data-action="save-list-criteria-exclusions"
                     >
                         <FloppyDiskIcon weight="bold" aria-hidden="true" />

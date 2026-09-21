@@ -64,17 +64,30 @@ describe('WeekView', () => {
         expect(dateElements).toHaveLength(7);
     });
 
-    it('calls onDayClick when a day column is clicked', async () => {
+    it('calls onDayClick when its separate day button is clicked', async () => {
         const user = userEvent.setup();
         const onDayClick = vi.fn();
         render(
             <WeekView {...defaultProps} getEventsForDate={() => [makeEvent('1', 'Test')]} onDayClick={onDayClick} />,
         );
 
-        const col = document.querySelector('[data-date="2024-01-14"]');
+        const col = document.querySelector('[data-date="2024-01-14"] > button');
         expect(col).toBeInTheDocument();
         await user.click(col!);
         expect(onDayClick).toHaveBeenCalledTimes(1);
+        expect(document.querySelector('button button, [role="button"] button')).toBeNull();
+    });
+
+    it('calls onDayClick when the weekday header column is clicked', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onDayClick = vi.fn();
+        render(<WeekView {...defaultProps} onDayClick={onDayClick} />);
+        // Act
+        await user.click(document.querySelectorAll('button.calendar-page__weekday-col')[0]);
+        // Assert
+        expect(onDayClick).toHaveBeenCalledTimes(1);
+        expect(document.querySelectorAll('button.calendar-page__weekday-col')).toHaveLength(7);
     });
 
     it('does not call onDayClick when an event card is clicked', async () => {

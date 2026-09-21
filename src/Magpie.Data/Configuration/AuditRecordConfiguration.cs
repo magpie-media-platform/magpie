@@ -19,5 +19,6 @@ internal sealed class AuditRecordConfiguration : IEntityTypeConfiguration<AuditR
         builder.HasIndex(e => e.EntityId);
         builder.HasIndex(e => e.UserId);
         builder.HasIndex(e => e.CorrelationId);
+        builder.HasIndex(e => e.JobExecutionId);
     }
 }

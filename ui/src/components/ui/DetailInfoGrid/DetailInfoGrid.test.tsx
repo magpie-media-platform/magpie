@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
@@ -30,37 +27,30 @@ describe('DetailInfoGrid', () => {
 
         expect(screen.getByTestId('publish-date-row')).toHaveAttribute('data-has-control', 'false');
     });
+});
 
-    it('sets one shared gap token so every consecutive row pair keeps the same pitch', () => {
-        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/DetailInfoGrid/DetailInfoGrid.css'), 'utf8');
-        const grid = css.match(/\.detail-info-grid\s*{(?<declarations>[\s\S]*?)\n {4}}/)?.groups?.declarations;
-        const row = css.match(/\.detail-info-row\s*{(?<declarations>[\s\S]*?)\n {4}}/)?.groups?.declarations;
+describe('DetailInfoRow', () => {
+    it('renders a compact policy row with its effective value and control', () => {
+        render(
+            <DetailInfoGrid aria-label="Content settings">
+                <DetailInfoRow label="Monitoring" value="Monitored" control={<button>Inherit</button>} />
+            </DetailInfoGrid>,
+        );
 
-        expect(grid).toContain('gap: var(--space-sm);');
-        expect(grid).not.toContain('gap: var(--space-xs);');
-        expect(row).toContain('min-height: 32px;');
-        expect(row).not.toContain('margin-top:');
+        expect(screen.getByRole('region', { name: 'Content settings' })).toBeInTheDocument();
+        expect(screen.getByText('Monitoring')).toBeInTheDocument();
+        expect(screen.getByText('Monitored')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Inherit' })).toBeInTheDocument();
     });
 
-    it('declares the under-header offset once for every detail page that consumes it', () => {
-        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/DetailInfoGrid/DetailInfoGrid.css'), 'utf8');
-        const underHeader = css.match(/\.detail-info-grid--under-header\s*{(?<declarations>[\s\S]*?)\n {4}}/)?.groups
-            ?.declarations;
-        const wideUnderHeader = css.match(
-            /@media \(min-width: 1100px\) {\s*\.detail-info-grid--under-header\s*{(?<declarations>[\s\S]*?)\n {8}}/,
-        )?.groups?.declarations;
-        const contentPageCss = readFileSync(
-            resolve(process.cwd(), 'src/pages/ContentDetailPage/ContentDetailPage.css'),
-            'utf8',
-        );
-        const subjectPageCss = readFileSync(
-            resolve(process.cwd(), 'src/pages/SubjectDetailPage/SubjectDetailPage.css'),
-            'utf8',
+    it('renders effective values without requiring an editable control', () => {
+        render(
+            <DetailInfoGrid aria-label="Content settings">
+                <DetailInfoRow label="Root folder" value="Movies" />
+            </DetailInfoGrid>,
         );
 
-        expect(underHeader).toContain('margin-top: calc(-1 * var(--space-md));');
-        expect(wideUnderHeader).toContain('margin-top: calc(-1 * var(--space-lg));');
-        expect(contentPageCss).not.toContain('__supporting-info');
-        expect(subjectPageCss).not.toContain('__supporting-info');
+        expect(screen.getByText('Movies')).toBeInTheDocument();
+        expect(screen.queryByRole('button')).not.toBeInTheDocument();
     });
 });

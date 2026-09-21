@@ -22,8 +22,7 @@ import { useUserMap } from '@/hooks/useUserMap';
 import { useAuth, Role } from '@/auth';
 import { canEditOwned } from '@/lib/ownership';
 import { getErrorMessage } from '@/lib/errors';
-import type { WishlistFormValues } from '@/types';
-import { WishlistForm } from './WishlistForm';
+import { WishlistForm, type WishlistFormValues } from './WishlistForm';
 import { resolveFilterContentType } from './wishlistFormUtils';
 import { WishlistRow, type WishlistItem } from './WishlistRow';
 import { buildWishlistPatch } from './buildWishlistPatch';
@@ -40,7 +39,8 @@ function mapApiWishlistToItem(apiWishlist: ApiWishlist): WishlistItem {
         ownerName: null,
         filterName: apiWishlist.contentFilter?.name ?? null,
         qualityTierListName: apiWishlist.qualityTierList?.name ?? null,
-        monitored: apiWishlist.enabled,
+        enabled: apiWishlist.enabled,
+        monitoring: apiWishlist.monitoring ?? null,
         ownerLock: apiWishlist.ownerLock,
         lastSyncedAt: apiWishlist.lastSyncedAt ?? null,
         createdAt: apiWishlist.createdAt,
@@ -76,7 +76,6 @@ export function WishlistsPage() {
         updateWishlist,
         isUpdating,
         toggleLock,
-        isLocking,
         deleteWishlist,
         refetch,
     } = useWishlists();
@@ -143,13 +142,6 @@ export function WishlistsPage() {
         [handleAddWishlist],
     );
 
-    const handleWishlistClick = useCallback(
-        (id: string) => {
-            void navigate(`/wishlists/${id}`);
-        },
-        [navigate],
-    );
-
     const handleEditWishlist = useCallback(
         (id: string) => {
             const wishlist = apiWishlists.find((wl) => wl.id === id);
@@ -178,17 +170,11 @@ export function WishlistsPage() {
             return;
         }
 
-        const isOwner = deletingWishlist.ownerUserId === user?.id;
         const hasBackingFilter = !!deletingWishlist.contentFilter;
         setIsDeleting(true);
 
         try {
-            await deleteWishlist(
-                deletingWishlist.id,
-                isOwner,
-                hasBackingFilter && deleteFilterToo,
-                deletingWishlist.ownerUserId,
-            );
+            await deleteWishlist(deletingWishlist.id, hasBackingFilter && deleteFilterToo);
             toast({
                 title: 'Wishlist Deleted',
                 description: `Magpie deleted "${deletingWishlist.name}".`,
@@ -204,7 +190,7 @@ export function WishlistsPage() {
             setIsDeleting(false);
             setDeletingWishlist(null);
         }
-    }, [deletingWishlist, user?.id, deleteFilterToo, deleteWishlist, toast]);
+    }, [deletingWishlist, deleteFilterToo, deleteWishlist, toast]);
 
     const handleCancelDelete = useCallback(() => {
         setDeletingWishlist(null);
@@ -274,7 +260,6 @@ export function WishlistsPage() {
     const handleFormSubmit = useCallback(
         async (values: WishlistFormValues) => {
             const isEditing = !!currentEditingWishlist;
-            const isOwner = currentEditingWishlist ? currentEditingWishlist.ownerUserId === user?.id : true;
 
             try {
                 if (isEditing && currentEditingWishlist) {
@@ -283,7 +268,7 @@ export function WishlistsPage() {
                         entityTags.map((t) => t.name),
                     );
 
-                    await updateWishlist(currentEditingWishlist.id, patch, isOwner);
+                    await updateWishlist(currentEditingWishlist.id, patch);
                     toast({
                         title: 'Wishlist Updated',
                         description: `"${values.name}" updated.`,
@@ -295,10 +280,11 @@ export function WishlistsPage() {
                         criteria: values.criteria,
                         qualityTierListId: values.qualityTierListId,
                         rootFolderId: values.rootFolderId,
-                        enabled: values.monitored,
+                        enabled: values.enabled,
+                        monitoring: values.monitoring,
                     });
                     if (values.tagIds.length > 0) {
-                        await updateWishlist(created.id, { tags: { add: values.tagIds } }, true);
+                        await updateWishlist(created.id, { tags: { add: values.tagIds } });
                     }
                     toast({
                         title: 'Wishlist Created',
@@ -316,7 +302,7 @@ export function WishlistsPage() {
                 throw error;
             }
         },
-        [currentEditingWishlist, user?.id, entityTags, createWishlist, updateWishlist, toast],
+        [currentEditingWishlist, entityTags, createWishlist, updateWishlist, toast],
     );
 
     const getFormInitialValues = useCallback((): WishlistFormValues | null => {
@@ -329,7 +315,8 @@ export function WishlistsPage() {
                     criteria: createSeed.createCriteria,
                     qualityTierListId: null,
                     rootFolderId: null,
-                    monitored: true,
+                    enabled: true,
+                    monitoring: null,
                     tagIds: [],
                 };
             }
@@ -346,7 +333,8 @@ export function WishlistsPage() {
             criteria,
             qualityTierListId: currentEditingWishlist.qualityTierListId ?? null,
             rootFolderId: currentEditingWishlist.rootFolderId ?? null,
-            monitored: currentEditingWishlist.enabled,
+            enabled: currentEditingWishlist.enabled,
+            monitoring: currentEditingWishlist.monitoring ?? null,
             tagIds: entityTags.map((t) => t.name),
         };
     }, [currentEditingWishlist, entityTags, createSeed]);
@@ -444,7 +432,6 @@ export function WishlistsPage() {
                             <WishlistRow
                                 key={wishlist.id}
                                 wishlist={wishlist}
-                                isLocking={isLocking}
                                 isOwner={wishlist.ownerId === user?.id}
                                 canEdit={canEditWishlist(wishlist)}
                                 canDelete={canDeleteWishlist(wishlist)}
@@ -452,7 +439,6 @@ export function WishlistsPage() {
                                 onDelete={handleDeleteWishlist}
                                 onLock={handleLockWishlist}
                                 onUnlock={handleUnlockWishlist}
-                                onClick={handleWishlistClick}
                             />
                         ))
                     )}

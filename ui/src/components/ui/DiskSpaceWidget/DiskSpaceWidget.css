@@ -129,6 +129,10 @@
         color: var(--status-unhealthy);
     }
 
+    .disk-space-widget__usage-percent--unavailable {
+        color: var(--text-muted);
+    }
+
     .disk-space-widget__progress-track {
         height: 6px;
         background-color: var(--bg-tertiary);

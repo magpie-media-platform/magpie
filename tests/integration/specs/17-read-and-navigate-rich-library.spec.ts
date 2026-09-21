@@ -1,8 +1,8 @@
-import { expect, test, type Request } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 import { type ApiClient } from '../helpers/api';
 import { restoreCheckpoint } from '../helpers/checkpoints';
-import { loginUi } from '../helpers/ui';
+import { expectScopedEventRefresh, loginUi } from '../helpers/ui';
 import { until } from '../helpers/wait';
 
 interface Paged<T> {
@@ -47,7 +47,7 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
         test.setTimeout(600_000);
 
         let ids!: RichIds;
-        const api = await restoreCheckpoint('rich-library', async (restored) => {
+        const api = await restoreCheckpoint('journey-rich-library', async (restored) => {
             const stats = await restored.get<{ total: number; fulfilled: number; missing: number }>('/api/content/stats');
             expect(stats.total).toBeGreaterThan(65);
             expect(stats.fulfilled).toBeGreaterThanOrEqual(1);
@@ -348,7 +348,12 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
             await expect(page.locator(`[data-wishlist-id="${wishlist.id}"]`)).toContainText('Rich library wishlist');
             await page.goto(`/wishlists/${wishlist.id}`);
             await expect(page.getByRole('heading', { name: 'Rich library wishlist' })).toBeVisible();
-            await expect(page.getByText('Unmonitored', { exact: true })).toBeVisible();
+            await expect(page.getByText('Inherit', { exact: true })).toBeVisible();
+            expect(
+                await api.get<{ enabled: boolean; monitoring: boolean | null; lastSyncedAt?: string | null }>(
+                    `/api/wishlists/${wishlist.id}`,
+                ),
+            ).toMatchObject({ enabled: false, monitoring: null, lastSyncedAt: null });
 
             const upcomingMetadata = await api.get<{ publishDate?: string | null }>(
                 `/api/content/${ids.upcoming}/metadata`,
@@ -373,45 +378,17 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
             await activity.locator('[data-action="view-detail"]').first().click();
             const detail = page.getByRole('dialog');
             await expect(detail.getByRole('tab', { name: 'Details' })).toBeVisible();
-            await detail.getByRole('tab', { name: 'Trace context' }).click();
+            await detail.getByRole('tab', { name: 'Related activity' }).click();
             await expect(detail.getByRole('tabpanel')).toBeVisible();
             await page.keyboard.press('Escape');
         });
 
-        await test.step('scope event-stream network refreshes to relevant visible records exactly once', async () => {
+        await test.step('the event stream refreshes exactly the visible record and nothing else', async () => {
             await page.goto(`/library/${ids.movie}?tab=details`);
             await expect(page.locator('[data-component="content-details-header"]')).toContainText(
                 'A feature with metadata, a main file, and a sidecar.',
             );
-            await page.waitForTimeout(750);
-            const observed: string[] = [];
-            const record = (request: Request) => {
-                const url = new URL(request.url());
-                if (request.method() === 'GET' && (url.pathname.startsWith('/api/content') || url.pathname.includes('/metadata'))) {
-                    observed.push(`${url.pathname}${url.search}`);
-                }
-            };
-            page.on('request', record);
-
-            const unrelated = await api.get<ContentItem>(`/api/content/${ids.upcoming}`);
-            await api.patch(`/api/content/${ids.upcoming}`, { monitoring: { value: !unrelated.effectiveMonitoring } });
-            await page.waitForTimeout(750);
-            expect(observed.filter((url) => url === `/api/content/${ids.upcoming}`)).toHaveLength(0);
-            expect(observed.filter((url) => url === `/api/content/${ids.movie}`)).toHaveLength(0);
-
-            const movie = await api.get<ContentItem>(`/api/content/${ids.movie}`);
-            await api.patch(`/api/content/${ids.movie}`, { monitoring: { value: !movie.effectiveMonitoring } });
-            await until(
-                'the visible movie to refresh once after its event',
-                async () => observed.filter((url) => url === `/api/content/${ids.movie}`).length || undefined,
-                15_000,
-                100,
-            );
-            await page.waitForTimeout(750);
-            expect(observed.filter((url) => url === `/api/content/${ids.movie}`)).toHaveLength(1);
-            const metadataRequests = observed.filter((url) => url.startsWith(`/api/content/${ids.movie}/metadata`));
-            expect(new Set(metadataRequests).size).toBe(metadataRequests.length);
-            page.off('request', record);
+            await expectScopedEventRefresh(page, api, ids.movie, ids.upcoming);
         });
     });
 });

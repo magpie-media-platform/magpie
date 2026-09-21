@@ -31,6 +31,9 @@ internal static class MappingExtensions
         var externalIds = new List<ExternalIdentifier> { new() { Source = Constants.ProviderType, Value = mbid } };
         AddIdentifiers(externalIds, Constants.IsniSource, artist!.Isnis);
         AddIdentifiers(externalIds, Constants.IpiSource, artist.Ipis);
+        var personArtist = IsPersonArtist(artist.Type);
+        var begin = ParseTemporal(artist.LifeSpan?.Begin);
+        var end = ParseTemporal(artist.LifeSpan?.End);
         return new SearchHit
         {
             Target = QueryTarget.Artist,
@@ -40,10 +43,10 @@ internal static class MappingExtensions
             Disambiguation = artist.Disambiguation.NullIfBlank(),
             Aliases = artist.Aliases,
             ArtistType = artist.Type.NullIfBlank(),
-            Established = ParseTemporal(artist.LifeSpan?.Begin),
-            Dissolved = ParseTemporal(artist.LifeSpan?.End),
-            BirthDate = ParseTemporal(artist.LifeSpan?.Begin),
-            DeathDate = ParseTemporal(artist.LifeSpan?.End),
+            Established = personArtist ? null : begin,
+            Dissolved = personArtist ? null : end,
+            BirthDate = personArtist ? begin : null,
+            DeathDate = personArtist ? end : null,
             Ended = artist.LifeSpan?.Ended,
             Genres = HitGenreNames(artist.Genres, artist.Tags),
             UrlRelations = artist.Relations,

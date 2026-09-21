@@ -10,7 +10,7 @@ namespace Magpie.Sdk.Extensions;
 public interface IExtension
 {
     /// <summary>
-    /// The extension id.
+    /// The id that correlates this extension to its installed record.
     /// </summary>
     Guid Id { get; }
 

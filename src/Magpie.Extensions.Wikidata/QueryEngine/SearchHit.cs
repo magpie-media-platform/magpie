@@ -32,6 +32,4 @@ internal sealed record SearchHit
     public IReadOnlyList<string> Genres { get; init; } = [];
 
     public bool CandidateProjectionApplied { get; init; }
-
-    public int? SearchOrdinal { get; init; }
 }

@@ -6,7 +6,7 @@ import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
 import type { JobScopeValue } from './useJobs';
-import type { ScalarPatch, DictionaryPatch } from './useScheduleTriggers';
+import type { ScalarPatch, DictionaryPatch } from '@/types/patch';
 
 export type { ApiEventFilter, DictionaryCriteria, PropertyCriterion } from '@/lib/eventContextCriteria';
 
@@ -81,16 +81,11 @@ export interface EventTriggerPatch {
 const eventTriggerQueryKeys = {
     all: ['event-triggers'] as const,
     list: (params?: EventTriggerQueryParams) => ['event-triggers', 'list', params ?? {}] as const,
-    detail: (id: string) => ['event-triggers', 'detail', id] as const,
 };
 
 async function fetchEventTriggers(params?: EventTriggerQueryParams): Promise<ApiEventTrigger[]> {
     const url = buildUrl('/event-triggers', params as Record<string, string | number | boolean | undefined>);
     return apiGet<ApiEventTrigger[]>(url);
-}
-
-async function fetchEventTriggerById(id: string): Promise<ApiEventTrigger> {
-    return apiGet<ApiEventTrigger>(`/event-triggers/${id}`);
 }
 
 async function createEventTrigger(request: EventTriggerCreate): Promise<ApiEventTrigger> {
@@ -157,26 +152,5 @@ export function useEventTriggers(params?: EventTriggerQueryParams) {
         isDeleting: deleteMutation.isPending,
 
         refetch: triggersQuery.refetch,
-    };
-}
-
-export function useEventTrigger(id: string, enabled = true) {
-    useInvalidateQueriesOnEvents(
-        ['eventTrigger.created', 'eventTrigger.updated', 'eventTrigger.deleted'],
-        [eventTriggerQueryKeys.detail(id)],
-        { entityIds: id ? [id] : [], exact: true, owner: 'event-triggers:detail' },
-    );
-    const triggerQuery = useQuery({
-        queryKey: eventTriggerQueryKeys.detail(id),
-        queryFn: () => fetchEventTriggerById(id),
-        enabled: enabled && Boolean(id),
-        staleTime: POLLING_INTERVALS.normal / 2,
-    });
-
-    return {
-        trigger: triggerQuery.data ?? null,
-        isLoading: triggerQuery.isLoading,
-        error: queryErrorOrNull(triggerQuery),
-        refetch: triggerQuery.refetch,
     };
 }

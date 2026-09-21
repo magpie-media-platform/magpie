@@ -23,6 +23,18 @@ internal sealed class QueryEngine(
     public async Task<QueryExecution> SearchAsync(QueryRequest request, CancellationToken cancellationToken)
     {
         var plan = planner.Plan(request);
+        if (plan.IsKnownEmpty() && plan.Warnings.Count == 0)
+        {
+            return new QueryExecution
+            {
+                Supported = true,
+                Hits = EmptyAsync(),
+                Warnings = [],
+                RequestedPage = plan.RequestedPage,
+                PagingMode = QueryPagingMode.LogicalStream
+            };
+        }
+
         var context = await settingsResolver.AcquireContextAsync(
             plan.DefaultLanguagePreference,
             cancellationToken).ConfigureAwait(false);

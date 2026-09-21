@@ -9,6 +9,7 @@ using Magpie.Extensions.MusicBrainz.Mapping;
 using Magpie.Extensions.MusicBrainz.QueryEngine;
 using Magpie.Models;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
 using Magpie.Models.Releases;
@@ -37,7 +38,7 @@ public class ContentMetadataSearcherTests
         new() { RequestedPage = 1, HasMore = false };
 
     private Mock<ISettingsResolver> _settingsResolver = null!;
-    private Mock<ISearchEngine> _queryEngine = null!;
+    private Mock<IQueryPlanner> _queryPlanner = null!;
     private Mock<IQueryExecutor> _queryExecutor = null!;
     private Mock<IQueryCoordinator> _cache = null!;
     private Mock<IMusicBrainzClient> _client = null!;
@@ -50,7 +51,16 @@ public class ContentMetadataSearcherTests
         _settingsResolver = new Mock<ISettingsResolver>();
         _settingsResolver.Setup(resolver => resolver.ResolveAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Settings());
-        _queryEngine = new Mock<ISearchEngine>();
+        _queryPlanner = new Mock<IQueryPlanner>();
+        _queryPlanner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
+            .Returns((QueryRequest request) => new QueryPlan
+            {
+                RequestedPage = request.RequestedPage,
+                MaxResults = request.MaxResults,
+                Settings = request.Settings,
+                Warnings = [],
+                Fingerprint = request.Target.ToString()
+            });
         _queryExecutor = new Mock<IQueryExecutor>();
         _cache = new Mock<IQueryCoordinator>();
         _cache.Setup(cache => cache.GetCoverAsync(
@@ -62,7 +72,7 @@ public class ContentMetadataSearcherTests
         _coverClient = new Mock<ICoverArtArchiveClient>();
         _subject = new ContentMetadataSearcher(
             _settingsResolver.Object,
-            _queryEngine.Object,
+            _queryPlanner.Object,
             _queryExecutor.Object,
             _cache.Object,
             _client.Object,
@@ -101,7 +111,7 @@ public class ContentMetadataSearcherTests
     public async Task AdvancedSearchAsync_QueriesAllThreeTargets_WhenNoIdentityCriteriaNarrowRouting()
     {
         // Arrange
-        _queryEngine.Setup(engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult { Supported = true, Hits = [], PageInfo = NotExhausted });
 
         // Act
@@ -113,24 +123,15 @@ public class ContentMetadataSearcherTests
             default).ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            _queryEngine.Verify(
-                engine => engine.SearchAsync(
-                    It.Is<QueryRequest>(request => request.Target == QueryTarget.Artist),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-            _queryEngine.Verify(
-                engine => engine.SearchAsync(
-                    It.Is<QueryRequest>(request => request.Target == QueryTarget.Album),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-            _queryEngine.Verify(
-                engine => engine.SearchAsync(
-                    It.Is<QueryRequest>(request => request.Target == QueryTarget.Track),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-        }
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request => request.Target == QueryTarget.Artist)),
+            Times.Once);
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request => request.Target == QueryTarget.Album)),
+            Times.Once);
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request => request.Target == QueryTarget.Track)),
+            Times.Once);
     }
 
     [TestCase(Constants.IsniSource)]
@@ -138,7 +139,7 @@ public class ContentMetadataSearcherTests
     public async Task AdvancedSearchAsync_QueriesOnlyArtistTarget_WhenExternalIdSourceIsArtistAuthority(string source)
     {
         // Arrange
-        _queryEngine.Setup(engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult { Supported = true, Hits = [], PageInfo = NotExhausted });
         var criteria = new MetadataCriteria
         {
@@ -166,13 +167,11 @@ public class ContentMetadataSearcherTests
             default).ConfigureAwait(false);
 
         // Assert
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.IsAny<QueryRequest>()),
             Times.Once);
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(
-                It.Is<QueryRequest>(request => request.Target == QueryTarget.Artist),
-                It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request => request.Target == QueryTarget.Artist)),
             Times.Once);
     }
 
@@ -185,7 +184,7 @@ public class ContentMetadataSearcherTests
     {
         // Arrange
         var expectedTarget = (QueryTarget)expectedTargetValue;
-        _queryEngine.Setup(engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult { Supported = true, Hits = [], PageInfo = NotExhausted });
         var criteria = new MetadataCriteria
         {
@@ -211,13 +210,11 @@ public class ContentMetadataSearcherTests
             default).ConfigureAwait(false);
 
         // Assert
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.IsAny<QueryRequest>()),
             Times.Once);
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(
-                It.Is<QueryRequest>(request => request.Target == expectedTarget),
-                It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request => request.Target == expectedTarget)),
             Times.Once);
     }
 
@@ -225,7 +222,7 @@ public class ContentMetadataSearcherTests
     public async Task AdvancedSearchAsync_QueriesOnlyAlbumTarget_WhenExternalIdSourceIsIfpi()
     {
         // Arrange
-        _queryEngine.Setup(engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult { Supported = true, Hits = [], PageInfo = NotExhausted });
         var criteria = new MetadataCriteria
         {
@@ -253,15 +250,13 @@ public class ContentMetadataSearcherTests
             default).ConfigureAwait(false);
 
         // Assert
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(
-                It.Is<QueryRequest>(request => request.Target == QueryTarget.Album),
-                It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request => request.Target == QueryTarget.Album)),
             Times.Once);
     }
 
     [Test]
-    public async Task AdvancedSearchAsync_ReturnsUnsupportedWithRoutingWarning_WhenExternalIdSourceMapsToNoTarget()
+    public async Task AdvancedSearchAsync_ReturnsValidEmptyWithoutWarning_WhenExternalIdSourceMapsToNoTarget()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -292,28 +287,132 @@ public class ContentMetadataSearcherTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Supported, Is.False);
+            Assert.That(result.Supported, Is.True);
             Assert.That(result.Matches, Is.Empty);
             Assert.That(result.PageInfo.HasMore, Is.False);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Is.EqualTo(
-                [
-                    "musicbrainz cannot route these external identifier criteria to an artist, album, or track search."
-                ]));
+            Assert.That(result.Warnings, Is.Empty);
         }
 
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.IsAny<QueryRequest>()),
             Times.Never);
+    }
+
+    [Test]
+    public async Task AdvancedSearchAsync_ReturnsValidEmptyWithoutWarning_WhenThePlanRefusesACriterion()
+    {
+        // Arrange
+        _queryPlanner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
+            .Returns(new QueryPlan
+            {
+                RequestedPage = 1,
+                MaxResults = 25,
+                Settings = new Settings(),
+                Warnings = [],
+                Fingerprint = "fp-refused",
+                TraceProvenance = new QueryTraceProvenance
+                {
+                    Criteria =
+                    [
+                        new QueryTraceProvenance.Criterion
+                        {
+                            Source = "Metadata.OriginalTitle.And[0]",
+                            FinalDisposition = QueryTraceProvenance.Disposition.Refused
+                        }
+                    ]
+                }
+            });
+
+        // Act
+        var result = await _subject.AdvancedSearchAsync(
+            "music",
+            new ContentHierarchyItemCriteria(),
+            25,
+            "en",
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Supported, Is.True);
+            Assert.That(result.Matches, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        _queryExecutor.VerifyNoOtherCalls();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task AdvancedSearchAsync_ReturnsValidEmpty_WhenContentTypeCriterionCannotBeEvaluated(bool negate)
+    {
+        // Arrange
+        var query = new ContentHierarchyItemCriteria
+        {
+            ContentType = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And =
+                [
+                    new PropertyCriterion<string>
+                    {
+                        Operator = CriteriaValueOperator.GreaterThan,
+                        Negate = negate,
+                        Values = ["music"]
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var result = await _subject.AdvancedSearchAsync("music", query, 25, "en", default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Supported, Is.True);
+            Assert.That(result.Matches, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        _settingsResolver.VerifyNoOtherCalls();
+        _queryPlanner.VerifyNoOtherCalls();
+    }
+
+    [Test]
+    public async Task AdvancedSearchAsync_ReturnsValidEmpty_WhenLevelDoesNotMatchAnySupportedTarget()
+    {
+        // Arrange
+        var query = new ContentHierarchyItemCriteria
+        {
+            Level = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["movement"] }]
+            }
+        };
+
+        // Act
+        var result = await _subject.AdvancedSearchAsync("music", query, 25, "en", default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Supported, Is.True);
+            Assert.That(result.Matches, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+
+        _settingsResolver.VerifyNoOtherCalls();
+        _queryPlanner.VerifyNoOtherCalls();
     }
 
     [Test]
     public async Task AdvancedSearchAsync_StopsRoutingAdditionalTargets_WhenMaxResultsIsAlreadyReached()
     {
         // Arrange
-        _queryEngine.Setup(engine => engine.SearchAsync(
-                It.Is<QueryRequest>(request => request.Target == QueryTarget.Artist),
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(
+                It.Is<QueryPlan>(plan => plan.Fingerprint == "Artist"),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult
             {
@@ -321,8 +420,8 @@ public class ContentMetadataSearcherTests
                 Hits = [new SearchHit { Target = QueryTarget.Artist, PrimaryMbid = "artist-1", Title = "Home" }],
                 PageInfo = NotExhausted
             });
-        _queryEngine.Setup(engine => engine.SearchAsync(
-                It.Is<QueryRequest>(request => request.Target == QueryTarget.Album),
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(
+                It.Is<QueryPlan>(plan => plan.Fingerprint == "Album"),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult
             {
@@ -352,21 +451,19 @@ public class ContentMetadataSearcherTests
             Assert.That(result.PageInfo.HasMore, Is.True);
         }
 
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(
-                It.Is<QueryRequest>(request => request.Target == QueryTarget.Track),
-                It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request => request.Target == QueryTarget.Track)),
             Times.Never);
     }
 
     [Test]
-    public async Task AdvancedSearchAsync_DedupesHitsAndAggregatesWarnings_AcrossTargets()
+    public async Task AdvancedSearchAsync_DedupesHitsAndAggregatesWarnings_WhenMultipleTargetsMatch()
     {
         // Arrange
         var shared = new SearchHit { Target = QueryTarget.Artist, PrimaryMbid = "shared-artist", Title = "Home" };
         var warning = "musicbrainz is unavailable.";
-        _queryEngine.SetupSequence(
-                engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+        _queryExecutor.SetupSequence(
+                executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult
             {
                 Supported = true,
@@ -401,12 +498,12 @@ public class ContentMetadataSearcherTests
     }
 
     [Test]
-    public async Task AdvancedSearchAsync_MapsHitToCandidate_ForSingleLevelTarget()
+    public async Task AdvancedSearchAsync_MapsHitToCandidate_WhenSingleLevelTarget()
     {
         // Arrange
         var hit = new SearchHit { Target = QueryTarget.Album, PrimaryMbid = "album-1", Title = "OK Computer" };
         var warning = "a residual warning";
-        _queryEngine.Setup(engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult
             {
                 Supported = true,
@@ -439,10 +536,9 @@ public class ContentMetadataSearcherTests
             Assert.That(result.Warnings, Is.EqualTo([warning]));
         }
 
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(
-                It.Is<QueryRequest>(request => request.Target == QueryTarget.Album && request.Criteria != null),
-                It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request =>
+                request.Target == QueryTarget.Album && request.Criteria != null)),
             Times.Once);
     }
 
@@ -465,17 +561,17 @@ public class ContentMetadataSearcherTests
             Assert.That(result.Matches, Is.Empty);
         }
 
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.IsAny<QueryRequest>()),
             Times.Never);
     }
 
     [Test]
-    public async Task SearchAsync_MapsHitsToSearchResults_ForResolvedLevel()
+    public async Task SearchAsync_MapsHitsToSearchResults_WhenResolvedLevel()
     {
         // Arrange
         var hit = new SearchHit { Target = QueryTarget.Track, PrimaryMbid = "track-1", Title = "Bohemian Rhapsody" };
-        _queryEngine.Setup(engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QueryResult { Supported = true, Hits = [hit], PageInfo = NotExhausted });
         var trackLevel = new ContentHierarchyLevelDefinition
         { Slug = "track", ParentSlug = "album", DisplayName = "Piece", CustomMetadataFields = [] };
@@ -491,13 +587,11 @@ public class ContentMetadataSearcherTests
             Assert.That(results.Single().Level, Is.EqualTo("track"));
         }
 
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(
-                It.Is<QueryRequest>(request => request.Target == QueryTarget.Track &&
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.Is<QueryRequest>(request => request.Target == QueryTarget.Track &&
                     request.IsOrdinary &&
                     request.OrdinaryTerm == "Bohemian Rhapsody" &&
-                    request.RequestedPage == 2),
-                It.IsAny<CancellationToken>()),
+                    request.RequestedPage == 2)),
             Times.Once);
     }
 
@@ -510,8 +604,8 @@ public class ContentMetadataSearcherTests
 
         // Assert
         Assert.That(results, Is.Empty);
-        _queryEngine.Verify(
-            engine => engine.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()),
+        _queryPlanner.Verify(
+            planner => planner.Plan(It.IsAny<QueryRequest>()),
             Times.Never);
     }
 
@@ -630,7 +724,7 @@ public class ContentMetadataSearcherTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(label.DisplayName, Is.EqualTo("Blue Note"));
-            Assert.That(label.SubjectKind, Is.EqualTo(Constants.LabelSubjectKind));
+            Assert.That(label.SubjectKind, Is.EqualTo("music-label"));
             Assert.That(
                 label.ExternalIds[Constants.ProviderType],
                 Is.EqualTo("44444444-4444-4444-8444-444444444444"));
@@ -707,7 +801,7 @@ public class ContentMetadataSearcherTests
     }
 
     [Test]
-    public async Task GetFactsAsync_ReturnsAlbumFacts_ForLiteralMusicTarget()
+    public async Task GetFactsAsync_ReturnsAlbumFacts_WhenLiteralMusicTarget()
     {
         // Arrange
         var albumId = Guid.Parse("22222222-2222-2222-2222-222222222222");
@@ -799,7 +893,7 @@ public class ContentMetadataSearcherTests
     }
 
     [Test]
-    public async Task GetFactsAsync_ReturnsTrackFacts_ForLiteralMusicTarget()
+    public async Task GetFactsAsync_ReturnsTrackFacts_WhenLiteralMusicTarget()
     {
         // Arrange
         var artistId = Guid.Parse("11111111-1111-1111-1111-111111111111");
@@ -902,7 +996,7 @@ public class ContentMetadataSearcherTests
     }
 
     [Test]
-    public async Task GetFactsAsync_ReturnsEmpty_ForArtistTarget()
+    public async Task GetFactsAsync_ReturnsEmpty_WhenArtistTarget()
     {
         // Arrange
         var artistId = Guid.Parse("11111111-1111-1111-1111-111111111111");

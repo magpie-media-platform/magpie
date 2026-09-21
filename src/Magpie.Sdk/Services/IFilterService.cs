@@ -37,7 +37,7 @@ public interface IFilterService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a content filter by id when the caller can see it.
+    /// A content filter by id when the caller can see it.
     /// </summary>
     /// <param name="contentFilterId">The id of the content filter to return</param>
     /// <param name="callerUserId">The id of the user that makes the request</param>
@@ -111,7 +111,7 @@ public interface IFilterService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a subject filter by id when the caller can see it.
+    /// A subject filter by id when the caller can see it.
     /// </summary>
     /// <param name="subjectFilterId">The id of the subject filter to return</param>
     /// <param name="callerUserId">The id of the user that makes the request</param>

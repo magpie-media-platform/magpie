@@ -24,7 +24,8 @@ function renderWithRoute(path: string, admin = false) {
 function makeReadyContext(extensionsBySlot: Record<string, UIExtension[]>): ExtensionContextValue {
     return {
         state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
-        context: { apiBaseUrl: '/api', userId: 'user-1', username: 'user', role: 'Admin', theme: null },
+        retriesExhausted: false,
+        context: { apiBaseUrl: '/api', userId: 'user-1', username: 'user', role: 'Admin' },
         getExtensionsForSlot: (slot: string) => extensionsBySlot[slot] ?? [],
         retry: () => Promise.resolve(),
     };

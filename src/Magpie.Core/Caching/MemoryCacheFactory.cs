@@ -38,6 +38,7 @@ internal sealed class MemoryCacheFactory(MemoryCacheStore store) : ICacheFactory
         return cache;
     }
 
+    /// <inheritdoc />
     public void Dispose()
     {
         lock (_lock)

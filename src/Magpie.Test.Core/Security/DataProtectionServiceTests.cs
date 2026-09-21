@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 
 using Magpie.Abstractions.Security;
 using Magpie.Core.Security;
 using Magpie.Models;
+using Magpie.Sdk.Security;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -15,8 +17,9 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Security;
 
 [TestFixture]
-public class DataProtectionServiceTests
+public sealed class DataProtectionServiceTests
 {
+    private MagpieHostEnvironment _hostEnvironment = null!;
     private string _dataRoot = null!;
     private ILoggerFactory _loggerFactory = null!;
     private IDataProtectionService _subject = null!;
@@ -37,11 +40,9 @@ public class DataProtectionServiceTests
             ConfigRoot: _dataRoot,
             DataRoot: _dataRoot,
             StartedAt: DateTime.UtcNow);
-        var keyStore = new AtomicFileKeyStore(
-            hostEnvironment,
-            _loggerFactory.CreateLogger<AtomicFileKeyStore>());
+        _hostEnvironment = hostEnvironment;
         var dataProtectionProvider = new DefaultDataProtectionProvider(
-            keyStore,
+            hostEnvironment,
             _loggerFactory.CreateLogger<DefaultDataProtectionProvider>());
         _subject = new DataProtectionService(dataProtectionProvider);
     }
@@ -145,5 +146,31 @@ public class DataProtectionServiceTests
         // Act
         // Assert
         Assert.That(() => _subject.Unprotect(unencrypted), Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    [Test]
+    public async Task Unprotect_RestoresSecret_WhenKeyDirectoryIsCopiedToAnotherDataRoot()
+    {
+        // Arrange
+        var keyStore = new AtomicFileKeyStore(_hostEnvironment, NullLogger<AtomicFileKeyStore>.Instance);
+        await keyStore.CreateHmacKeyAsync("test").ConfigureAwait(false);
+        var settings = _subject.Protect(new Dictionary<string, string> { ["apiKey"] = "secret" });
+        var relocatedEnvironment = _hostEnvironment with { DataRoot = Path.Combine(_dataRoot, "relocated") };
+        var relocatedStore = new AtomicFileKeyStore(relocatedEnvironment, NullLogger<AtomicFileKeyStore>.Instance);
+        Directory.CreateDirectory(Path.GetDirectoryName(relocatedStore.KeysDirectory)!);
+        Directory.Move(keyStore.KeysDirectory, relocatedStore.KeysDirectory);
+
+        // Act
+        var provider = new DefaultDataProtectionProvider(relocatedEnvironment,
+            NullLogger<DefaultDataProtectionProvider>.Instance);
+        var restored = new DataProtectionService(provider).Unprotect(settings);
+        var keyExists = await relocatedStore.KeyExistsAsync("test").ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(restored["apiKey"], Is.EqualTo("secret"));
+            Assert.That(keyExists, Is.True);
+        }
     }
 }

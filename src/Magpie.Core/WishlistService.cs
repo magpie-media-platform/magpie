@@ -9,8 +9,6 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Enums;
-using Magpie.Models.Jobs;
 using Magpie.Models.Patch;
 using Magpie.Sdk.Services;
 
@@ -20,20 +18,32 @@ internal sealed class WishlistService(
     IWishlistRepository wishlists,
     IWishlistDiscoveredRepository discovered,
     IContentFilterRepository contentFilters,
-    IJobManager jobManager,
     ITransactionManager transactions) : IWishlistService
 {
-    private const string WishlistRefreshItemJobType = "WishlistRefreshItem";
-
-    private const string WishlistIdParameter = "wishlistId";
-
     private static bool CanView(Wishlist wishlist, Guid callerUserId, bool callerIsAdmin) =>
         callerIsAdmin || wishlist.OwnerUserId is null || wishlist.OwnerUserId == callerUserId;
 
     private static bool CanWrite(Wishlist wishlist, Guid callerUserId, bool callerIsAdmin) =>
-        callerIsAdmin || wishlist.OwnerUserId == callerUserId;
+        wishlist.OwnerUserId is null
+            ? callerIsAdmin
+            : wishlist.OwnerUserId == callerUserId || (callerIsAdmin && !wishlist.OwnerLock);
 
     private static string BackingFilterName(string wishlistName) => $"{wishlistName} (wishlist)";
+
+    private async Task<bool> OwnsFilterExclusivelyAsync(
+        Wishlist wishlist,
+        ContentFilter? filter,
+        CancellationToken cancellationToken)
+    {
+        if (filter is null || filter.OwnerUserId != wishlist.OwnerUserId)
+        {
+            return false;
+        }
+
+        var all = await wishlists.ListAllAsync(cancellationToken).ConfigureAwait(false);
+
+        return all.All(other => other.Id == wishlist.Id || other.ContentFilterId != filter.Id);
+    }
 
     public async Task<IReadOnlyList<Wishlist>> ListVisibleAsync(
         bool? monitored,
@@ -54,27 +64,9 @@ internal sealed class WishlistService(
         Guid ownerUserId,
         CancellationToken cancellationToken = default)
     {
-        const int pageSize = 500;
-        var owned = new List<Wishlist>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await wishlists.QueryAsync(
-                new WishlistQuery { OwnerUserId = ownerUserId },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            owned.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        return owned;
+        return await wishlists.QueryAllAsync(
+            new WishlistQuery { OwnerUserId = ownerUserId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<Wishlist?> GetAsync(
@@ -129,6 +121,16 @@ internal sealed class WishlistService(
                             token).ConfigureAwait(false);
                     }
                 }
+                else if (contentFilterId != Guid.Empty)
+                {
+                    var referenced = await contentFilters.GetByIdAsync(contentFilterId, token)
+                        .ConfigureAwait(false);
+                    if (referenced is null ||
+                        (referenced.OwnerUserId is not null && referenced.OwnerUserId != ownerUserId))
+                    {
+                        throw new MagpieException("The content filter was not found.");
+                    }
+                }
 
                 return await wishlists.CreateAsync(
                     new Wishlist
@@ -140,23 +142,11 @@ internal sealed class WishlistService(
                         RootFolderId = create.RootFolderId,
                         OwnerUserId = ownerUserId,
                         OwnerLock = create.OwnerLock,
-                        Enabled = create.Enabled
+                        Enabled = create.Enabled,
+                        Monitoring = create.Monitoring
                     },
                     ownerUserId,
                     token).ConfigureAwait(false);
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        await jobManager.ExecuteAsync(
-            new JobEnqueueRequest
-            {
-                JobType = WishlistRefreshItemJobType,
-                Parameters = new Dictionary<string, string>()
-                {
-                    [WishlistIdParameter] = created.Id.ToString("D")
-                },
-                Mode = JobExecutionMode.Queue,
-                UserId = ownerUserId,
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -190,8 +180,11 @@ internal sealed class WishlistService(
             async token =>
             {
                 var contentFilterId = existing.ContentFilterId;
+                var backing = contentFilterId == Guid.Empty
+                    ? null
+                    : await contentFilters.GetByIdAsync(contentFilterId, token).ConfigureAwait(false);
 
-                if (contentFilterId == Guid.Empty)
+                if (!await OwnsFilterExclusivelyAsync(existing, backing, token).ConfigureAwait(false))
                 {
                     var backingFilter = await contentFilters.CreateAsync(
                         new ContentFilter
@@ -261,30 +254,25 @@ internal sealed class WishlistService(
             return false;
         }
 
-        bool deleted;
-        if (deleteFilter && existing.ContentFilterId != Guid.Empty)
+        if (!deleteFilter || existing.ContentFilterId == Guid.Empty)
         {
-            deleted = await transactions.ExecuteWithTransactionAsync(
-                async token =>
+            return await wishlists.DeleteAsync(wishlistId, callerUserId, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await transactions.ExecuteWithTransactionAsync(
+            async token =>
+            {
+                var removed = await wishlists.DeleteAsync(wishlistId, callerUserId, token).ConfigureAwait(false);
+                if (removed)
                 {
-                    var removed = await wishlists.DeleteAsync(wishlistId, callerUserId, token).ConfigureAwait(false);
-                    if (removed)
-                    {
-                        await contentFilters
-                            .DeleteAsync(existing.ContentFilterId, callerUserId, token)
-                            .ConfigureAwait(false);
-                    }
+                    await contentFilters
+                        .DeleteAsync(existing.ContentFilterId, callerUserId, token)
+                        .ConfigureAwait(false);
+                }
 
-                    return removed;
-                },
-                cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            deleted = await wishlists.DeleteAsync(wishlistId, callerUserId, cancellationToken).ConfigureAwait(false);
-        }
-
-        return deleted;
+                return removed;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<WishlistDiscoveredLedger?> GetDiscoveredAsync(

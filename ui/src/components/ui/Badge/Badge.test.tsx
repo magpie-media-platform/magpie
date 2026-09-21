@@ -111,9 +111,10 @@ describe('Badge', () => {
         expect(count).toHaveTextContent('5');
     });
 
-    it('does not render when count is zero', () => {
-        const { container } = render(<Badge count={0}>Status</Badge>);
-        expect(container.innerHTML).toBe('');
+    it('keeps children and hides only the counter when count is zero', () => {
+        render(<Badge count={0}>Status</Badge>);
+        expect(screen.getByText('Status')).toBeInTheDocument();
+        expect(screen.getByText('Status').querySelector('.badge__count')).not.toBeInTheDocument();
     });
 
     it('renders normally when count is undefined', () => {

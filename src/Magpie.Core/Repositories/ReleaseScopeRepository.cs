@@ -10,6 +10,7 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 
 using Microsoft.EntityFrameworkCore;
@@ -22,9 +23,9 @@ internal sealed class ReleaseScopeRepository(
     ITransactionManager transactionManager,
     IAuditRecordRepository auditRecordRepository,
     ILogger<ReleaseScopeRepository> logger,
-    TimeProvider? timeProvider = null) : IReleaseScopeRepository
+    TimeProvider timeProvider) : IReleaseScopeRepository
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeProvider _time = timeProvider;
 
     public async Task<IEnumerable<ReleaseScope>> ListAllAsync(CancellationToken cancellationToken = default)
     {
@@ -84,15 +85,26 @@ internal sealed class ReleaseScopeRepository(
             }
 
             var totalItems = await filtered.CountAsync(cancellationToken).ConfigureAwait(false);
-            IQueryable<ReleaseScope> results = filtered
+            var results = filtered
                 .OrderBy(scope => scope.ReleaseId)
                 .ThenBy(scope => scope.ContentHierarchyItemId)
                 .ThenBy(scope => scope.Id);
-            results = results.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
+            var sortProperty = context.Model.FindEntityType(typeof(ReleaseScope))!.GetProperties()
+                .Select(property => property.Name)
+                .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
+            if (sort is not null && sortProperty is not null)
+            {
+                results = sort.Direction == SortDirection.Ascending
+                    ? filtered.OrderBy(scope => EF.Property<object>(scope, sortProperty)).ThenBy(scope => scope.Id)
+                    : filtered.OrderByDescending(scope => EF.Property<object>(scope, sortProperty))
+                        .ThenBy(scope => scope.Id);
+            }
+
+            var page = results.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
             return new()
             {
-                Items = await results.ToListAsync(cancellationToken).ConfigureAwait(false),
+                Items = await page.ToListAsync(cancellationToken).ConfigureAwait(false),
                 PageNumber = paging.PageNumber,
                 PageSize = paging.PageSize,
                 TotalItems = totalItems

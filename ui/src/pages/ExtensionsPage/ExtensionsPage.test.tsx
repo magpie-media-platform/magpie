@@ -1,3 +1,4 @@
+import { LiveAnnouncerProvider } from '@/components/ui/LiveAnnouncer';
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -5,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
+import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { RestartRequiredProvider } from '@/components/ui/RestartRequiredBanner';
 import { apiGet, apiPatch, apiPost } from '@/lib/api';
 import { useExtensionManagement } from '@/hooks/useExtensionManagement';
@@ -302,7 +303,9 @@ vi.mock('@/lib/api', () => ({
     apiPost: vi.fn().mockResolvedValue({}),
     apiPatch: vi.fn().mockResolvedValue(undefined),
     apiDelete: vi.fn().mockResolvedValue(undefined),
-    isApiError: vi.fn(() => false),
+    isApiError: vi.fn(
+        (value: unknown) => typeof value === 'object' && value !== null && 'status' in value && 'message' in value,
+    ),
     buildUrl: vi.fn((path, params) => {
         if (!params) return path;
         const searchParams = new URLSearchParams();
@@ -331,18 +334,21 @@ function createWrapper(initialEntries?: string[]) {
 
     return function TestWrapper({ children }: { children: ReactNode }) {
         return (
-            <QueryClientProvider client={queryClient}>
-                <MemoryRouter initialEntries={initialEntries}>
-                    <RestartRequiredProvider>
-                        <ToastProvider>
-                            <ToastStateProvider>
-                                {children}
-                                <ToastViewport />
-                            </ToastStateProvider>
-                        </ToastProvider>
-                    </RestartRequiredProvider>
-                </MemoryRouter>
-            </QueryClientProvider>
+            <LiveAnnouncerProvider>
+                <QueryClientProvider client={queryClient}>
+                    <MemoryRouter initialEntries={initialEntries}>
+                        <RestartRequiredProvider>
+                            <ToastProvider>
+                                <ToastStateProvider>
+                                    {children}
+                                    <ToastList />
+                                    <ToastViewport />
+                                </ToastStateProvider>
+                            </ToastProvider>
+                        </RestartRequiredProvider>
+                    </MemoryRouter>
+                </QueryClientProvider>
+            </LiveAnnouncerProvider>
         );
     };
 }
@@ -379,6 +385,8 @@ describe('ExtensionsPage', () => {
         await waitFor(() => {
             const list = screen.getByRole('list', { name: /installed extensions/i });
             expect(list).toBeInTheDocument();
+            expect(list.children).toHaveLength(10);
+            expect(list.querySelector(':scope > :not([role="listitem"])')).toBeNull();
 
             const items = screen.getAllByRole('listitem');
             expect(items.length).toBe(listedExtensions.length);
@@ -461,6 +469,7 @@ describe('ExtensionsPage', () => {
         await waitFor(() => expect(extensionFetches).toBeGreaterThanOrEqual(2));
         expect(await screen.findByTestId('extensions-page__card-update-badge')).toHaveTextContent('Update 2.2.0');
         expect(vi.mocked(apiPost)).not.toHaveBeenCalledWith('/extensions/check-updates');
+        expect(await screen.findByText('1 extension has updates available.')).toBeInTheDocument();
     });
 });
 
@@ -562,6 +571,20 @@ describe('ExtensionsPage enable/disable toggle', () => {
         vi.mocked(apiPatch).mockResolvedValue(undefined);
     });
 
+    it('shows a readable error when the toggle request fails generically', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockRejectedValue({ status: 500, message: 'Request failed with status 500' });
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+        await screen.findByRole('list', { name: 'Installed extensions' });
+        const card = document.querySelector('[data-magpie-extension-id="ext-downloadclient-a"]') as HTMLElement;
+        // Act
+        await user.click(within(card).getByRole('switch'));
+        // Assert
+        expect(await screen.findByText('The server request failed. Try again later.')).toBeInTheDocument();
+        expect(within(card).getByRole('switch')).toBeEnabled();
+    });
+
     it('calls POST /extensions/{id}/enable when enabling', async () => {
         const wrapper = createWrapper();
         const { result } = renderHook(() => useExtensionManagement(), { wrapper });
@@ -590,6 +613,43 @@ describe('ExtensionsPage enable/disable toggle', () => {
         });
 
         expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/extensions/ext-downloadclient-a/disable');
+    });
+});
+
+describe('ExtensionsPage card anatomy (mobile collapse)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('marks the drag handle and enable toggle for the mobile card layout', async () => {
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
+        });
+
+        const enabledCard = document.querySelector('[data-magpie-extension-id="ext-prowlarr"]');
+        expect(enabledCard?.querySelector('.extensions-page__drag-handle')).toBeInTheDocument();
+
+        const toggle = enabledCard?.querySelector('.extensions-page__card-toggle');
+        expect(toggle?.querySelector('.extensions-page__toggle-label')).toHaveTextContent('Enabled');
+        expect(toggle?.querySelector('[role="switch"]')).toBeInTheDocument();
+    });
+
+    it('keeps the reorder buttons out of the enable toggle so they collapse into the bottom bar separately', async () => {
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
+        });
+
+        const card = document.querySelector('[data-magpie-extension-id="ext-prowlarr"]');
+        const orderControls = card?.querySelector('.extensions-page__order-controls');
+        expect(orderControls).toBeInTheDocument();
+        expect(orderControls?.querySelector('.extensions-page__card-toggle')).not.toBeInTheDocument();
+        expect(
+            card?.querySelector('.extensions-page__card-toggle .extensions-page__order-controls'),
+        ).not.toBeInTheDocument();
     });
 });
 
@@ -693,7 +753,7 @@ describe('ExtensionsPage load-order reordering', () => {
                 loadOrder: { value: 1 },
             });
         });
-        expect(document.querySelector('.sr-only[aria-live="polite"]')).toHaveTextContent(
+        expect(document.querySelector('[data-component="live-announcer"][aria-live="polite"]')).toHaveTextContent(
             `Magpie Core moved to position ${listedExtensions.length - 1} of ${listedExtensions.length}.`,
         );
         await waitFor(() => {

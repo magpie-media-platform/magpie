@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,8 +15,10 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
+using Magpie.Models.Patch;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
@@ -40,6 +43,10 @@ internal sealed class JobManager(
 
     private const string GlobalPartition = "global";
 
+    private const int ExecutionTreePageSize = 500;
+
+    private const int MaxExecutionTreeNodes = 5000;
+
     private static JobSpec? GetRegisteredSpec(IReadOnlyList<JobSpec> specs, string jobType)
     {
         if (string.IsNullOrWhiteSpace(jobType))
@@ -58,6 +65,50 @@ internal sealed class JobManager(
         }
 
         AuthorizeRequiredRole(spec, callerRole);
+    }
+
+    private static Dictionary<string, string?> BuildLockPartitionParameters(JobExecution execution, JobSpec? spec)
+    {
+        var parameters = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var parameter in execution.Parameters)
+        {
+            parameters[parameter.Key] = parameter.Value;
+        }
+
+        if (spec is null || spec.LockPartitionEventContextKeys.Count == 0)
+        {
+            return parameters;
+        }
+
+        foreach (var (field, eventContextKey) in spec.LockPartitionEventContextKeys)
+        {
+            if (parameters.TryGetValue(field, out var existing) && !string.IsNullOrWhiteSpace(existing))
+            {
+                continue;
+            }
+
+            if (execution.TriggerContext.TryGetValue(eventContextKey.ToEventContextKey(), out var value) &&
+                !string.IsNullOrWhiteSpace(value))
+            {
+                parameters[field] = value;
+            }
+        }
+
+        return parameters;
+    }
+
+    private static void InjectCurrentTrace(IDictionary<string, string> triggerContext)
+    {
+        if (Activity.Current is not { } activity ||
+            DistributedContextPropagator.Current.Fields.Any(triggerContext.ContainsKey))
+        {
+            return;
+        }
+
+        DistributedContextPropagator.Current.Inject(
+            activity,
+            triggerContext,
+            static (carrier, key, value) => ((IDictionary<string, string>)carrier!)[key] = value);
     }
 
     private static string? ResolveLockPartition(
@@ -167,6 +218,37 @@ internal sealed class JobManager(
         }
 
         ValidateParameters(spec, resolved, requireRequired: false);
+    }
+
+    private static void ValidateEventFilter(EventFilter? filter)
+    {
+        if (filter is null)
+        {
+            return;
+        }
+
+        ValidateRegexCriterion(filter.EventName);
+        foreach (var criterion in filter.EventContext?.Items.Values.AsEnumerable() ?? [])
+        {
+            ValidateRegexCriterion(criterion);
+        }
+    }
+
+    private static void ValidateRegexCriterion(PropertyCriterion<string>? criterion)
+    {
+        if (criterion is null || criterion.Operator != CriteriaValueOperator.Regex || criterion.Value is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = new Regex(criterion.Value);
+        }
+        catch (ArgumentException)
+        {
+            throw new MagpieException("Event filter regular expression is malformed.");
+        }
     }
 
     private static string EventBindingValidationSample(DataType type) => type switch
@@ -376,29 +458,22 @@ internal sealed class JobManager(
             ExecutionMode = request.Mode,
             Status = JobExecutionStatus.Queued,
             CorrelationId = effectiveCorrelationId,
-            ParentExecutionId = jobExecutionScopes.CurrentExecutionId,
+            ParentExecutionId = request.IsSuccessor ? null : jobExecutionScopes.CurrentExecutionId,
             DedupKey = dedupKey,
             NotBeforeAt = request.NotBeforeAt,
         };
 
-        if (Activity.Current is { } currentActivity)
-        {
-            DistributedContextPropagator.Current.Inject(
-                currentActivity,
-                execution.TriggerContext,
-                static (carrier, key, value) => ((IDictionary<string, string>)carrier!)[key] = value);
-        }
+        InjectCurrentTrace(execution.TriggerContext);
 
         execution.LockPartition = ResolveLockPartition(
             spec?.ConcurrencyScope ?? ConcurrencyScope.PerType,
             execution.JobType,
-            execution.GetLockPartitionFor(spec),
+            BuildLockPartitionParameters(execution, spec),
             spec?.LockPartitionFields ?? []);
 
         var created = await executionRepository.CreateAsync(
             execution,
             request.UserId,
-            request.ClearDeferralOnCoalesce,
             cancellationToken)
             .ConfigureAwait(false);
 
@@ -441,9 +516,13 @@ internal sealed class JobManager(
     public async Task<JobExecutionTree?> GetExecutionTreeAsync(
         Guid executionId,
         bool includeSiblings,
+        int maxNodes,
         CancellationToken cancellationToken)
     {
-        var lineage = await executionRepository.GetLineageAsync(executionId, 500, cancellationToken)
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxNodes, 1);
+        var nodeLimit = Math.Min(maxNodes, MaxExecutionTreeNodes);
+        var lineage = await executionRepository
+            .GetLineageAsync(executionId, ExecutionTreePageSize, nodeLimit, cancellationToken)
             .ConfigureAwait(false);
         if (lineage.Count == 0)
         {
@@ -475,7 +554,12 @@ internal sealed class JobManager(
 
         var visited = new HashSet<Guid>();
         var rootNode = BuildExecutionNode(root, byParent, visited, timeProvider.GetUtcNow().UtcDateTime);
-        return new JobExecutionTree { Root = rootNode, TotalCount = visited.Count };
+        return new JobExecutionTree
+        {
+            Root = rootNode,
+            TotalCount = visited.Count,
+            Truncated = lineage.Count >= nodeLimit
+        };
     }
 
     public async Task<bool> RequestCancellationAsync(Guid executionId, CancellationToken cancellationToken)
@@ -564,29 +648,22 @@ internal sealed class JobManager(
             throw new ArgumentException(error, nameof(patch));
         }
 
-        if (!await scheduleTriggerRepository.PatchAsync(
-            patch with { Id = triggerId }, callerUserId, cancellationToken).ConfigureAwait(false))
+        ScalarPatch<DateTime?>? nextRunAt = null;
+        if (patch.Schedule is not null || patch.Enabled is not null)
         {
-            return false;
+            var enabled = patch.Enabled?.Value ?? trigger.Enabled;
+            var cron = patch.Schedule?.Value ?? trigger.Schedule;
+            nextRunAt = new()
+            {
+                Value = enabled && CronSchedule.TryParse(cron, out var schedule, out _)
+                    ? schedule.NextOccurrence(timeProvider.GetUtcNow().UtcDateTime)
+                    : null
+            };
         }
 
-        if (patch.Schedule is null && patch.Enabled is null)
-        {
-            return true;
-        }
-
-        var updated = await scheduleTriggerRepository.GetByIdAsync(triggerId, cancellationToken)
+        return await scheduleTriggerRepository
+            .PatchAsync(patch with { Id = triggerId, NextRunAt = nextRunAt }, callerUserId, cancellationToken)
             .ConfigureAwait(false);
-        if (updated is not null)
-        {
-            updated.NextRunAt = updated.Enabled && CronSchedule.TryParse(updated.Schedule, out var schedule, out _)
-                ? schedule.NextOccurrence(timeProvider.GetUtcNow().UtcDateTime)
-                : null;
-            await scheduleTriggerRepository.UpdateAsync(updated, callerUserId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        return true;
     }
 
     public async Task<bool> DeleteScheduleTriggerAsync(
@@ -636,6 +713,7 @@ internal sealed class JobManager(
         var spec = GetSpec(create.JobType);
         AuthorizeTriggerCreate(spec, JobTriggerMode.Event, ownerRole);
         ValidateEventTriggerParameters(spec!, create.Parameters);
+        ValidateEventFilter(create.EventFilter);
         return await eventTriggerRepository.CreateAsync(
             new EventTrigger
             {
@@ -694,6 +772,8 @@ internal sealed class JobManager(
 
             ValidateEventTriggerParameters(spec, parameters);
         }
+
+        ValidateEventFilter(patch.EventFilter?.Value);
 
         return await eventTriggerRepository.PatchAsync(
             patch with { Id = triggerId }, callerUserId, cancellationToken).ConfigureAwait(false);

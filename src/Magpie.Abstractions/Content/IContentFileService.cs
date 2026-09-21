@@ -27,6 +27,15 @@ public interface IContentFileService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Calculates the absolute path of a content hierarchy item.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<string?> GetEffectivePathAsync(
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lists a directory within the configured root of a content hierarchy item.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
@@ -116,7 +125,7 @@ public interface IContentFileService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the rename that Magpie plans for a file, without a change on disk.
+    /// Plans a rename for a file, without a change on disk.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the leaf content item that owns the file</param>
     /// <param name="original">The file at its current path</param>

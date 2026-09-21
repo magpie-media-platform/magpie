@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type SubmitEvent } from 'react';
+import { useState, useId, useCallback, useEffect, type SubmitEvent } from 'react';
 import { FloppyDiskIcon } from '@phosphor-icons/react';
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../Dialog';
@@ -44,6 +44,7 @@ export function SaveFilterDialog({
     error,
     existingNames = EMPTY_EXISTING_NAMES,
 }: SaveFilterDialogProps) {
+    const inputId = useId();
     const [name, setName] = useState('');
     const [localError, setLocalError] = useState<string | null>(null);
 
@@ -112,9 +113,9 @@ export function SaveFilterDialog({
 
                 <form onSubmit={handleSubmit} className="save-filter-dialog__form">
                     <div className="save-filter-dialog__field">
-                        <Label htmlFor="filter-name">{canUpdate ? 'New Filter Name' : 'Filter Name'}</Label>
+                        <Label htmlFor={inputId}>{canUpdate ? 'New Filter Name' : 'Filter Name'}</Label>
                         <Input
-                            id="filter-name"
+                            id={inputId}
                             type="text"
                             value={name}
                             onChange={(e) => setName(e.target.value)}

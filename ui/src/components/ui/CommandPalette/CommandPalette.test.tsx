@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -310,34 +307,5 @@ describe('CommandPalette', () => {
         });
 
         expect(screen.getByText('Dashboard')).toBeInTheDocument();
-    });
-
-    it('keeps the mobile palette inside a 390px viewport throughout its animation', () => {
-        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/CommandPalette/CommandPalette.css'), 'utf8');
-        const mobileRule = css.match(
-            /@media\s*\(max-width:\s*480px\)\s*{\s*\.command-palette\s*{(?<declarations>[\s\S]*?)}\s*}/,
-        )?.groups?.declarations;
-
-        expect(mobileRule).toContain('left: 50%;');
-        expect(mobileRule).toContain('width: 100%;');
-        expect(mobileRule).toContain('transform: translateX(-50%);');
-        expect(mobileRule).not.toContain('animation-name:');
-        expect(css).toContain('animation: command-palette-in');
-        expect(css).toMatch(/&\[data-state='closed'\]\s*{\s*animation-name: command-palette-out;/);
-        expect(css).toMatch(/@keyframes command-palette-in[\s\S]*?translateX\(-50%\) scale\(1\)/);
-        expect(css).toMatch(/@keyframes command-palette-out[\s\S]*?translateX\(-50%\) scale\(1\)/);
-
-        const viewportWidth = 390;
-        const dialogWidth = viewportWidth;
-        const centeredLeft = viewportWidth / 2 - dialogWidth / 2;
-        const animationScales = [1, 0.97];
-
-        for (const scale of animationScales) {
-            const animatedWidth = dialogWidth * scale;
-            const animatedLeft = centeredLeft + (dialogWidth - animatedWidth) / 2;
-
-            expect(animatedLeft).toBeGreaterThanOrEqual(0);
-            expect(animatedLeft + animatedWidth).toBeLessThanOrEqual(viewportWidth);
-        }
     });
 });

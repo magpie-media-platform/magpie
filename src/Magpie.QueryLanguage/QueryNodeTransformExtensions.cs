@@ -175,6 +175,14 @@ internal static class QueryNodeTransformExtensions
 
         var op = operatorResult.Value;
 
+        if (!field.SupportsOperator(op))
+        {
+            return new ParseError(
+                $"Operator {node.Operator} is not supported for field {node.Field}",
+                node.Position,
+                []);
+        }
+
         if (op is CriteriaValueOperator.In or CriteriaValueOperator.NotIn)
         {
             if (node.Value is not ListValueNode listValue)
@@ -186,12 +194,12 @@ internal static class QueryNodeTransformExtensions
             foreach (var item in listValue.Values)
             {
                 var parsed = ParseValue(item, field.ValueType);
-                if (parsed == null && !IsNullIdentifier(item))
+                if (parsed == null)
                 {
                     return new ParseError($"Cannot parse value for field {node.Field}", item.Position, []);
                 }
 
-                values.Add(parsed!);
+                values.Add(parsed);
             }
 
             field.AddCriterion(context, op, null, values);
@@ -211,6 +219,14 @@ internal static class QueryNodeTransformExtensions
             if (parsedValue == null && !IsNullIdentifier(node.Value))
             {
                 return new ParseError($"Cannot parse value for field {node.Field}", node.Value.Position, []);
+            }
+
+            if (field.ConflictsWithExisting(context, op, parsedValue))
+            {
+                return new ParseError(
+                    $"Field {node.Field} is constrained more than once with conflicting values",
+                    node.Position,
+                    []);
             }
 
             field.AddCriterion(context, op, parsedValue, null);
@@ -471,52 +487,56 @@ internal static class QueryNodeTransformExtensions
 
     private static TimeSpan? ParseShortTimeSpan(string value)
     {
-        var totalMinutes = 0;
-        var current = 0;
-        var i = 0;
+        var total = TimeSpan.Zero;
+        var current = 0L;
+        var hasDigits = false;
 
-        while (i < value.Length)
+        try
         {
-            if (char.IsDigit(value[i]))
+            foreach (var character in value)
             {
-                current = current * 10 + (value[i] - '0');
-                i++;
+                if (char.IsDigit(character))
+                {
+                    current = checked((current * 10) + (character - '0'));
+                    hasDigits = true;
+                }
+                else if (character is 'h' or 'm' or 's')
+                {
+                    if (!hasDigits)
+                    {
+                        return null;
+                    }
+
+                    total += character switch
+                    {
+                        'h' => TimeSpan.FromHours(current),
+                        'm' => TimeSpan.FromMinutes(current),
+                        _ => TimeSpan.FromSeconds(current)
+                    };
+                    current = 0;
+                    hasDigits = false;
+                }
+                else if (!char.IsWhiteSpace(character))
+                {
+                    return null;
+                }
             }
-            else if (value[i] == 'h')
+
+            if (hasDigits)
             {
-                totalMinutes += current * 60;
-                current = 0;
-                i++;
-            }
-            else if (value[i] == 'm')
-            {
-                totalMinutes += current;
-                current = 0;
-                i++;
-            }
-            else if (value[i] == 's')
-            {
-                current = 0;
-                i++;
-            }
-            else if (char.IsWhiteSpace(value[i]))
-            {
-                i++;
-            }
-            else
-            {
-                return null;
+                total += TimeSpan.FromMinutes(current);
             }
         }
-
-        totalMinutes += current;
-
-        if (totalMinutes == 0)
+        catch (OverflowException)
+        {
+            return null;
+        }
+        catch (ArgumentOutOfRangeException)
         {
             return null;
         }
 
-        return TimeSpan.FromMinutes(totalMinutes);
+        return total == TimeSpan.Zero ? null : total;
     }
 
     private static object? ParseNumberValue(string value, Type targetType)

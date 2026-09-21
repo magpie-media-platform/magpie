@@ -13,6 +13,8 @@ const PRESET_LABELS: Record<string, string> = {
     '0 0 * * 0': 'Weekly on Sunday',
 };
 
+export const cronPresets = Object.entries(PRESET_LABELS).map(([value, label]) => ({ value, label }));
+
 function isWildcard(field: string): boolean {
     return field === '*';
 }

@@ -21,7 +21,7 @@ public interface IRemotePathMappingService
     Task<IReadOnlyList<RemotePathMapping>> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets a remote path mapping by id.
+    /// A remote path mapping by id.
     /// </summary>
     /// <param name="id">The id of the mapping to return</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

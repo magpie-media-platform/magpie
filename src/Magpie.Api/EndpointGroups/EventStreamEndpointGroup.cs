@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -136,9 +137,23 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
 
     private static readonly HashSet<string> AdminOnlyEvents =
     [
+        MagpieEvents.Names.ApiKeyCreated,
+        MagpieEvents.Names.ApiKeyDeleted,
+        MagpieEvents.Names.ApiKeyUpdated,
+        MagpieEvents.Names.AuditRecordCreated,
         MagpieEvents.Names.BackupCompleted,
         MagpieEvents.Names.BackupDeleted,
         MagpieEvents.Names.BackupFailed,
+        MagpieEvents.Names.UserCreated,
+        MagpieEvents.Names.UserDeleted,
+        MagpieEvents.Names.UserLockedOut,
+        MagpieEvents.Names.UserUnlocked,
+        MagpieEvents.Names.UserUpdated,
+    ];
+
+    private static readonly HashSet<string> ManagerEvents =
+    [
+        MagpieEvents.Names.SettingsGroupUpdated,
     ];
 
     private static readonly HashSet<string> RequesterEvents =
@@ -200,6 +215,7 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         MagpieEvents.Keys.IndexerFeedId,
         MagpieEvents.Keys.IndexerId,
         MagpieEvents.Keys.IntegrationId,
+        MagpieEvents.Keys.IntegrationType,
         MagpieEvents.Keys.LibraryImportCandidateId,
         MagpieEvents.Keys.MediaServerId,
         MagpieEvents.Keys.MimeMappingExtension,
@@ -219,6 +235,20 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         MagpieEvents.Keys.WishlistItemId,
     ];
 
+    private static readonly HashSet<string> AccountLifecycleNames =
+    [
+        MagpieEvents.Names.UserDeleted,
+        MagpieEvents.Names.UserLockedOut,
+        MagpieEvents.Names.UserUnlocked,
+        MagpieEvents.Names.UserUpdated,
+    ];
+
+    private static readonly HashSet<string> SessionRevokingFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        MagpieEvents.Fields.UserEnabled,
+        MagpieEvents.Fields.UserRole,
+    };
+
     public string Name => "events";
 
     private static string GetNamePrefix(string name)
@@ -236,11 +266,13 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
 
         var requiredRole = AdminOnlyEvents.Contains(evt.Name)
             ? Role.Admin
-            : RequesterEvents.Contains(evt.Name)
-                ? Role.Requester
-                : Role.Viewer;
+            : ManagerEvents.Contains(evt.Name)
+                ? Role.Manager
+                : RequesterEvents.Contains(evt.Name)
+                    ? Role.Requester
+                    : Role.Viewer;
 
-        return user.IsInRole(requiredRole);
+        return user.IsInRole(requiredRole) || ConcernsAccountOf(evt, user);
     }
 
     private static async Task WriteSseFrameAsync(
@@ -303,6 +335,12 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
 
             await foreach (var evt in listener.ReadAllAsync(streamCts.Token).ConfigureAwait(false))
             {
+                if (RevokesSessionOf(evt, user))
+                {
+                    disconnectReason = "session_revoked";
+                    break;
+                }
+
                 if (!CanViewEvent(evt, user))
                 {
                     ApiTelemetry.EventsDroppedByAllowlistTotal.Add(
@@ -327,7 +365,7 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         catch (Exception ex)
         {
             disconnectReason = "error";
-            logger.LogWarning(ex, "The event stream writer failed. The handler will close the connection.");
+            logger.LogWarning(ex, "The event stream writer failed, so the handler closed the connection.");
         }
         finally
         {
@@ -336,6 +374,26 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
                 Stopwatch.GetElapsedTime(startedTimestamp).TotalSeconds,
                 new KeyValuePair<string, object?>("disconnect_reason", disconnectReason));
         }
+    }
+
+    private static bool ConcernsAccountOf(MagpieEvent evt, AuthenticatedUser user)
+    {
+        return AccountLifecycleNames.Contains(evt.Name) && IdentifiesUser(evt, user);
+    }
+
+    private static bool RevokesSessionOf(MagpieEvent evt, AuthenticatedUser user)
+    {
+        return string.Equals(evt.Name, MagpieEvents.Names.UserUpdated, StringComparison.Ordinal) &&
+            IdentifiesUser(evt, user) &&
+            evt.Context.TryGetValue(MagpieEvents.Keys.UserChangedFields, out var changedFields) &&
+            changedFields.Split(',').Any(field => SessionRevokingFields.Contains(field.Trim()));
+    }
+
+    private static bool IdentifiesUser(MagpieEvent evt, AuthenticatedUser user)
+    {
+        return evt.Context.TryGetValue(MagpieEvents.Keys.UserId, out var userId) &&
+            Guid.TryParse(userId, out var parsed) &&
+            parsed == user.Id;
     }
 
     private static async Task WriteRawAsync(HttpResponse response, string text, CancellationToken cancellationToken)

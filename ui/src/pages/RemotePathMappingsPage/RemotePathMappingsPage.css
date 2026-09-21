@@ -30,6 +30,12 @@
         color: var(--accent-primary);
     }
 
+    .remote-path-mappings-page__header-actions {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
     .remote-path-mappings-page__list {
         display: flex;
         flex-direction: column;
@@ -37,6 +43,7 @@
     }
 
     .remote-path-mappings-page__item {
+        position: relative;
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-md);
@@ -45,6 +52,10 @@
 
         &:hover {
             border-color: var(--border-accent);
+        }
+
+        &:has(> .selection-circle-toggle) {
+            padding-inline-start: calc(var(--space-xs) + 44px + var(--space-sm));
         }
     }
 

@@ -11,24 +11,24 @@ using Magpie.Models.Storage;
 namespace Magpie.Sdk.Services;
 
 /// <summary>
-/// Provides file-system and file-type operations.
+/// The file-system and file-type operations of the host.
 /// </summary>
 public interface IFileSystem
 {
     /// <summary>
-    /// Gets whether a file exists at a path.
+    /// Determines whether a file exists at a path.
     /// </summary>
     /// <param name="path">The path of the file to find</param>
     bool FileExists(string path);
 
     /// <summary>
-    /// Gets whether a directory exists at a path.
+    /// Determines whether a directory exists at a path.
     /// </summary>
     /// <param name="path">The path of the directory to find</param>
     bool DirectoryExists(string path);
 
     /// <summary>
-    /// Gets the entries directly in a directory.
+    /// Lists the entries directly in a directory.
     /// </summary>
     /// <param name="path">The path of the directory to read</param>
     IEnumerable<string> EnumerateFileSystemEntries(string path);
@@ -40,7 +40,7 @@ public interface IFileSystem
     void CreateDirectory(string path);
 
     /// <summary>
-    /// Gets every file in a directory and its subdirectories.
+    /// Lists every file in a directory and its subdirectories.
     /// </summary>
     /// <param name="path">The path of the directory to read</param>
     IEnumerable<string> EnumerateFiles(string path);
@@ -136,13 +136,13 @@ public interface IFileSystem
     bool MatchesAnyFileType(string filePath, string? mimeType, IReadOnlyList<string>? fileTypes);
 
     /// <summary>
-    /// Gets the file kind represented by a MIME type.
+    /// Resolves the file kind represented by a MIME type.
     /// </summary>
     /// <param name="mimeType">The MIME type, or <see langword="null"/> when unknown</param>
     FileKind ResolveFileKind(string? mimeType);
 
     /// <summary>
-    /// Sets the MIME type for a file extension.
+    /// Adds or replaces the MIME type registration for a file extension.
     /// </summary>
     /// <param name="extension">The file extension to map</param>
     /// <param name="mimeType">The MIME type to store for the extension</param>
@@ -172,7 +172,7 @@ public interface IFileSystem
     string GetFullPath(string path);
 
     /// <summary>
-    /// Gets a path relative to another path.
+    /// A path relative to another path.
     /// </summary>
     /// <param name="relativeTo">The path that the result is relative to</param>
     /// <param name="path">The path to resolve</param>
@@ -193,7 +193,7 @@ public interface IFileSystem
     bool IsPathWithin(string root, string path);
 
     /// <summary>
-    /// Gets whether a path below a root contains a symbolic link or reparse point.
+    /// Determines whether a path below a root contains a symbolic link or reparse point.
     /// </summary>
     /// <param name="root">The root path to exclude from the check</param>
     /// <param name="path">The path to check</param>

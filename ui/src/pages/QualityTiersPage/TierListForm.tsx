@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type ReactNode } from 'react';
+import { useState, useCallback, type ReactNode } from 'react';
 import { FloppyDiskIcon, XIcon, InfoIcon, ListNumbersIcon } from '@phosphor-icons/react';
 
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
@@ -72,17 +72,18 @@ export function TierListForm({
     const [cleanValues, setCleanValues] = useState<TierListFormValues>(initialValues ?? emptyValues);
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
 
-    useEffect(() => {
-        if (open) {
-            const clean = initialValues ?? emptyValues;
-            setValues(clean);
-            setCleanValues(clean);
-            setErrors({});
-            setShowUnsavedDialog(false);
-        }
-    }, [open, initialValues]);
-
     const isDirty = useFormDirty(values, cleanValues, normalizeTierList);
+
+    const resetKey = `${open ? 'open' : 'closed'}:${initialValues?.id ?? 'new'}`;
+    const [seededKey, setSeededKey] = useState(resetKey);
+    if (seededKey !== resetKey) {
+        const clean = initialValues ?? emptyValues;
+        setSeededKey(resetKey);
+        setValues(clean);
+        setCleanValues(clean);
+        setErrors({});
+        setShowUnsavedDialog(false);
+    }
 
     useUnsavedChangesGuard(open && isDirty && !isSubmitting);
 

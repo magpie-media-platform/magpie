@@ -88,6 +88,17 @@
         object-fit: contain;
     }
 
+    .preview-drawer__artwork--placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: clamp(150px, 30vw, 240px);
+        height: clamp(220px, 44vh, 360px);
+        height: clamp(220px, 44dvh, 360px);
+        color: var(--text-muted);
+        font-size: var(--icon-size-md);
+    }
+
     .preview-drawer__meta,
     .preview-drawer__genres {
         display: flex;

@@ -13,15 +13,15 @@ public enum Role
     /// <summary>
     /// The right to request content.
     /// </summary>
-    Requester,
+    Requester = 1,
 
     /// <summary>
     /// The right to manage content.
     /// </summary>
-    Manager,
+    Manager = 2,
 
     /// <summary>
     /// Full administrative access.
     /// </summary>
-    Admin
+    Admin = 3
 }

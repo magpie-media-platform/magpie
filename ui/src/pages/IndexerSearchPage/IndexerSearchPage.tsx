@@ -33,13 +33,13 @@ import {
 } from '@/hooks/useIndexerSearch';
 import { useAllIndexerConnections, useIndexers } from '@/hooks/useIndexers';
 import { useReleaseGrabGuard } from '@/hooks/useReleaseGrabGuard';
-import { getErrorMessage, isNoDownloadClientError } from '@/lib/errors';
+import { getErrorMessage } from '@/lib/errors';
 import { formatFileSize } from '@/lib/formatSize';
 import { formatRelativeTime } from '@/lib/formatTime';
 import type { ContentListItem } from '@/types/content';
 
 import { ContentPickerDialog, type ContentPickerMode } from './ContentPickerDialog';
-import { sharedQueryModes } from './queryModes';
+import { availableQueryModes, fieldLabel } from './queryModes';
 
 import './IndexerSearchPage.css';
 
@@ -119,7 +119,7 @@ export function IndexerSearchPage() {
         () => [...new Map(selectedRows.map((row) => [row.indexer.id, row.indexer])).values()],
         [selectedRows],
     );
-    const modes = useMemo(() => sharedQueryModes(selectedIndexers), [selectedIndexers]);
+    const modes = useMemo(() => availableQueryModes(selectedIndexers), [selectedIndexers]);
 
     const [modeKey, setModeKey] = useState(() => searchParams.get('mode') ?? '');
     const [values, setValues] = useState<Record<string, string>>(() => {
@@ -224,14 +224,6 @@ export function IndexerSearchPage() {
                     },
                     onError: (grabError) => {
                         markGrabFailed(key);
-                        if (isNoDownloadClientError(grabError)) {
-                            toast({
-                                title: 'No download client configured',
-                                description: 'Add a download client on the Download Clients page to download releases.',
-                                variant: 'warning',
-                            });
-                            return;
-                        }
                         toast({
                             title: 'Grab failed',
                             description: getErrorMessage(grabError, 'Failed to grab the release.'),
@@ -284,6 +276,7 @@ export function IndexerSearchPage() {
                 id: 'title',
                 accessorFn: (row) => row.release.title,
                 header: 'Title',
+                meta: { mobileRole: 'header' },
                 cell: ({ row }) => (
                     <span className="indexer-search__release-title" title={row.original.release.title}>
                         {row.original.release.title}
@@ -405,7 +398,7 @@ export function IndexerSearchPage() {
     );
 
     const isLoadingSelection = isLoadingIndexers || isLoadingConnections;
-    const hasNoSharedMode = !isLoadingSelection && selectedRows.length > 0 && modes.length === 0;
+    const hasNoMode = !isLoadingSelection && selectedRows.length > 0 && modes.length === 0;
     const searchedNothing = !!data && data.connectionsAttempted === 0;
 
     return (
@@ -445,10 +438,12 @@ export function IndexerSearchPage() {
                         ))}
                     </div>
 
-                    {hasNoSharedMode ? (
-                        <p className="indexer-search__incompatible" role="status">
-                            The selected indexers have no compatible search fields.
-                        </p>
+                    {hasNoMode ? (
+                        <EmptyState
+                            role="status"
+                            title="No search modes available"
+                            description="The selected indexers do not offer any search fields."
+                        />
                     ) : (
                         <div className="indexer-search__form">
                             <div className="indexer-search__field">
@@ -477,7 +472,7 @@ export function IndexerSearchPage() {
                                     className={`indexer-search__field${field === 'q' ? ' indexer-search__field--grow' : ''}`}
                                 >
                                     <label htmlFor={`indexer-search-${field}`}>
-                                        {field === 'q' ? 'Search' : field}
+                                        {field === 'q' ? 'Search' : fieldLabel(field)}
                                     </label>
                                     <Input
                                         id={`indexer-search-${field}`}

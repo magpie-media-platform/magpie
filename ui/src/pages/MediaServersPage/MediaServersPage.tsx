@@ -1,13 +1,17 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { TelevisionIcon, PlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { PlusIcon, PowerIcon, TelevisionIcon, TrashIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { Badge } from '@/components/ui/Badge';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
-import { DataTable } from '@/components/ui/DataTable';
+import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Pager } from '@/components/ui/Pager';
 import { MultiSelectColumnFilter, encodeMultiValue, decodeMultiValue } from '@/components/ui/MultiSelectColumnFilter';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -41,6 +45,7 @@ import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteC
 import { MediaServerForm, type MediaServerFormValues } from '@/components/configuration/MediaServerForm';
 
 import './MediaServersPage.css';
+import '@/styles/bulk-actions-toolbar.css';
 import '@/styles/card-actions.css';
 
 interface MediaServerItem {
@@ -109,7 +114,12 @@ export function MediaServersPage() {
     const [deletingServer, setDeletingServer] = useState<MediaServerItem | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const [testingId, setTestingId] = useState<string | null>(null);
+    const [pageRowIds, setPageRowIds] = useState<string[]>([]);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const [isBulkSettingEnabled, setIsBulkSettingEnabled] = useState(false);
     const { toast } = useToast();
+    const runBulk = useBulkRun();
 
     const {
         servers: apiServers,
@@ -362,6 +372,50 @@ export function MediaServersPage() {
         setDeletingServer(null);
     }, []);
 
+    const selectionResetKey = useMemo(
+        () => [filters.provider, filters.status, filters.enabled].join('|'),
+        [filters.provider, filters.status, filters.enabled],
+    );
+    const selection = useBulkSelection({
+        pageRowIds,
+        totalCount: filteredServers.length,
+        resetKey: selectionResetKey,
+    });
+    const selectedServers = useMemo(
+        () => filteredServers.filter((s) => selection.isRowChecked(s.id)),
+        [filteredServers, selection],
+    );
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedServers, selection, {
+                action: (server) => deleteServer(server.id),
+                verb: 'delete',
+                itemNounPlural: 'media servers',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [deleteServer, runBulk, selectedServers, selection]);
+
+    const handleBulkSetEnabled = useCallback(
+        async (isEnabled: boolean) => {
+            setIsBulkSettingEnabled(true);
+            try {
+                await runBulk(selectedServers, selection, {
+                    action: (server) => toggleServerEnabled(server.id, isEnabled),
+                    verb: isEnabled ? 'enable' : 'disable',
+                    itemNounPlural: 'media servers',
+                });
+            } finally {
+                setIsBulkSettingEnabled(false);
+            }
+        },
+        [runBulk, selectedServers, selection, toggleServerEnabled],
+    );
+
     const handleRefresh = useCallback(async () => {
         await refetch();
     }, [refetch]);
@@ -373,10 +427,17 @@ export function MediaServersPage() {
 
     const columns = useMemo<ColumnDef<MediaServerItem>[]>(
         () => [
+            selectColumn<MediaServerItem>({
+                selection,
+                getId: (row) => row.id,
+                headerLabel: 'Select all media servers',
+                rowLabel: (row) => row.name,
+            }),
             {
                 id: 'name',
                 accessorFn: (row) => row.name,
                 header: 'Name',
+                meta: { mobileRole: 'header' },
                 size: 240,
                 cell: ({ row }) => (
                     <span className="media-servers-table__name" title={row.original.name}>
@@ -412,7 +473,7 @@ export function MediaServersPage() {
                         onChange={(value) => setFilters({ status: value })}
                     />
                 ),
-                meta: { headerLabel: 'Status' },
+                meta: { headerLabel: 'Status', mobileRole: 'header' },
                 size: 140,
                 cell: ({ row }) => {
                     const variant = mediaServerStatusVariants[row.original.status];
@@ -436,7 +497,7 @@ export function MediaServersPage() {
                         onChange={(value) => setFilters({ enabled: value })}
                     />
                 ),
-                meta: { headerLabel: 'Enabled' },
+                meta: { headerLabel: 'Enabled', mobileRole: 'hidden' },
                 size: 140,
                 cell: ({ row }) => (
                     <Badge variant={row.original.enabled ? 'healthy' : 'unknown'} size="sm">
@@ -480,6 +541,7 @@ export function MediaServersPage() {
             },
         ],
         [
+            selection,
             providerOptions,
             statusOptions,
             provider,
@@ -544,6 +606,49 @@ export function MediaServersPage() {
                     }
                 />
 
+                <BulkActionsToolbar
+                    selection={selection}
+                    label="Media server selection actions"
+                    itemNounPlural="media servers"
+                >
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled}
+                        onClick={() => void handleBulkSetEnabled(true)}
+                        aria-label="Enable selected media servers"
+                        data-action="bulk-enable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Enable</span>
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled}
+                        onClick={() => void handleBulkSetEnabled(false)}
+                        aria-label="Disable selected media servers"
+                        data-action="bulk-disable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Disable</span>
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected media servers"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                    </Button>
+                </BulkActionsToolbar>
+
+                <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+
                 <div className="media-servers-table" data-area="servers">
                     <DataTable<MediaServerItem>
                         columns={columns}
@@ -558,9 +663,15 @@ export function MediaServersPage() {
                         pageSize={PAGE_SIZE}
                         pagination={pagination}
                         getRowId={getRowId}
+                        onPageRowIdsChange={setPageRowIds}
                         loading={isLoading}
                         emptyState={error ? errorState : emptyState}
                         keepHeaderWhenEmpty={hasActiveFilters}
+                        mobileSelectionActive={selection.selectionMode}
+                        mobileSelectionOverlay={{
+                            isSelected: (server) => selection.isRowChecked(server.id),
+                            onToggle: (server) => selection.toggleRow(server.id, !selection.isRowChecked(server.id)),
+                        }}
                         aria-label="Media servers"
                     />
                     {filteredServers.length > PAGE_SIZE && (
@@ -587,6 +698,59 @@ export function MediaServersPage() {
                 itemType="Media Server"
                 isDeleting={isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Media Servers"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="media-servers-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="media servers"
+                >
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(true)}
+                        aria-label="Enable selected media servers"
+                        data-action="bulk-enable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Enable
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(false)}
+                        aria-label="Disable selected media servers"
+                        data-action="bulk-disable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Disable
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected media servers"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
 
             <MediaServerForm
                 open={formOpen}

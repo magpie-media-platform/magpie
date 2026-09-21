@@ -8,6 +8,14 @@
         background-color: var(--bg-primary);
     }
 
+    /* Standalone WebKit under-reports 100dvh, and standalone has no browser chrome, so 100vh is exact. */
+    @media (display-mode: standalone) {
+        .app-shell,
+        .admin-shell {
+            height: 100vh;
+        }
+    }
+
     .app-shell__header,
     .admin-shell__header {
         position: sticky;
@@ -16,7 +24,7 @@
         flex-shrink: 0;
 
         @media (max-width: 767px) {
-            z-index: calc(var(--z-overlay) + 1);
+            z-index: calc(var(--z-overlay) + 3);
         }
     }
 
@@ -54,7 +62,7 @@
         @media (max-width: 767px) {
             display: block;
             position: fixed;
-            inset: 0;
+            inset: var(--header-height) 0 0;
             z-index: calc(var(--z-overlay) + 1);
             background-color: rgb(0 0 0 / 0%);
             pointer-events: none;
@@ -71,10 +79,10 @@
         .app-shell__sidebar,
         .admin-shell__sidebar {
             position: fixed;
-            top: var(--header-height, 56px);
+            top: var(--header-height);
             left: 0;
             z-index: calc(var(--z-overlay) + 2);
-            height: calc(100dvh - var(--header-height, 56px));
+            height: calc(100dvh - var(--header-height));
             width: var(--sidebar-width);
             min-width: var(--sidebar-width);
             transform: translateX(-100%);
@@ -88,12 +96,13 @@
                 min-width: var(--sidebar-width);
             }
         }
+    }
 
-        .app-shell__sidebar-close,
-        .admin-shell__sidebar-close {
-            align-self: flex-start;
-            margin: var(--space-sm);
-            margin-bottom: 0;
+    /* The same standalone 100dvh under-report as the shell height above. */
+    @media (max-width: 767px) and (display-mode: standalone) {
+        .app-shell__sidebar,
+        .admin-shell__sidebar {
+            height: calc(100vh - var(--header-height));
         }
     }
 

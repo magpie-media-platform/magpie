@@ -1,11 +1,14 @@
 import type { WishlistPatch } from '@/hooks/useWishlists';
-import type { WishlistFormValues } from '@/types';
+import { tagsPatch } from '@/lib/tagsPatch';
+
+import type { WishlistFormValues } from './WishlistForm';
 
 export function buildWishlistPatch(values: WishlistFormValues, originalTagNames: string[]): WishlistPatch {
     const patch: WishlistPatch = {
         name: { value: values.name },
         criteria: { value: values.criteria },
-        enabled: { value: values.monitored },
+        enabled: { value: values.enabled },
+        monitoring: { value: values.monitoring },
     };
     if (values.qualityTierListId !== undefined) {
         patch.qualityTierListId = { value: values.qualityTierListId };
@@ -14,16 +17,9 @@ export function buildWishlistPatch(values: WishlistFormValues, originalTagNames:
         patch.rootFolderId = { value: values.rootFolderId };
     }
 
-    const tagsToAdd = values.tagIds.filter((id) => !originalTagNames.includes(id));
-    const tagsToRemove = originalTagNames.filter((id) => !values.tagIds.includes(id));
-    if (tagsToAdd.length > 0 || tagsToRemove.length > 0) {
-        patch.tags = {};
-        if (tagsToAdd.length > 0) {
-            patch.tags.add = tagsToAdd;
-        }
-        if (tagsToRemove.length > 0) {
-            patch.tags.remove = tagsToRemove;
-        }
+    const tags = tagsPatch(values.tagIds, originalTagNames);
+    if (tags) {
+        patch.tags = tags;
     }
 
     return patch;

@@ -40,7 +40,7 @@ internal sealed class SettingsResolver(
 
         var detail = await settingsService
             .GetExtensionGroupAsync(
-                new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A"),
+                Constants.ExtensionId,
                 Settings.GroupName,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -121,8 +121,8 @@ internal sealed class SettingsResolver(
 
         _missingApiKeyWarned = true;
         logger.LogWarning(
-            "The settings group {GroupName} does not contain {ApiKey}, and {EnvVar} is not set. " +
-            "TMDb metadata is disabled. Calls will return null or empty.",
+            "TMDb metadata is disabled because settings group {GroupName} has no {ApiKey} and " +
+            "environment variable {EnvVar} is not set.",
             Settings.GroupName,
             Settings.ApiKeyKey,
             EnvApiKeyVariable);

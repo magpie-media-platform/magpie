@@ -47,7 +47,9 @@ internal sealed class ContentDefaultsDiagnostic(
                 {
                     DiagnosticCheckId = Id,
                     Severity = DiagnosticFindingSeverity.Error,
-                    Title = $"Content type {contentType} has no default root folder",
+                    Title = defaultCount == 0
+                        ? $"Content type {contentType} has no default root folder"
+                        : $"Content type {contentType} has multiple default root folders",
                     Detail = $"Content type {contentType} requires one effective default root folder.",
                     AffectedEntity = $"ContentType:{contentType}"
                 });
@@ -67,7 +69,7 @@ internal sealed class ContentDefaultsDiagnostic(
                     Title = $"Root folder {folder.Name} uses an unknown content type",
                     Detail = $"Content type {folder.ContentType} is not registered, so quality defaults cannot " +
                         "resolve.",
-                    AffectedEntity = $"RootFolder:{folder.Id}"
+                    AffectedEntity = $"{JobDiagnosticAffectedEntityPrefixes.RootFolder}{folder.Id}"
                 });
                 continue;
             }

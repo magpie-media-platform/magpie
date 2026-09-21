@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+    extractCustomValues,
     extractExternalIds,
     extractImages,
     extractImageUrl,
@@ -484,5 +485,71 @@ describe('extractImages', () => {
         };
 
         expect(extractImages(container)[0]?.type).toBe('still');
+    });
+});
+
+describe('extractCustomValues', () => {
+    it('returns deduped key/value pairs in priority then source order', () => {
+        const container: MetadataContainer = {
+            id: 'mc',
+            contributions: [
+                {
+                    ordinal: 0,
+                    customMetadata: [
+                        { key: 'Ethnicity', value: 'Caucasian' },
+                        { key: 'Height', value: '170 cm' },
+                    ],
+                },
+                {
+                    ordinal: 1,
+                    customMetadata: [
+                        { key: 'Height', value: '168 cm' },
+                        { key: 'Eye colour', value: 'Brown' },
+                    ],
+                },
+            ],
+        };
+
+        expect(extractCustomValues(container)).toEqual([
+            { key: 'Ethnicity', value: 'Caucasian' },
+            { key: 'Height', value: '170 cm' },
+            { key: 'Eye colour', value: 'Brown' },
+        ]);
+    });
+
+    it('dedupes case-insensitively and keeps the highest-priority value', () => {
+        const container: MetadataContainer = {
+            id: 'mc',
+            contributions: [
+                { ordinal: 0, customMetadata: [{ key: 'height', value: 'first' }] },
+                { ordinal: 1, customMetadata: [{ key: 'Height', value: 'second' }] },
+            ],
+        };
+
+        expect(extractCustomValues(container)).toEqual([{ key: 'height', value: 'first' }]);
+    });
+
+    it('skips entries without a non-empty key or value', () => {
+        const container: MetadataContainer = {
+            id: 'mc',
+            contributions: [
+                {
+                    ordinal: 0,
+                    customMetadata: [
+                        { key: 'Nationality', value: '' },
+                        { key: '  ', value: 'orphan' },
+                        { key: 'Weight', value: null },
+                        { key: 'Hair colour', value: 'Black' },
+                    ],
+                },
+            ],
+        };
+
+        expect(extractCustomValues(container)).toEqual([{ key: 'Hair colour', value: 'Black' }]);
+    });
+
+    it('returns an empty array when no container or custom values are present', () => {
+        expect(extractCustomValues(undefined)).toEqual([]);
+        expect(extractCustomValues({ contributions: [] })).toEqual([]);
     });
 });

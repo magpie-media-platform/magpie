@@ -1,113 +1,9 @@
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PreviewPlayer } from './PreviewPlayer';
 import { parseYouTubeId } from './parseYouTubeId';
-import type { YTNamespace, YTPlayer, YTPlayerOptions } from './youtubeApi';
-
-vi.mock('./youtubeApi', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('./youtubeApi')>();
-    return {
-        ...actual,
-        loadYouTubeIframeApi: () => Promise.resolve(fakeYT),
-    };
-});
-
-let lastPlayer: FakePlayer | null = null;
-let lastOptions: YTPlayerOptions | null = null;
-
-let deferReady = false;
-
-class FakePlayer implements YTPlayer {
-    options: YTPlayerOptions;
-    volume = 50;
-    muted = false;
-    destroyed = false;
-    stopped = false;
-    playCalled = false;
-    ready = false;
-    getCurrentTimeCalls = 0;
-
-    constructor(_element: HTMLElement | string, options: YTPlayerOptions) {
-        this.options = options;
-        lastOptions = options;
-        if (deferReady) {
-            this.removeGetters();
-            return;
-        }
-        queueMicrotask(() => this.fireReady());
-    }
-
-    private removeGetters() {
-        (this as unknown as Record<string, unknown>).getCurrentTime = undefined;
-        (this as unknown as Record<string, unknown>).getDuration = undefined;
-        (this as unknown as Record<string, unknown>).getVolume = undefined;
-    }
-
-    fireReady() {
-        this.ready = true;
-        delete (this as unknown as Record<string, unknown>).getCurrentTime;
-        delete (this as unknown as Record<string, unknown>).getDuration;
-        delete (this as unknown as Record<string, unknown>).getVolume;
-        this.options.events?.onReady?.({ target: this });
-    }
-
-    playVideo() {
-        this.playCalled = true;
-    }
-    stopVideo() {
-        this.stopped = true;
-    }
-    seekTo = vi.fn();
-    getCurrentTime() {
-        this.getCurrentTimeCalls += 1;
-        return 0;
-    }
-    getDuration() {
-        return 120;
-    }
-    setVolume = vi.fn((v: number) => {
-        this.volume = v;
-    });
-    getVolume() {
-        return this.volume;
-    }
-    mute() {
-        this.muted = true;
-    }
-    unMute = vi.fn(() => {
-        this.muted = false;
-    });
-    isMuted() {
-        return this.muted;
-    }
-    destroy() {
-        this.destroyed = true;
-        (this as unknown as Record<string, unknown>).getCurrentTime = undefined;
-        (this as unknown as Record<string, unknown>).getDuration = undefined;
-    }
-
-    fireEnded() {
-        this.options.events?.onStateChange?.({ data: fakeYT.PlayerState.ENDED, target: this });
-    }
-}
-
-const fakeYT: YTNamespace = {
-    Player: function (this: unknown, element: HTMLElement | string, options: YTPlayerOptions) {
-        const player = new FakePlayer(element, options);
-        lastPlayer = player;
-        return player;
-    } as unknown as YTNamespace['Player'],
-    PlayerState: {
-        ENDED: 0,
-        PLAYING: 1,
-        PAUSED: 2,
-        BUFFERING: 3,
-        CUED: 5,
-        UNSTARTED: -1,
-    },
-};
 
 describe('parseYouTubeId', () => {
     it('parses watch?v= urls', () => {
@@ -128,80 +24,124 @@ describe('parseYouTubeId', () => {
 });
 
 describe('PreviewPlayer', () => {
-    beforeEach(() => {
-        lastPlayer = null;
-        lastOptions = null;
-        deferReady = false;
+    afterEach(() => vi.restoreAllMocks());
+
+    it('shows a play facade and no iframe until the viewer starts the preview', () => {
+        render(<PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />);
+
+        expect(screen.getByRole('button', { name: 'Play Trailer' })).toBeInTheDocument();
+        expect(screen.queryByTestId('preview-player-iframe')).not.toBeInTheDocument();
     });
 
-    afterEach(() => {
-        deferReady = false;
-        vi.restoreAllMocks();
-    });
-
-    it('wide fit: youtube renders a lazy facade and mounts the interactive player on click', async () => {
+    it('embeds YouTube in a sandboxed nocookie iframe with native controls', async () => {
         const user = userEvent.setup();
         render(<PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />);
 
-        const facade = screen.getByTestId('preview-player-facade');
-        expect(facade).toBeInTheDocument();
-        expect(screen.queryByTestId('preview-player-yt-mount')).not.toBeInTheDocument();
-        expect(facade.querySelector('img')).toHaveAttribute('src', 'https://i.ytimg.com/vi/KEY123/hqdefault.jpg');
+        await user.click(screen.getByRole('button', { name: 'Play Trailer' }));
 
-        await user.click(facade);
-
-        await waitFor(() => expect(lastPlayer).not.toBeNull());
-        expect(lastOptions?.host).toBe('https://www.youtube-nocookie.com');
-        expect(lastOptions?.videoId).toBe('KEY123');
-        expect(lastOptions?.playerVars?.controls).toBe(0);
-        expect(screen.getByTestId('preview-player-yt-mount')).toBeInTheDocument();
-        expect(screen.getByTestId('preview-player-scrubber')).toBeInTheDocument();
-        expect(screen.getByTestId('preview-player-volume')).toBeInTheDocument();
-        expect(screen.getByTestId('preview-player-fullscreen')).toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: /pause/i })).not.toBeInTheDocument();
+        const frame = screen.getByTitle('Trailer');
+        expect(frame).toHaveAttribute(
+            'src',
+            'https://www.youtube-nocookie.com/embed/KEY123?autoplay=1&playsinline=1&rel=0',
+        );
+        expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation');
+        expect(frame).toHaveAttribute('allow', 'autoplay; encrypted-media; fullscreen');
+        expect(frame).toHaveAttribute('allowfullscreen');
+        expect(document.querySelector('script[src="https://www.youtube.com/iframe_api"]')).toBeNull();
+        expect(screen.queryByTestId('preview-player-controls')).not.toBeInTheDocument();
     });
 
-    it('resolves a youtube player from an embedKind:"youtube" preview', async () => {
+    it('moves focus to the stop control once the preview starts', async () => {
+        const user = userEvent.setup();
+        render(<PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />);
+
+        await user.click(screen.getByRole('button', { name: 'Play Trailer' }));
+
+        expect(screen.getByRole('button', { name: 'Stop preview' })).toHaveFocus();
+    });
+
+    it('stops the preview on Escape and returns focus to the facade', async () => {
+        const user = userEvent.setup();
+        render(<PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />);
+        await user.click(screen.getByRole('button', { name: 'Play Trailer' }));
+        const frame = screen.getByTitle('Trailer');
+
+        await user.keyboard('{Escape}');
+
+        expect(frame).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Play Trailer' })).toHaveFocus();
+    });
+
+    it('starts the preview from the keyboard and stops it from the stop button', async () => {
+        const user = userEvent.setup();
+        render(<PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />);
+        screen.getByRole('button', { name: 'Play Trailer' }).focus();
+
+        await user.keyboard('{Enter}');
+        await user.click(screen.getByRole('button', { name: 'Stop preview' }));
+
+        expect(screen.queryByTestId('preview-player-iframe')).not.toBeInTheDocument();
+    });
+
+    it('tears down a playing frame when the player unmounts', async () => {
+        const user = userEvent.setup();
+        const { unmount } = render(
+            <PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />,
+        );
+        await user.click(screen.getByRole('button', { name: 'Play Trailer' }));
+        const playingFrame = screen.getByTitle('Trailer');
+
+        unmount();
+
+        expect(playingFrame).not.toBeInTheDocument();
+    });
+
+    it('resolves a YouTube embed kind and retains the facade thumbnail', async () => {
         const user = userEvent.setup();
         render(<PreviewPlayer preview={{ url: 'https://youtu.be/ABC987', embedKind: 'youtube', kind: 'teaser' }} />);
+        expect(screen.getByTestId('preview-player-facade').querySelector('img')).toHaveAttribute(
+            'src',
+            'https://i.ytimg.com/vi/ABC987/hqdefault.jpg',
+        );
         await user.click(screen.getByTestId('preview-player-facade'));
-        await waitFor(() => expect(lastPlayer).not.toBeNull());
-        expect(lastOptions?.videoId).toBe('ABC987');
+        expect(screen.getByTitle('Teaser')).toHaveAttribute(
+            'src',
+            'https://www.youtube-nocookie.com/embed/ABC987?autoplay=1&playsinline=1&rel=0',
+        );
     });
 
-    it('renders plain text for a non-http preview with no embedKind', () => {
-        render(<PreviewPlayer preview={{ url: 'magnet:?xt=urn:zzz', kind: 'clip', title: 'Raw clip' }} />);
+    it('retains direct video seeking, volume and keyboard stop', async () => {
+        const user = userEvent.setup();
+        const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+        render(<PreviewPlayer preview={{ url: 'https://example.com/clip.mp4', title: 'Clip' }} />);
+        await user.click(screen.getByRole('button', { name: 'Play Clip' }));
+        const video = screen.getByTestId('preview-player-video') as HTMLVideoElement;
+        Object.defineProperty(video, 'duration', { value: 120 });
+        Object.defineProperty(video, 'mozHasAudio', { value: true });
+        fireEvent.loadedMetadata(video);
+        fireEvent.playing(video);
+        fireEvent.change(screen.getByTestId('preview-player-scrubber'), { target: { value: '30' } });
+        expect(video.currentTime).toBe(30);
+        fireEvent.change(screen.getByTestId('preview-player-volume-slider'), { target: { value: '0.8' } });
+        expect(video.volume).toBe(0.8);
+        await user.click(screen.getByTestId('preview-player-volume-toggle'));
+        expect(video.muted).toBe(true);
+        await user.click(screen.getByRole('button', { name: 'Stop preview' }));
+        expect(pause).toHaveBeenCalledOnce();
+        expect(video).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Play Clip' })).toHaveFocus();
+    });
+
+    it.each([
+        ['magnet:?xt=urn:zzz', 'Raw clip'],
+        ['magnet:?xt=urn:foo', 'Behind the scenes'],
+    ])('renders plain text for unsupported preview %s', (url, title) => {
+        render(<PreviewPlayer preview={{ url, kind: 'clip', title }} />);
         const label = screen.getByTestId('preview-player-external');
         expect(label.tagName).toBe('SPAN');
         expect(label).not.toHaveAttribute('href');
-        expect(label).toHaveTextContent('Raw clip');
         expect(screen.queryByTestId('preview-player-facade')).not.toBeInTheDocument();
     });
-
-    it('wide fit: youtube mute is reflected as a dimmed volume control', async () => {
-        const user = userEvent.setup();
-        render(<PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />);
-        await user.click(screen.getByTestId('preview-player-facade'));
-        await waitFor(() => expect(lastPlayer).not.toBeNull());
-        await waitFor(() => expect(lastPlayer?.ready).toBe(true));
-
-        act(() => {
-            lastPlayer!.muted = true;
-        });
-
-        const volume = screen.getByTestId('preview-player-volume');
-        await waitFor(() => expect(volume).toHaveAttribute('data-muted'));
-        expect(screen.getByTestId('preview-player-volume-toggle')).toHaveAttribute('aria-label', 'Unmute');
-    });
-
-    it('renders plain text for an unparseable url', () => {
-        render(<PreviewPlayer preview={{ url: 'magnet:?xt=urn:foo', kind: 'clip', title: 'Behind the scenes' }} />);
-        const label = screen.getByTestId('preview-player-external');
-        expect(label.tagName).toBe('SPAN');
-        expect(label).not.toHaveAttribute('href');
-        expect(label).toHaveTextContent('Behind the scenes');
-    });
-
     describe('fit', () => {
         it('defaults to the wide (16:9) fit', () => {
             render(<PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />);
@@ -229,205 +169,57 @@ describe('PreviewPlayer', () => {
             expect(screen.queryByTestId('preview-player-controls')).not.toBeInTheDocument();
         });
     });
-
-    describe('poster fit -- youtube (IFrame API)', () => {
-        beforeEach(() => {
-            lastPlayer = null;
-            lastOptions = null;
-            deferReady = false;
-        });
-
-        afterEach(() => {
-            deferReady = false;
-            vi.restoreAllMocks();
-        });
-
-        const renderYt = () =>
-            render(
-                <PreviewPlayer
-                    preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }}
-                    posterUrl="https://example.com/poster.jpg"
-                    fit="poster"
-                />,
-            );
-
-        it('idle shows the poster + play button and no iframe/video', () => {
-            renderYt();
-            expect(screen.getByTestId('preview-player-facade')).toBeInTheDocument();
-            expect(screen.queryByTestId('preview-player-iframe')).not.toBeInTheDocument();
-            expect(screen.queryByTestId('preview-player-video')).not.toBeInTheDocument();
-        });
-
-        it('clicking play creates the IFrame player (controls:0) and renders scrubber + volume but no play/pause', async () => {
-            const user = userEvent.setup();
-            renderYt();
-            await user.click(screen.getByTestId('preview-player-facade'));
-
-            await waitFor(() => expect(lastPlayer).not.toBeNull());
-            expect(lastOptions?.host).toBe('https://www.youtube-nocookie.com');
-            expect(lastOptions?.videoId).toBe('KEY123');
-            expect(lastOptions?.playerVars?.controls).toBe(0);
-            expect(lastOptions?.playerVars?.autoplay).toBe(1);
-            expect(lastPlayer?.playCalled).toBe(true);
-
-            expect(screen.getByTestId('preview-player-scrubber')).toBeInTheDocument();
-            expect(screen.getByTestId('preview-player-volume')).toBeInTheDocument();
-            expect(screen.queryByRole('button', { name: /pause/i })).not.toBeInTheDocument();
-            expect(screen.queryByRole('button', { name: /^play/i })).not.toBeInTheDocument();
-            expect(screen.queryByTestId('preview-player-facade')).not.toBeInTheDocument();
-        });
-
-        it('firing ENDED returns to idle (poster + play button)', async () => {
-            const user = userEvent.setup();
-            renderYt();
-            await user.click(screen.getByTestId('preview-player-facade'));
-            await waitFor(() => expect(lastPlayer).not.toBeNull());
-
-            act(() => lastPlayer!.fireEnded());
-
-            await waitFor(() => expect(screen.getByTestId('preview-player-facade')).toBeInTheDocument());
-            expect(lastPlayer?.destroyed).toBe(true);
-        });
-
-        it('clicking the stop target stops + destroys the player and returns to idle', async () => {
-            const user = userEvent.setup();
-            renderYt();
-            await user.click(screen.getByTestId('preview-player-facade'));
-            await waitFor(() => expect(lastPlayer).not.toBeNull());
-
-            await user.click(screen.getByTestId('preview-player-stop-target'));
-
-            expect(lastPlayer?.stopped).toBe(true);
-            expect(lastPlayer?.destroyed).toBe(true);
-            await waitFor(() => expect(screen.getByTestId('preview-player-facade')).toBeInTheDocument());
-        });
-
-        it('adjusting the controls does not stop playback (stopPropagation)', async () => {
-            const user = userEvent.setup();
-            renderYt();
-            await user.click(screen.getByTestId('preview-player-facade'));
-            await waitFor(() => expect(lastPlayer).not.toBeNull());
-
-            await user.click(screen.getByTestId('preview-player-controls'));
-            expect(screen.getByTestId('preview-player-controls')).toBeInTheDocument();
-            expect(lastPlayer?.destroyed).toBe(false);
-        });
-
-        it('seeking calls seekTo and volume calls unMute + setVolume', async () => {
-            const user = userEvent.setup();
-            renderYt();
-            await user.click(screen.getByTestId('preview-player-facade'));
-            await waitFor(() => expect(lastPlayer).not.toBeNull());
-
-            const scrubber = screen.getByTestId('preview-player-scrubber') as HTMLInputElement;
-            fireRangeChange(scrubber, '30');
-            expect(lastPlayer?.seekTo).toHaveBeenCalledWith(30, true);
-
-            const volume = screen.getByTestId('preview-player-volume-slider') as HTMLInputElement;
-            fireRangeChange(volume, '0.8');
-            expect(lastPlayer?.unMute).toHaveBeenCalled();
-            expect(lastPlayer?.setVolume).toHaveBeenCalledWith(80);
-        });
-
-        it('unmount destroys the player and clears the poll interval', async () => {
-            const clearSpy = vi.spyOn(globalThis, 'clearInterval');
-            const user = userEvent.setup();
-            const { unmount } = renderYt();
-            await user.click(screen.getByTestId('preview-player-facade'));
-            await waitFor(() => expect(lastPlayer).not.toBeNull());
-
-            unmount();
-            expect(lastPlayer?.destroyed).toBe(true);
-            expect(clearSpy).toHaveBeenCalled();
-        });
-
-        it('on ready, unmutes and sets a default volume so the trailer has sound', async () => {
-            const user = userEvent.setup();
-            renderYt();
-            await user.click(screen.getByTestId('preview-player-facade'));
-            await waitFor(() => expect(lastPlayer).not.toBeNull());
-            await waitFor(() => expect(lastPlayer?.ready).toBe(true));
-
-            expect(lastPlayer?.unMute).toHaveBeenCalled();
-            expect(lastPlayer?.setVolume).toHaveBeenCalledWith(100);
-            expect(lastPlayer?.muted).toBe(false);
-            const slider = screen.getByTestId('preview-player-volume-slider') as HTMLInputElement;
-            expect(slider.value).toBe('1');
-        });
-
-        it('reflects an autoplay-forced mute in a dimmed control and unmutes on click', async () => {
-            const user = userEvent.setup();
-            renderYt();
-            await user.click(screen.getByTestId('preview-player-facade'));
-            await waitFor(() => expect(lastPlayer).not.toBeNull());
-            await waitFor(() => expect(lastPlayer?.ready).toBe(true));
-
-            act(() => {
-                lastPlayer!.muted = true;
-            });
-
-            const volume = screen.getByTestId('preview-player-volume');
-            await waitFor(() => expect(volume).toHaveAttribute('data-muted'));
-            expect(screen.getByTestId('preview-player-volume-toggle')).toHaveAttribute('aria-label', 'Unmute');
-
-            lastPlayer!.unMute.mockClear();
-            await user.click(screen.getByTestId('preview-player-volume-toggle'));
-            expect(lastPlayer?.unMute).toHaveBeenCalled();
-            await waitFor(() => expect(volume).not.toHaveAttribute('data-muted'));
-        });
-
-        it('does not poll player methods until onReady has fired', async () => {
-            deferReady = true;
-            const user = userEvent.setup();
-            vi.useFakeTimers({ shouldAdvanceTime: true });
-            try {
-                renderYt();
-                await user.click(screen.getByTestId('preview-player-facade'));
-                await vi.waitFor(() => expect(lastPlayer).not.toBeNull());
-                expect(lastPlayer?.ready).toBe(false);
-
-                await act(async () => {
-                    await vi.advanceTimersByTimeAsync(1000);
-                });
-                expect(lastPlayer?.getCurrentTimeCalls).toBe(0);
-
-                act(() => lastPlayer!.fireReady());
-                await act(async () => {
-                    await vi.advanceTimersByTimeAsync(600);
-                });
-                expect(lastPlayer!.getCurrentTimeCalls).toBeGreaterThan(0);
-            } finally {
-                vi.useRealTimers();
-            }
-        });
-
-        it('a poll tick after destroy is a no-op (does not throw)', async () => {
-            const user = userEvent.setup();
-            vi.useFakeTimers({ shouldAdvanceTime: true });
-            try {
-                renderYt();
-                await user.click(screen.getByTestId('preview-player-facade'));
-                await vi.waitFor(() => expect(lastPlayer).not.toBeNull());
-                await vi.waitFor(() => expect(lastPlayer?.ready).toBe(true));
-
-                act(() => lastPlayer!.destroy());
-                const before = lastPlayer!.getCurrentTimeCalls;
-
-                await act(async () => {
-                    await vi.advanceTimersByTimeAsync(1000);
-                });
-                expect(lastPlayer!.getCurrentTimeCalls).toBe(before);
-            } finally {
-                vi.useRealTimers();
-            }
-        });
-    });
 });
 
-function fireRangeChange(input: HTMLInputElement, value: string) {
-    act(() => {
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-        setter?.call(input, value);
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-}
+it('stops direct playback with the keyboard', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    render(<PreviewPlayer preview={{ url: 'https://example.com/preview.mp4', mimeType: 'video/mp4' }} />);
+    await user.tab();
+    await user.keyboard('{Enter}');
+    const stop = screen.getByRole('button', { name: 'Stop preview' });
+    expect(stop).toHaveClass('preview-player__stop');
+    expect(stop).not.toHaveClass('preview-player__fullscreen');
+    expect(stop).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Play Preview' })).toBeInTheDocument();
+    expect(screen.queryByTestId('preview-player-controls')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Play Preview' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: 'Play Preview' })).toHaveFocus();
+});
+
+it('passes the declared MIME type to the direct video source', async () => {
+    const user = userEvent.setup();
+    render(<PreviewPlayer preview={{ url: 'https://example.com/preview.webm', mimeType: 'video/webm' }} />);
+    await user.click(screen.getByRole('button', { name: 'Play Preview' }));
+    expect(screen.getByTestId('preview-player-video').querySelector('source')).toHaveAttribute('type', 'video/webm');
+});
+
+it.each(['youtube', 'YouTube'])('shows unavailable for an unrecognized %s embed URL', (embedKind) => {
+    render(<PreviewPlayer preview={{ url: 'https://example.com/embed/123', embedKind }} />);
+    expect(screen.getByText('Preview unavailable')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Play Preview' })).not.toBeInTheDocument();
+});
+
+it.each([
+    [undefined, undefined, 'Preview unavailable'],
+    [' ', ' ', 'Preview unavailable'],
+    ['Preview', undefined, 'Preview unavailable'],
+    [undefined, 'preview', 'Preview unavailable'],
+    ['Behind the scenes', 'clip', 'Behind the scenes unavailable'],
+    [undefined, 'trailer', 'Trailer unavailable'],
+])('shows unavailable copy for title %s and kind %s', (title, kind, expected) => {
+    render(<PreviewPlayer preview={{ url: 'magnet:?xt=urn:foo', title, kind }} />);
+    expect(screen.getByTestId('preview-player-external')).toHaveTextContent(expected);
+});
+
+it.each([undefined, '', 'custom'])('plays direct media with embedKind %s', async (embedKind) => {
+    const user = userEvent.setup();
+    render(<PreviewPlayer preview={{ url: 'https://example.com/preview.webm', mimeType: 'video/webm', embedKind }} />);
+    await user.click(screen.getByRole('button', { name: 'Play Preview' }));
+    const source = screen.getByTestId('preview-player-video').querySelector('source');
+    expect(source).toHaveAttribute('src', 'https://example.com/preview.webm');
+    expect(source).toHaveAttribute('type', 'video/webm');
+});

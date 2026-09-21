@@ -203,7 +203,8 @@ describe('UpcomingContentWidget today badge', () => {
         ];
         renderWithRouter(<UpcomingContentWidget items={todayItems} />);
         const badge = screen.getByText('1 today');
-        expect(badge).toHaveAttribute('aria-label', '1 airing today');
+        expect(badge).toHaveTextContent('1 today');
+        expect(badge).not.toHaveAttribute('aria-label');
     });
 });
 

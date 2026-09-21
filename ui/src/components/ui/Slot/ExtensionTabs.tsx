@@ -1,18 +1,13 @@
 import { createElement, useEffect, useRef } from 'react';
-import { PuzzlePieceIcon } from '@phosphor-icons/react';
 
 import { useExtensions, useSlotExtensions } from '@/extensions/useExtensions';
 import type { UIExtension } from '@/extensions/types';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
-import { TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { TabsContent } from '@/components/ui/Tabs';
 import { buildExtensionAttributes } from './buildExtensionAttributes';
 
 function tabValue(ext: UIExtension): string {
     return `ext-${ext.id}`;
-}
-
-function tabLabel(ext: UIExtension): string {
-    return ext.attributes?.['tab-label'] ?? ext.name;
 }
 
 export function useTabSlotExtensions(slot: string) {
@@ -42,27 +37,6 @@ export interface ExtensionTabsProps {
 
     entityType?: string;
 }
-
-export function ExtensionTabTriggers({ slot }: ExtensionTabsProps) {
-    const { tabs } = useTabSlotExtensions(slot);
-
-    if (tabs.length === 0) {
-        return null;
-    }
-
-    return (
-        <>
-            {tabs.map((ext, i) => (
-                <TabsTrigger key={`${ext.id}:${i}`} value={tabValue(ext)}>
-                    <PuzzlePieceIcon weight="bold" aria-hidden="true" />
-                    <span>{tabLabel(ext)}</span>
-                </TabsTrigger>
-            ))}
-        </>
-    );
-}
-
-ExtensionTabTriggers.displayName = 'ExtensionTabTriggers';
 
 export function ExtensionTabContents({ slot, entityId, entityType }: ExtensionTabsProps) {
     const { tabs } = useTabSlotExtensions(slot);

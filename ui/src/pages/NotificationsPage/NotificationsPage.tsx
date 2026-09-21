@@ -1,13 +1,25 @@
 import { useCallback, useMemo, useState } from 'react';
-import { BellIcon, BellSimpleSlashIcon, PlusIcon, UserIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import {
+    BellIcon,
+    BellSimpleSlashIcon,
+    PlusIcon,
+    PowerIcon,
+    TrashIcon,
+    UserIcon,
+    WarningCircleIcon,
+} from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { Badge } from '@/components/ui/Badge';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
-import { DataTable } from '@/components/ui/DataTable';
+import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { MultiSelectColumnFilter, encodeMultiValue, decodeMultiValue } from '@/components/ui/MultiSelectColumnFilter';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Pager } from '@/components/ui/Pager';
@@ -24,7 +36,7 @@ import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
 import { useUserMap } from '@/hooks/useUserMap';
 import { extractValidationResultFromError } from '@/hooks/useValidateSettings';
-import { isApiError } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import { editableCriteriaToEventContext, eventContextToEditableCriteria } from '@/lib/eventContextCriteria';
 import { formatRelativeTime } from '@/lib/formatTime';
 import type { ApiEventFilter } from '@/hooks/useEventTriggers';
@@ -36,25 +48,8 @@ import {
 } from './NotificationRuleForm';
 
 import './NotificationsPage.css';
+import '@/styles/bulk-actions-toolbar.css';
 import '@/styles/card-actions.css';
-
-function testFailureReason(error: unknown): string {
-    if (isApiError(error)) {
-        const details = error.details;
-        if (details && typeof details === 'object' && 'detail' in details) {
-            const detail = (details as { detail?: unknown }).detail;
-            if (typeof detail === 'string' && detail.trim() !== '') {
-                return detail;
-            }
-        }
-        if (error.message.trim() !== '') {
-            return error.message;
-        }
-    } else if (error instanceof Error && error.message.trim() !== '') {
-        return error.message;
-    }
-    return 'The provider did not give a reason.';
-}
 
 function ruleToFormValues(rule: NotificationRule): NotificationRuleFormValues {
     const filters: NotificationContextFilter[] = eventContextToEditableCriteria(rule.eventFilter.eventContext);
@@ -97,6 +92,7 @@ const enabledOptions: FacetOption[] = [
 export function NotificationsPage() {
     useDocumentTitle('Notifications');
     const { toast } = useToast();
+    const runBulk = useBulkRun();
     const userMap = useUserMap();
 
     const {
@@ -108,6 +104,7 @@ export function NotificationsPage() {
         isCreating,
         updateRule,
         isUpdating,
+        toggleRuleEnabled,
         deleteRule,
         testRule,
         isTesting,
@@ -132,8 +129,11 @@ export function NotificationsPage() {
     const [editingRule, setEditingRule] = useState<NotificationRule | null>(null);
     const [deletingRule, setDeletingRule] = useState<NotificationRule | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
-    const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
     const [testingId, setTestingId] = useState<string | null>(null);
+    const [pageRowIds, setPageRowIds] = useState<string[]>([]);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const [isBulkSettingEnabled, setIsBulkSettingEnabled] = useState(false);
     const currentEditingRule = useMemo(() => {
         if (!editingRule) {
             return null;
@@ -184,11 +184,9 @@ export function NotificationsPage() {
                     await updateRule({
                         id: values.id!,
                         name: values.name,
-                        providerType: values.providerType,
                         eventFilter,
                         settings,
                         enabled: values.enabled,
-                        ownerUserId: currentEditingRule?.ownerUserId ?? null,
                     });
                 }
                 toast({
@@ -210,7 +208,7 @@ export function NotificationsPage() {
                 throw error;
             }
         },
-        [createRule, updateRule, closeForm, currentEditingRule, toast],
+        [createRule, updateRule, closeForm, toast],
     );
 
     const handleDelete = useCallback((rule: NotificationRule) => {
@@ -247,31 +245,17 @@ export function NotificationsPage() {
 
     const handleToggle = useCallback(
         async (rule: NotificationRule, isEnabled: boolean) => {
-            setTogglingIds((prev) => new Set([...prev, rule.id]));
             try {
-                await updateRule({
-                    id: rule.id,
-                    name: rule.name,
-                    providerType: rule.providerType,
-                    eventFilter: rule.eventFilter,
-                    enabled: isEnabled,
-                    ownerUserId: rule.ownerUserId ?? null,
-                });
+                await toggleRuleEnabled(rule.id, isEnabled);
             } catch {
                 toast({
                     title: rule.name,
                     description: 'Failed to update notification rule',
                     variant: 'error',
                 });
-            } finally {
-                setTogglingIds((prev) => {
-                    const next = new Set(prev);
-                    next.delete(rule.id);
-                    return next;
-                });
             }
         },
-        [updateRule, toast],
+        [toggleRuleEnabled, toast],
     );
 
     const handleTest = useCallback(
@@ -287,7 +271,7 @@ export function NotificationsPage() {
             } catch (error) {
                 toast({
                     title: 'Test Failed',
-                    description: `Failed to test "${rule.name}": ${testFailureReason(error)}`,
+                    description: `Failed to test "${rule.name}": ${getErrorMessage(error, 'The provider did not give a reason.')}`,
                     variant: 'error',
                 });
             } finally {
@@ -324,6 +308,50 @@ export function NotificationsPage() {
 
     const providerOptions = useMemo(() => [...new Set(rules.map((r) => r.providerType))].sort(), [rules]);
 
+    const selectionResetKey = useMemo(
+        () => [filters.provider, filters.enabled].join('|'),
+        [filters.provider, filters.enabled],
+    );
+    const selection = useBulkSelection({
+        pageRowIds,
+        totalCount: filteredRows.length,
+        resetKey: selectionResetKey,
+    });
+    const selectedRules = useMemo(
+        () => filteredRows.filter((row) => selection.isRowChecked(row.rule.id)).map((row) => row.rule),
+        [filteredRows, selection],
+    );
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedRules, selection, {
+                action: (rule) => deleteRule(rule.id),
+                verb: 'delete',
+                itemNounPlural: 'notification rules',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [deleteRule, runBulk, selectedRules, selection]);
+
+    const handleBulkSetEnabled = useCallback(
+        async (isEnabled: boolean) => {
+            setIsBulkSettingEnabled(true);
+            try {
+                await runBulk(selectedRules, selection, {
+                    action: (rule) => toggleRuleEnabled(rule.id, isEnabled),
+                    verb: isEnabled ? 'enable' : 'disable',
+                    itemNounPlural: 'notification rules',
+                });
+            } finally {
+                setIsBulkSettingEnabled(false);
+            }
+        },
+        [runBulk, selectedRules, selection, toggleRuleEnabled],
+    );
+
     const setMulti = useCallback(
         (key: 'provider', next: string[]) => {
             setFilters({ [key]: encodeMultiValue(next) });
@@ -347,10 +375,17 @@ export function NotificationsPage() {
 
     const columns = useMemo<ColumnDef<NotificationRuleRow>[]>(
         () => [
+            selectColumn<NotificationRuleRow>({
+                selection,
+                getId: (row) => row.rule.id,
+                headerLabel: 'Select all notification rules',
+                rowLabel: (row) => row.rule.name,
+            }),
             {
                 id: 'name',
                 accessorFn: (row) => row.rule.name,
                 header: 'Name',
+                meta: { mobileRole: 'header' },
                 size: 260,
                 cell: ({ row }) => {
                     const pattern = row.original.rule.eventFilter.eventName?.value;
@@ -416,7 +451,7 @@ export function NotificationsPage() {
                         onChange={(value) => setFilters({ enabled: value })}
                     />
                 ),
-                meta: { headerLabel: 'Enabled' },
+                meta: { headerLabel: 'Enabled', mobileRole: 'hidden' },
                 size: 110,
                 cell: ({ row }) => (
                     <Badge variant={row.original.rule.enabled ? 'healthy' : 'unknown'} size="sm">
@@ -451,9 +486,7 @@ export function NotificationsPage() {
                         name={row.original.rule.name}
                         id={row.original.rule.id}
                         enabled={row.original.rule.enabled}
-                        isTesting={
-                            (isTesting && testingId === row.original.rule.id) || togglingIds.has(row.original.rule.id)
-                        }
+                        isTesting={isTesting && testingId === row.original.rule.id}
                         onTest={() => handleTest(row.original.rule)}
                         onToggleEnabled={(value) => handleToggle(row.original.rule, value)}
                         onEdit={() => handleEdit(row.original.rule)}
@@ -463,6 +496,7 @@ export function NotificationsPage() {
             },
         ],
         [
+            selection,
             providerOptions,
             provider,
             enabled,
@@ -470,7 +504,6 @@ export function NotificationsPage() {
             setFilters,
             isTesting,
             testingId,
-            togglingIds,
             handleTest,
             handleToggle,
             handleEdit,
@@ -527,6 +560,49 @@ export function NotificationsPage() {
                     }
                 />
 
+                <BulkActionsToolbar
+                    selection={selection}
+                    label="Notification rule selection actions"
+                    itemNounPlural="notification rules"
+                >
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled}
+                        onClick={() => void handleBulkSetEnabled(true)}
+                        aria-label="Enable selected notification rules"
+                        data-action="bulk-enable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Enable</span>
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled}
+                        onClick={() => void handleBulkSetEnabled(false)}
+                        aria-label="Disable selected notification rules"
+                        data-action="bulk-disable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Disable</span>
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected notification rules"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                    </Button>
+                </BulkActionsToolbar>
+
+                <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+
                 <div className="notifications-table" data-area="rules">
                     <DataTable<NotificationRuleRow>
                         columns={columns}
@@ -541,9 +617,15 @@ export function NotificationsPage() {
                         pageSize={PAGE_SIZE}
                         pagination={pagination}
                         getRowId={getRowId}
+                        onPageRowIdsChange={setPageRowIds}
                         loading={isLoading}
                         emptyState={error ? errorState : emptyState}
                         keepHeaderWhenEmpty={hasActiveFilters}
+                        mobileSelectionActive={selection.selectionMode}
+                        mobileSelectionOverlay={{
+                            isSelected: (row) => selection.isRowChecked(row.rule.id),
+                            onToggle: (row) => selection.toggleRow(row.rule.id, !selection.isRowChecked(row.rule.id)),
+                        }}
                         aria-label="Notification rules"
                     />
                     {filteredRows.length > PAGE_SIZE && (
@@ -582,6 +664,59 @@ export function NotificationsPage() {
                 itemType="Notification Rule"
                 isDeleting={isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Notification Rules"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="notifications-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="notification rules"
+                >
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(true)}
+                        aria-label="Enable selected notification rules"
+                        data-action="bulk-enable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Enable
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(false)}
+                        aria-label="Disable selected notification rules"
+                        data-action="bulk-disable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Disable
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected notification rules"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
         </div>
     );
 }

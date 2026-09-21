@@ -11,25 +11,25 @@ public sealed record AuthSession
     /// <summary>
     /// The authenticated user.
     /// </summary>
-    public required User User { get; set; }
+    public required User User { get; init; }
 
     /// <summary>
     /// The access token.
     /// </summary>
-    public required string AccessToken { get; set; }
+    public required string AccessToken { get; init; }
 
     /// <summary>
     /// The UTC expiry time of the access token.
     /// </summary>
-    public required DateTime AccessTokenExpiresAt { get; set; }
+    public required DateTime AccessTokenExpiresAt { get; init; }
 
     /// <summary>
     /// The refresh token.
     /// </summary>
-    public required string RefreshToken { get; set; }
+    public required string RefreshToken { get; init; }
 
     /// <summary>
     /// The UTC expiry time of the refresh token.
     /// </summary>
-    public required DateTime RefreshTokenExpiresAt { get; set; }
+    public required DateTime RefreshTokenExpiresAt { get; init; }
 }

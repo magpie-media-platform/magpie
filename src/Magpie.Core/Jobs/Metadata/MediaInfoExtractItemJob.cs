@@ -25,7 +25,7 @@ internal sealed class MediaInfoExtractItemJob(
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "MediaInfoExtractItem",
+        JobType = MagpieJobs.Types.MediaInfoExtractItem,
         DisplayName = "Media info extract item",
         Description = "Reads media information from one file and saves it.",
         Category = "Metadata",
@@ -103,9 +103,7 @@ internal sealed class MediaInfoExtractItemJob(
 
         return bool.TryParse(raw, out var parsed)
             ? parsed
-            : string.Equals(raw, bool.TrueString, StringComparison.OrdinalIgnoreCase) ||
-                raw == "1" ||
-                raw.Equals("yes", StringComparison.OrdinalIgnoreCase);
+            : raw == "1" || raw.Equals("yes", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
@@ -188,7 +186,7 @@ internal sealed class MediaInfoExtractItemJob(
             {
                 FileKind = fileSystem.ResolveFileKind(mimeType).ToString(),
                 MimeType = mimeType,
-                FileSize = ReadFileSize(filePath),
+                FileSize = ReadFileSize(filePath) ?? mediaFile.FileSize,
                 MediaInfo = mediaInfo,
                 ModifiedAt = now
             },
@@ -197,7 +195,7 @@ internal sealed class MediaInfoExtractItemJob(
         return MediaInfoScanResult.Updated;
     }
 
-    private long ReadFileSize(string filePath)
+    private long? ReadFileSize(string filePath)
     {
         try
         {
@@ -207,9 +205,9 @@ internal sealed class MediaInfoExtractItemJob(
         {
             logger.LogWarning(
                 ex,
-                "Media info extract item failed to read the size of media file {FilePath} and used size 0",
+                "Media info extract item failed to read the size of media file {FilePath} and kept the stored size",
                 filePath);
-            return 0;
+            return null;
         }
     }
 }

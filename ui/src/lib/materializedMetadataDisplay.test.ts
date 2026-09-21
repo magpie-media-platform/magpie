@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildAwardGroups } from './materializedMetadataDisplay';
+import { buildAwardGroups, buildMaterializedDetailRows } from './materializedMetadataDisplay';
 import type { MaterializedMetadata, MetadataAward } from '@/types/contentMetadata';
+import type { LibraryStandardMetadataFieldDefinition } from '@/types/library';
 
 function metadataWithAwards(awards: MetadataAward[]): MaterializedMetadata {
     return { containerId: 'container-1', awards };
@@ -9,7 +10,6 @@ function metadataWithAwards(awards: MetadataAward[]): MaterializedMetadata {
 
 describe('buildAwardGroups', () => {
     it('returns no rows when there is no award data', () => {
-        // Arrange, Act, Assert
         expect(buildAwardGroups(undefined)).toEqual([]);
         expect(buildAwardGroups(metadataWithAwards([]))).toEqual([]);
     });
@@ -199,5 +199,26 @@ describe('buildAwardGroups', () => {
                 ],
             },
         ]);
+    });
+});
+
+describe('buildMaterializedDetailRows', () => {
+    const durationFields: LibraryStandardMetadataFieldDefinition[] = [
+        { key: 'Duration', field: 'Duration', displayName: 'Duration', valueKind: 'duration', editable: true },
+    ];
+
+    it.each([
+        ['00:00:30', '30 s'],
+        ['00:45:00', '45 m'],
+        ['01:30:00', '1 h 30 m'],
+    ])('formats the duration row for %s', (duration, expected) => {
+        // Arrange
+        const metadata: MaterializedMetadata = { containerId: 'container-1', duration };
+
+        // Act
+        const rows = buildMaterializedDetailRows(metadata, durationFields, []);
+
+        // Assert
+        expect(rows).toEqual([{ key: 'duration', label: 'Duration', value: expected }]);
     });
 });

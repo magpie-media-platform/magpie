@@ -1,28 +1,14 @@
 import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-    ArrowsDownUpIcon,
-    CaretRightIcon,
-    EyeIcon,
-    EyeSlashIcon,
-    ImageBrokenIcon,
-    SortAscendingIcon,
-    SortDescendingIcon,
-} from '@phosphor-icons/react';
-import {
-    getCoreRowModel,
-    getSortedRowModel,
-    useReactTable,
-    type ColumnDef,
-    type SortingState,
-} from '@tanstack/react-table';
+import { CaretRightIcon, EyeIcon, EyeSlashIcon } from '@phosphor-icons/react';
+import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { DataTable } from '@/components/ui/DataTable';
 import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
-import { ContentFulfillmentBadge } from '@/components/content/ContentCardPrimitives';
-import { Button } from '@/components/ui/Button';
+import { ContentFulfillmentBadge, ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { Pager } from '@/components/ui/Pager';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
+import { MobileListToolbar } from '@/components/ui/MobileListToolbar';
+import { sortTableRows } from '@/lib/sortTableRows';
 import { Tooltip } from '@/components/ui/Tooltip';
 import type { FulfillmentStatus } from '@/components/ui/ContentList';
 import type { AcquisitionStatus } from '@/types';
@@ -73,28 +59,9 @@ export interface ChildrenTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 
     emptyMessage?: string;
 }
 
-const CHILD_SORT_LABELS: Record<string, string> = {
-    number: 'Number',
-    title: 'Title',
-    date: 'Date',
-    fulfillment: 'Status',
-};
-
 const DEFAULT_CHILD_SORTING: SortingState = [{ id: 'number', desc: false }];
 const EMPTY_CHILD_SORTING: SortingState = [];
 const CHILD_PAGE_SIZE = 50;
-
-function PosterCell({ posterUrl, title }: { posterUrl?: string; title: string }) {
-    if (!posterUrl) {
-        return (
-            <div className="children-tab__poster children-tab__poster--placeholder">
-                <ImageBrokenIcon weight="thin" aria-hidden="true" />
-            </div>
-        );
-    }
-
-    return <img src={posterUrl} alt={`${title} artwork`} className="children-tab__poster" loading="lazy" />;
-}
 
 function TitleCell({ title, subtitle, number }: { title: string; subtitle?: string; number?: number }) {
     return (
@@ -176,6 +143,15 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
         const [sorting, setSorting] = useState<SortingState>(DEFAULT_CHILD_SORTING);
         const [mobilePaging, setMobilePaging] = useState({ scope: '', page: 1 });
         const usesCardLayout = useCardLayout();
+        const sortOptions = useMemo(
+            () => [
+                { id: 'number', label: 'Number' },
+                { id: 'title', label: 'Title' },
+                { id: 'date', label: dateColumnHeader },
+                { id: 'fulfillment', label: 'Status' },
+            ],
+            [dateColumnHeader],
+        );
         const columns: ColumnDef<ChildItem>[] = useMemo(
             () => [
                 {
@@ -184,12 +160,20 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                     header: '',
                     enableSorting: false,
                     size: 50,
-                    cell: ({ row }) => <PosterCell posterUrl={row.original.posterUrl} title={row.original.title} />,
+                    cell: ({ row }) => (
+                        <ContentPoster
+                            posterUrl={row.original.posterUrl}
+                            title={row.original.title}
+                            className="children-tab__poster"
+                            placeholderClassName="children-tab__poster--placeholder"
+                        />
+                    ),
                 },
                 {
                     id: 'title',
                     accessorKey: 'title',
                     header: 'Title',
+                    meta: { mobileRole: 'header' },
                     size: 300,
                     cell: ({ row }) => (
                         <TitleCell
@@ -281,37 +265,15 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
 
         const tableSorting = isNumberSort ? EMPTY_CHILD_SORTING : sorting;
 
-        const mobileTable = useReactTable({
-            columns,
-            data: orderedItems,
-            state: { sorting: tableSorting },
-            getCoreRowModel: getCoreRowModel(),
-            getSortedRowModel: getSortedRowModel(),
-            getRowId,
-        });
-        const sortedChildren = mobileTable.getSortedRowModel().rows.map((row) => row.original);
+        const sortedChildren = useMemo(
+            () => (usesCardLayout ? sortTableRows(orderedItems, columns, tableSorting) : orderedItems),
+            [usesCardLayout, orderedItems, columns, tableSorting],
+        );
         const mobilePageCount = Math.max(1, Math.ceil(sortedChildren.length / CHILD_PAGE_SIZE));
         const requestedMobilePage = mobilePaging.scope === mobilePageScope ? mobilePaging.page : 1;
         const mobilePage = Math.min(requestedMobilePage, mobilePageCount);
         const pagedChildren = sortedChildren.slice((mobilePage - 1) * CHILD_PAGE_SIZE, mobilePage * CHILD_PAGE_SIZE);
         const goToMobilePage = (page: number) => setMobilePaging({ scope: mobilePageScope, page });
-        const activeSortLabel = activeSort ? CHILD_SORT_LABELS[activeSort.id] : undefined;
-        const DirectionIcon = activeSort?.desc ? SortDescendingIcon : SortAscendingIcon;
-
-        const handleSortFieldChange = useCallback((id: string) => {
-            setSorting((current) => {
-                const currentSort = current[0];
-                return [{ id, desc: currentSort?.id === id ? currentSort.desc : false }];
-            });
-        }, []);
-
-        const handleSortDirectionToggle = useCallback(() => {
-            if (!activeSort) {
-                return;
-            }
-            setSorting([{ id: activeSort.id, desc: !activeSort.desc }]);
-        }, [activeSort]);
-
         const classes = ['children-tab', className].filter(Boolean).join(' ');
 
         const renderMobileList = () => (
@@ -328,7 +290,12 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                             className="children-tab__mobile-card"
                             data-child-id={child.id}
                         >
-                            <PosterCell posterUrl={child.posterUrl} title={child.title} />
+                            <ContentPoster
+                                posterUrl={child.posterUrl}
+                                title={child.title}
+                                className="children-tab__poster"
+                                placeholderClassName="children-tab__poster--placeholder"
+                            />
                             <div className="children-tab__mobile-info">
                                 <TitleCell title={child.title} subtitle={child.subtitle} number={child.number} />
                                 {child.date && (
@@ -371,36 +338,16 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                 data-layout={usesCardLayout ? 'card' : 'table'}
                 {...props}
             >
-                <div className="children-tab__sort-controls" data-testid="children-tab__sort-controls">
-                    <ArrowsDownUpIcon className="children-tab__sort-icon" weight="duotone" aria-hidden="true" />
-                    <Select value={activeSort?.id ?? ''} onValueChange={handleSortFieldChange}>
-                        <SelectTrigger size="sm" aria-label="Sort children by" data-sort="field">
-                            <SelectValue placeholder="Sort by" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="number">Number</SelectItem>
-                            <SelectItem value="title">Title</SelectItem>
-                            <SelectItem value="date">{dateColumnHeader}</SelectItem>
-                            <SelectItem value="fulfillment">Status</SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleSortDirectionToggle}
-                        disabled={!activeSort}
-                        aria-label={
-                            activeSort
-                                ? `Sort children by ${activeSortLabel} ${activeSort.desc ? 'ascending' : 'descending'}`
-                                : 'Choose a child sort field before changing direction'
-                        }
-                        data-sort="direction"
-                        data-direction={activeSort?.desc ? 'desc' : 'asc'}
-                        className="children-tab__sort-direction"
-                    >
-                        <DirectionIcon weight="bold" aria-hidden="true" />
-                    </Button>
-                </div>
+                {usesCardLayout && (
+                    <MobileListToolbar
+                        className="children-tab__sort-controls"
+                        data-testid="children-tab__sort-controls"
+                        sorting={sorting}
+                        sortOptions={sortOptions}
+                        onSortingChange={setSorting}
+                        allowUnsorted
+                    />
+                )}
                 {usesCardLayout ? (
                     renderMobileList()
                 ) : (

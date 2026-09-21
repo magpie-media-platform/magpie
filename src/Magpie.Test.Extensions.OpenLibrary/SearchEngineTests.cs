@@ -92,10 +92,6 @@ public sealed class SearchEngineTests
         {
             Root = new PlanNode { Kind = PlanNodeKind.Fetch },
             Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
-            Warnings =
-            [
-                "planner warning"
-            ],
             CandidateLanguagePreferences = ["eng"],
             Page = 3
         };
@@ -118,7 +114,7 @@ public sealed class SearchEngineTests
             Assert.That(result.PageInfo.HasMore, Is.True);
             Assert.That(
                 result.Warnings.Select(warning => warning),
-                Is.EqualTo(["planner warning", "Open Library could not complete the remote search."]));
+                Is.EqualTo(["Open Library could not complete the remote search."]));
             Assert.That(result.CandidateLanguagePreferences, Is.EqualTo(["eng"]));
         }
     }

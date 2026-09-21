@@ -25,9 +25,13 @@ vi.mock('@/hooks/useJobs', async (importOriginal) => {
     };
 });
 
-vi.mock('@/hooks/useScheduleTriggers', () => ({
-    useScheduleTriggers: vi.fn(),
-}));
+vi.mock('@/hooks/useScheduleTriggers', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/hooks/useScheduleTriggers')>();
+    return {
+        ...actual,
+        useScheduleTriggers: vi.fn(),
+    };
+});
 
 vi.mock('@/hooks/useEventTriggers', () => ({
     useEventTriggers: vi.fn(),
@@ -473,8 +477,14 @@ describe('MyJobsPage Executions tab', () => {
         expect(screen.getByText('Child execution')).toBeInTheDocument();
     });
 
-    it('expands and scrolls the execution linked by the job query parameter', () => {
+    it('shows only the execution linked by the job query parameter, with a way back', () => {
         const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+        const linked = mockUserJobs.find((job) => job.id === 'exec-2');
+        mockUseJobExecution.mockReturnValue({
+            job: linked,
+            isLoading: false,
+            error: null,
+        } as unknown as ReturnType<typeof useJobExecution>);
 
         render(
             <TestWrapper initialRoute="/?job=exec-2">
@@ -486,6 +496,26 @@ describe('MyJobsPage Executions tab', () => {
         expect(within(linkedRow).getByTestId('execution-row__trigger')).toHaveAttribute('aria-expanded', 'true');
         expect(within(linkedRow).getByTestId('execution-row__logs')).toHaveAttribute('data-state', 'open');
         expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+        expect(document.querySelectorAll('[data-execution-id]')).toHaveLength(1);
+        expect(screen.getByRole('button', { name: 'Back to jobs' })).toBeInTheDocument();
+    });
+
+    it('shows the loading skeleton, not the empty state, while the linked execution loads', () => {
+        mockUseJobExecution.mockReturnValue({
+            job: null,
+            isLoading: true,
+            error: null,
+            refetch: vi.fn(),
+        });
+
+        render(
+            <TestWrapper initialRoute="/?job=exec-2">
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByTestId('my-jobs-page__loading')).toBeInTheDocument();
+        expect(screen.queryByText('No job history found')).not.toBeInTheDocument();
     });
 
     it('fetches and expands a linked execution omitted from the current page', () => {
@@ -540,6 +570,57 @@ describe('MyJobsPage Executions tab', () => {
 
         expect(items.length).toBe(1);
         expect(screen.getByText('Manual run')).toBeInTheDocument();
+    });
+});
+
+describe('MyJobsPage chain filter', () => {
+    it('requests the correlationId filter from the URL', () => {
+        render(
+            <TestWrapper initialRoute="/?correlationId=corr-alpha">
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        expect(mockUseJobs).toHaveBeenCalledWith(expect.objectContaining({ correlationId: 'corr-alpha' }));
+    });
+
+    it('shows the active chain filter labeled as a chain, not as parent and child', () => {
+        render(
+            <TestWrapper initialRoute="/?correlationId=corr-alpha">
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByText('Chain: corr-alpha')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /clear chain filter/i })).toBeInTheDocument();
+    });
+
+    it('does not show the chain filter when no correlationId is in the URL', () => {
+        render(
+            <TestWrapper>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        expect(document.querySelector('[data-control="chain-filter"]')).not.toBeInTheDocument();
+    });
+
+    it('clears the chain filter when the clear button is clicked', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper initialRoute="/?correlationId=corr-alpha">
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: /clear chain filter/i }));
+
+        expect(document.querySelector('[data-control="chain-filter"]')).not.toBeInTheDocument();
+        await waitFor(() => {
+            const lastCallParams = mockUseJobs.mock.calls.at(-1)?.[0];
+            expect(lastCallParams?.correlationId).toBeUndefined();
+        });
     });
 });
 

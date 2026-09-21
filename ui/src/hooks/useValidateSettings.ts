@@ -1,4 +1,4 @@
-import { SchemaDataType, type IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
+import { SchemaDataType, isRenderableSetting, type IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
 import { isApiError } from '@/lib/api';
 
 export interface IntegrationSettingsValidationIssue {
@@ -41,55 +41,15 @@ function isValidDate(value: string): boolean {
     return !Number.isNaN(Date.parse(value));
 }
 
-const DECIMAL_MAX_UNSCALED = 79_228_162_514_264_337_593_543_950_335n;
+const DECIMAL_MAX_MAGNITUDE = 79_228_162_514_264_337_593_543_950_335n;
 
 function isInvariantDecimal(value: string): boolean {
-    let number = value.trim();
-    if (!number) {
+    if (!/^(?:[+-]?(?:\d[\d,]*(?:\.\d*)?|\.\d+)|(?:\d[\d,]*(?:\.\d*)?|\.\d+)\s*[+-])$/.test(value.trim())) {
         return false;
     }
-
-    const hasTrailingSign = /[+-]$/.test(number);
-    if (hasTrailingSign) {
-        number = number.slice(0, -1).trimEnd();
-    }
-    if (/^[+-]/.test(number)) {
-        if (hasTrailingSign) {
-            return false;
-        }
-        number = number.slice(1);
-    }
-
-    const parts = number.split('.');
-    if (parts.length > 2) {
-        return false;
-    }
-
-    const [integerPart, fractionalPart = ''] = parts;
-    if (
-        (integerPart && !/^\d[\d,]*$/.test(integerPart)) ||
-        (fractionalPart && !/^\d+$/.test(fractionalPart)) ||
-        (!integerPart && !fractionalPart)
-    ) {
-        return false;
-    }
-
-    let unscaled = BigInt(`${integerPart.replace(/,/g, '')}${fractionalPart}` || '0');
-    let scale = fractionalPart.length;
-    while (scale > 28 || unscaled > DECIMAL_MAX_UNSCALED) {
-        if (scale === 0) {
-            return false;
-        }
-
-        const remainder = unscaled % 10n;
-        unscaled /= 10n;
-        if (remainder > 5n || (remainder === 5n && unscaled % 2n !== 0n)) {
-            unscaled += 1n;
-        }
-        scale -= 1;
-    }
-
-    return true;
+    const [integer, fraction = ''] = value.replace(/[,\s+-]/g, '').split('.');
+    const magnitude = BigInt(integer || '0');
+    return magnitude < DECIMAL_MAX_MAGNITUDE || (magnitude === DECIMAL_MAX_MAGNITUDE && (fraction[0] ?? '0') < '5');
 }
 
 function parseMappingRows(value: string): Record<string, string>[] | null {
@@ -147,6 +107,9 @@ function typeMismatchMessage(entry: IntegrationSettingDefinition): string {
             return `${fieldLabel} must be a valid date.`;
         case SchemaDataType.MappingsList:
             return `${fieldLabel} must be a JSON array of mapping rows.`;
+        default:
+            entry.type satisfies never;
+            return `${fieldLabel} is invalid.`;
     }
 }
 
@@ -160,9 +123,10 @@ export function validateIntegrationSettings(
     settings: Record<string, string>,
     preserveExistingSecrets: boolean,
 ): IntegrationSettingsValidationResult {
+    const renderable = schema.filter(isRenderableSetting);
     const issues: IntegrationSettingsValidationIssue[] = [];
 
-    for (const entry of schema) {
+    for (const entry of renderable) {
         const value = settingValue(settings, entry.key);
         if (entry.required && isBlank(value) && !(preserveExistingSecrets && entry.secret)) {
             issues.push({ key: entry.key, message: `${label(entry)} is required.` });
@@ -170,7 +134,7 @@ export function validateIntegrationSettings(
     }
 
     for (const [key, value] of Object.entries(settings)) {
-        const entry = schema.find((candidate) => candidate.key.toLowerCase() === key.toLowerCase());
+        const entry = renderable.find((candidate) => candidate.key.toLowerCase() === key.toLowerCase());
         if (!entry || isBlank(value)) {
             continue;
         }

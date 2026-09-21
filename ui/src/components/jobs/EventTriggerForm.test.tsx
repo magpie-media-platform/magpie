@@ -29,6 +29,50 @@ const mockTemplates: JobTemplateOption[] = [
 ];
 
 describe('EventTriggerForm', () => {
+    it('keeps validation errors on their pattern and filter when earlier rows are removed', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open
+                    onOpenChange={vi.fn()}
+                    templates={mockTemplates}
+                    onSubmit={vi.fn()}
+                    initialValues={{
+                        name: 'Trigger',
+                        templateId: 'template-1',
+                        eventNamePatterns: ['valid', '[', 'other'],
+                        filters: [
+                            { key: 'first', pattern: null, negate: false },
+                            { key: '', pattern: '[', negate: false },
+                            { key: 'last', pattern: null, negate: false },
+                        ],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: {},
+                    }}
+                />
+            </TestWrapper>,
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+        await user.click(screen.getByRole('button', { name: 'Remove event name 1' }));
+        await user.click(screen.getByRole('button', { name: 'Remove filter 1' }));
+
+        // Assert
+        expect(screen.getByLabelText('Pattern (Regex)')).toHaveAttribute('aria-invalid', 'true');
+        expect(screen.getByLabelText('Event name 2')).not.toHaveAttribute('aria-invalid', 'true');
+        expect(screen.getByLabelText('Filter 1 key')).toHaveAttribute('aria-invalid', 'true');
+        expect(screen.getByLabelText('Filter 1 pattern')).toHaveAttribute('aria-invalid', 'true');
+        expect(screen.getByLabelText('Filter 2 key')).not.toHaveAttribute('aria-invalid', 'true');
+        await user.click(screen.getByRole('button', { name: 'Remove event name 1' }));
+        await user.click(screen.getByRole('button', { name: 'Remove filter 1' }));
+        expect(screen.queryByText('Invalid regex pattern')).not.toBeInTheDocument();
+        expect(screen.queryByText('Key is required')).not.toBeInTheDocument();
+        expect(screen.queryByText('Invalid regex')).not.toBeInTheDocument();
+    });
     it('renders add form title when no initialValues', () => {
         render(
             <TestWrapper>

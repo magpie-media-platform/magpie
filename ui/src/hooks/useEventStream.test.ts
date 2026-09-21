@@ -10,7 +10,6 @@ import {
     useEventStream,
     useGlobalEventStreamConnection,
     type EventStreamPayload,
-    type MagpieEventDiagnostics,
 } from './useEventStream';
 
 type Listener = (evt: { data: string }) => void;
@@ -98,14 +97,6 @@ describe('useEventStream', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
-    });
-
-    it('exposes subscription diagnostics on window in development', () => {
-        const diagnostics = (window as typeof window & { __magpieEventDiagnostics?: MagpieEventDiagnostics })
-            .__magpieEventDiagnostics;
-
-        expect(diagnostics?.getActiveEventSubscriptionCount).toBe(getActiveEventSubscriptionCount);
-        expect(diagnostics?.getActiveEventSubscriptions).toBe(getActiveEventSubscriptions);
     });
 
     it('opens one unfiltered EventSource for the active application session', () => {

@@ -4,21 +4,28 @@ import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Badge } from '@/components/ui/Badge';
+import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
-import { DataTable } from '@/components/ui/DataTable';
+import { DataTable, selectColumn } from '@/components/ui/DataTable';
+import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Pager } from '@/components/ui/Pager';
 import { Switch } from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/Toast';
 import { Tooltip } from '@/components/ui/Tooltip';
 
+import { useBulkRun } from '@/hooks/useBulkRun';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useIndexers, type IndexerFeedItem } from '@/hooks/useIndexers';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
 
 import { EmptyState } from '@/components/ui/EmptyState';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { IndexerFeedForm, type IndexerFeedFormValues } from './IndexerFeedForm';
+
+import '@/styles/bulk-actions-toolbar.css';
 
 const PAGE_SIZE = 25;
 
@@ -42,7 +49,12 @@ export function FeedsManagement() {
     const [editingFeed, setEditingFeed] = useState<IndexerFeedFormValues | null>(null);
     const [deletingFeed, setDeletingFeed] = useState<IndexerFeedItem | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [pageRowIds, setPageRowIds] = useState<string[]>([]);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const [isBulkSettingEnabled, setIsBulkSettingEnabled] = useState(false);
     const { toast } = useToast();
+    const runBulk = useBulkRun();
 
     const {
         feeds,
@@ -79,7 +91,7 @@ export function FeedsManagement() {
             } catch (error) {
                 toast({
                     title: 'Error',
-                    description: error instanceof Error ? error.message : 'Failed to toggle feed',
+                    description: getErrorMessage(error, 'Failed to toggle feed'),
                     variant: 'error',
                 });
             }
@@ -99,7 +111,7 @@ export function FeedsManagement() {
             } catch (error) {
                 toast({
                     title: 'Error',
-                    description: error instanceof Error ? error.message : 'Failed to start sync',
+                    description: getErrorMessage(error, 'Failed to start sync'),
                     variant: 'error',
                 });
             }
@@ -136,7 +148,7 @@ export function FeedsManagement() {
         } catch (error) {
             toast({
                 title: 'Error',
-                description: error instanceof Error ? error.message : 'Failed to delete feed',
+                description: getErrorMessage(error, 'Failed to delete feed'),
                 variant: 'error',
             });
         } finally {
@@ -149,17 +161,50 @@ export function FeedsManagement() {
         setDeletingFeed(null);
     }, []);
 
+    const selection = useBulkSelection({ pageRowIds, totalCount: feeds.length });
+    const selectedFeeds = useMemo(() => feeds.filter((f) => selection.isRowChecked(f.id)), [feeds, selection]);
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            await runBulk(selectedFeeds, selection, {
+                action: (feed) => apiDeleteFeed(feed.id),
+                verb: 'delete',
+                itemNounPlural: 'feeds',
+            });
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [apiDeleteFeed, runBulk, selectedFeeds, selection]);
+
+    const handleBulkSetEnabled = useCallback(
+        async (enabled: boolean) => {
+            setIsBulkSettingEnabled(true);
+            try {
+                await runBulk(selectedFeeds, selection, {
+                    action: (feed) => toggleFeedEnabled(feed.id, enabled),
+                    verb: enabled ? 'enable' : 'disable',
+                    itemNounPlural: 'feeds',
+                });
+            } finally {
+                setIsBulkSettingEnabled(false);
+            }
+        },
+        [runBulk, selectedFeeds, selection, toggleFeedEnabled],
+    );
+
     const handleFormSubmit = useCallback(
         async (values: IndexerFeedFormValues) => {
             try {
                 if (values.id) {
                     const settings = Object.keys(values.settings).length > 0 ? values.settings : undefined;
                     await apiUpdateFeed(values.id, {
-                        name: values.name,
-                        description: values.description || undefined,
-                        providerType: values.provider,
-                        enabled: values.enabled,
-                        settings,
+                        name: { value: values.name },
+                        description: { value: values.description },
+                        providerType: { value: values.provider },
+                        enabled: { value: values.enabled },
+                        ...(settings ? { settings: { add: settings } } : {}),
                     });
                     toast({
                         title: 'Feed updated',
@@ -184,7 +229,7 @@ export function FeedsManagement() {
             } catch (error) {
                 toast({
                     title: 'Error',
-                    description: error instanceof Error ? error.message : 'Failed to save feed',
+                    description: getErrorMessage(error, 'Failed to save feed'),
                     variant: 'error',
                 });
                 throw error;
@@ -200,10 +245,17 @@ export function FeedsManagement() {
 
     const columns = useMemo<ColumnDef<IndexerFeedItem>[]>(
         () => [
+            selectColumn<IndexerFeedItem>({
+                selection,
+                getId: (row) => row.id,
+                headerLabel: 'Select all indexer feeds',
+                rowLabel: (row) => row.name,
+            }),
             {
                 id: 'name',
                 accessorKey: 'name',
                 header: 'Name',
+                meta: { mobileRole: 'header' },
                 size: 220,
                 cell: ({ row }) => (
                     <span className="indexers-table__name" title={row.original.name}>
@@ -237,6 +289,7 @@ export function FeedsManagement() {
                 id: 'enabled',
                 accessorKey: 'enabled',
                 header: 'Enabled',
+                meta: { mobileRole: 'hidden' },
                 size: 110,
                 cell: ({ row }) => (
                     <Badge variant={row.original.enabled ? 'healthy' : 'unknown'} size="sm">
@@ -268,12 +321,13 @@ export function FeedsManagement() {
                     return (
                         <div className="indexers-page__item-actions card-actions">
                             <Tooltip content={feed.enabled ? 'Disable' : 'Enable'}>
-                                <div className="indexers-page__item-toggle">
+                                <div className="indexers-page__item-toggle card-actions__toggle">
                                     <PowerIcon
                                         weight="bold"
-                                        className="indexers-page__toggle-icon"
+                                        className="indexers-page__toggle-icon card-actions__toggle-icon"
                                         aria-hidden="true"
                                     />
+                                    <span className="card-actions__toggle-label">Enabled</span>
                                     <Switch
                                         checked={feed.enabled}
                                         onCheckedChange={(checked) => handleToggleEnabled(feed.id, checked)}
@@ -328,7 +382,7 @@ export function FeedsManagement() {
                 },
             },
         ],
-        [handleToggleEnabled, handleEdit, handleSync, syncingFeedId],
+        [selection, handleToggleEnabled, handleEdit, handleSync, syncingFeedId],
     );
 
     const pageCount = Math.max(1, Math.ceil(feeds.length / PAGE_SIZE));
@@ -355,6 +409,45 @@ export function FeedsManagement() {
                 </Button>
             </div>
 
+            <BulkActionsToolbar selection={selection} label="Indexer feed selection actions" itemNounPlural="feeds">
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={isBulkSettingEnabled}
+                    disabled={isBulkSettingEnabled}
+                    onClick={() => void handleBulkSetEnabled(true)}
+                    aria-label="Enable selected feeds"
+                    data-action="bulk-enable"
+                >
+                    <PowerIcon weight="bold" aria-hidden="true" />
+                    <span className="bulk-actions-toolbar__btn-label">Enable</span>
+                </Button>
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={isBulkSettingEnabled}
+                    disabled={isBulkSettingEnabled}
+                    onClick={() => void handleBulkSetEnabled(false)}
+                    aria-label="Disable selected feeds"
+                    data-action="bulk-disable"
+                >
+                    <PowerIcon weight="bold" aria-hidden="true" />
+                    <span className="bulk-actions-toolbar__btn-label">Disable</span>
+                </Button>
+                <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setIsBulkDeleteOpen(true)}
+                    aria-label="Delete selected feeds"
+                    data-action="bulk-delete"
+                >
+                    <TrashIcon weight="bold" aria-hidden="true" />
+                    <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                </Button>
+            </BulkActionsToolbar>
+
+            <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+
             <div className="indexers-table" data-area="feeds">
                 <DataTable<IndexerFeedItem>
                     columns={columns}
@@ -369,8 +462,14 @@ export function FeedsManagement() {
                     pageSize={PAGE_SIZE}
                     pagination={pagination}
                     getRowId={getRowId}
+                    onPageRowIdsChange={setPageRowIds}
                     loading={isLoadingFeeds}
                     emptyState={emptyState}
+                    mobileSelectionActive={selection.selectionMode}
+                    mobileSelectionOverlay={{
+                        isSelected: (feed) => selection.isRowChecked(feed.id),
+                        onToggle: (feed) => selection.toggleRow(feed.id, !selection.isRowChecked(feed.id)),
+                    }}
                     aria-label="Indexer feeds"
                 />
                 {feeds.length > PAGE_SIZE && (
@@ -408,6 +507,59 @@ export function FeedsManagement() {
                 itemType="Indexer Feed"
                 isDeleting={isDeleting}
             />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Indexer Feeds"
+                isDeleting={isBulkDeleting}
+            />
+
+            {selection.selectionMode && (
+                <MobileSelectionBar
+                    data-component="indexer-feeds-mobile-selection-bar"
+                    selection={selection}
+                    itemNounPlural="feeds"
+                >
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(true)}
+                        aria-label="Enable selected feeds"
+                        data-action="bulk-enable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Enable
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={isBulkSettingEnabled}
+                        disabled={isBulkSettingEnabled || !selection.hasSelection}
+                        onClick={() => void handleBulkSetEnabled(false)}
+                        aria-label="Disable selected feeds"
+                        data-action="bulk-disable"
+                    >
+                        <PowerIcon weight="bold" aria-hidden="true" />
+                        Disable
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selection.hasSelection}
+                        onClick={() => setIsBulkDeleteOpen(true)}
+                        aria-label="Delete selected feeds"
+                        data-action="bulk-delete"
+                    >
+                        <TrashIcon weight="bold" aria-hidden="true" />
+                        Delete
+                    </Button>
+                </MobileSelectionBar>
+            )}
         </>
     );
 }

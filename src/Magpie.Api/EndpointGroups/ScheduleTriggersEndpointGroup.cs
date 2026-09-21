@@ -84,7 +84,7 @@ internal sealed class ScheduleTriggersEndpointGroup : IApiEndpointGroup
         var trigger = await jobManager.CreateScheduleTriggerAsync(create, user.Id, user.Role, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{trigger.Id}", trigger);
+        return Results.Created($"/api/{Name}/{trigger.Id}", trigger);
     }
 
     internal async Task<IResult> PatchScheduleTriggerAsync(

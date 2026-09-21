@@ -15,7 +15,6 @@ using Magpie.Models.Enums;
 using Magpie.Models.Integrations;
 using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
@@ -28,21 +27,22 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Downloads;
 
 [TestFixture]
-public class DownloadServiceTests
+public sealed class DownloadServiceTests
 {
     private Mock<IDownloadRepository> _downloadRepository = null!;
     private Mock<IDownloadClientIntegration> _integration = null!;
-    private Mock<IJobExecutionRepository> _jobExecutionRepository = null!;
     private Mock<IJobManager> _jobManager = null!;
     private StuckDownloadCandidate _candidate = null!;
     private DownloadInfo _downloadedInfo = null!;
     private DateTime _now;
+    private Guid? _refreshedDownloadId;
+    private DownloadStatus? _refreshedStatus;
     private IDownloadService _subject = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _downloadRepository = new Mock<IDownloadRepository>();
+        _downloadRepository = new Mock<IDownloadRepository> { CallBase = true };
         _downloadRepository
             .Setup(r => r.ListFailedByReleaseIdentitiesAsync(
                 It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
@@ -60,14 +60,8 @@ public class DownloadServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DownloadInfo { ExternalId = "default", Status = DownloadStatus.Queued });
 
-        _jobExecutionRepository = new Mock<IJobExecutionRepository>();
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution>());
+        _refreshedDownloadId = null;
+        _refreshedStatus = null;
         _downloadRepository
             .Setup(repository => repository.UpdateActiveRefreshedStatusAsync(
                 It.IsAny<Guid>(),
@@ -83,6 +77,24 @@ public class DownloadServiceTests
                 It.IsAny<DateTime>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
+            .Callback((
+                Guid downloadId,
+                DownloadStatus status,
+                string? _,
+                string? _,
+                DateTime? _,
+                decimal? _,
+                DateTime? _,
+                bool _,
+                DownloadFailureReason? _,
+                DateTime? _,
+                DateTime _,
+                Guid? _,
+                CancellationToken _) =>
+            {
+                _refreshedDownloadId = downloadId;
+                _refreshedStatus = status;
+            })
             .ReturnsAsync(true);
         _jobManager = new Mock<IJobManager>();
         _jobManager
@@ -93,7 +105,7 @@ public class DownloadServiceTests
         _now = new DateTime(2026, 8, 5, 12, 0, 0, DateTimeKind.Utc);
         _candidate = new StuckDownloadCandidate
         {
-            DownloadId = Guid.NewGuid(),
+            DownloadId = new Guid("65bf4f33-77dc-4ae7-a4b9-9d89012df7b6"),
             ExternalId = "external-download",
             Title = "Download",
             Status = DownloadStatus.Downloading,
@@ -111,7 +123,6 @@ public class DownloadServiceTests
             [],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            _jobExecutionRepository.Object,
             _jobManager.Object,
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -119,7 +130,7 @@ public class DownloadServiceTests
     }
 
     [Test]
-    public async Task GrabAsync_DelegatesToMatchingIntegration_AndReturnsSuccessWithDownloadInfo()
+    public async Task GrabAsync_ReturnsDownloadInfo_WhenTheIntegrationSucceeds()
     {
         // Arrange
         _integration
@@ -139,7 +150,6 @@ public class DownloadServiceTests
             [_integration.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -203,7 +213,6 @@ public class DownloadServiceTests
             [_integration.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -258,7 +267,6 @@ public class DownloadServiceTests
             [_integration.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -318,7 +326,6 @@ public class DownloadServiceTests
             [_integration.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -392,7 +399,6 @@ public class DownloadServiceTests
             [older.Object, newer.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -466,7 +472,6 @@ public class DownloadServiceTests
             [_integration.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -560,7 +565,6 @@ public class DownloadServiceTests
             [_integration.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -655,7 +659,6 @@ public class DownloadServiceTests
             [_integration.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -720,7 +723,7 @@ public class DownloadServiceTests
             Status = DownloadStatus.Queued,
             CreatedAt = DateTime.UtcNow
         };
-        var clientRepository = new Mock<IDownloadClientRepository>();
+        var clientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
         clientRepository
             .Setup(r => r.GetByIdAsync(clientId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(client);
@@ -740,7 +743,6 @@ public class DownloadServiceTests
             [pausable.Object],
             clientRepository.Object,
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -808,7 +810,7 @@ public class DownloadServiceTests
             Status = DownloadStatus.Downloading,
             CreatedAt = DateTime.UtcNow
         };
-        var clientRepository = new Mock<IDownloadClientRepository>();
+        var clientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
         clientRepository
             .Setup(r => r.GetByIdAsync(clientId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(client);
@@ -831,7 +833,6 @@ public class DownloadServiceTests
             [pausable.Object],
             clientRepository.Object,
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -859,13 +860,221 @@ public class DownloadServiceTests
     }
 
     [Test]
+    public async Task BulkPauseAsync_PatchesNoDownload_WhenTheClientRefusesThePause()
+    {
+        // Arrange
+        var downloadId = Guid.Parse("44444444-4444-4444-4444-444444444445");
+        var clientId = Guid.Parse("55555555-5555-5555-5555-555555555554");
+        var client = new DownloadClient
+        {
+            Id = clientId,
+            Name = "Mock client",
+            ProviderType = "pausable-fake",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Healthy,
+            Settings = new Dictionary<string, string> { ["host"] = "127.0.0.1" },
+            CreatedAt = DateTime.UtcNow
+        };
+        var download = new Download
+        {
+            Id = downloadId,
+            ReleaseId = Guid.Parse("66666666-6666-6666-6666-666666666667"),
+            DownloadClientId = clientId,
+            ExternalId = "ext-refused",
+            Title = "Queued item",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+        var clientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
+        clientRepository
+            .Setup(r => r.GetByIdAsync(clientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(client);
+        _downloadRepository
+            .Setup(r => r.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(download);
+        _downloadRepository
+            .Setup(r => r.BulkPatchAsync(
+                It.IsAny<BulkPatch<DownloadQuery, DownloadPatch>>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BulkResult { Count = 0 });
+        var pausable = new Mock<IDownloadClientIntegration>();
+        pausable.SetupGet(i => i.ProviderType).Returns("pausable-fake");
+        pausable.As<IPausableDownloadClient>()
+            .Setup(c => c.PauseDownloadAsync(
+                "ext-refused",
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var service = new DownloadService(
+            [pausable.Object],
+            clientRepository.Object,
+            _downloadRepository.Object,
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            TimeProvider.System,
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        var result = await service
+            .BulkPauseAsync(new BulkAction<DownloadQuery> { Ids = [downloadId] }, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Count, Is.EqualTo(0));
+            _downloadRepository.Verify(
+                r => r.BulkPatchAsync(
+                    It.Is<BulkPatch<DownloadQuery, DownloadPatch>>(patch => patch.Ids!.Count == 0),
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ApplyRefreshedClientStateAsync_StampsLastProgressAt_WhenTheDownloadCompletes()
+    {
+        // Arrange
+        var downloadId = Guid.Parse("77777777-7777-7777-7777-777777777771");
+        var download = new Download
+        {
+            Id = downloadId,
+            ReleaseId = Guid.Parse("77777777-7777-7777-7777-777777777772"),
+            DownloadClientId = Guid.Parse("77777777-7777-7777-7777-777777777773"),
+            ExternalId = "ext-complete",
+            Title = "Finishing item",
+            Status = DownloadStatus.Downloading,
+            Progress = 100m,
+            LastProgressAt = new DateTime(2026, 8, 5, 11, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow
+        };
+        var info = new DownloadInfo
+        {
+            ExternalId = "ext-complete",
+            Status = DownloadStatus.Downloaded,
+            ProgressPercent = 100m
+        };
+        DateTime? observedLastProgressAt = null;
+        _downloadRepository
+            .Setup(r => r.UpdateRefreshedStatusAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<DownloadStatus>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<bool>(),
+                It.IsAny<DownloadFailureReason?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((
+                Guid _,
+                DownloadStatus _,
+                string? _,
+                string? _,
+                DateTime? _,
+                decimal? _,
+                DateTime? lastProgressAt,
+                bool _,
+                DownloadFailureReason? _,
+                DateTime? _,
+                DateTime _,
+                Guid? _,
+                CancellationToken _) => observedLastProgressAt = lastProgressAt)
+            .ReturnsAsync(true);
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task> operation, CancellationToken token) => operation(token));
+        var service = new DownloadService(
+            [_integration.Object],
+            Mock.Of<IDownloadClientRepository>(),
+            _downloadRepository.Object,
+            Mock.Of<IJobManager>(),
+            transactionManager.Object,
+            TimeProvider.System,
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        await service.ApplyRefreshedClientStateAsync(download, info, null, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            observedLastProgressAt,
+            Is.Not.EqualTo(new DateTime(2026, 8, 5, 11, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public async Task DeleteAsync_ReturnsSuccess_WhenClientDeletesFilesAndRowWasAlreadyDeleted()
+    {
+        // Arrange
+        var downloadId = Guid.Parse("55555555-5555-5555-5555-555555555555");
+        var clientId = Guid.Parse("55555555-5555-5555-5555-555555555556");
+        var settings = new Dictionary<string, string> { ["host"] = "127.0.0.1" };
+        var download = new Download
+        {
+            Id = downloadId,
+            ReleaseId = Guid.Parse("55555555-5555-5555-5555-555555555557"),
+            DownloadClientId = clientId,
+            ExternalId = "ext-deleted",
+            Title = "Deleted download",
+            Status = DownloadStatus.Imported,
+            CreatedAt = DateTime.UtcNow
+        };
+        var clientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
+        clientRepository
+            .Setup(r => r.GetByIdAsync(clientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DownloadClient
+            {
+                Id = clientId,
+                Name = "Mock client",
+                ProviderType = "fake",
+                Enabled = true,
+                Status = IntegrationHealthStatus.Healthy,
+                Settings = settings,
+                CreatedAt = DateTime.UtcNow
+            });
+        _downloadRepository
+            .Setup(r => r.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(download);
+        _downloadRepository
+            .Setup(r => r.DeleteAsync(downloadId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        _integration
+            .Setup(i => i.RemoveDownloadAsync("ext-deleted", true, settings, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var service = new DownloadService(
+            [_integration.Object],
+            clientRepository.Object,
+            _downloadRepository.Object,
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            TimeProvider.System,
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        var result = await service.DeleteAsync(downloadId, deleteFiles: true).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.True);
+    }
+
+    [Test]
     public async Task BulkRemoveAsync_RemovesFilteredTargetsAndDeletesRows_WhenFilterExcludesIds()
     {
         // Arrange
         var firstDownloadId = Guid.Parse("77777777-7777-7777-7777-777777777777");
-        var secondDownloadId = Guid.Parse("88888888-8888-8888-8888-888888888888");
-        var excludedDownloadId = Guid.Parse("99999999-9999-9999-9999-999999999999");
-        var clientId = Guid.Parse("aaaaaaaa-1111-1111-1111-111111111111");
+        var secondDownloadId = Guid.NewGuid();
+        var excludedDownloadId = Guid.NewGuid();
+        var clientId = Guid.NewGuid();
         var settings = new Dictionary<string, string> { ["host"] = "127.0.0.1" };
         var client = new DownloadClient
         {
@@ -880,7 +1089,7 @@ public class DownloadServiceTests
         var firstDownload = new Download
         {
             Id = firstDownloadId,
-            ReleaseId = Guid.Parse("aaaaaaaa-2222-2222-2222-222222222222"),
+            ReleaseId = Guid.NewGuid(),
             DownloadClientId = clientId,
             ExternalId = "ext-first",
             Title = "First download",
@@ -890,7 +1099,7 @@ public class DownloadServiceTests
         var secondDownload = new Download
         {
             Id = secondDownloadId,
-            ReleaseId = Guid.Parse("aaaaaaaa-3333-3333-3333-333333333333"),
+            ReleaseId = Guid.NewGuid(),
             DownloadClientId = clientId,
             ExternalId = "ext-second",
             Title = "Second download",
@@ -902,7 +1111,7 @@ public class DownloadServiceTests
             Statuses = [DownloadStatus.Imported, DownloadStatus.Downloaded],
             ExcludeIds = [excludedDownloadId]
         };
-        var clientRepository = new Mock<IDownloadClientRepository>();
+        var clientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
         clientRepository
             .Setup(r => r.GetByIdAsync(clientId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(client);
@@ -933,7 +1142,6 @@ public class DownloadServiceTests
             [_integration.Object],
             clientRepository.Object,
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -967,12 +1175,12 @@ public class DownloadServiceTests
     }
 
     [Test]
-    public async Task BulkRemoveAsync_ContinuesRemovingAndDeleting_WhenClientRemovalFails()
+    public async Task BulkRemoveAsync_ReportsPartialFailureAndKeepsRow_WhenClientRemovalFails()
     {
         // Arrange
-        var firstDownloadId = Guid.Parse("bbbbbbbb-1111-1111-1111-111111111111");
-        var secondDownloadId = Guid.Parse("bbbbbbbb-2222-2222-2222-222222222222");
-        var clientId = Guid.Parse("bbbbbbbb-3333-3333-3333-333333333333");
+        var firstDownloadId = Guid.NewGuid();
+        var secondDownloadId = Guid.NewGuid();
+        var clientId = Guid.NewGuid();
         var settings = new Dictionary<string, string> { ["host"] = "127.0.0.1" };
         var client = new DownloadClient
         {
@@ -987,7 +1195,7 @@ public class DownloadServiceTests
         var firstDownload = new Download
         {
             Id = firstDownloadId,
-            ReleaseId = Guid.Parse("bbbbbbbb-4444-4444-4444-444444444444"),
+            ReleaseId = Guid.NewGuid(),
             DownloadClientId = clientId,
             ExternalId = "ext-failing",
             Title = "Failing client removal",
@@ -997,14 +1205,14 @@ public class DownloadServiceTests
         var secondDownload = new Download
         {
             Id = secondDownloadId,
-            ReleaseId = Guid.Parse("bbbbbbbb-5555-5555-5555-555555555555"),
+            ReleaseId = Guid.NewGuid(),
             DownloadClientId = clientId,
             ExternalId = "ext-continuing",
             Title = "Continuing client removal",
             Status = DownloadStatus.Downloaded,
             CreatedAt = DateTime.UtcNow
         };
-        var clientRepository = new Mock<IDownloadClientRepository>();
+        var clientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
         clientRepository
             .Setup(r => r.GetByIdAsync(clientId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(client);
@@ -1035,7 +1243,6 @@ public class DownloadServiceTests
             [_integration.Object],
             clientRepository.Object,
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -1051,7 +1258,8 @@ public class DownloadServiceTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Count, Is.EqualTo(2));
+            Assert.That(result.Count, Is.EqualTo(1));
+            Assert.That(result.Error, Is.EqualTo("Failed to remove 1 download."));
             _integration.Verify(
                 i => i.RemoveDownloadAsync("ext-failing", true, settings, It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -1060,7 +1268,7 @@ public class DownloadServiceTests
                 Times.Once);
             _downloadRepository.Verify(
                 r => r.DeleteAsync(firstDownloadId, null, It.IsAny<CancellationToken>()),
-                Times.Once);
+                Times.Never);
             _downloadRepository.Verify(
                 r => r.DeleteAsync(secondDownloadId, null, It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -1068,13 +1276,13 @@ public class DownloadServiceTests
     }
 
     [Test]
-    public async Task QueryAsync_StampsCapabilityFields_FromDistinctIntegrationInterfaces()
+    public async Task QueryAsync_StampsCapabilityFields_WhenIntegrationsSupportDifferentCapabilities()
     {
         // Arrange
-        var pauseOnlyId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
-        var resumeOnlyId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
-        var forceOnlyId = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
-        var basicId = Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd");
+        var pauseOnlyId = Guid.NewGuid();
+        var resumeOnlyId = Guid.NewGuid();
+        var forceOnlyId = Guid.NewGuid();
+        var basicId = Guid.NewGuid();
         var pauseOnlyEntry = new DownloadQueueEntry
         {
             Id = pauseOnlyId,
@@ -1115,7 +1323,7 @@ public class DownloadServiceTests
             Status = DownloadStatus.Queued,
             CreatedAt = DateTime.UtcNow
         };
-        var clientRepository = new Mock<IDownloadClientRepository>();
+        var clientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
         _downloadRepository
             .Setup(r => r.QueryQueueEntriesAsync(
                 It.IsAny<DownloadQuery>(),
@@ -1144,7 +1352,6 @@ public class DownloadServiceTests
             [pauseOnly.Object, resumeOnly.Object, forceOnly.Object, basic.Object],
             clientRepository.Object,
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -1195,7 +1402,7 @@ public class DownloadServiceTests
         bool canForceStart)
     {
         // Arrange
-        var downloadId = Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
+        var downloadId = Guid.NewGuid();
         var entry = new DownloadQueueEntry
         {
             Id = downloadId,
@@ -1228,7 +1435,6 @@ public class DownloadServiceTests
             [capable.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -1253,7 +1459,7 @@ public class DownloadServiceTests
     public async Task GetAsync_StampsCapabilityFieldsFalse_WhenIntegrationMissing()
     {
         // Arrange
-        var downloadId = Guid.Parse("12121212-1212-1212-1212-121212121212");
+        var downloadId = Guid.NewGuid();
         var entry = new DownloadQueueEntry
         {
             Id = downloadId,
@@ -1271,7 +1477,6 @@ public class DownloadServiceTests
             [_integration.Object],
             Mock.Of<IDownloadClientRepository>(),
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -1291,7 +1496,7 @@ public class DownloadServiceTests
     }
 
     [Test]
-    public async Task QueryAsync_StampsCapabilityFields_WithoutClientRepositoryLookup()
+    public async Task QueryAsync_StampsCapabilityFields_WhenMultipleDownloadsShareAClient()
     {
         // Arrange
         var downloadId = Guid.Parse("66666666-6666-6666-6666-666666666666");
@@ -1305,7 +1510,7 @@ public class DownloadServiceTests
             Status = DownloadStatus.Queued,
             CreatedAt = DateTime.UtcNow
         };
-        var clientRepository = new Mock<IDownloadClientRepository>();
+        var clientRepository = new Mock<IDownloadClientRepository> { CallBase = true };
         clientRepository
             .Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Stored secret settings do not contain a protected envelope"));
@@ -1331,7 +1536,6 @@ public class DownloadServiceTests
             [capable.Object],
             clientRepository.Object,
             _downloadRepository.Object,
-            Mock.Of<IJobExecutionRepository>(),
             Mock.Of<IJobManager>(),
             Mock.Of<ITransactionManager>(),
             TimeProvider.System,
@@ -1354,154 +1558,8 @@ public class DownloadServiceTests
     }
 
     [Test]
-    public async Task TryApplyVerifiedClientStateAsync_EnqueuesImport_WhenNoMatchingExecutionExists()
+    public async Task TryApplyVerifiedClientStateAsync_AppliesTheCompletedStatus_WhenTheClientReportsDownloaded()
     {
-        // Act
-        await _subject
-            .TryApplyVerifiedClientStateAsync(_candidate, _downloadedInfo, _now, _now, null, default)
-            .ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            manager => manager.ExecuteAsync(
-                It.IsAny<JobEnqueueRequest>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task TryApplyVerifiedClientStateAsync_DoesNotEnqueueImport_WhenDirectParameterMatches()
-    {
-        // Arrange
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution>
-            {
-                Items =
-                [
-                    new JobExecution
-                    {
-                        JobType = "DownloadImportItem",
-                        Scope = JobScope.Content,
-                        Status = JobExecutionStatus.Queued,
-                        CreatedAt = DateTime.UtcNow,
-                        Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-                        {
-                            ["downloadId"] = _candidate.DownloadId.ToString("D")
-                        }
-                    }
-                ]
-            });
-
-        // Act
-        await _subject
-            .TryApplyVerifiedClientStateAsync(_candidate, _downloadedInfo, _now, _now, null, default)
-            .ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            manager => manager.ExecuteAsync(
-                It.IsAny<JobEnqueueRequest>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Test]
-    public async Task TryApplyVerifiedClientStateAsync_DoesNotEnqueueImport_WhenEventContextMatches()
-    {
-        // Arrange
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution>
-            {
-                Items =
-                [
-                    new JobExecution
-                    {
-                        JobType = "DownloadImportItem",
-                        Scope = JobScope.Content,
-                        Status = JobExecutionStatus.Queued,
-                        CreatedAt = DateTime.UtcNow,
-                        TriggerContext = new Dictionary<string, string>(StringComparer.Ordinal)
-                        {
-                            [MagpieEvents.Keys.DownloadId.ToEventContextKey()] = _candidate.DownloadId.ToString("D")
-                        }
-                    }
-                ]
-            });
-
-        // Act
-        await _subject
-            .TryApplyVerifiedClientStateAsync(_candidate, _downloadedInfo, _now, _now, null, default)
-            .ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            manager => manager.ExecuteAsync(
-                It.IsAny<JobEnqueueRequest>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Test]
-    public async Task TryApplyVerifiedClientStateAsync_EnqueuesImport_WhenEventContextKeyIsNotPrefixed()
-    {
-        // Arrange
-        var execution = new JobExecution
-        {
-            JobType = "DownloadImportItem",
-            Scope = JobScope.Content,
-            Status = JobExecutionStatus.Queued,
-            CreatedAt = DateTime.UtcNow,
-            TriggerContext = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [MagpieEvents.Keys.DownloadId] = _candidate.DownloadId.ToString("D")
-            }
-        };
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = [execution] });
-
-        // Act
-        await _subject
-            .TryApplyVerifiedClientStateAsync(_candidate, _downloadedInfo, _now, _now, null, default)
-            .ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            manager => manager.ExecuteAsync(
-                It.IsAny<JobEnqueueRequest>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task TryApplyVerifiedClientStateAsync_QueriesDispatchedStatuses_WhenDownloadCompletes()
-    {
-        // Arrange
-        JobExecutionQuery? capturedQuery = null;
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<JobExecutionQuery, PagingParameter, SortParameter?, CancellationToken>(
-                (query, paging, sort, cancellationToken) => capturedQuery = query)
-            .ReturnsAsync(new PagedList<JobExecution>());
-
         // Act
         await _subject
             .TryApplyVerifiedClientStateAsync(_candidate, _downloadedInfo, _now, _now, null, default)
@@ -1510,59 +1568,14 @@ public class DownloadServiceTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(capturedQuery, Is.Not.Null);
-            Assert.That(capturedQuery!.JobType, Is.EqualTo("DownloadImportItem"));
-            Assert.That(
-                capturedQuery.Statuses,
-                Is.EquivalentTo(
-                [
-                    JobExecutionStatus.Queued,
-                    JobExecutionStatus.Running,
-                    JobExecutionStatus.Completed
-                ]));
+            Assert.That(_refreshedDownloadId, Is.EqualTo(new Guid("65bf4f33-77dc-4ae7-a4b9-9d89012df7b6")));
+            Assert.That(_refreshedStatus, Is.EqualTo(DownloadStatus.Downloaded));
         }
     }
 
     [Test]
-    public async Task TryApplyVerifiedClientStateAsync_EnqueuesImport_WhenExecutionMatchesDifferentDownload()
+    public async Task TryApplyVerifiedClientStateAsync_DoesNotEnqueueImport_WhenTheDownloadCompletes()
     {
-        // Arrange
-        var seededId = Guid.NewGuid();
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution>
-            {
-                Items =
-                [
-                    new JobExecution
-                    {
-                        JobType = "DownloadImportItem",
-                        Scope = JobScope.Content,
-                        Status = JobExecutionStatus.Completed,
-                        CreatedAt = DateTime.UtcNow,
-                        Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-                        {
-                            ["downloadId"] = seededId.ToString("D")
-                        }
-                    },
-                    new JobExecution
-                    {
-                        JobType = "DownloadImportItem",
-                        Scope = JobScope.Content,
-                        Status = JobExecutionStatus.Queued,
-                        CreatedAt = DateTime.UtcNow,
-                        TriggerContext = new Dictionary<string, string>(StringComparer.Ordinal)
-                        {
-                            [MagpieEvents.Keys.DownloadId.ToEventContextKey()] = seededId.ToString("D")
-                        }
-                    }
-                ]
-            });
-
         // Act
         await _subject
             .TryApplyVerifiedClientStateAsync(_candidate, _downloadedInfo, _now, _now, null, default)
@@ -1573,6 +1586,6 @@ public class DownloadServiceTests
             manager => manager.ExecuteAsync(
                 It.IsAny<JobEnqueueRequest>(),
                 It.IsAny<CancellationToken>()),
-            Times.Once);
+            Times.Never);
     }
 }

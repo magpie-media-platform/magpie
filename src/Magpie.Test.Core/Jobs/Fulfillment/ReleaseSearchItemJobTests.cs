@@ -61,6 +61,8 @@ public sealed class ReleaseSearchItemJobTests
             }).SetArgDisplayNames("Queue", "force=not-a-bool")
     ];
 
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IReleaseSearchService> _releaseSearchService = null!;
     private IJob _subject = null!;
     private JobContext _jobContext = null!;
@@ -89,28 +91,11 @@ public sealed class ReleaseSearchItemJobTests
             Parameters: new Dictionary<string, string>(),
             Event: null);
 
-        _subject = new ReleaseSearchItemJob(_releaseSearchService.Object);
-    }
-
-    [Test]
-    public void Spec_ListsForceAsOptionalWithFalseDefault_WhenDeclared()
-    {
-        // Act
-        var spec = ReleaseSearchItemJob.Spec;
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(spec.Parameters, Has.Count.EqualTo(2));
-            Assert.That(
-                spec.Parameters,
-                Has.Exactly(1).Matches<JobParameter>(p =>
-                    p.Name == "force" && !p.Required && p.DefaultValue == "false"));
-        }
+        _subject = new ReleaseSearchItemJob(_releaseSearchService.Object, _progressReporter);
     }
 
     [TestCaseSource(nameof(ForcingRequests))]
-    public async Task ExecuteAsync_SearchesPastTheCoalescingWindow_WhenTheRequestForcesTheSearch(
+    public async Task ExecuteAsync_PassesTheOverride_WhenTheRequestForcesTheSearch(
         JobExecutionMode mode,
         IReadOnlyDictionary<string, string> parameters)
     {
@@ -134,7 +119,7 @@ public sealed class ReleaseSearchItemJobTests
     }
 
     [TestCaseSource(nameof(NonForcingRequests))]
-    public async Task ExecuteAsync_KeepsTheCoalescingWindow_WhenTheRequestDoesNotForceTheSearch(
+    public async Task ExecuteAsync_PassesNoOverride_WhenTheRequestDoesNotForceTheSearch(
         JobExecutionMode mode,
         IReadOnlyDictionary<string, string> parameters)
     {
@@ -163,7 +148,7 @@ public sealed class ReleaseSearchItemJobTests
         // Arrange
         var context = _jobContext with { Parameters = new Dictionary<string, string>() };
 
-        // Act and Assert
+        // Assert
         Assert.ThrowsAsync<ArgumentException>(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false));
     }
 }

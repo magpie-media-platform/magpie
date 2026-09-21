@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 
 using Magpie.Models.Patch;
 
@@ -33,4 +34,15 @@ public sealed record ExtensionPatch
     /// The patch for the position in the load order.
     /// </summary>
     public ScalarPatch<int>? LoadOrder { get; init; }
+
+    /// <summary>
+    /// The patch for whether the extension is enabled.
+    /// </summary>
+    public ScalarPatch<bool>? Enabled { get; init; }
+
+    /// <summary>
+    /// The patch for the reason that the extension is disabled.
+    /// </summary>
+    [JsonIgnore]
+    public ScalarPatch<string?>? DisabledReason { get; init; }
 }

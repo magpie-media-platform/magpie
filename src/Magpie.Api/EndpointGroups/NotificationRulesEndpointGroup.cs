@@ -95,7 +95,7 @@ internal sealed class NotificationRulesEndpointGroup : IApiEndpointGroup
         var response = await RedactSecretsAsync(notificationService, created, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", response);
+        return Results.Created($"/api/{Name}/{created.Id}", response);
     }
 
     [MagpieCommand("test-settings", "POST", "test", "Test unsaved notification rule settings")]

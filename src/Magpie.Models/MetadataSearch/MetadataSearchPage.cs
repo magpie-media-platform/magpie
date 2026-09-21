@@ -10,7 +10,7 @@ public sealed record MetadataSearchPage
     /// <summary>
     /// An unsupported search result.
     /// </summary>
-    public static MetadataSearchPage NotSupported { get; } = new()
+    public static MetadataSearchPage NotSupported => new()
     {
         Supported = false,
         Matches = [],
@@ -18,22 +18,22 @@ public sealed record MetadataSearchPage
     };
 
     /// <summary>
-    /// Warning messages.
+    /// Warnings for failed or incomplete searches, not valid empty results.
     /// </summary>
-    public IReadOnlyList<string> Warnings { get; init; } = [];
+    public IReadOnlyList<string> Warnings { get; set; } = [];
 
     /// <summary>
     /// Whether the provider supports the search.
     /// </summary>
-    public required bool Supported { get; init; }
+    public required bool Supported { get; set; }
 
     /// <summary>
     /// Search candidates.
     /// </summary>
-    public required IReadOnlyList<MetadataSearchCandidate> Matches { get; init; }
+    public required IReadOnlyList<MetadataSearchCandidate> Matches { get; set; }
 
     /// <summary>
     /// Paging state.
     /// </summary>
-    public required ProviderSearchPageInfo PageInfo { get; init; }
+    public required ProviderSearchPageInfo PageInfo { get; set; }
 }

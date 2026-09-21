@@ -14,7 +14,13 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiGet, apiPatch, apiPost, apiDelete } from '@/lib/api';
-import { countConfiguredIndexerInstances, useIndexers, type ApiIndexer, type ApiIndexerFeed } from './useIndexers';
+import {
+    countConfiguredIndexerInstances,
+    useIndexers,
+    useIndexerConnectionMutations,
+    type ApiIndexer,
+    type ApiIndexerFeed,
+} from './useIndexers';
 
 const mockApiIndexers: ApiIndexer[] = [
     {
@@ -315,7 +321,7 @@ describe('useIndexers', () => {
                 await result.current.toggleFeedEnabled('feed-2', true);
             });
 
-            expect(mockApiPatch).toHaveBeenCalledWith('/indexer-feeds/feed-2', { enabled: true });
+            expect(mockApiPatch).toHaveBeenCalledWith('/indexer-feeds/feed-2', { enabled: { value: true } });
         });
 
         it('should disable a feed', async () => {
@@ -342,7 +348,7 @@ describe('useIndexers', () => {
                 await result.current.toggleFeedEnabled('feed-1', false);
             });
 
-            expect(mockApiPatch).toHaveBeenCalledWith('/indexer-feeds/feed-1', { enabled: false });
+            expect(mockApiPatch).toHaveBeenCalledWith('/indexer-feeds/feed-1', { enabled: { value: false } });
         });
 
         it('should sync a feed and invalidate the feeds query', async () => {
@@ -511,5 +517,22 @@ describe('useIndexers', () => {
 
             expect(result.current.isLoading).toBe(false);
         });
+    });
+});
+
+describe('useIndexerConnectionMutations', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('posts to the targeted indexer connection test route', async () => {
+        vi.mocked(apiPost).mockResolvedValue({ success: true, message: 'Connected' });
+        const { result } = renderHook(() => useIndexerConnectionMutations(), { wrapper: createWrapper() });
+
+        await act(async () => {
+            await result.current.testConnection('idx-1', 'idx-conn-1');
+        });
+
+        expect(apiPost).toHaveBeenCalledWith('/indexers/idx-1/connections/idx-conn-1/test');
     });
 });

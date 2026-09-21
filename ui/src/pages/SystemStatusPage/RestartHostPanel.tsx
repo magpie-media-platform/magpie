@@ -16,18 +16,8 @@ import { useHostRestart } from '@/hooks/useHostRestart';
 import './RestartHostPanel.css';
 
 export function RestartHostPanel() {
-    const {
-        capabilityLoading,
-        canRestart,
-        unavailableReason,
-        phase,
-        error,
-        openConfirm,
-        cancelConfirm,
-        requestRestart,
-        reset,
-        recover,
-    } = useHostRestart();
+    const { capabilityLoading, canRestart, phase, error, openConfirm, cancelConfirm, requestRestart, reset, recover } =
+        useHostRestart();
 
     const isBusy = phase === 'restarting' || phase === 'reconnecting';
 
@@ -49,8 +39,7 @@ export function RestartHostPanel() {
                     icon={<WarningIcon weight="fill" aria-hidden="true" />}
                     data-testid="restart-unavailable"
                 >
-                    {unavailableReason ??
-                        'This deployment has no supervisor to relaunch Magpie, so a restart cannot be performed.'}
+                    This deployment has no supervisor to relaunch Magpie, so a restart cannot be performed.
                 </Alert>
             )}
 
@@ -72,9 +61,7 @@ export function RestartHostPanel() {
                     disabled={capabilityLoading || !canRestart || isBusy}
                     data-action="restart-host"
                     title={
-                        !canRestart && !capabilityLoading
-                            ? (unavailableReason ?? 'Restart is not available in this deployment.')
-                            : undefined
+                        !canRestart && !capabilityLoading ? 'Restart is not available in this deployment.' : undefined
                     }
                 >
                     <ArrowClockwiseIcon weight="bold" aria-hidden="true" />

@@ -27,12 +27,23 @@ export interface MobileListToolbarProps extends Omit<ComponentPropsWithoutRef<'d
     onSortingChange: (sorting: SortingState) => void;
     selection?: MobileListSelectionControl;
     filterActions?: ReactNode;
+    allowUnsorted?: boolean;
     disabled?: boolean;
 }
 
 export const MobileListToolbar = forwardRef<HTMLDivElement, MobileListToolbarProps>(
     (
-        { sorting, sortOptions, onSortingChange, selection, filterActions, disabled = false, className, ...props },
+        {
+            sorting,
+            sortOptions,
+            onSortingChange,
+            selection,
+            filterActions,
+            disabled = false,
+            allowUnsorted = false,
+            className,
+            ...props
+        },
         ref,
     ) => {
         const { activeOption, isDescending, selectField, toggleDirection } = useListSorting(
@@ -41,10 +52,7 @@ export const MobileListToolbar = forwardRef<HTMLDivElement, MobileListToolbarPro
             onSortingChange,
         );
 
-        if (!activeOption) {
-            return null;
-        }
-
+        const hasSort = !allowUnsorted || sorting.length > 0;
         const classes = ['mobile-list-toolbar', className].filter(Boolean).join(' ');
         const DirectionIcon = isDescending ? SortDescendingIcon : SortAscendingIcon;
 
@@ -70,34 +78,36 @@ export const MobileListToolbar = forwardRef<HTMLDivElement, MobileListToolbarPro
 
                 {filterActions && <div className="mobile-list-toolbar__filter-actions">{filterActions}</div>}
 
-                <div className="mobile-list-toolbar__sorting" role="group" aria-label="Sort list">
-                    <Select value={activeOption.id} onValueChange={selectField} disabled={disabled}>
-                        <SelectTrigger size="sm" aria-label="Sort by field" data-sort="field">
-                            {activeOption.label}
-                        </SelectTrigger>
-                        <SelectContent>
-                            {sortOptions.map((option) => (
-                                <SelectItem key={option.id} value={option.id}>
-                                    {option.label}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+                {activeOption && (
+                    <div className="mobile-list-toolbar__sorting" role="group" aria-label="Sort list">
+                        <Select value={hasSort ? activeOption.id : ''} onValueChange={selectField} disabled={disabled}>
+                            <SelectTrigger size="sm" aria-label="Sort by field" data-sort="field">
+                                {hasSort ? activeOption.label : 'Sort by'}
+                            </SelectTrigger>
+                            <SelectContent>
+                                {sortOptions.map((option) => (
+                                    <SelectItem key={option.id} value={option.id}>
+                                        {option.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
 
-                    <Button
-                        variant="ghost"
-                        size="sm"
-                        className="mobile-list-toolbar__direction"
-                        onClick={toggleDirection}
-                        disabled={disabled}
-                        aria-label={`Sort ${isDescending ? 'ascending' : 'descending'}`}
-                        title={isDescending ? 'Descending' : 'Ascending'}
-                        data-sort="direction"
-                        data-direction={isDescending ? 'desc' : 'asc'}
-                    >
-                        <DirectionIcon weight="bold" aria-hidden="true" />
-                    </Button>
-                </div>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="mobile-list-toolbar__direction"
+                            onClick={toggleDirection}
+                            disabled={disabled || !hasSort}
+                            aria-label={`Sort ${isDescending ? 'ascending' : 'descending'}`}
+                            title={isDescending ? 'Descending' : 'Ascending'}
+                            data-sort="direction"
+                            data-direction={isDescending ? 'desc' : 'asc'}
+                        >
+                            <DirectionIcon weight="bold" aria-hidden="true" />
+                        </Button>
+                    </div>
+                )}
             </div>
         );
     },

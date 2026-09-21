@@ -1,8 +1,18 @@
 @layer reset, base, components, utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600&display=swap');
+@import url('./fonts.css');
 @import url('./tokens.css');
 @import url('./reset.css');
 @import url('./base.css');
 @import url('./motion.css');
 @import url('./utilities.css');
+
+@layer base {
+    @media (pointer: coarse) {
+        input,
+        textarea,
+        select {
+            font-size: 16px;
+        }
+    }
+}

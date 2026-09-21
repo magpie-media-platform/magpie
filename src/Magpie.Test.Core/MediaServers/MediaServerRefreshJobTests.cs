@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs;
 using Magpie.Models;
@@ -26,28 +26,15 @@ namespace Magpie.Test.Core.MediaServers;
 [TestFixture]
 public sealed class MediaServerRefreshJobTests
 {
+    private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
+
     private Mock<IMediaServerRepository> _mediaServers = null!;
     private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
-    private Mock<IRootFolderRepository> _rootFolders = null!;
+    private Mock<IContentFileService> _contentFiles = null!;
     private Mock<IMaterializedMetadataRepository> _materializedMetadata = null!;
-    private Mock<IContentTypeRegistry> _contentTypes = null!;
     private List<IMediaServerIntegration> _integrations = null!;
     private JobContext _jobContext = null!;
     private IJob _subject = null!;
-
-    private static IEnumerable<TestCaseData> EligibilityCases()
-    {
-        yield return new TestCaseData(false, true, IntegrationHealthStatus.Healthy, 0)
-            .SetName("ExecuteAsync_DoesNothing_WhenNoEnabledMediaServersExist");
-        yield return new TestCaseData(true, true, IntegrationHealthStatus.Healthy, 1)
-            .SetName("ExecuteAsync_InvokesRefresh_ForEnabledServerWithRegisteredIntegration");
-        yield return new TestCaseData(true, false, IntegrationHealthStatus.Healthy, 0)
-            .SetName("ExecuteAsync_SkipsDisabledServers");
-        yield return new TestCaseData(true, true, IntegrationHealthStatus.Unhealthy, 0)
-            .SetName("ExecuteAsync_SkipsUnhealthyServers");
-        yield return new TestCaseData(true, true, IntegrationHealthStatus.Degraded, 1)
-            .SetName("ExecuteAsync_RefreshesDegradedServers_BecauseOnlyUnhealthyIsExcluded");
-    }
 
     [SetUp]
     public void SetUp()
@@ -60,10 +47,7 @@ public sealed class MediaServerRefreshJobTests
         _contentHierarchyItems
             .Setup(r => r.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        _rootFolders = new Mock<IRootFolderRepository>();
-        _rootFolders
-            .Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((RootFolder?)null);
+        _contentFiles = new Mock<IContentFileService>();
         _materializedMetadata = new Mock<IMaterializedMetadataRepository>();
         _materializedMetadata
             .Setup(r => r.QueryAsync(
@@ -72,7 +56,6 @@ public sealed class MediaServerRefreshJobTests
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<MaterializedMetadata>());
-        _contentTypes = new Mock<IContentTypeRegistry>();
         _integrations = [];
 
         _jobContext = new JobContext(
@@ -87,40 +70,54 @@ public sealed class MediaServerRefreshJobTests
         _subject = new MediaServerRefreshJob(
             _mediaServers.Object,
             _contentHierarchyItems.Object,
-            _rootFolders.Object,
+            _contentFiles.Object,
             _materializedMetadata.Object,
             _integrations,
-            _contentTypes.Object,
-            NullLogger<MediaServerRefreshJob>.Instance);
+            NullLogger<MediaServerRefreshJob>.Instance,
+            _progressReporter);
     }
 
-    [TestCaseSource(nameof(EligibilityCases))]
+    [TestCase(
+        true,
+        IntegrationHealthStatus.Healthy,
+        1,
+        TestName = "ExecuteAsync_RefreshesTheServer_WhenItIsEnabledAndHealthy")]
+    [TestCase(
+        true,
+        IntegrationHealthStatus.Degraded,
+        1,
+        TestName = "ExecuteAsync_RefreshesTheServer_WhenItIsEnabledAndDegraded")]
+    [TestCase(
+        false,
+        IntegrationHealthStatus.Healthy,
+        0,
+        TestName = "ExecuteAsync_SkipsTheServer_WhenItIsDisabled")]
+    [TestCase(
+        true,
+        IntegrationHealthStatus.Unhealthy,
+        0,
+        TestName = "ExecuteAsync_SkipsTheServer_WhenItIsUnhealthy")]
     public async Task ExecuteAsync_RefreshesEligibleServers_WhenServerEligibilityDiffers(
-        bool seedServer,
         bool enabled,
         IntegrationHealthStatus status,
         int expectedCalls)
     {
         // Arrange
-        if (seedServer)
-        {
-            _mediaServers
-                .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
-                .ReturnsAsync([
-                    new MediaServer
-                    {
-                        Id = Guid.NewGuid(),
-                        Name = "Server",
-                        ProviderType = "fake",
-                        Enabled = enabled,
-                        Status = status,
-                        ContentTypes = [],
-                        Settings = [],
-                        CreatedAt = DateTime.UtcNow
-                    }
-                ]);
-        }
-
+        _mediaServers
+            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new MediaServer
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Server",
+                    ProviderType = "fake",
+                    Enabled = enabled,
+                    Status = status,
+                    ContentTypes = [],
+                    Settings = [],
+                    CreatedAt = DateTime.UtcNow
+                }
+            ]);
         var integration = new Mock<IMediaServerIntegration>();
         integration.SetupGet(i => i.ProviderType).Returns("fake");
         var refreshable = integration.As<IRefreshableMediaServerIntegration>();
@@ -146,6 +143,29 @@ public sealed class MediaServerRefreshJobTests
                 It.IsAny<string>(),
                 It.IsAny<CancellationToken>()),
             Times.Exactly(expectedCalls));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_RefreshesNothing_WhenNoMediaServerIsConfigured()
+    {
+        // Arrange
+        var integration = new Mock<IMediaServerIntegration>();
+        integration.SetupGet(i => i.ProviderType).Returns("fake");
+        var refreshable = integration.As<IRefreshableMediaServerIntegration>();
+        _integrations.Add(integration.Object);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        refreshable.Verify(
+            i => i.RefreshForContentAsync(
+                It.IsAny<MediaServer>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never());
     }
 
     [Test]
@@ -1022,26 +1042,9 @@ public sealed class MediaServerRefreshJobTests
         _contentHierarchyItems
             .Setup(r => r.GetLineageAsync(item.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync([item]);
-        _rootFolders
-            .Setup(r => r.GetByIdAsync(rootFolder.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(rootFolder);
-        _contentTypes
-            .Setup(registry => registry.GetDefinitionFor("type-a"))
-            .Returns(new ContentTypeDefinition
-            {
-                Slug = "type-a",
-                DisplayName = "Type A",
-                LevelDefinitions =
-                [
-                    new ContentHierarchyLevelDefinition
-                    {
-                        Slug = "root",
-                        DisplayName = "Root",
-                        CustomMetadataFields = [],
-                        Subfolder = "items"
-                    }
-                ]
-            });
+        _contentFiles
+            .Setup(service => service.GetEffectivePathAsync(item.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("D:/library/items/Item");
 
         var integration = new Mock<IMediaServerIntegration>();
         integration.SetupGet(i => i.ProviderType).Returns("fake");
@@ -1084,7 +1087,7 @@ public sealed class MediaServerRefreshJobTests
             Assert.That((string)refresh.Arguments[2], Is.EqualTo("type-a"));
             Assert.That(
                 (string)refresh.Arguments[3],
-                Is.EqualTo(Path.GetFullPath(Path.Combine(rootFolder.Path, "items", "Item"))));
+                Is.EqualTo("D:/library/items/Item"));
             Assert.That(((MediaServer)refresh.Arguments[0]).Id, Is.EqualTo(server.Id));
         }
     }

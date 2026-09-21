@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useBlocker } from 'react-router-dom';
 
-const MESSAGE = 'You have unsaved changes. Leave this page and discard them?';
+import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 
 interface UnsavedChangesRegistry {
     register: (key: symbol) => void;
@@ -46,19 +46,13 @@ export function UnsavedChangesBlocker() {
     const hasUnsavedChanges = useContext(UnsavedChangesStateContext);
     const blocker = useBlocker(hasUnsavedChanges);
 
-    useEffect(() => {
-        if (blocker.state !== 'blocked') {
-            return;
-        }
-
-        if (window.confirm(MESSAGE)) {
-            blocker.proceed();
-        } else {
-            blocker.reset();
-        }
-    }, [blocker]);
-
-    return null;
+    return (
+        <UnsavedChangesDialog
+            open={blocker.state === 'blocked'}
+            onDiscard={() => blocker.proceed?.()}
+            onCancel={() => blocker.reset?.()}
+        />
+    );
 }
 
 export function useUnsavedChangesGuard(active: boolean): void {

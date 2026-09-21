@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Models;
@@ -25,22 +26,32 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Configuration;
 
 [TestFixture]
-public class SettingsServiceValidationTests
+public sealed class SettingsServiceValidationTests
 {
+    private Mock<ITransactionManager> _transactionManager = null!;
+    private Mock<IContentHierarchyItemRepository> _hierarchy = null!;
     private ISettingsService _subject = null!;
 
     [SetUp]
     public void SetUp()
     {
+        _hierarchy = new Mock<IContentHierarchyItemRepository>();
+        _transactionManager = new Mock<ITransactionManager>();
+        _transactionManager.Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<bool>> action, CancellationToken token) => action(token));
         _subject = new SettingsService(
             new Mock<ISettingsRepository>().Object,
+            _hierarchy.Object,
+            _transactionManager.Object,
             [],
             [],
-            NullLogger<SettingsService>.Instance);
+            NullLogger<SettingsService>.Instance,
+            Mock.Of<IExtensionRepository>());
     }
 
     [Test]
-    public async Task ValidateAsync_AllValid_ReturnsValidResultWithNoIssues()
+    public async Task ValidateAsync_ReturnsValidResultWithNoIssues_WhenAllValid()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -73,7 +84,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_MissingRequired_ReportsKeyIssue()
+    public async Task ValidateAsync_ReportsKeyIssue_WhenMissingRequired()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -97,7 +108,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_RequiredPresentButWhitespace_ReportsKeyIssue()
+    public async Task ValidateAsync_ReportsKeyIssue_WhenRequiredPresentButWhitespace()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -120,7 +131,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_RequiredMissing_FallsBackToKeyWhenDisplayNameMissing()
+    public async Task ValidateAsync_FallsBackToKeyWhenDisplayNameMissing_WhenRequiredMissing()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -138,7 +149,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_NumberWithNonNumericValue_ReportsTypeIssue()
+    public async Task ValidateAsync_ReportsTypeIssue_WhenNumberWithNonNumericValue()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -162,7 +173,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_BooleanWithBadValue_ReportsTypeIssue()
+    public async Task ValidateAsync_ReportsTypeIssue_WhenBooleanWithBadValue()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -189,7 +200,7 @@ public class SettingsServiceValidationTests
     [TestCase("False")]
     [TestCase("0")]
     [TestCase("1")]
-    public async Task ValidateAsync_BooleanWithAcceptableValues_PassesValidation(string value)
+    public async Task ValidateAsync_PassesValidation_WhenBooleanWithAcceptableValues(string value)
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -207,7 +218,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_DateWithBadValue_ReportsTypeIssue()
+    public async Task ValidateAsync_ReportsTypeIssue_WhenDateWithBadValue()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -229,7 +240,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_OptionsMismatch_ReportsIssueWithJoinedOptions()
+    public async Task ValidateAsync_ReportsIssueWithJoinedOptions_WhenOptionsMismatch()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -257,7 +268,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_OptionsMatch_IsCaseInsensitive()
+    public async Task ValidateAsync_IsCaseInsensitive_WhenOptionsMatch()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -275,7 +286,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_KeysNotInSchema_AreSilentlyAllowed()
+    public async Task ValidateAsync_AcceptsUnknownKeys_WhenKeysAreNotInTheSchema()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -301,7 +312,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_OptionalEmptyValue_SkipsTypeAndOptionsChecks()
+    public async Task ValidateAsync_SkipsTypeAndOptionsChecks_WhenOptionalEmptyValue()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -324,7 +335,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_KeyMatching_IsCaseInsensitive()
+    public async Task ValidateAsync_IsCaseInsensitive_WhenKeyMatching()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -346,7 +357,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_KeyMatching_TypeChecksRespectCaseInsensitivity()
+    public async Task ValidateAsync_TypeChecksRespectCaseInsensitivity_WhenKeyMatching()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -369,7 +380,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_MultipleIssues_AreAllCollected()
+    public async Task ValidateAsync_ReturnsAllIssues_WhenMultipleFieldsAreInvalid()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -398,7 +409,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_MappingsListEmptyArray_PassesAsTyped()
+    public async Task ValidateAsync_PassesAsTyped_WhenMappingsListEmptyArray()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -420,7 +431,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_MappingsListNotJsonArray_ReportsTypeMismatch()
+    public async Task ValidateAsync_ReportsTypeMismatch_WhenMappingsListNotJsonArray()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -444,7 +455,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_MappingsListRowMissingRequiredColumn_ReportsRowScopedIssue()
+    public async Task ValidateAsync_ReportsRowScopedIssue_WhenMappingsListRowMissingRequiredColumn()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -483,7 +494,7 @@ public class SettingsServiceValidationTests
     }
 
     [Test]
-    public async Task ValidateAsync_MappingsListAllRequiredColumnsPresent_Passes()
+    public async Task ValidateAsync_Passes_WhenMappingsListAllRequiredColumnsPresent()
     {
         // Arrange
         var schema = new List<SettingSchemaDefinition> {
@@ -556,9 +567,9 @@ public class SettingsServiceValidationTests
         var definitionId = Guid.NewGuid();
         var loadedId = Guid.NewGuid();
         var groupName = "provider";
-        var provider = new Mock<IExtensionSettingsSchemaProvider>();
-        provider.Setup(value => value.GetSettingsGroups())
-            .Returns(
+        var provider = new TestSettingsSchemaProvider
+        {
+            Groups =
             [
                 new ExtensionSettingsGroupDefinition
                 {
@@ -566,7 +577,8 @@ public class SettingsServiceValidationTests
                     Name = groupName,
                     SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
                 }
-            ]);
+            ]
+        };
         var settingsRepository = new Mock<ISettingsRepository>();
         settingsRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
@@ -594,12 +606,14 @@ public class SettingsServiceValidationTests
                     Version = "1.0.0",
                     Name = "Provider",
                     FilePath = "provider.dll",
-                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                    AssemblyName = "Magpie.Test.Core"
                 }
             ]);
         var subject = new SettingsService(
             settingsRepository.Object,
-            [provider.Object],
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [provider],
             [],
             NullLogger<SettingsService>.Instance,
             extensionRepository.Object);
@@ -629,9 +643,9 @@ public class SettingsServiceValidationTests
         var definitionId = Guid.NewGuid();
         var loadedId = Guid.NewGuid();
         var groupName = "provider";
-        var provider = new Mock<IExtensionSettingsSchemaProvider>();
-        provider.Setup(value => value.GetSettingsGroups())
-            .Returns(
+        var provider = new TestSettingsSchemaProvider
+        {
+            Groups =
             [
                 new ExtensionSettingsGroupDefinition
                 {
@@ -639,7 +653,8 @@ public class SettingsServiceValidationTests
                     Name = groupName,
                     SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
                 }
-            ]);
+            ]
+        };
         var settingsRepository = new Mock<ISettingsRepository>();
         settingsRepository.Setup(value => value.GetByIdAsync(
             It.Is<SettingsGroupLookupKey>(key => key.ExtensionId == loadedId && key.Name == groupName),
@@ -665,12 +680,14 @@ public class SettingsServiceValidationTests
                     Version = "1.0.0",
                     Name = "Provider",
                     FilePath = "provider.dll",
-                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                    AssemblyName = "Magpie.Test.Core"
                 }
             ]);
         var subject = new SettingsService(
             settingsRepository.Object,
-            [provider.Object],
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [provider],
             [],
             NullLogger<SettingsService>.Instance,
             extensionRepository.Object);
@@ -700,9 +717,9 @@ public class SettingsServiceValidationTests
         var definitionId = Guid.NewGuid();
         var loadedId = Guid.NewGuid();
         var groupName = "provider";
-        var provider = new Mock<IExtensionSettingsSchemaProvider>();
-        provider.Setup(value => value.GetSettingsGroups())
-            .Returns(
+        var provider = new TestSettingsSchemaProvider
+        {
+            Groups =
             [
                 new ExtensionSettingsGroupDefinition
                 {
@@ -710,7 +727,8 @@ public class SettingsServiceValidationTests
                     Name = groupName,
                     SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
                 }
-            ]);
+            ]
+        };
         var settingsRepository = new Mock<ISettingsRepository>();
         settingsRepository
             .Setup(value => value.GetByIdAsync(
@@ -732,12 +750,14 @@ public class SettingsServiceValidationTests
                     Version = "1.0.0",
                     Name = "Provider",
                     FilePath = "provider.dll",
-                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                    AssemblyName = "Magpie.Test.Core"
                 }
             ]);
         var subject = new SettingsService(
             settingsRepository.Object,
-            [provider.Object],
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [provider],
             [],
             NullLogger<SettingsService>.Instance,
             extensionRepository.Object);
@@ -777,9 +797,9 @@ public class SettingsServiceValidationTests
         var definitionId = Guid.NewGuid();
         var loadedId = Guid.NewGuid();
         var groupName = "provider";
-        var provider = new Mock<IExtensionSettingsSchemaProvider>();
-        provider.Setup(value => value.GetSettingsGroups())
-            .Returns(
+        var provider = new TestSettingsSchemaProvider
+        {
+            Groups =
             [
                 new ExtensionSettingsGroupDefinition
                 {
@@ -787,7 +807,8 @@ public class SettingsServiceValidationTests
                     Name = groupName,
                     SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
                 }
-            ]);
+            ]
+        };
         var tester = new Mock<IExtensionConfigurationTester>();
         tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
         tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
@@ -805,12 +826,14 @@ public class SettingsServiceValidationTests
                     Version = "1.0.0",
                     Name = "Provider",
                     FilePath = "provider.dll",
-                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                    AssemblyName = "Magpie.Test.Core"
                 }
             ]);
         var subject = new SettingsService(
             new Mock<ISettingsRepository>().Object,
-            [provider.Object],
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [provider],
             [tester.Object],
             NullLogger<SettingsService>.Instance,
             extensionRepository.Object);
@@ -830,17 +853,17 @@ public class SettingsServiceValidationTests
             Times.Once());
     }
 
-    [TestCase(true)]
-    [TestCase(false)]
-    public async Task ListGroupsAsync_SetsCanTest_FromConfigurationTesterRegistration(bool hasTester)
+    [TestCase(true, TestName = "ListGroupsAsync_SetsCanTest_WhenAConfigurationTesterIsRegistered")]
+    [TestCase(false, TestName = "ListGroupsAsync_ClearsCanTest_WhenNoConfigurationTesterIsRegistered")]
+    public async Task ListGroupsAsync_SetsCanTest_WhenConfigurationTesterRegistrationIsProvided(bool hasTester)
     {
         // Arrange
         var definitionId = Guid.NewGuid();
         var loadedId = Guid.NewGuid();
         var groupName = "provider";
-        var provider = new Mock<IExtensionSettingsSchemaProvider>();
-        provider.Setup(value => value.GetSettingsGroups())
-            .Returns(
+        var provider = new TestSettingsSchemaProvider
+        {
+            Groups =
             [
                 new ExtensionSettingsGroupDefinition
                 {
@@ -848,7 +871,8 @@ public class SettingsServiceValidationTests
                     Name = groupName,
                     SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
                 }
-            ]);
+            ]
+        };
         var settingsRepository = new Mock<ISettingsRepository>();
         settingsRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
@@ -866,21 +890,18 @@ public class SettingsServiceValidationTests
                     Version = "1.0.0",
                     Name = "Provider",
                     FilePath = "provider.dll",
-                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                    AssemblyName = "Magpie.Test.Core"
                 }
             ]);
-        IExtensionConfigurationTester[] testers = [];
-        if (hasTester)
-        {
-            var tester = new Mock<IExtensionConfigurationTester>();
-            tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
-            tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
-            testers = [tester.Object];
-        }
-
+        var tester = new Mock<IExtensionConfigurationTester>();
+        tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
+        tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
+        IExtensionConfigurationTester[] testers = hasTester ? [tester.Object] : [];
         var subject = new SettingsService(
             settingsRepository.Object,
-            [provider.Object],
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [provider],
             testers,
             NullLogger<SettingsService>.Instance,
             extensionRepository.Object);
@@ -893,17 +914,17 @@ public class SettingsServiceValidationTests
         Assert.That(detail.CanTest, Is.EqualTo(hasTester));
     }
 
-    [TestCase(true)]
-    [TestCase(false)]
-    public async Task GetExtensionGroupAsync_SetsCanTest_FromConfigurationTesterRegistration(bool hasTester)
+    [TestCase(true, TestName = "GetExtensionGroupAsync_SetsCanTest_WhenAConfigurationTesterIsRegistered")]
+    [TestCase(false, TestName = "GetExtensionGroupAsync_ClearsCanTest_WhenNoConfigurationTesterIsRegistered")]
+    public async Task GetExtensionGroupAsync_SetsCanTest_WhenConfigurationTesterRegistrationIsProvided(bool hasTester)
     {
         // Arrange
         var definitionId = Guid.NewGuid();
         var loadedId = Guid.NewGuid();
         var groupName = "provider";
-        var provider = new Mock<IExtensionSettingsSchemaProvider>();
-        provider.Setup(value => value.GetSettingsGroups())
-            .Returns(
+        var provider = new TestSettingsSchemaProvider
+        {
+            Groups =
             [
                 new ExtensionSettingsGroupDefinition
                 {
@@ -911,7 +932,8 @@ public class SettingsServiceValidationTests
                     Name = groupName,
                     SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
                 }
-            ]);
+            ]
+        };
         var settingsRepository = new Mock<ISettingsRepository>();
         settingsRepository.Setup(value => value.GetByIdAsync(
             It.IsAny<SettingsGroupLookupKey>(),
@@ -927,21 +949,18 @@ public class SettingsServiceValidationTests
                     Version = "1.0.0",
                     Name = "Provider",
                     FilePath = "provider.dll",
-                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                    AssemblyName = "Magpie.Test.Core"
                 }
             ]);
-        IExtensionConfigurationTester[] testers = [];
-        if (hasTester)
-        {
-            var tester = new Mock<IExtensionConfigurationTester>();
-            tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
-            tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
-            testers = [tester.Object];
-        }
-
+        var tester = new Mock<IExtensionConfigurationTester>();
+        tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
+        tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
+        IExtensionConfigurationTester[] testers = hasTester ? [tester.Object] : [];
         var subject = new SettingsService(
             settingsRepository.Object,
-            [provider.Object],
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [provider],
             testers,
             NullLogger<SettingsService>.Instance,
             extensionRepository.Object);
@@ -952,5 +971,39 @@ public class SettingsServiceValidationTests
         // Assert
         Assert.That(detail, Is.Not.Null);
         Assert.That(detail!.CanTest, Is.EqualTo(hasTester));
+    }
+
+    [TestCase("monitoring", "system-default", 1)]
+    [TestCase("monitoring", "other", 0)]
+    [TestCase("other", "system-default", 0)]
+    public async Task PatchSystemGroupAsync_RecomputesHierarchy_WhenMonitoringDefaultChanges(
+        string group, string key, int expectedCalls)
+    {
+        // Arrange
+        var repository = new Mock<ISettingsRepository>();
+        repository.Setup(store => store.PatchAsync(
+                It.IsAny<SettingsGroupPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var subject = new SettingsService(repository.Object, _hierarchy.Object, _transactionManager.Object,
+            [], [], NullLogger<SettingsService>.Instance, Mock.Of<IExtensionRepository>());
+        var patch = new SettingsGroupPatch
+        {
+            Name = group,
+            Settings = new() { Add = new Dictionary<string, string> { [key] = "false" } }
+        };
+
+        // Act
+        await subject.PatchSystemGroupAsync(group, patch, Guid.NewGuid()).ConfigureAwait(false);
+
+        // Assert
+        _hierarchy.Verify(store => store.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedCalls));
+    }
+
+    private sealed class TestSettingsSchemaProvider : IExtensionSettingsSchemaProvider
+    {
+        public IEnumerable<ExtensionSettingsGroupDefinition> Groups { get; set; } = [];
+
+        public IEnumerable<ExtensionSettingsGroupDefinition> GetSettingsGroups() => Groups;
     }
 }

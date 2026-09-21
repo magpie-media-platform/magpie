@@ -61,6 +61,10 @@
             height: 100%;
             max-height: none;
             border-radius: 0;
+            padding-top: env(safe-area-inset-top, 0);
+            padding-bottom: env(safe-area-inset-bottom, 0);
+
+            --overlay-close-top: calc(var(--space-md) + env(safe-area-inset-top, 0));
 
             &[data-state='open'] {
                 animation-name: dialog-slide-up-in;
@@ -83,6 +87,7 @@
             max-height: calc(100vh - var(--space-2xl));
             border-bottom-left-radius: 0;
             border-bottom-right-radius: 0;
+            padding-bottom: env(safe-area-inset-bottom, 0);
 
             &[data-state='open'] {
                 animation-name: dialog-slide-up-in;

@@ -105,6 +105,7 @@ internal sealed class ContentMetadataProvider(
             mbid,
             LookupProfile.Hydration,
             settings,
+            required: false,
             cancellationToken).ConfigureAwait(false);
         if (groupEntity?.ReleaseGroup is not { } releaseGroup)
         {
@@ -122,6 +123,7 @@ internal sealed class ContentMetadataProvider(
             releaseMbid,
             LookupProfile.Hydration,
             settings,
+            required: false,
             cancellationToken).ConfigureAwait(false);
         var release = releaseEntity?.Release;
         var labels = await GetLabelsAsync(release, settings, cancellationToken).ConfigureAwait(false);
@@ -145,6 +147,7 @@ internal sealed class ContentMetadataProvider(
             mbid,
             LookupProfile.Hydration,
             settings,
+            required: false,
             cancellationToken).ConfigureAwait(false);
         return entity?.Recording is { } recording
             ? recording.TrackSubjectRelationships(timeProvider.GetUtcNow().UtcDateTime)
@@ -168,6 +171,7 @@ internal sealed class ContentMetadataProvider(
                 mbid,
                 LookupProfile.Hydration,
                 settings,
+                required: false,
                 cancellationToken).ConfigureAwait(false);
             if (entity?.Label is { } label)
             {
@@ -194,6 +198,7 @@ internal sealed class ContentMetadataProvider(
             mbid,
             LookupProfile.Hydration,
             settings,
+            required: true,
             cancellationToken).ConfigureAwait(false);
         if (entity?.Artist is not { } artist)
         {
@@ -218,6 +223,12 @@ internal sealed class ContentMetadataProvider(
                 cancellationToken).ConfigureAwait(false);
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } page })
             {
+                if (fetched.Outcome != FetchOutcome.NotFound)
+                {
+                    throw new InvalidOperationException(
+                        $"MusicBrainz could not browse the release groups of {mbid}: {fetched.Outcome}.");
+                }
+
                 return null;
             }
 
@@ -262,6 +273,7 @@ internal sealed class ContentMetadataProvider(
             mbid,
             LookupProfile.Hydration,
             settings,
+            required: true,
             cancellationToken).ConfigureAwait(false);
         if (groupEntity?.ReleaseGroup is not { } releaseGroup)
         {
@@ -277,6 +289,7 @@ internal sealed class ContentMetadataProvider(
                 releaseMbid,
                 LookupProfile.Hydration,
                 settings,
+                required: false,
                 cancellationToken).ConfigureAwait(false);
             release = releaseEntity?.Release;
         }
@@ -310,6 +323,7 @@ internal sealed class ContentMetadataProvider(
             mbid,
             LookupProfile.Hydration,
             settings,
+            required: true,
             cancellationToken).ConfigureAwait(false);
         if (entity?.Recording is not { } recording)
         {
@@ -327,6 +341,7 @@ internal sealed class ContentMetadataProvider(
         string mbid,
         LookupProfile profile,
         Settings settings,
+        bool required,
         CancellationToken cancellationToken)
     {
         var key = new EntityCacheKey { Kind = kind, Mbid = mbid, Profile = profile };
@@ -334,6 +349,11 @@ internal sealed class ContentMetadataProvider(
             key,
             token => client.GetEntityAsync(key, settings, token),
             cancellationToken).ConfigureAwait(false);
+        if (required && fetched.Outcome is not FetchOutcome.Success and not FetchOutcome.NotFound)
+        {
+            throw new InvalidOperationException($"MusicBrainz could not read {kind} {mbid}: {fetched.Outcome}.");
+        }
+
         return fetched.Outcome == FetchOutcome.Success ? fetched.Value : null;
     }
 }

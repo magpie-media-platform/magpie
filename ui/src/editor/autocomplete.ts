@@ -108,17 +108,16 @@ function findFieldName(context: CompletionContext): string | null {
 
 function findCollectionContext(context: CompletionContext, registry: FieldRegistry): CollectionFieldDef | null {
     const tree = syntaxTree(context.state);
-    let node = tree.resolveInner(context.pos, -1);
+    const resolved = tree.resolveInner(context.pos, -1);
 
-    while (node.parent) {
-        if (node.parent.name === 'CollectionExpr') {
-            const idNode = node.parent.getChild('Identifier');
+    for (let node: typeof resolved | null = resolved; node; node = node.parent) {
+        if (node.name === 'CollectionExpr') {
+            const idNode = node.getChild('Identifier');
             if (idNode) {
                 const fieldName = context.state.sliceDoc(idNode.from, idNode.to);
                 return getCollectionField(registry, fieldName) ?? null;
             }
         }
-        node = node.parent;
     }
 
     return null;
@@ -128,7 +127,7 @@ function getCompletionContext(
     context: CompletionContext,
     registry: FieldRegistry,
 ): {
-    kind: 'field' | 'operator' | 'value' | 'collectionOp' | 'itemField' | 'itemValue' | 'none';
+    kind: 'field' | 'operator' | 'value' | 'collectionOp' | 'itemField' | 'none';
     fieldName?: string;
     collectionField?: CollectionFieldDef;
 } {
@@ -137,15 +136,25 @@ function getCompletionContext(
     const nodeName = node.name;
     const parentName = node.parent?.name ?? '';
 
+    const beforeCursor = context.state.sliceDoc(0, context.pos);
+    const quoteTokens = beforeCursor.match(/\\.|"/g) ?? [];
+    if (quoteTokens.filter((token) => token === '"').length % 2 !== 0) {
+        return { kind: 'none' };
+    }
+    for (let current: typeof node | null = node; current; current = current.parent) {
+        if (current.name === 'String' || (current.name === 'Value' && current.parent?.name !== 'ItemValue')) {
+            return { kind: 'none' };
+        }
+    }
+
     const collField = findCollectionContext(context, registry);
     if (collField) {
         if (parentName === 'ItemField' && (nodeName === 'ItemOp' || node.prevSibling?.name === 'ItemOp')) {
-            return { kind: 'itemValue', collectionField: collField };
+            return { kind: 'none' };
         }
         return { kind: 'itemField', collectionField: collField };
     }
 
-    const beforeCursor = context.state.sliceDoc(0, context.pos);
     const valueMatch = beforeCursor.match(/(?:^|[\s(])([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|!=)\s*$/);
     if (valueMatch && getScalarField(registry, valueMatch[1])) {
         return { kind: 'value', fieldName: valueMatch[1] };
@@ -163,12 +172,6 @@ function getCompletionContext(
             }
             if (nodeName === 'Identifier' && node.from === node.parent!.firstChild?.from) {
                 return { kind: 'field' };
-            }
-        }
-        if (parentName === 'CollectionExpr') {
-            const prevSibling = node.prevSibling;
-            if (prevSibling?.name === 'CollectionOp') {
-                return { kind: 'value', fieldName };
             }
         }
     }
@@ -191,7 +194,7 @@ function getCompletionContext(
         }
     }
 
-    if (context.pos === 0 || /\s/.test(context.state.sliceDoc(context.pos - 1, context.pos))) {
+    if (context.pos === 0 || /[\s(]/.test(context.state.sliceDoc(context.pos - 1, context.pos))) {
         return { kind: 'field' };
     }
 
@@ -237,12 +240,7 @@ export function filterQueryAutocomplete(registry: FieldRegistry) {
                     options = [...itemFieldCompletions(ctx.collectionField), ...keywordCompletions()];
                 }
                 break;
-            case 'itemValue':
-                break;
             case 'none':
-                if (context.explicit) {
-                    options = [...fieldCompletions(registry), ...keywordCompletions()];
-                }
                 break;
         }
 

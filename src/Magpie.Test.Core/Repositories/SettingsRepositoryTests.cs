@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -12,12 +13,12 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -26,7 +27,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class SettingsRepositoryTests
+public sealed class SettingsRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private ISettingsRepository _subject = null!;
@@ -76,7 +77,9 @@ public class SettingsRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _publishedEvents = [];
@@ -90,9 +93,9 @@ public class SettingsRepositoryTests
             _context,
             auditRecordRepository,
             transactionManager,
-            Mock.Of<IContentHierarchyItemRepository>(),
             eventBus.Object,
-            loggerFactory.CreateLogger<SettingsRepository>());
+            loggerFactory.CreateLogger<SettingsRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -311,7 +314,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_CreatesSettingsGroup_WithExtensionId()
+    public async Task PatchAsync_CreatesSettingsGroup_WhenExtensionIdIsProvided()
     {
         // Arrange
         var patch = new SettingsGroupPatch
@@ -337,7 +340,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_AddsSettings_ToNewGroup()
+    public async Task PatchAsync_AddsSettings_WhenTheGroupIsNew()
     {
         // Arrange
         var settingsToAdd = new Dictionary<string, string>
@@ -377,7 +380,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_AddsSettings_ToExistingGroup()
+    public async Task PatchAsync_AddsSettings_WhenTheGroupExists()
     {
         // Arrange
         var group = new SettingsGroup
@@ -526,7 +529,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_UpdatesModifiedFields_OnExistingGroup()
+    public async Task PatchAsync_UpdatesModifiedFields_WhenTheGroupExists()
     {
         // Arrange
         var group = new SettingsGroup
@@ -561,7 +564,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_CreatesAuditRecord_ForNewGroup()
+    public async Task PatchAsync_CreatesAuditRecord_WhenTheGroupIsCreated()
     {
         // Arrange
         var patch = new SettingsGroupPatch
@@ -585,7 +588,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_CreatesAuditRecord_ForAddedSetting()
+    public async Task PatchAsync_CreatesAuditRecord_WhenASettingIsAdded()
     {
         // Arrange
         var settingsToAdd = new Dictionary<string, string>
@@ -615,7 +618,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_CreatesAuditRecord_ForUpdatedSetting()
+    public async Task PatchAsync_CreatesAuditRecord_WhenASettingIsUpdated()
     {
         // Arrange
         var group = new SettingsGroup
@@ -661,7 +664,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_CreatesAuditRecord_ForDeletedSetting()
+    public async Task PatchAsync_CreatesAuditRecord_WhenASettingIsDeleted()
     {
         // Arrange
         var group = new SettingsGroup
@@ -703,7 +706,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_HandlesNullValue_InAddedSetting()
+    public async Task PatchAsync_StoresAnEmptyValue_WhenAnAddedSettingHasANullValue()
     {
         // Arrange
         var settingsToAdd = new Dictionary<string, string?>
@@ -728,7 +731,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_HandlesNullValue_InUpdatedSetting()
+    public async Task PatchAsync_StoresAnEmptyValue_WhenAnUpdatedSettingHasANullValue()
     {
         // Arrange
         var group = new SettingsGroup
@@ -834,7 +837,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PerformsAllOperations_InSinglePatch()
+    public async Task PatchAsync_PerformsAllOperations_WhenOnePatchAddsUpdatesAndRemoves()
     {
         // Arrange
         var group = new SettingsGroup
@@ -905,7 +908,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PublishesUpdatedEvent_WithSortedDistinctChangedFields()
+    public async Task PatchAsync_PublishesSortedDistinctChangedFields_WhenChangedFieldsRepeat()
     {
         // Arrange
         var group = new SettingsGroup
@@ -939,7 +942,7 @@ public class SettingsRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
-            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.SettingsGroupUpdated));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("settingsGroup.updated"));
             Assert.That(_publishedEvents[0].Context.Values, Does.Contain(group.Name));
             Assert.That(_publishedEvents[0].Context.Values, Does.Contain("alpha,middle,zeta"));
         }

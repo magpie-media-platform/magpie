@@ -143,6 +143,7 @@ export interface ApiContentItem {
     id: string;
     contentHierarchyItemId: string;
     fulfillment: FulfillmentStatusValue;
+    fulfilledAt?: string | null;
     requestedAt?: string | null;
     requestedByUserId?: string | null;
     requestedViaWishlistId?: string | null;
@@ -175,6 +176,7 @@ export interface ApiContentHierarchyItem {
     languagePreferences?: string[];
     settings?: Record<string, string>;
     dateLastRefreshed?: string | null;
+    pendingMetadataRefresh?: boolean;
     createdAt: string;
     createdByUserId?: string | null;
     modifiedAt?: string | null;
@@ -230,8 +232,10 @@ export interface ContentListItem {
     sequenceNumber?: number;
     overview?: string;
     dateAdded?: string;
+    fulfilledAt?: string;
     lastSearched?: string;
     acquisitionStatus?: AcquisitionStatus;
+    previews?: ContentPreviewClip[];
 }
 
 export interface ContentDetailItem {
@@ -277,6 +281,23 @@ export interface ContentPreviewClip {
     language?: string;
 }
 
+function extractPreviewClips(metadata?: MetadataContainer | null): ContentPreviewClip[] {
+    return [...(metadata?.contributions ?? [])]
+        .sort((left, right) => left.ordinal - right.ordinal)
+        .flatMap((contribution) =>
+            [...(contribution.previews ?? [])].sort((left, right) => left.ordinal - right.ordinal),
+        )
+        .filter((p) => !!p?.url && !!p?.kind)
+        .map((p) => ({
+            url: p.url,
+            kind: p.kind,
+            title: p.title ?? undefined,
+            mimeType: p.mimeType ?? undefined,
+            embedKind: p.embedKind ?? undefined,
+            language: p.language ?? undefined,
+        }));
+}
+
 export function mapToContentListItem(item: ApiContentHierarchyItem): ContentListItem {
     const metadata = item.metadataContainer;
     const contentItem = item.contentItem;
@@ -297,8 +318,10 @@ export function mapToContentListItem(item: ApiContentHierarchyItem): ContentList
         sequenceNumber: extractSequenceNumber(metadata) ?? undefined,
         overview: extractOverview(metadata) ?? undefined,
         dateAdded: item.createdAt,
+        fulfilledAt: contentItem?.fulfilledAt ?? undefined,
         lastSearched: contentItem?.dateLastSearched ?? undefined,
         acquisitionStatus: mapAcquisitionStatus(contentItem?.activeAcquisitionStatus),
+        previews: extractPreviewClips(metadata),
     };
 }
 
@@ -335,20 +358,7 @@ export function mapToContentDetailItem(item: ApiContentHierarchyItem): ContentDe
         rootFolderId: item.rootFolderId ?? undefined,
         contentItemId: contentItem?.id ?? undefined,
         acquisitionStatus: mapAcquisitionStatus(contentItem?.activeAcquisitionStatus),
-        previews: [...(metadata?.contributions ?? [])]
-            .sort((left, right) => left.ordinal - right.ordinal)
-            .flatMap((contribution) =>
-                [...(contribution.previews ?? [])].sort((left, right) => left.ordinal - right.ordinal),
-            )
-            .filter((p) => !!p?.url && !!p?.kind)
-            .map((p) => ({
-                url: p.url,
-                kind: p.kind,
-                title: p.title ?? undefined,
-                mimeType: p.mimeType ?? undefined,
-                embedKind: p.embedKind ?? undefined,
-                language: p.language ?? undefined,
-            })),
+        previews: extractPreviewClips(metadata),
         images: extractImages(metadata),
     };
 }

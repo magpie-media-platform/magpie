@@ -1,16 +1,21 @@
-import { useCallback } from 'react';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
     ClockIcon,
+    EyeIcon,
+    EyeSlashIcon,
     FunnelSimpleIcon,
     LockSimpleIcon,
     LockSimpleOpenIcon,
     PencilSimpleIcon,
     TrashIcon,
     CircleNotchIcon,
+    TreeViewIcon,
     UserIcon,
 } from '@phosphor-icons/react';
 
 import { Tooltip } from '@/components/ui/Tooltip';
+import { Badge } from '@/components/ui/Badge';
 import { useFormattedCriteria, type ContentFilterCriteria } from '@/hooks/useFilters';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { formatDateTime } from '@/lib/dateFormatting';
@@ -24,7 +29,8 @@ export interface WishlistItem {
     ownerName: string | null;
     filterName: string | null;
     qualityTierListName: string | null;
-    monitored: boolean;
+    enabled: boolean;
+    monitoring: boolean | null;
     ownerLock: boolean;
     lastSyncedAt: string | null;
     createdAt: string;
@@ -33,20 +39,17 @@ export interface WishlistItem {
 
 interface WishlistRowProps {
     wishlist: WishlistItem;
-    isLocking: boolean;
     isOwner: boolean;
     canEdit: boolean;
     canDelete: boolean;
     onEdit: (id: string) => void;
     onDelete: (id: string) => void;
-    onLock: (id: string) => void;
-    onUnlock: (id: string) => void;
-    onClick: (id: string) => void;
+    onLock: (id: string) => Promise<void>;
+    onUnlock: (id: string) => Promise<void>;
 }
 
 export function WishlistRow({
     wishlist,
-    isLocking,
     isOwner,
     canEdit,
     canDelete,
@@ -54,51 +57,43 @@ export function WishlistRow({
     onDelete,
     onLock,
     onUnlock,
-    onClick,
 }: WishlistRowProps) {
     const formattedCriteriaQuery = useFormattedCriteria(wishlist.contentFilterCriteria);
     const criteriaQuery = formattedCriteriaQuery.data ?? '';
 
-    const handleRowClick = useCallback(
-        (e: React.MouseEvent) => {
-            if ((e.target as HTMLElement | null)?.closest('.wishlists-page__item-actions')) {
-                return;
-            }
-            onClick(wishlist.id);
-        },
-        [wishlist.id, onClick],
-    );
+    const MonitoringIcon = wishlist.monitoring === null ? TreeViewIcon : wishlist.monitoring ? EyeIcon : EyeSlashIcon;
+    const monitoringLabel =
+        wishlist.monitoring === null ? 'Inherit' : wishlist.monitoring ? 'Monitored' : 'Not monitored';
 
-    const handleKeyDown = useCallback(
-        (e: React.KeyboardEvent) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                if ((e.target as HTMLElement | null)?.closest('.wishlists-page__item-actions')) {
-                    return;
-                }
-                e.preventDefault();
-                onClick(wishlist.id);
-            }
-        },
-        [wishlist.id, onClick],
-    );
+    const [isLocking, setIsLocking] = useState(false);
+    const handleToggleLock = async () => {
+        setIsLocking(true);
+        try {
+            await (wishlist.ownerLock ? onUnlock(wishlist.id) : onLock(wishlist.id));
+        } finally {
+            setIsLocking(false);
+        }
+    };
 
     return (
         <div
-            className={`wishlists-page__item${wishlist.monitored ? '' : ' wishlists-page__item--unmonitored'}`}
+            className={`wishlists-page__item${wishlist.enabled ? '' : ' wishlists-page__item--disabled'}`}
             role="listitem"
-            tabIndex={0}
-            onClick={handleRowClick}
-            onKeyDown={handleKeyDown}
             data-wishlist-id={wishlist.id}
-            data-monitored={wishlist.monitored}
+            data-enabled={wishlist.enabled}
             data-owner={isOwner || undefined}
             data-locked={wishlist.ownerLock || undefined}
-            data-testid={wishlist.monitored ? 'wishlists-page__item' : 'wishlists-page__item--unmonitored'}
+            data-testid={wishlist.enabled ? 'wishlists-page__item' : 'wishlists-page__item--disabled'}
         >
             <div className="wishlists-page__item-main">
                 <div className="wishlists-page__item-info">
                     <div className="wishlists-page__item-header">
-                        <span className="wishlists-page__item-name">{wishlist.name}</span>
+                        <Link to={`/wishlists/${wishlist.id}`} className="wishlists-page__item-name">
+                            {wishlist.name}
+                        </Link>
+                        <Badge variant={wishlist.enabled ? 'fulfilled' : 'default'} size="sm">
+                            {wishlist.enabled ? 'Enabled' : 'Disabled'}
+                        </Badge>
                         {wishlist.ownerLock && (
                             <Tooltip
                                 content={isOwner ? 'Locked. Only you can edit.' : 'Locked. Only the owner can edit.'}
@@ -146,6 +141,10 @@ export function WishlistRow({
                             <ClockIcon weight="regular" aria-hidden="true" />
                             {formatRelativeTime(wishlist.lastSyncedAt)}
                         </span>
+                        <span className="wishlists-page__item-monitoring" data-testid="wishlists-page__item-monitoring">
+                            <MonitoringIcon weight="regular" aria-hidden="true" />
+                            {monitoringLabel}
+                        </span>
                     </div>
                     {criteriaQuery && (
                         <span
@@ -162,7 +161,7 @@ export function WishlistRow({
                         <button
                             type="button"
                             className={`card-actions__btn${isLocking ? ' card-actions__btn--loading' : ''}${wishlist.ownerLock ? ' wishlists-page__action-btn--locked' : ''}`}
-                            onClick={() => (wishlist.ownerLock ? onUnlock(wishlist.id) : onLock(wishlist.id))}
+                            onClick={() => void handleToggleLock()}
                             disabled={isLocking}
                             aria-label={
                                 isLocking

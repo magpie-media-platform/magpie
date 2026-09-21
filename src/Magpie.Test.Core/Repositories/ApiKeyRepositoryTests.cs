@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
@@ -12,12 +13,12 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -26,7 +27,7 @@ using NUnit.Framework;
 namespace Magpie.Test.Core.Repositories;
 
 [TestFixture]
-public class ApiKeyRepositoryTests
+public sealed class ApiKeyRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IApiKeyRepository _subject = null!;
@@ -63,7 +64,9 @@ public class ApiKeyRepositoryTests
             _context,
             Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<AuditRecordRepository>(),
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _publishedEvents = [];
@@ -78,7 +81,8 @@ public class ApiKeyRepositoryTests
             auditRecordRepository,
             transactionManager,
             eventBus.Object,
-            loggerFactory.CreateLogger<ApiKeyRepository>());
+            loggerFactory.CreateLogger<ApiKeyRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
@@ -86,6 +90,38 @@ public class ApiKeyRepositoryTests
     {
         _context.Database.CloseConnection();
         _context.Dispose();
+    }
+
+    [Test]
+    public async Task UpdateLastUsedAsync_PreservesRevocationAndExpiry_WhenAnEarlierValidationFinishes()
+    {
+        // Arrange
+        var key = new ApiKey
+        {
+            UserId = _userId,
+            Name = "Revoked",
+            KeyPrefix = "mgp_test",
+            KeyHash = "hash",
+            Enabled = false,
+            ExpiresAt = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        _context.ApiKeys.Add(key);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.UpdateLastUsedAsync(key.Id, new DateTime(2026, 9, 4, 0, 0, 0, DateTimeKind.Utc))
+            .ConfigureAwait(false);
+        await _subject.UpdateLastUsedAsync(key.Id, new DateTime(2026, 9, 3, 0, 0, 0, DateTimeKind.Utc))
+            .ConfigureAwait(false);
+        var stored = await _subject.GetByIdAsync(key.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Enabled, Is.False);
+            Assert.That(stored.ExpiresAt, Is.EqualTo(new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(stored.LastUsedAt, Is.EqualTo(new DateTime(2026, 9, 4, 0, 0, 0, DateTimeKind.Utc)));
+        }
     }
 
     [Test]
@@ -383,9 +419,9 @@ public class ApiKeyRepositoryTests
         {
             Assert.That(
                 _publishedEvents.Select(magpieEvent => magpieEvent.Name),
-                Is.EqualTo([MagpieEvents.Names.ApiKeyUpdated]));
+                Is.EqualTo(["apiKey.updated"]));
             Assert.That(_publishedEvents[0].Context.Values, Does.Contain("enabled"));
-            Assert.That(_publishedEvents[0].Context[MagpieEvents.Keys.UserId], Is.EqualTo(_userId.ToString("D")));
+            Assert.That(_publishedEvents[0].Context["user.id"], Is.EqualTo(_userId.ToString("D")));
         }
     }
 
@@ -520,14 +556,14 @@ public class ApiKeyRepositoryTests
                 _publishedEvents.Select(magpieEvent => magpieEvent.Name),
                 Is.EqualTo(
                 [
-                    MagpieEvents.Names.ApiKeyCreated,
-                    MagpieEvents.Names.ApiKeyUpdated,
-                    MagpieEvents.Names.ApiKeyDeleted
+                    "apiKey.created",
+                    "apiKey.updated",
+                    "apiKey.deleted"
                 ]));
             Assert.That(_publishedEvents[0].Context.Values, Does.Contain(created.Id.ToString("D")));
             Assert.That(_publishedEvents[0].Context.Values, Does.Contain(_userId.ToString("D")));
             Assert.That(_publishedEvents[1].Context.Values, Does.Contain("name,enabled"));
-            Assert.That(_publishedEvents[1].Context[MagpieEvents.Keys.UserId], Is.EqualTo(_userId.ToString("D")));
+            Assert.That(_publishedEvents[1].Context["user.id"], Is.EqualTo(_userId.ToString("D")));
         }
     }
 
@@ -717,7 +753,7 @@ public class ApiKeyRepositoryTests
             Name = "ExpiredKey",
             KeyHash = "hash1",
             Enabled = true,
-            ExpiresAt = DateTime.UtcNow.AddHours(-1),
+            ExpiresAt = new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         var futureKey = new ApiKey
@@ -727,7 +763,7 @@ public class ApiKeyRepositoryTests
             Name = "FutureKey",
             KeyHash = "hash2",
             Enabled = true,
-            ExpiresAt = DateTime.UtcNow.AddHours(1),
+            ExpiresAt = new DateTime(2026, 9, 8, 13, 0, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         var noExpiryKey = new ApiKey
@@ -767,7 +803,7 @@ public class ApiKeyRepositoryTests
             Name = "ExpiredKey",
             KeyHash = "hash1",
             Enabled = true,
-            ExpiresAt = DateTime.UtcNow.AddHours(-1),
+            ExpiresAt = new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         var futureKey = new ApiKey
@@ -777,7 +813,7 @@ public class ApiKeyRepositoryTests
             Name = "FutureKey",
             KeyHash = "hash2",
             Enabled = true,
-            ExpiresAt = DateTime.UtcNow.AddHours(1),
+            ExpiresAt = new DateTime(2026, 9, 8, 13, 0, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         var noExpiryKey = new ApiKey
@@ -829,7 +865,7 @@ public class ApiKeyRepositoryTests
             Name = "MatchingKey",
             KeyHash = "hash1",
             Enabled = true,
-            ExpiresAt = DateTime.UtcNow.AddHours(1),
+            ExpiresAt = new DateTime(2026, 9, 8, 13, 0, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         var disabledKey = new ApiKey
@@ -848,7 +884,7 @@ public class ApiKeyRepositoryTests
             Name = "ExpiredKey",
             KeyHash = "hash3",
             Enabled = true,
-            ExpiresAt = DateTime.UtcNow.AddHours(-1),
+            ExpiresAt = new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc),
             CreatedAt = DateTime.UtcNow
         };
         var otherUserKey = new ApiKey
@@ -919,5 +955,23 @@ public class ApiKeyRepositoryTests
 
         // Assert
         Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public async Task QueryAsync_UsesDefaultSort_WhenSecretColumnIsRequested()
+    {
+        // Arrange
+        _context.ApiKeys.AddRange(
+            new ApiKey { Name = "Alpha", UserId = _userId, KeyPrefix = "alpha", KeyHash = "z" },
+            new ApiKey { Name = "Zulu", UserId = _userId, KeyPrefix = "zulu", KeyHash = "a" });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.QueryAsync(new ApiKeyQuery(),
+            new() { PageNumber = 1, PageSize = 10 },
+            new() { PropertyName = "keyHash", Direction = SortDirection.Ascending }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(page.Items.Select(item => item.Name), Is.EqualTo(["Alpha", "Zulu"]));
     }
 }

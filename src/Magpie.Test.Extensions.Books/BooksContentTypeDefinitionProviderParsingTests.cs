@@ -1,4 +1,9 @@
+using System;
+using System.Collections.Generic;
+
 using Magpie.Extensions.Books;
+using Magpie.Models.Data;
+using Magpie.Models.Releases;
 using Magpie.Models.Signals;
 
 using NUnit.Framework;
@@ -9,7 +14,7 @@ namespace Magpie.Test.Extensions.Books;
 public class BooksContentTypeDefinitionProviderParsingTests
 {
     [Test]
-    public void Parse_AuthorAndBookFolders_ExtractsAuthorTitleAndYear()
+    public void Parse_ExtractsAuthorTitleAndYear_WhenAuthorAndBookFolders()
     {
         // Arrange
         var path = "/library/books/Andy Weir/The Martian (2011)/book.epub";
@@ -45,7 +50,7 @@ public class BooksContentTypeDefinitionProviderParsingTests
     }
 
     [Test]
-    public void Parse_FlatFileNoYearAnywhere_ReturnsStemTitleOnly()
+    public void Parse_ReturnsStemTitleOnly_WhenFlatFileNoYearAnywhere()
     {
         // Arrange
         var path = "/library/books/The Martian.epub";
@@ -78,5 +83,48 @@ public class BooksContentTypeDefinitionProviderParsingTests
             Assert.That(result.GetFirstValue("title"), Is.EqualTo("Project Hail Mary"));
             Assert.That(result.GetFirstInt32("year"), Is.EqualTo(2021));
         }
+    }
+
+    [TestCase("The Martian", "The Martian (2011) [EPUB]", ReleaseMatchResult.Confident)]
+    [TestCase("The Martian", "Andy Weir - The Martian (2011) [EPUB]", ReleaseMatchResult.Confident)]
+    [TestCase("The Martian", "Andy_Weir_-_The_Martian_(2011)_[EPUB]", ReleaseMatchResult.Confident)]
+    [TestCase("The Martian", "Andy Weir - The Martian (2012) [EPUB]", ReleaseMatchResult.NoMatch)]
+    [TestCase("The Martian", "Andy Weir - The Martian [EPUB]", ReleaseMatchResult.Indeterminate)]
+    [TestCase("The Martian", "Andy Weir - The Martian (2011) [M4B]", ReleaseMatchResult.NoMatch)]
+    [TestCase("The Martian", "Andy Weir - The Martians (2011) [EPUB]", ReleaseMatchResult.NoMatch)]
+    [TestCase("The Martian", "Andy Weir - NotThe Martian (2011) [EPUB]", ReleaseMatchResult.NoMatch)]
+    [TestCase("The Martian", "Andy Weir - Project Hail Mary (2011) [EPUB]", ReleaseMatchResult.NoMatch)]
+    [TestCase(null, "Andy Weir - The Martian (2011) [EPUB]", ReleaseMatchResult.Indeterminate)]
+    [TestCase("...", "Andy Weir - The Martian (2011) [EPUB]", ReleaseMatchResult.NoMatch)]
+    public void IsMatch_Result_WhenBookTitleIsBoundedWithinRelease(
+        string? title,
+        string releaseTitle,
+        ReleaseMatchResult expected)
+    {
+        // Arrange
+        var subject = new BooksContentTypeDefinitionProvider();
+        var item = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "book",
+            Level = "ebook",
+            Slug = "the-martian",
+            Name = "The Martian"
+        };
+        var target = new ContentTarget
+        {
+            Item = item,
+            Lineage = [item],
+            Metadata = new Dictionary<Guid, MaterializedMetadata>
+            {
+                [item.Id] = new() { Title = title, PublishDate = new DateTime(2011, 1, 1) }
+            }
+        };
+
+        // Act
+        var result = subject.IsMatch(target, [], new Release { Protocol = "torrent", Title = releaseTitle }, []);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
     }
 }

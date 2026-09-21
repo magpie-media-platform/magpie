@@ -77,6 +77,7 @@ describe('FilterForm mode switch confirmation dialog', () => {
     it('switches to advanced mode without confirmation', async () => {
         const user = userEvent.setup();
         renderFilterForm();
+        expect(screen.queryByRole('switch', { name: 'Shared Filter' })).not.toBeInTheDocument();
 
         const switchControl = document.querySelector('[data-action="switch-to-advanced"]') as HTMLButtonElement;
         expect(switchControl.tagName).toBe('BUTTON');

@@ -78,10 +78,11 @@ public sealed class CardigannExtensionSeedTests
         {
             Assert.That(store, Has.Count.EqualTo(2));
             Assert.That(cardigannFeed.Name, Is.EqualTo("Cardigann community definitions"));
-            indexers.Verify(
-                s => s.CreateFeedAsync(It.IsAny<IndexerFeed>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
-                Times.Once);
         }
+
+        indexers.Verify(
+            s => s.CreateFeedAsync(It.IsAny<IndexerFeed>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]

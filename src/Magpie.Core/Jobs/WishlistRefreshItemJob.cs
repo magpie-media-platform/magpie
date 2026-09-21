@@ -34,7 +34,7 @@ internal sealed class WishlistRefreshItemJob(
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "WishlistRefreshItem",
+        JobType = MagpieJobs.Types.WishlistRefreshItem,
         DisplayName = "Wishlist refresh item",
         Description = "Searches all metadata sources for one wishlist and adds new matches to the library.",
         Category = "Content",
@@ -93,7 +93,9 @@ internal sealed class WishlistRefreshItemJob(
         var wishlist = await wishlistRepository.GetByIdAsync(wishlistId, cancellationToken).ConfigureAwait(false);
         if (wishlist is null)
         {
-            logger.LogInformation("Wishlist {WishlistId} no longer exists. The job skipped the refresh", wishlistId);
+            logger.LogInformation(
+                "Wishlist {WishlistId} no longer exists, so the job skipped the refresh",
+                wishlistId);
             progressReporter.Report(1, "The refresh stopped because the wishlist does not exist.");
             return;
         }
@@ -101,7 +103,7 @@ internal sealed class WishlistRefreshItemJob(
         if (!wishlist.Enabled)
         {
             logger.LogInformation(
-                "Wishlist {WishlistId} ({WishlistName}) is disabled. The job skipped the one-off refresh",
+                "Wishlist {WishlistId} ({WishlistName}) is disabled, so the job skipped the one-off refresh",
                 wishlist.Id,
                 wishlist.Name);
             progressReporter.Report(1, "The refresh stopped because the wishlist is disabled.");
@@ -121,8 +123,8 @@ internal sealed class WishlistRefreshItemJob(
         if (contentFilter is null)
         {
             logger.LogWarning(
-                "Wishlist {WishlistId} references missing content filter {ContentFilterId}. " +
-                "The job skipped the refresh",
+                "Wishlist {WishlistId} references missing content filter {ContentFilterId}, so " +
+                "the job skipped the refresh",
                 wishlist.Id,
                 wishlist.ContentFilterId);
             return;
@@ -143,7 +145,6 @@ internal sealed class WishlistRefreshItemJob(
             discoveredKeys.Select(key => (
                 key.ExternalIdSource.NormalizeExternalIdentifierName(),
                 key.ExternalId.NormalizeExternalIdentifierValue())));
-        var surfaced = new List<WishlistDiscovered>();
 
         var hydrated = 0;
         var matchesSeen = 0;
@@ -196,12 +197,6 @@ internal sealed class WishlistRefreshItemJob(
                         effectiveUserId,
                         cancellationToken).ConfigureAwait(false);
 
-                    surfaced.Add(new WishlistDiscovered
-                    {
-                        ExternalIdSource = candidate.ExternalIdSource,
-                        ExternalId = candidate.ExternalId,
-                        Title = candidate.Title
-                    });
                     if (candidateHydrated)
                     {
                         hydrated++;
@@ -221,7 +216,22 @@ internal sealed class WishlistRefreshItemJob(
                         candidate.ExternalId,
                         candidate.ProviderType,
                         wishlist.Id);
+                    continue;
                 }
+
+                await wishlistDiscoveredRepository
+                    .RecordDiscoveredAsync(
+                        wishlist.Id,
+                        [
+                            new WishlistDiscovered
+                            {
+                                ExternalIdSource = candidate.ExternalIdSource,
+                                ExternalId = candidate.ExternalId,
+                                Title = candidate.Title
+                            }
+                        ],
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
             }
 
             if (!searchResult.PageInfo.HasMore)
@@ -230,31 +240,6 @@ internal sealed class WishlistRefreshItemJob(
             }
 
             page++;
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (surfaced.Count > 0)
-        {
-            try
-            {
-                await wishlistDiscoveredRepository
-                    .RecordDiscoveredAsync(wishlist.Id, surfaced, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(
-                    ex,
-                    "The job failed to save {Count} seen candidate(s) for wishlist {WishlistId} ({WishlistName})",
-                    surfaced.Count,
-                    wishlist.Id,
-                    wishlist.Name);
-            }
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -284,9 +269,8 @@ internal sealed class WishlistRefreshItemJob(
         }
 
         logger.LogInformation(
-            "The wishlist refresh for {WishlistId} is complete. The job hydrated {Count} new item(s) " +
-            "from {Candidates} provider-search candidate(s) across {Pages} page(s). The job skipped " +
-            "{SkippedSeen} already-seen candidate(s)",
+            "The wishlist refresh for {WishlistId} hydrated {Count} new item(s) from {Candidates} " +
+            "provider-search candidate(s) across {Pages} page(s), skipping {SkippedSeen} already-seen candidate(s)",
             wishlist.Id,
             hydrated,
             matchesSeen,
@@ -303,6 +287,7 @@ internal sealed class WishlistRefreshItemJob(
         if (await ExistsInLibraryAsync(
             candidate.ExternalIdSource,
             candidate.ExternalId,
+            candidate.ContentType,
             cancellationToken).ConfigureAwait(false))
         {
             return false;
@@ -315,7 +300,7 @@ internal sealed class WishlistRefreshItemJob(
             candidate.ContentType,
             candidate.Level,
             wishlist.RootFolderId,
-            monitoring: true,
+            wishlist.Monitoring,
             wishlist.QualityTierListId,
             wishlist.Id,
             [.. wishlist.Tags.Select(t => t.Name)],
@@ -324,8 +309,8 @@ internal sealed class WishlistRefreshItemJob(
 
         if (hydration is null)
         {
-            logger.LogInformation(
-                "Wishlist {WishlistId} match {Key}={Value} resolved to not-found. The job created no content",
+            logger.LogDebug(
+                "Wishlist {WishlistId} match {Key}={Value} resolved to not-found, so the job created no content",
                 wishlist.Id,
                 candidate.ExternalIdSource,
                 candidate.ExternalId);
@@ -344,6 +329,7 @@ internal sealed class WishlistRefreshItemJob(
     private async Task<bool> ExistsInLibraryAsync(
         string externalIdSource,
         string externalIdValue,
+        string contentType,
         CancellationToken cancellationToken)
     {
         var matches = await contentService.QueryAsync(
@@ -357,6 +343,10 @@ internal sealed class WishlistRefreshItemJob(
                         [
                             new ContentHierarchyItemCriteria
                             {
+                                ContentType = new()
+                                {
+                                    And = [new() { Value = contentType }]
+                                },
                                 Metadata = new()
                                 {
                                     And =

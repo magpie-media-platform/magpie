@@ -17,7 +17,7 @@ export function reloadForPreloadError(now: number = Date.now()): boolean {
     try {
         raw = sessionStorage.getItem(GUARD_KEY);
     } catch {
-        // sessionStorage can throw in privacy modes; treat as no prior reload.
+        // sessionStorage can throw in privacy modes, where an unreadable guard means no prior reload.
     }
 
     if (raw !== null) {
@@ -30,7 +30,7 @@ export function reloadForPreloadError(now: number = Date.now()): boolean {
     try {
         sessionStorage.setItem(GUARD_KEY, String(now));
     } catch {
-        // sessionStorage can throw in privacy modes; the reload still proceeds without the guard.
+        // The reload proceeds without the guard.
     }
 
     window.location.reload();

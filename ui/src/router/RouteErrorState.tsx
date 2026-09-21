@@ -41,5 +41,3 @@ export function RouteErrorState({ message = 'Try again or go to the dashboard.',
 }
 
 RouteErrorState.displayName = 'RouteErrorState';
-
-export default RouteErrorState;

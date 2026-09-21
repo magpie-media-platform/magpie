@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 using Magpie.Extensions.Movies.Parsing;
 using Magpie.Models;
@@ -15,6 +16,10 @@ namespace Magpie.Extensions.Movies;
 
 internal sealed class MoviesContentTypeDefinitionProvider : IReleaseMatchContentTypeDefinitionProvider
 {
+    private static readonly Regex SamplePattern = new(
+        @"(?:^|[._-])sample(?:$|[._-])|\[sample\]",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly ContentTypeDefinition MovieDefinition = new()
     {
         Slug = ContentTypeSlug,
@@ -103,7 +108,7 @@ internal sealed class MoviesContentTypeDefinitionProvider : IReleaseMatchContent
 
         var parsedTitle = parsed.Title.NormalizeMediaFilename();
         var metadata = target.Metadata.GetValueOrDefault(movie.Id);
-        var titles =
+        var titles = (
             from title in (
                 from text in metadata?.AlternateTexts ?? []
                 where string.Equals(text.Kind, "Title", StringComparison.OrdinalIgnoreCase)
@@ -111,7 +116,7 @@ internal sealed class MoviesContentTypeDefinitionProvider : IReleaseMatchContent
                 .Prepend(metadata?.OriginalTitle)
                 .Prepend(metadata?.Title)
             where !string.IsNullOrWhiteSpace(title)
-            select title.Trim();
+            select title.Trim()).ToArray();
         if (!titles.Any())
         {
             return ReleaseMatchResult.Indeterminate;
@@ -151,9 +156,7 @@ internal sealed class MoviesContentTypeDefinitionProvider : IReleaseMatchContent
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? Parse(string filePath, out string? levelSlug)
     {
         levelSlug = null;
-        if (Path.GetFileNameWithoutExtension(filePath)
-            .Split(['.', ' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries)
-            .Contains("sample", StringComparer.OrdinalIgnoreCase))
+        if (SamplePattern.IsMatch(Path.GetFileNameWithoutExtension(filePath)))
         {
             return null;
         }

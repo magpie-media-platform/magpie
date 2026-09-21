@@ -32,8 +32,13 @@ internal static class FilterCriteriaFormattingExtensions
         [CriteriaValueOperator.IsNotNull] = FilterQueryToken.NotNull,
     };
 
-    public static string FormatFilterQuery(this ContentFilterCriteria criteria)
+    public static string? FormatFilterQueryOrDefault(this ContentFilterCriteria criteria)
     {
+        if (criteria.MediaFiles.And.Any())
+        {
+            return null;
+        }
+
         var parts = new List<QueryPart>();
 
         foreach (var item in criteria.ContentHierarchyItem.And)

@@ -49,7 +49,7 @@ public sealed class ContentFactProviderTests
     }
 
     [Test]
-    public async Task GetFactsAsync_ReturnsEpisodeFacts_ForTvTarget()
+    public async Task GetFactsAsync_ReturnsEpisodeFacts_WhenTvTarget()
     {
         // Arrange
         var showId = new Guid("11111111-1111-1111-1111-111111111111");
@@ -155,7 +155,7 @@ public sealed class ContentFactProviderTests
     }
 
     [Test]
-    public async Task GetFactsAsync_ReturnsSeasonFacts_ForTvTarget()
+    public async Task GetFactsAsync_ReturnsSeasonFacts_WhenTvTarget()
     {
         // Arrange
         var showId = new Guid("11111111-1111-1111-1111-111111111111");
@@ -230,7 +230,7 @@ public sealed class ContentFactProviderTests
     }
 
     [Test]
-    public async Task GetFactsAsync_ReturnsEmpty_ForShowTarget()
+    public async Task GetFactsAsync_ReturnsEmpty_WhenShowTarget()
     {
         // Arrange
         var show = new ContentHierarchyItem

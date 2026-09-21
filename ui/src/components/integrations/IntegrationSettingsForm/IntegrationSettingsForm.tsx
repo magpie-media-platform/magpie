@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
 
 import { Label } from '@/components/ui/Label';
-import { SchemaDataType, isSchemaDataType, type IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
+import { SchemaDataType, isRenderableSetting, type IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
 import type { IntegrationSettingsValidationIssue } from '@/hooks/useValidateSettings';
 
 import { SettingFieldInput } from './SettingFieldInput';
@@ -60,13 +60,7 @@ export function IntegrationSettingsForm({
 }: IntegrationSettingsFormProps): ReactNode {
     const formIssues = useMemo(() => formLevelIssues(issues), [issues]);
 
-    const renderableEntries = useMemo(
-        () =>
-            schema.filter(
-                (entry) => typeof entry?.key === 'string' && entry.key.length > 0 && isSchemaDataType(entry.type),
-            ),
-        [schema],
-    );
+    const renderableEntries = useMemo(() => schema.filter(isRenderableSetting), [schema]);
 
     return (
         <div className="integration-settings-form" data-component="integration-settings-form">

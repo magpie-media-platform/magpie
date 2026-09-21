@@ -70,20 +70,20 @@ public sealed class ContentFileServiceTests
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = new MetadataContainer { Id = Guid.NewGuid(), CreatedAt = DateTime.UtcNow }
         };
-        _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
+        _contentHierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
         _contentHierarchyItems
             .Setup(r => r.GetByIdAsync(_leaf.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => _leaf);
         _contentHierarchyItems
             .Setup(r => r.GetLineageAsync(_leaf.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => [_leaf]);
-        _metadataContainers = new Mock<IMetadataContainerRepository>();
+        _metadataContainers = new Mock<IMetadataContainerRepository> { CallBase = true };
         _metadataContainers
             .Setup(r => r.GetRelationshipTitlesByContentHierarchyItemAsync(
                 It.IsAny<IReadOnlyCollection<Guid>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>>());
-        _rootFolders = new Mock<IRootFolderRepository>();
+        _rootFolders = new Mock<IRootFolderRepository> { CallBase = true };
         _rootFolders
             .Setup(r => r.GetByIdAsync(_rootFolder.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => _rootFolder);
@@ -120,9 +120,9 @@ public sealed class ContentFileServiceTests
                 _files[destination] = fileSize;
             });
 
-        _mediaFiles = new Mock<IMediaFileRepository>();
-        _contentItems = new Mock<IContentRepository>();
-        _auditRecords = new Mock<IAuditRecordRepository>();
+        _mediaFiles = new Mock<IMediaFileRepository> { CallBase = true };
+        _contentItems = new Mock<IContentRepository> { CallBase = true };
+        _auditRecords = new Mock<IAuditRecordRepository> { CallBase = true };
         _transactionManager = new Mock<ITransactionManager>();
         _transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
@@ -159,44 +159,29 @@ public sealed class ContentFileServiceTests
     [TestCaseSource(typeof(ContentFileServiceTemplateCases), nameof(ContentFileServiceTemplateCases.Cases))]
     public async Task PreviewRenameAsync_ReturnsExpectedPath_WhenTokensAreRendered(
         string template,
-        IReadOnlyDictionary<string, string?> tokens,
-        string expected)
+        string title,
+        string? originalTitle,
+        DateTime? publishDate,
+        string fileName,
+        string[] expectedSegments)
     {
         // Arrange
         _rootFolder.RenameTemplate = template;
-        if (tokens.TryGetValue("Title", out var title))
-        {
-            _leaf.Name = title ?? string.Empty;
-        }
-
-        if (tokens.TryGetValue("Slug", out var slug) && slug is not null)
-        {
-            _leaf.Slug = slug;
-        }
-
-        var contribution = new MetadataContribution
+        _leaf.Name = title;
+        _leaf.MetadataContainer!.Contributions.Add(new MetadataContribution
         {
             ProviderType = "test",
-            OriginalTitle = tokens.GetValueOrDefault("OriginalTitle"),
-            SortTitle = tokens.GetValueOrDefault("SortTitle"),
-            PublishDate = int.TryParse(tokens.GetValueOrDefault("Year"), out var year)
-                ? new DateTime(year, 1, 1)
-                : null,
-            CreatedAt = DateTime.UtcNow
-        };
-        _leaf.MetadataContainer!.Contributions.Add(contribution);
-        var extension = tokens.GetValueOrDefault("Ext");
-        var fileName = string.IsNullOrEmpty(extension) ? "source" : "source." + extension;
+            OriginalTitle = originalTitle,
+            PublishDate = publishDate,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
         var original = new FileInfo(Path.Combine(_rootFolder.Path, "incoming", fileName));
 
         // Act
         var result = await _subject.PreviewRenameAsync(_leaf.Id, original).ConfigureAwait(false);
 
         // Assert
-        var expectedPath = Path.Combine(
-            _rootFolder.Path,
-            expected.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar));
-        Assert.That(result.Rename.FullName, Is.EqualTo(expectedPath));
+        Assert.That(result.Rename.FullName, Is.EqualTo(Path.Combine([_rootFolder.Path, .. expectedSegments])));
     }
 
     [Test]
@@ -250,7 +235,7 @@ public sealed class ContentFileServiceTests
         };
         var provider = new Mock<IPathResolutionContentTypeDefinitionProvider>();
         provider
-            .Setup(p => p.BuildPath(
+            .Setup(p => p.BuildPathPlan(
                 It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
                 It.IsAny<IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>>>(),
                 It.IsAny<string>(),
@@ -261,9 +246,20 @@ public sealed class ContentFileServiceTests
             {
                 var year = ancestors[^1].MetadataContainer!.Contributions.OrderBy(c => c.Ordinal)
                     .First(c => c.PublishDate is not null).PublishDate!.Value.Year;
-                return $"{ancestors[0].Name}/{ancestors[^1].Name} " +
-                    $"({year}) " +
-                    $"{relationshipsByNode[ancestors[^1].Id]["network"][0]}/{originalFileName}.{extension}";
+                return new ContentPathPlan
+                {
+                    Directories =
+                    [
+                        new ContentPathPlanDirectory { LevelSlug = ancestors[0].Level, Name = ancestors[0].Name },
+                        new ContentPathPlanDirectory
+                        {
+                            LevelSlug = ancestors[^1].Level,
+                            Name = $"{ancestors[^1].Name} ({year}) " +
+                                $"{relationshipsByNode[ancestors[^1].Id]["network"][0]}"
+                        }
+                    ],
+                    FileName = $"{originalFileName}.{extension}"
+                };
             });
         _contentHierarchyItems
             .Setup(repository => repository.GetLineageAsync(leaf.Id, It.IsAny<CancellationToken>()))
@@ -459,7 +455,7 @@ public sealed class ContentFileServiceTests
         });
         var provider = new Mock<IPathResolutionContentTypeDefinitionProvider>();
         provider
-            .Setup(p => p.BuildPath(
+            .Setup(p => p.BuildPathPlan(
                 It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
                 It.IsAny<IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>>>(),
                 It.IsAny<string>(),
@@ -765,6 +761,52 @@ public sealed class ContentFileServiceTests
     }
 
     [Test]
+    public async Task DeleteFilesAsync_DeletesTheOtherFilesAndRecordsTheFailure_WhenOneFileCannotBeDeleted()
+    {
+        // Arrange
+        var lockedPath = Path.Combine(_rootFolder.Path, "locked.mkv");
+        var freePath = Path.Combine(_rootFolder.Path, "free.mkv");
+        var content = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        content.MediaFiles.Add(new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = content.Id,
+            FileKind = "Video",
+            FilePath = lockedPath
+        });
+        content.MediaFiles.Add(new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = content.Id,
+            FileKind = "Video",
+            FilePath = freePath
+        });
+        _files[lockedPath] = 100;
+        _files[freePath] = 100;
+        _fileSystem.Setup(fileSystem => fileSystem.DeleteFile(lockedPath))
+            .Throws(new IOException("The file is in use."));
+
+        // Act
+        await _subject.DeleteFilesAsync([_leaf with { ContentItem = content }]).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _fileSystem.Verify(fileSystem => fileSystem.DeleteFile(freePath), Times.Once);
+            _auditRecords.Verify(
+                repository => repository.CreateAsync(
+                    It.Is<AuditRecord>(record => record.Operation == "FileDeleteFailed"),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
     public async Task ChangePathAsync_PatchesPath_WhenThePathIsAvailable()
     {
         // Arrange
@@ -932,7 +974,7 @@ public sealed class ContentFileServiceTests
         Assert.That(
             exception!.Message,
             Is.EqualTo(
-                "This content level has no configured file types. Configure them in the level settings before importing files."));
+                "This content level has no configured file types."));
     }
 
     [Test]
@@ -1481,10 +1523,10 @@ public sealed class ContentFileServiceTests
         _mediaFiles.Verify(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    [TestCase("UNIQUE constraint failed: content_mediaFile.PathKey", typeof(ArgumentException))]
-    [TestCase("FOREIGN KEY constraint failed", typeof(DbUpdateException))]
+    [TestCase("The INSERT violated IX_content_mediaFile_PathKey.", typeof(ArgumentException))]
+    [TestCase("The INSERT violated FK_content_mediaFile_content_contentItem_ContentItemId.", typeof(DbUpdateException))]
     public void AttachAsync_ThrowsExpectedException_WhenMediaFileInsertFails(
-        string databaseMessage,
+        string failureMessage,
         Type expectedExceptionType)
     {
         // Arrange
@@ -1529,7 +1571,11 @@ public sealed class ContentFileServiceTests
                 It.IsAny<MediaFile>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new DbUpdateException("Insert failed.", new InvalidOperationException(databaseMessage)));
+            .ThrowsAsync(new DbUpdateException(
+                "An error occurred while saving the entity changes.",
+                new InvalidOperationException(failureMessage)));
+        _mediaFiles.Setup(repository => repository.GetByPathAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MediaFile?)null);
 
         // Act
         var exception = Assert.CatchAsync(
@@ -2137,6 +2183,172 @@ public sealed class ContentFileServiceTests
     }
 
     [Test]
+    public void DeleteAsync_KeepsTheHostFile_WhenTheRowTransactionFails()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        _files[path] = 12;
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                mediaFile.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile>());
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _contentItems.Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The audit row failed."));
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await _subject.DeleteAsync(_leaf.Id, mediaFile.Id, null).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo("The audit row failed."));
+            _fileSystem.Verify(system => system.DeleteFile(It.IsAny<string>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public void DeleteAsync_RecordsTheAbandonedFile_WhenTheHostFileCannotBeDeleted()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        _files[path] = 12;
+        _fileSystem.Setup(system => system.DeleteFile(path)).Throws(new IOException("The file is in use."));
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                mediaFile.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile>());
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _contentItems.Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileDeleted" });
+
+        // Act
+        var exception = Assert.ThrowsAsync<MediaFileDeletionException>(
+            async () => await _subject.DeleteAsync(_leaf.Id, mediaFile.Id, null).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.InnerException, Is.TypeOf<IOException>());
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record =>
+                    record.Operation == "FileDeleteFailed" &&
+                    record.EntityId == mediaFile.Id.ToString() &&
+                    record.ParentEntityId == _leaf.Id.ToString()),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public void PreviewRenameAsync_Throws_WhenAStoredPathEscapesItsEffectiveParent()
+    {
+        // Arrange
+        _leaf.Path = "../escape";
+        _contentTypes
+            .Setup(registry => registry.GetDefinitionFor("movie"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "movie",
+                DisplayName = "Movie",
+                LevelDefinitions =
+                [
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "movie",
+                        DisplayName = "Movie",
+                        CustomMetadataFields = [],
+                        Subfolder = "movies"
+                    }
+                ]
+            });
+        var original = new FileInfo(Path.Combine(_rootFolder.Path, "incoming", "source.mkv"));
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(
+            async () => await _subject.PreviewRenameAsync(_leaf.Id, original).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo("Relative content path ../escape escapes its effective parent path."));
+    }
+
+    [Test]
     public async Task GetBrowserLocationAsync_ReturnsEffectiveContentPath_WhenDirectoryExists()
     {
         // Arrange
@@ -2167,6 +2379,62 @@ public sealed class ContentFileServiceTests
             Assert.That(result!.RootPath, Is.EqualTo(_rootFolder.Path));
             Assert.That(result.InitialPath, Is.EqualTo(Path.Combine(_rootFolder.Path, "movies", "The Matrix")));
         }
+    }
+
+    [Test]
+    public async Task GetEffectivePathAsync_ReturnsRootFolderCombinedWithComputedDirectory_WhenPathIsRelative()
+    {
+        // Arrange
+        _leaf.Path = "The Matrix";
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    Subfolder = "movies"
+                }
+            ]
+        });
+
+        // Act
+        var result = await _subject.GetEffectivePathAsync(_leaf.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(Path.Combine(_rootFolder.Path, "movies", "The Matrix")));
+    }
+
+    [Test]
+    public async Task GetEffectivePathAsync_ReturnsStoredPath_WhenPathIsAbsolute()
+    {
+        // Arrange
+        var absolutePath = Path.Combine(Path.GetTempPath(), "content-file-effective-path", "Avatar (2009)");
+        _leaf.Path = absolutePath;
+
+        // Act
+        var result = await _subject.GetEffectivePathAsync(_leaf.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(absolutePath));
+    }
+
+    [Test]
+    public async Task GetEffectivePathAsync_ReturnsStoredPath_WhenNoRootFolderIsAssigned()
+    {
+        // Arrange
+        _leaf.Path = "Example Movie (2025)";
+        _leaf.EffectiveRootFolderId = Guid.NewGuid();
+
+        // Act
+        var result = await _subject.GetEffectivePathAsync(_leaf.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.EqualTo("Example Movie (2025)"));
     }
 
     [Test]

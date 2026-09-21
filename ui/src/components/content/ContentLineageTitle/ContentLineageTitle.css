@@ -24,7 +24,7 @@
     }
 
     .content-lineage-title__segment--ancestor {
-        flex: 1 10 auto;
+        flex: 0 10 auto;
         color: var(--text-secondary);
     }
 

@@ -17,11 +17,11 @@ public sealed record PagingParameter
     }
 
     /// <summary>
-    /// Number of items per page, clamped to at least one.
+    /// Number of items per page, clamped to the range 1 through 1000.
     /// </summary>
     public required int PageSize
     {
         get;
-        init => field = Math.Max(1, value);
+        init => field = Math.Clamp(value, 1, 1000);
     }
 }

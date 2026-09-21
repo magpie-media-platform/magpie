@@ -1,14 +1,7 @@
+import type { ScalarPatch } from './patch';
 import type { JobExecutionModeValue } from '@/lib/jobActions';
 
 import type { ContentListItem } from './content';
-
-export type AcquisitionBlockReason = 'None' | 'NoRootFolder';
-
-export interface AcquisitionEligibility {
-    canAutoGrab: boolean;
-    blockReason: AcquisitionBlockReason;
-    blockReasonDetail?: string | null;
-}
 
 export type RootFolderResolutionSource = 'Override' | 'Inherited' | 'ContentTypeDefault' | 'None';
 
@@ -70,13 +63,6 @@ export interface ContentRelationship {
     subjectId?: string | null;
     name: string;
     imageUrl?: string | null;
-}
-
-export type PendingRefreshState = 'None' | 'Queued' | 'Running' | 'RecentlyCompleted';
-
-export interface PendingRefreshResponse {
-    state: PendingRefreshState;
-    lastCompletedAt?: string | null;
 }
 
 export interface UpdateContentRequest {
@@ -272,6 +258,7 @@ export interface MetadataInspectorResponse {
     materialized: MaterializedMetadata;
     contributions: MetadataContribution[];
     subjects: Record<string, SubjectRef>;
+    subjectsTruncated?: boolean;
 }
 
 export type MetadataSubItemKey =
@@ -370,10 +357,6 @@ export interface SubItemPayloadByKey {
 }
 
 export type SubItemPayload = SubItemPayloadByKey[MetadataSubItemKey];
-
-export interface ScalarPatch<T> {
-    value: T;
-}
 
 export interface MetadataCollectionPatch<TAdd, TUpdate> {
     add?: TAdd[];
@@ -531,4 +514,5 @@ export interface BulkContentPatchRequest {
 export interface BulkContentDeleteRequest {
     ids?: string[];
     filter?: string;
+    deleteFromLibrary?: boolean;
 }

@@ -3,30 +3,30 @@
     return;
   }
 
-  const tokenKey = "magpie_auth_token";
-  const tokenExpiresKey = "magpie_token_expires";
-  const authFailureEvent = "magpie:auth:failure";
   const adminRoleName = "admin";
-  const runtimeAssetUrl = document.currentScript?.src;
-  const templatePromise = loadTemplate();
+  const extensionContext = document.currentScript?.magpieExtensionContext;
+  if (
+    !extensionContext?.loadAssetText ||
+    !extensionContext.waitUntil ||
+    !extensionContext.fetch
+  ) {
+    throw new Error("Metadata settings extension context is unavailable");
+  }
+  extensionContext.waitUntil(initialize(extensionContext));
 
-  async function loadTemplate() {
-    if (!runtimeAssetUrl) {
-      throw new Error("Metadata settings runtime URL is unavailable");
+  async function initialize(context) {
+    const template = await loadTemplate(context);
+    if (window.MagpieMetadataSettings) {
+      return;
     }
+    window.MagpieMetadataSettings = {
+      register: (settingsConfig) => register(settingsConfig, template),
+    };
+  }
 
-    const response = await fetch(
-      new URL("metadata-settings.html", runtimeAssetUrl),
-      { headers: { Accept: "text/html" } },
-    );
-    if (!response.ok) {
-      throw new Error(
-        `Failed to load metadata settings template: ${response.status}`,
-      );
-    }
-
+  async function loadTemplate(context) {
     const templateDocument = new DOMParser().parseFromString(
-      await response.text(),
+      await context.loadAssetText("metadata-settings.html"),
       "text/html",
     );
     const template = templateDocument.querySelector(
@@ -39,119 +39,17 @@
   }
 
   function baseUrl(element) {
-    return (element.getAttribute("data-magpie-api-base") || "/api").replace(
-      /\/+$/,
-      "",
-    );
-  }
-
-  function readToken() {
-    try {
-      return localStorage.getItem(tokenKey);
-    } catch {
-      return null;
-    }
-  }
-
-  function writeToken(body) {
-    try {
-      if (body.accessToken) {
-        localStorage.setItem(tokenKey, body.accessToken);
-      }
-      if (body.accessTokenExpiresAt) {
-        localStorage.setItem(tokenExpiresKey, body.accessTokenExpiresAt);
-      }
-    } catch {
-      /* empty */
-    }
-  }
-
-  function clearToken() {
-    try {
-      localStorage.removeItem(tokenKey);
-      localStorage.removeItem(tokenExpiresKey);
-    } catch {
-      /* empty */
-    }
-  }
-
-  function dispatchAuthFailure() {
-    window.dispatchEvent(new CustomEvent(authFailureEvent));
-  }
-
-  async function refreshToken(base) {
-    try {
-      const response = await fetch(`${base}/auth/refresh`, {
-        method: "POST",
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(`Refresh failed with status ${response.status}`);
-      }
-      writeToken(await response.json());
-      return true;
-    } catch {
-      clearToken();
-      dispatchAuthFailure();
-      return false;
-    }
-  }
-
-  async function request(element, path, options = {}, retry = true) {
-    const headers = new Headers(options.headers || {});
-    headers.set("Accept", "application/json");
-    if (options.body !== undefined && !headers.has("Content-Type")) {
-      headers.set("Content-Type", "application/json");
-    }
-
-    const callerProvidedAuth = headers.has("Authorization");
-    const token = readToken();
-    if (token && !callerProvidedAuth) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
-
-    const init = { ...options, credentials: "include", headers };
-    if (options.body !== undefined) {
-      init.body = JSON.stringify(options.body);
-    }
-
-    const base = baseUrl(element);
-    let response = await fetch(`${base}${path}`, init);
-    if (response.status !== 401) {
-      return response;
-    }
-
-    if (retry && !callerProvidedAuth && (await refreshToken(base))) {
-      response = await request(element, path, options, false);
-    }
-
-    if (response.status === 401 && (!retry || !callerProvidedAuth)) {
-      clearToken();
-      dispatchAuthFailure();
-    }
-
-    return response;
-  }
-
-  async function errorMessage(response) {
-    const type = response.headers.get("content-type") || "";
-    if (type.includes("application/json")) {
-      try {
-        const body = await response.json();
-        return (
-          body.title ||
-          body.message ||
-          body.detail ||
-          `Request failed with status ${response.status}`
-        );
-      } catch {
-        return `Request failed with status ${response.status}`;
-      }
-    }
     return (
-      (await response.text()) || `Request failed with status ${response.status}`
-    );
+      element.getAttribute("data-magpie-api-base") ||
+      extensionContext.apiBaseUrl
+    ).replace(/\/+$/, "");
+  }
+
+  function request(element, path, options = {}) {
+    return extensionContext.fetch(path, {
+      ...options,
+      baseUrl: baseUrl(element),
+    });
   }
 
   function clean(value) {
@@ -200,12 +98,10 @@
     );
   }
 
-  async function register(settingsConfig) {
+  async function register(settingsConfig, template) {
     if (customElements.get(settingsConfig.tagName)) {
       return;
     }
-
-    const template = await templatePromise;
 
     class MetadataSettingsElement extends HTMLElement {
       static get observedAttributes() {
@@ -282,14 +178,16 @@
             this,
             `/settings/groups/${encodeURIComponent(extensionId)}/${encodeURIComponent(settingsConfig.groupName)}`,
             { method: "GET" },
-          );
+          ).catch((error) => {
+            if (error.status === 404) {
+              return null;
+            }
+            throw error;
+          });
 
           let record = {};
           let configuredSecrets = new Set();
-          if (response.status !== 404) {
-            if (!response.ok) {
-              throw new Error(await errorMessage(response));
-            }
+          if (response) {
             const settingsState = readSettings(await response.json());
             record = settingsState.settings;
             configuredSecrets = settingsState.configuredSecrets;
@@ -414,14 +312,11 @@
         try {
           const extensionId =
             this.getAttribute("data-magpie-extension-id") || "";
-          const response = await request(
+          await request(
             this,
             `/settings/groups/${encodeURIComponent(extensionId)}/${encodeURIComponent(settingsConfig.groupName)}`,
             { method: "PATCH", body },
           );
-          if (!response.ok) {
-            throw new Error(await errorMessage(response));
-          }
 
           this.values = { ...saved };
           this.original = { ...saved };
@@ -465,6 +360,7 @@
           this.shadowRoot.replaceChildren();
           return;
         }
+
         const readOnly = !canEdit(this);
         const status =
           this.error ||
@@ -480,7 +376,9 @@
               ? "info"
               : "";
 
-        this.shadowRoot.replaceChildren(template.content.cloneNode(true));
+        if (!this.shadowRoot.querySelector(".panel")) {
+          this.shadowRoot.replaceChildren(template.content.cloneNode(true));
+        }
         const panel = this.shadowRoot.querySelector(".panel");
         panel.dataset.providerSettings = settingsConfig.groupName;
         this.shadowRoot.querySelector("[data-title]").textContent =
@@ -490,6 +388,7 @@
         description.hidden = !settingsConfig.description;
 
         const fields = this.shadowRoot.querySelector("[data-fields]");
+        fields.replaceChildren();
         if (this.loading) {
           const loading = document.createElement("div");
           loading.className = "loading";
@@ -509,7 +408,8 @@
 
             const secretConfigured = this.configuredSecrets.has(field.key);
             const unlocked = this.secretClears.has(field.key);
-            const masked = field.type === "password" && secretConfigured && !unlocked;
+            const masked =
+              field.type === "password" && secretConfigured && !unlocked;
 
             const fieldInput = document.createElement("div");
             fieldInput.className = "field-input";
@@ -549,9 +449,7 @@
 
         const statusElement = this.shadowRoot.querySelector("[data-status]");
         statusElement.textContent = status;
-        if (kind) {
-          statusElement.dataset.kind = kind;
-        }
+        statusElement.dataset.kind = kind;
         const button = this.shadowRoot.querySelector('button[type="submit"]');
         button.textContent = this.saving ? "Saving..." : "Save Settings";
         button.disabled = this.saving || readOnly || !this.changed();
@@ -565,15 +463,6 @@
             this.updateState();
           });
         }
-        for (const input of this.shadowRoot.querySelectorAll('input[type="password"]')) {
-          input.addEventListener("blur", () => {
-            const key = input.name;
-            if (this.secretClears.has(key) && !clean(this.values[key])) {
-              this.secretClears.delete(key);
-              this.render();
-            }
-          });
-        }
         for (const button of this.shadowRoot.querySelectorAll(
           "button[data-secret-key]",
         )) {
@@ -584,7 +473,9 @@
             this.notice = "";
             this.error = "";
             this.render();
-            this.shadowRoot.getElementById(`${settingsConfig.tagName}-${key}`)?.focus();
+            this.shadowRoot
+              .getElementById(`${settingsConfig.tagName}-${key}`)
+              ?.focus();
           });
         }
       }
@@ -592,6 +483,4 @@
 
     customElements.define(settingsConfig.tagName, MetadataSettingsElement);
   }
-
-  window.MagpieMetadataSettings = { register };
 })();

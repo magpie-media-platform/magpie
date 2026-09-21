@@ -31,7 +31,7 @@ internal sealed class MediaInfoExtractScanJob(
 {
     public static readonly JobSpec Spec = new()
     {
-        JobType = "MediaInfoExtractScan",
+        JobType = MagpieJobs.Types.MediaInfoExtractScan,
         DisplayName = "Media info extract scan",
         Description = "Scans for missing or stale media information and queues them inspection.",
         Category = "Metadata",
@@ -42,22 +42,22 @@ internal sealed class MediaInfoExtractScanJob(
         Timeout = TimeSpan.FromMinutes(5),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
-        LockPartitionFields = [ContentHierarchyItemIdParameter],
+        LockPartitionFields = [MagpieJobs.Parameters.ContentHierarchyItemId],
         LockPartitionEventContextKeys = new Dictionary<string, string>
         {
-            [ContentHierarchyItemIdParameter] = MagpieEvents.Keys.ContentHierarchyItemId
+            [MagpieJobs.Parameters.ContentHierarchyItemId] = MagpieEvents.Keys.ContentHierarchyItemId
         },
         Parameters =
         [
             new(
-                ContentHierarchyItemIdParameter,
+                MagpieJobs.Parameters.ContentHierarchyItemId,
                 "The content hierarchy item to scan again. Leave this parameter empty to scan missing and stale " +
                 "library content.",
                 DataType.String,
                 false,
                 null),
             new(
-                MaxAgeHoursParameter,
+                MagpieJobs.Parameters.MaxAgeHours,
                 "Hours before extracted media info is considered stale.",
                 DataType.Number,
                 false,
@@ -65,8 +65,6 @@ internal sealed class MediaInfoExtractScanJob(
         ],
     };
 
-    private const string ContentHierarchyItemIdParameter = "contentHierarchyItemId";
-    private const string MaxAgeHoursParameter = "maxAgeHours";
     private const int DefaultMaxAgeHours = 24;
     private const int MaximumMaxAgeHours = 36500 * 24;
     private const int MaxFilesPerRun = 500;
@@ -81,7 +79,7 @@ internal sealed class MediaInfoExtractScanJob(
 
     private static Guid? ResolveContentHierarchyItemId(JobContext context)
     {
-        if (context.Parameters.TryGetValue(ContentHierarchyItemIdParameter, out var rawParameter) &&
+        if (context.Parameters.TryGetValue(MagpieJobs.Parameters.ContentHierarchyItemId, out var rawParameter) &&
             !string.IsNullOrWhiteSpace(rawParameter))
         {
             if (!Guid.TryParse(rawParameter, out var parsed))
@@ -153,7 +151,7 @@ internal sealed class MediaInfoExtractScanJob(
                 await jobManager.ExecuteAsync(
                     new JobEnqueueRequest
                     {
-                        JobType = MediaInfoExtractItemJob.Spec.JobType,
+                        JobType = MagpieJobs.Types.MediaInfoExtractItem,
                         Parameters = new Dictionary<string, string>()
                         {
                             [MagpieJobs.Parameters.MediaFileId] = candidate.Id.ToString("D"),
@@ -203,32 +201,16 @@ internal sealed class MediaInfoExtractScanJob(
         Guid contentHierarchyItemId,
         CancellationToken cancellationToken)
     {
-        const int pageSize = 500;
-        var files = new List<MediaFile>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await mediaFileRepository.QueryAsync(
-                new MediaFileQuery { ContentHierarchyItemId = contentHierarchyItemId },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            files.AddRange(pageItems);
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var files = await mediaFileRepository.QueryAllAsync(
+            new MediaFileQuery { ContentHierarchyItemId = contentHierarchyItemId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return files;
     }
 
     private int ReadPositiveIntParameter(IReadOnlyDictionary<string, string> parameters)
     {
-        if (!parameters.TryGetValue(MaxAgeHoursParameter, out var raw) || string.IsNullOrWhiteSpace(raw))
+        if (!parameters.TryGetValue(MagpieJobs.Parameters.MaxAgeHours, out var raw) || string.IsNullOrWhiteSpace(raw))
         {
             return DefaultMaxAgeHours;
         }
@@ -240,8 +222,9 @@ internal sealed class MediaInfoExtractScanJob(
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Raw} is not between 1 and {Maximum}. The job will use the default {Default}",
-            MaxAgeHoursParameter,
+            "Parameter {Parameter} value {Raw} is not between 1 and {Maximum}, so the job will use the default" +
+            " {Default}",
+            MagpieJobs.Parameters.MaxAgeHours,
             raw,
             MaximumMaxAgeHours,
             DefaultMaxAgeHours);

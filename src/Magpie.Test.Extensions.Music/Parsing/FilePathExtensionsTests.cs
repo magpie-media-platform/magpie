@@ -8,7 +8,7 @@ namespace Magpie.Test.Extensions.Music.Parsing;
 public class FilePathExtensionsTests
 {
     [Test]
-    public void Parse_ArtistAlbumTrackFolders_ExtractsFullHierarchy()
+    public void Parse_ExtractsFullHierarchy_WhenArtistAlbumTrackFolders()
     {
         // Arrange
         var path = "/library/music/Pink Floyd/The Wall (1979)/01 - In The Flesh.flac";
@@ -26,7 +26,7 @@ public class FilePathExtensionsTests
     }
 
     [Test]
-    public void Parse_AlbumFolderWithoutYear_ReturnsAlbumTitleOnly()
+    public void Parse_ReturnsAlbumTitleOnly_WhenAlbumFolderWithoutYear()
     {
         // Arrange
         var path = "/library/music/Daft Punk/Discovery/03 Digital Love.flac";
@@ -44,7 +44,7 @@ public class FilePathExtensionsTests
     }
 
     [Test]
-    public void Parse_NoAlbumFolder_UsesFilenameWithoutTrackNumberAsAlbum()
+    public void Parse_UsesFilenameWithoutTrackNumberAsAlbum_WhenNoAlbumFolder()
     {
         // Arrange
         var path = "/01 - In The Flesh.flac";
@@ -62,7 +62,7 @@ public class FilePathExtensionsTests
     }
 
     [Test]
-    public void Parse_NoArtistFolder_ReturnsNullArtist()
+    public void Parse_ReturnsNullArtist_WhenNoArtistFolder()
     {
         // Arrange
         var path = "/The Wall (1979)/01 - In The Flesh.flac";

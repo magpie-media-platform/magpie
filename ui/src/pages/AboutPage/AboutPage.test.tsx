@@ -111,6 +111,7 @@ describe('AboutPage', () => {
         renderAboutPage();
 
         expect(screen.queryByText(/v0\.1\.0/)).not.toBeInTheDocument();
+        expect(screen.getByText('Uptime').querySelector('svg')).toBeInTheDocument();
     });
 
     describe('System Information Section', () => {

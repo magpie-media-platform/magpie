@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { GearSixIcon, FloppyDiskIcon, PlugsConnectedIcon } from '@phosphor-icons/react';
 
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
+import { getErrorMessage } from '@/lib/errors';
 import { Button } from '@/components/ui/Button';
 import { IntegrationSettingsForm } from '@/components/integrations/IntegrationSettingsForm/IntegrationSettingsForm';
 import { useToast } from '@/components/ui/Toast';
@@ -20,16 +21,12 @@ interface ExtensionSettingsSectionProps {
 }
 
 export function ExtensionSettingsSection({ extensionId }: ExtensionSettingsSectionProps): ReactNode {
-    const { groups, dataUpdatedAt } = useExtensionSettingsGroups(extensionId);
+    const { groups, dataUpdatedAt, isLoading, error } = useExtensionSettingsGroups(extensionId);
 
     const configurable = useMemo(
         () => groups.filter((group) => (group.schema?.length ?? 0) > 0).sort((a, b) => a.name.localeCompare(b.name)),
         [groups],
     );
-
-    if (configurable.length === 0) {
-        return null;
-    }
 
     return (
         <section className="extension-detail__section" data-section="settings">
@@ -37,6 +34,17 @@ export function ExtensionSettingsSection({ extensionId }: ExtensionSettingsSecti
                 <GearSixIcon weight="duotone" aria-hidden="true" />
                 Settings
             </h2>
+            {error ? (
+                <p className="extension-detail__section-note extension-detail__section-note--error" role="alert">
+                    Failed to load settings. {getErrorMessage(error)}
+                </p>
+            ) : isLoading ? (
+                <p className="extension-detail__section-note" role="status">
+                    Loading settings...
+                </p>
+            ) : configurable.length === 0 ? (
+                <p className="extension-detail__section-note">This extension has no configurable settings.</p>
+            ) : null}
             {configurable.map((group) => (
                 <ExtensionSettingsGroupForm
                     key={`${extensionId}:${group.name}`}
@@ -205,8 +213,11 @@ function ExtensionSettingsGroupForm({ extensionId, group, serverVersion }: Exten
             setShowStaleSaveDialog(false);
             toast({ title: 'Settings Saved', description: `${group.name} settings saved.`, variant: 'success' });
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to save settings.';
-            toast({ title: 'Save Failed', description: message, variant: 'error' });
+            toast({
+                title: 'Save Failed',
+                description: getErrorMessage(err, 'Failed to save settings.'),
+                variant: 'error',
+            });
         }
     }, [group.name, group.settings, schema, toast, update]);
 
@@ -228,8 +239,11 @@ function ExtensionSettingsGroupForm({ extensionId, group, serverVersion }: Exten
                 variant: result.success ? 'success' : 'error',
             });
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to run the connection test.';
-            toast({ title: 'Connection Failed', description: message, variant: 'error' });
+            toast({
+                title: 'Connection Failed',
+                description: getErrorMessage(err, 'Failed to run the connection test.'),
+                variant: 'error',
+            });
         }
     }, [connectionTest, schema, toast, values]);
 
@@ -284,7 +298,7 @@ function ExtensionSettingsGroupForm({ extensionId, group, serverVersion }: Exten
             </div>
             <StaleSaveConfirmationDialog
                 open={showStaleSaveDialog}
-                entityLabel="Configuration"
+                entityLabel="configuration"
                 saving={update.isUpdating}
                 onCancel={() => setShowStaleSaveDialog(false)}
                 onConfirm={() => void save()}

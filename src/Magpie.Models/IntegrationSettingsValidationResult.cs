@@ -10,10 +10,10 @@ public sealed record IntegrationSettingsValidationResult
     /// <summary>
     /// Whether the settings are valid.
     /// </summary>
-    public required bool IsValid { get; init; }
+    public required bool IsValid { get; set; }
 
     /// <summary>
     /// The validation issues, empty when the settings are valid.
     /// </summary>
-    public IReadOnlyList<IntegrationSettingsValidationIssue> Issues { get; init; } = [];
+    public IReadOnlyList<IntegrationSettingsValidationIssue> Issues { get; set; } = [];
 }

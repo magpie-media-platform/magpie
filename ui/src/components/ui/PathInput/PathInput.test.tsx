@@ -10,6 +10,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 }));
 
 import { AuthProvider } from '@/auth';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 import { Role } from '@/auth/types';
 import { apiPost } from '@/lib/api';
 import { testEffectivePermissions } from '@/test/permissions';
@@ -26,7 +27,7 @@ function createWrapper(user = { id: '1', username: 'admin', role: Role.Admin as 
     return ({ children }: { children: ReactNode }) => (
         <QueryClientProvider client={queryClient}>
             <AuthProvider initialUser={user} skipSessionInit={true} initialPermissions={testEffectivePermissions()}>
-                {children}
+                <TooltipProvider>{children}</TooltipProvider>
             </AuthProvider>
         </QueryClientProvider>
     );
@@ -201,10 +202,10 @@ describe('PathInput', () => {
             expect(screen.getByRole('button', { name: /browse/i })).not.toBeDisabled();
         });
 
-        it('disables unrestricted browse button for Manager', () => {
+        it('enables unrestricted browse button for Manager', () => {
             const manager = { id: '1', username: 'manager', role: Role.Manager as Role };
             render(<PathInput aria-label="Path" />, { wrapper: createWrapper(manager) });
-            expect(screen.getByRole('button', { name: /browse/i })).toBeDisabled();
+            expect(screen.getByRole('button', { name: /browse/i })).not.toBeDisabled();
         });
 
         it('enables scoped content browse button for Manager', () => {
