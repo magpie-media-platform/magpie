@@ -4,7 +4,7 @@ import { apiGet, buildUrl } from '@/lib/api';
 import type { PagedList } from '@/types/paging';
 import { queryErrorOrNull } from '@/lib/utils';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
-import { indexerQueryKeys } from './useIndexers';
+import { countConfiguredIndexerInstances, indexerQueryKeys, type ApiIndexer } from './useIndexers';
 import { downloadClientQueryKeys } from './useDownloadClients';
 import { rootFolderQueryKeys } from './useRootFolders';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
@@ -75,6 +75,7 @@ const rootFolderListQueryKey = rootFolderQueryKeys.list();
 const monitoredContentQueryKey = ['system', 'onboarding-monitored-content'] as const;
 
 const anyItem = (items: unknown[]) => items.length > 0;
+const anyConfiguredIndexer = (indexers: ApiIndexer[]) => countConfiguredIndexerInstances(indexers) > 0;
 const presenceStaleTime = POLLING_INTERVALS.normal / 2;
 
 export function useOnboardingStatus() {
@@ -103,8 +104,8 @@ export function useOnboardingStatus() {
         queries: [
             {
                 queryKey: indexerListQueryKey,
-                queryFn: () => apiGet<unknown[]>('/indexers'),
-                select: anyItem,
+                queryFn: () => apiGet<ApiIndexer[]>('/indexers'),
+                select: anyConfiguredIndexer,
                 staleTime: presenceStaleTime,
             },
             {

@@ -97,8 +97,8 @@ describe('useContent hooks', () => {
                     level: 'show',
                     slug: 'breaking-bad',
                     name: 'Breaking Bad',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     createdAt: '2024-01-01T00:00:00Z',
                     metadataContainer: {
                         id: '22222222-2222-2222-2222-222222222222',
@@ -133,7 +133,7 @@ describe('useContent hooks', () => {
 
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-            expect(api.apiGet).toHaveBeenCalledWith('/content');
+            expect(api.apiGet).toHaveBeenCalledWith('/content', { signal: expect.any(AbortSignal) });
             expect(result.current.data).toEqual({
                 items: [
                     {
@@ -143,9 +143,10 @@ describe('useContent hooks', () => {
                         level: 'show',
                         levelLabel: 'Show',
                         contentType: 'episodes',
-                        monitoring: true,
-                        effectiveMonitoring: true,
+                        monitoring: 'Monitored',
+                        effectiveMonitoring: 'Monitored',
                         fulfillment: 'fulfilled',
+                        importPending: false,
                         year: 2008,
                         publishDate: '2008-01-20T00:00:00Z',
                         dateAdded: '2024-01-01T00:00:00Z',
@@ -179,7 +180,80 @@ describe('useContent hooks', () => {
 
             expect(api.apiGet).toHaveBeenCalledWith(
                 '/content?contentType=episodes&monitoring=true&filter=breaking&pageNumber=2&pageSize=50',
+                { signal: expect.any(AbortSignal) },
             );
+        });
+
+        it('useContentList_KeepsLatestResults_WhenOlderRequestResolvesLast', async () => {
+            // Arrange
+            let resolveOlder!: (value: typeof mockPagedResponse) => void;
+            let resolveLatest!: (value: typeof mockPagedResponse) => void;
+            const olderResponse = new Promise<typeof mockPagedResponse>((resolve) => {
+                resolveOlder = resolve;
+            });
+            const latestResponse = new Promise<typeof mockPagedResponse>((resolve) => {
+                resolveLatest = resolve;
+            });
+            vi.mocked(api.apiGet).mockImplementation((url: string) =>
+                url.includes('filter=older') ? olderResponse : latestResponse,
+            );
+
+            // Act
+            const { result, rerender } = renderHook(({ filter }) => useContentList({ filter }), {
+                initialProps: { filter: 'older' },
+                wrapper: createWrapper(queryClient),
+            });
+            await waitFor(() =>
+                expect(api.apiGet).toHaveBeenCalledWith('/content?filter=older', { signal: expect.any(AbortSignal) }),
+            );
+            rerender({ filter: 'latest' });
+            await waitFor(() =>
+                expect(api.apiGet).toHaveBeenCalledWith('/content?filter=latest', { signal: expect.any(AbortSignal) }),
+            );
+
+            await act(async () => {
+                resolveLatest({
+                    ...mockPagedResponse,
+                    items: [
+                        {
+                            ...mockPagedResponse.items[0],
+                            metadataContainer: {
+                                ...mockPagedResponse.items[0].metadataContainer,
+                                contributions: [
+                                    {
+                                        ...mockPagedResponse.items[0].metadataContainer.contributions[0],
+                                        title: 'Latest title',
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                });
+            });
+            await waitFor(() => expect(result.current.data?.items[0]?.title).toBe('Latest title'));
+
+            await act(async () => {
+                resolveOlder({
+                    ...mockPagedResponse,
+                    items: [
+                        {
+                            ...mockPagedResponse.items[0],
+                            metadataContainer: {
+                                ...mockPagedResponse.items[0].metadataContainer,
+                                contributions: [
+                                    {
+                                        ...mockPagedResponse.items[0].metadataContainer.contributions[0],
+                                        title: 'Older title',
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                });
+            });
+
+            // Assert
+            expect(result.current.data?.items[0]?.title).toBe('Latest title');
         });
 
         it('refetches a filtered list exactly once when matching content is created before metadata exists', async () => {
@@ -259,8 +333,8 @@ describe('useContent hooks', () => {
             level: 'movie',
             slug: 'oppenheimer',
             name: 'Oppenheimer',
-            monitoring: true,
-            effectiveMonitoring: true,
+            monitoring: 'Monitored',
+            effectiveMonitoring: 'Monitored',
             path: '/movies/Oppenheimer',
             createdAt: '2024-01-01T00:00:00Z',
             metadataContainer: {
@@ -300,9 +374,10 @@ describe('useContent hooks', () => {
                 posterUrl: 'https://example.com/poster.jpg',
                 level: 'movie',
                 levelLabel: 'Movie',
-                monitoring: true,
-                effectiveMonitoring: true,
+                monitoring: 'Monitored',
+                effectiveMonitoring: 'Monitored',
                 fulfillment: 'fulfilled',
+                importPending: false,
                 year: 2023,
                 publishDate: '2023-07-21T00:00:00Z',
                 overview: 'The story of J. Robert Oppenheimer.',
@@ -405,6 +480,69 @@ describe('useContent hooks', () => {
                 vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === `/content/${mockContentItem.id}`),
             ).toHaveLength(1);
             resolveContentRefresh?.(mockContentItem);
+        });
+
+        it('keeps each ancestor query on its own id when refetched after an inheritance walk', async () => {
+            // The app keeps walked ancestor queries cached; with gcTime 0 they are rebuilt and the refetch boundary is lost.
+            queryClient.setQueryDefaults(contentQueryKeys.all, { gcTime: 300_000 });
+            const track = {
+                ...mockContentItem,
+                id: 'track-1',
+                name: 'Breed',
+                parentId: 'album-1',
+                effectiveRootFolderId: 'root-1',
+                effectiveQualityTierListId: 'tiers-1',
+            };
+            const album = { ...mockContentItem, id: 'album-1', name: 'Nevermind', parentId: 'artist-1' };
+            const artist = {
+                ...mockContentItem,
+                id: 'artist-1',
+                name: 'Nirvana',
+                rootFolderId: 'root-1',
+                qualityTierListId: 'tiers-1',
+            };
+            vi.mocked(api.apiGet).mockImplementation((path: string) => {
+                const item = { '/content/track-1': track, '/content/album-1': album, '/content/artist-1': artist }[
+                    path
+                ];
+                if (item) {
+                    return Promise.resolve(item);
+                }
+                if (path === '/root-folders' || path === '/quality-tier-lists') {
+                    return Promise.resolve([]);
+                }
+                return Promise.reject(new Error(`Unexpected path: ${path}`));
+            });
+
+            const { result } = renderHook(
+                () => ({
+                    rootFolder: useEffectiveRootFolder('track-1'),
+                    qualityTierList: useEffectiveQualityTierList('track-1'),
+                }),
+                { wrapper: createWrapper(queryClient) },
+            );
+            await waitFor(() => {
+                expect(result.current.rootFolder.data?.resolvingHierarchyItemId).toBe('artist-1');
+                expect(result.current.qualityTierList.data?.resolvingHierarchyItemId).toBe('artist-1');
+            });
+
+            vi.mocked(api.apiGet).mockClear();
+            await act(() => queryClient.refetchQueries({ queryKey: ['content', 'detail'] }));
+
+            expect(
+                vi
+                    .mocked(api.apiGet)
+                    .mock.calls.map(([path]) => path)
+                    .sort(),
+            ).toEqual(['/content/album-1', '/content/artist-1', '/content/track-1']);
+            expect(queryClient.getQueryData(contentQueryKeys.detail('album-1'))).toMatchObject({
+                id: 'album-1',
+                name: 'Nevermind',
+            });
+            expect(queryClient.getQueryData(contentQueryKeys.detail('artist-1'))).toMatchObject({
+                id: 'artist-1',
+                name: 'Nirvana',
+            });
         });
 
         it('does not fetch when id is undefined', () => {
@@ -625,7 +763,7 @@ describe('useContent hooks', () => {
 
             result.current.mutate({
                 id: '11111111-1111-1111-1111-111111111111',
-                monitoring: true,
+                monitoring: 'Monitored',
                 qualityTierListId: 'tier-1',
                 rootFolderId: 'folder-1',
             });
@@ -633,7 +771,7 @@ describe('useContent hooks', () => {
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
             expect(api.apiPatch).toHaveBeenCalledWith('/content/11111111-1111-1111-1111-111111111111', {
-                monitoring: { value: true },
+                monitoring: { value: 'Monitored' },
                 qualityTierListId: { value: 'tier-1' },
                 rootFolderId: { value: 'folder-1' },
             });
@@ -674,13 +812,13 @@ describe('useContent hooks', () => {
 
             result.current.mutate({
                 id: '11111111-1111-1111-1111-111111111111',
-                monitoring: false,
+                monitoring: 'Unmonitored',
             });
 
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
             expect(api.apiPatch).toHaveBeenCalledWith('/content/11111111-1111-1111-1111-111111111111', {
-                monitoring: { value: false },
+                monitoring: { value: 'Unmonitored' },
             });
         });
 
@@ -694,7 +832,7 @@ describe('useContent hooks', () => {
 
             result.current.mutate({
                 id: '11111111-1111-1111-1111-111111111111',
-                monitoring: true,
+                monitoring: 'Monitored',
             });
 
             await waitFor(() => expect(result.current.isError).toBe(true));
@@ -712,14 +850,14 @@ describe('useContent hooks', () => {
 
             result.current.mutate({
                 ids: ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'],
-                patch: { monitoring: { value: false } },
+                patch: { monitoring: { value: 'Unmonitored' } },
             });
 
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
             expect(api.apiPatch).toHaveBeenCalledWith('/content/bulk', {
                 ids: ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'],
-                patch: { monitoring: { value: false } },
+                patch: { monitoring: { value: 'Unmonitored' } },
             });
             expect(result.current.data).toEqual({ count: 2, error: null });
             expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.all });

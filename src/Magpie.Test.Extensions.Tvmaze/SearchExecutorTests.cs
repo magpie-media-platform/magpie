@@ -5139,4 +5139,241 @@ internal sealed class SearchExecutorTests
                 disposition.Disposition == "pass-through-residual"), Is.True);
         }
     }
+
+    [Test]
+    public async Task ContinueSearchAsync_PreservesFilteredLookahead_WhenBrowsePagesContinueAndReplay()
+    {
+        // Arrange
+        var pages = new List<int>();
+        _client.Setup(value => value.GetShowsPageAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Callback((int page, CancellationToken _) => pages.Add(page))
+            .ReturnsAsync((int page, CancellationToken _) => page switch
+            {
+                0 => [new ShowDto { Id = 1, Name = "discard" }, new ShowDto { Id = 2, Name = "keep two" }],
+                1 => [new ShowDto { Id = 3, Name = "keep three" }, new ShowDto { Id = 4, Name = "keep four" }],
+                _ => null
+            });
+        var planner = new Mock<ISearchPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>()))
+            .Returns((ContentHierarchyItemCriteria query, int maximum) => new QueryPlan
+            {
+                Query = query,
+                Metadata = new MetadataCriteria(),
+                MaximumResults = maximum,
+                Dispositions = [],
+                Root = new FilterPlanNode
+                {
+                    Id = 2,
+                    Contributes = "verified",
+                    Child = new FetchPlanNode
+                    {
+                        Id = 1,
+                        Contributes = "browse",
+                        AnchorKind = SearchAnchorKind.Browse,
+                        Seed = new SearchSeed.Browse()
+                    },
+                    HitFilters = [new LocalFilter
+                    {
+                        Kind = LocalFilterKind.Title, Operator = CriteriaValueOperator.ContainsString,
+                        StringValues = ["keep"]
+                    }],
+                    AkaFilters = [],
+                    RelationshipResiduals = [],
+                    ImageResiduals = []
+                }
+            });
+        var searcher = new ContentMetadataSearcher(_client.Object, planner.Object, _executor,
+            NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("tv", new(), 2, "", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("tv", new(), 2, "", first.Continuation).ConfigureAwait(false);
+        var retry = await searcher.ContinueSearchAsync("tv", new(), 2, "", first.Continuation).ConfigureAwait(false);
+        var independent = await searcher.ContinueSearchAsync("tv", new(), 2, "", null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["2", "3"]));
+            Assert.That(second.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["4"]));
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(retry.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["4"]));
+            Assert.That(independent.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["2", "3"]));
+            Assert.That(pages, Is.EqualTo([0, 1, 1, 2, 1, 2, 0, 1]));
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ContinueSearchAsync_ReplaysLastSourcePage_WhenFilteredScanBudgetEnds(bool emptyPages)
+    {
+        // Arrange
+        _client.Setup(client => client.GetShowsPageAsync(It.IsIn(0, 1, 2, 3), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(emptyPages ? [] : [new ShowDto { Id = 1, Name = "No image" }]);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+                1, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ShowDto { Id = 1, Name = "No image", Embedded = new ShowEmbeddedDto { Images = [] } });
+        _client.SetupSequence(client => client.GetShowsPageAsync(3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(emptyPages ? [] : [new ShowDto { Id = 1, Name = "No image" }])
+            .ReturnsAsync([new ShowDto
+            {
+                Id = 4,
+                Name = "New on last page",
+                Image = new ImageReferenceDto { Original = "https://static.tvmaze.com/new.jpg" }
+            }]);
+        _client.Setup(client => client.GetShowsPageAsync(4, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new ShowDto
+            {
+                Id = 5,
+                Name = "Matched",
+                Image = new ImageReferenceDto { Original = "https://static.tvmaze.com/matched.jpg" }
+            }]);
+        _client.Setup(client => client.GetShowsPageAsync(5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ShowDto>?)null);
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria>
+            {
+                And = [new MetadataCriteria { Images = new CollectionCriteria<ImageCriteria> { Some = [[new()]] } }]
+            }
+        };
+        var searcher = new ContentMetadataSearcher(_client.Object,
+            new SearchPlanner(NullLogger<SearchPlanner>.Instance), _executor,
+            NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("tv", query, 2, "", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("tv", query, 2, "", first.Continuation).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches, Is.Empty);
+            Assert.That(first.Page.Warnings, Is.Empty);
+            Assert.That(first.Page.PageInfo.HasMore, Is.True);
+            Assert.That(second.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["4", "5"]));
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(_client.Invocations.Where(value => value.Method.Name == "GetShowsPageAsync")
+                .Select(value => value.Arguments[0]), Is.EqualTo([0, 1, 2, 3, 3, 4, 5]));
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ContinueSearchAsync_RetriesUnverifiedBrowseCandidate_WhenLaterPageReachesExhaustion(
+        bool requestFailed)
+    {
+        // Arrange
+        _client.Setup(client => client.GetShowsPageAsync(0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new ShowDto { Id = 1, Name = "First" }]);
+        _client.Setup(client => client.GetShowsPageAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new ShowDto
+            {
+                Id = 2,
+                Name = "Second",
+                Image = new ImageReferenceDto { Original = "https://static.tvmaze.com/second.jpg" }
+            }]);
+        _client.Setup(client => client.GetShowsPageAsync(2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ShowDto>?)null);
+        var recoveredShow = new ShowDto
+        {
+            Id = 1,
+            Name = "First",
+            Image = new ImageReferenceDto { Original = "https://static.tvmaze.com/first.jpg" },
+            Embedded = new ShowEmbeddedDto { Images = [] }
+        };
+        _client.SetupSequence(client => client.GetShowWithEmbedsAsync(
+                1, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(requestFailed
+                ? Task.FromException<ShowDto?>(new HttpRequestException("Temporary detail failure"))
+                : Task.FromResult<ShowDto?>(null))
+            .ReturnsAsync(recoveredShow)
+            .ReturnsAsync(recoveredShow);
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria>
+            {
+                And = [new MetadataCriteria { Images = new CollectionCriteria<ImageCriteria> { Some = [[new()]] } }]
+            }
+        };
+        var searcher = new ContentMetadataSearcher(_client.Object,
+            new SearchPlanner(NullLogger<SearchPlanner>.Instance), _executor,
+            NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("tv", query, 2, "", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("tv", query, 2, "", first.Continuation).ConfigureAwait(false);
+        var independent = await searcher.ContinueSearchAsync("tv", query, 2, "", null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["2"]));
+            Assert.That(first.Page.Warnings, Is.Not.Empty);
+            Assert.That(first.Page.PageInfo.HasMore, Is.True);
+            Assert.That(second.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["1"]));
+            Assert.That(second.Page.Warnings, Is.Empty);
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(independent.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["1", "2"]));
+            Assert.That(_client.Invocations.Where(value => value.Method.Name == "GetShowsPageAsync")
+                .Select(value => value.Arguments[0]), Is.EqualTo([0, 1, 2, 0, 1, 2, 0, 1, 2]));
+        }
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_PreservesRetryAndLookahead_WhenUnverifiedPagePrecedesFullPage()
+    {
+        // Arrange
+        _client.Setup(client => client.GetShowsPageAsync(0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new ShowDto { Id = 1, Name = "First" }]);
+        _client.Setup(client => client.GetShowsPageAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new ShowDto { Id = 2, Name = "Second", Image = new() { Original = "https://static.tvmaze.com/2.jpg" } },
+                new ShowDto { Id = 3, Name = "Third", Image = new() { Original = "https://static.tvmaze.com/3.jpg" } },
+                new ShowDto { Id = 4, Name = "Fourth", Image = new() { Original = "https://static.tvmaze.com/4.jpg" } }
+            ]);
+        _client.Setup(client => client.GetShowsPageAsync(2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ShowDto>?)null);
+        var recoveredShow = new ShowDto
+        {
+            Id = 1,
+            Name = "First",
+            Image = new ImageReferenceDto { Original = "https://static.tvmaze.com/first.jpg" },
+            Embedded = new ShowEmbeddedDto { Images = [] }
+        };
+        _client.SetupSequence(client => client.GetShowWithEmbedsAsync(
+                1, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ShowDto?)null)
+            .ReturnsAsync(recoveredShow)
+            .ReturnsAsync(recoveredShow);
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria>
+            {
+                And = [new MetadataCriteria { Images = new CollectionCriteria<ImageCriteria> { Some = [[new()]] } }]
+            }
+        };
+        var searcher = new ContentMetadataSearcher(_client.Object,
+            new SearchPlanner(NullLogger<SearchPlanner>.Instance), _executor,
+            NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("tv", query, 2, "", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("tv", query, 2, "", first.Continuation).ConfigureAwait(false);
+        var retry = await searcher.ContinueSearchAsync("tv", query, 2, "", first.Continuation).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["2", "3"]));
+            Assert.That(first.Page.Warnings, Is.Not.Empty);
+            Assert.That(first.Page.PageInfo.HasMore, Is.True);
+            Assert.That(second.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["1", "4"]));
+            Assert.That(second.Page.Warnings, Is.Empty);
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(retry.Page.Matches.Select(value => value.ExternalId), Is.EqualTo(["1", "4"]));
+            Assert.That(_client.Invocations.Where(value => value.Method.Name == "GetShowsPageAsync")
+                .Select(value => value.Arguments[0]), Is.EqualTo([0, 1, 0, 1, 2, 0, 1, 2]));
+        }
+    }
 }

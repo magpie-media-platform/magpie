@@ -1,4 +1,14 @@
 @layer components {
+    .subject-content-tab__mobile-monitoring {
+        display: inline-flex;
+        align-items: center;
+        color: var(--text-muted);
+    }
+
+    .subject-content-tab__mobile-monitoring--active {
+        color: var(--status-healthy);
+    }
+
     .subject-content-tab__loading {
         display: flex;
         flex-direction: column;

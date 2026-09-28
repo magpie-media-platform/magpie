@@ -1,20 +1,21 @@
 import { forwardRef, type ComponentPropsWithoutRef, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
-import { CaretLeftIcon, DotsThreeVerticalIcon } from '@phosphor-icons/react';
+import { CaretLeftIcon } from '@phosphor-icons/react';
 
-import { ContentPoster } from '@/components/content/ContentCardPrimitives';
+import {
+    ContentFulfillmentBadge,
+    ContentMonitoringIndicator,
+    ContentPoster,
+} from '@/components/content/ContentCardPrimitives';
 import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
 import { Badge } from '@/components/ui/Badge';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
-import { Button } from '@/components/ui/Button';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from '@/components/ui/DropdownMenu';
 import { AwardsPanel } from '@/components/ui/AwardsPanel';
 import type { AwardGroup } from '@/lib/materializedMetadataDisplay';
 import { PreviewPlayer, type PreviewClip } from '@/components/ui/PreviewPlayer';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { isUnrecognizedContentLevel, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
-import { getFulfillmentBadge } from '@/types/content';
-import type { AcquisitionStatus } from '@/types';
+import type { AcquisitionStatus, MonitoringMode } from '@/types';
 import type { FulfillmentStatus } from '@/components/ui/ContentList';
 
 import './ContentDetailsHeader.css';
@@ -40,11 +41,12 @@ export interface ContentDetailItem {
 
     contentType?: string;
 
-    monitoring: boolean | null;
+    monitoring: MonitoringMode | null;
 
-    effectiveMonitoring: boolean;
+    effectiveMonitoring: MonitoringMode;
 
     fulfillment: FulfillmentStatus;
+    importPending?: boolean;
 
     acquisitionStatus?: AcquisitionStatus;
 
@@ -67,27 +69,11 @@ export interface ContentDetailsHeaderProps extends Omit<ComponentPropsWithoutRef
     awards?: AwardGroup[];
 
     actions?: React.ReactNode;
-
-    hideMobileActions?: boolean;
 }
 
 export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeaderProps>(
-    (
-        {
-            content,
-            parent,
-            heroPreview,
-            contentRatings,
-            awards,
-            actions,
-            hideMobileActions = false,
-            className,
-            ...props
-        },
-        ref,
-    ) => {
+    ({ content, parent, heroPreview, contentRatings, awards, actions, className, ...props }, ref) => {
         const classes = ['content-details-header', className].filter(Boolean).join(' ');
-        const isMonitored = content.effectiveMonitoring;
         const { contentTypes } = useLibraryTypes();
         const typeIconName = useTypeIconName();
         const contentTypeLabel =
@@ -171,11 +157,19 @@ export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeader
                             {contentTypeLabel}
                         </Badge>
 
-                        {isMonitored && (
-                            <Badge variant={getFulfillmentBadge(content.fulfillment).variant} size="md" dot>
-                                {getFulfillmentBadge(content.fulfillment).label}
-                            </Badge>
-                        )}
+                        <ContentMonitoringIndicator
+                            monitoring={content.monitoring}
+                            effectiveMonitoring={content.effectiveMonitoring}
+                            className="content-details-header__monitoring"
+                            activeClassName="content-details-header__monitoring--active"
+                            labelClassName="content-details-header__monitoring-label"
+                        />
+
+                        <ContentFulfillmentBadge
+                            fulfillment={content.fulfillment}
+                            importPending={content.importPending}
+                            size="md"
+                        />
 
                         {content.acquisitionStatus && <AcquisitionBadge status={content.acquisitionStatus} />}
 
@@ -192,26 +186,6 @@ export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeader
                     <AwardsPanel groups={awards ?? []} data-component="content-awards-panel" />
 
                     {actions && <div className="content-details-header__actions">{actions}</div>}
-
-                    {actions && !hideMobileActions && (
-                        <div className="content-details-header__mobile-actions">
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        aria-label="Actions"
-                                        data-testid="content-details-header__mobile-menu"
-                                    >
-                                        <DotsThreeVerticalIcon weight="bold" aria-hidden="true" />
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" sideOffset={4}>
-                                    <div className="content-details-header__mobile-actions-content">{actions}</div>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-                        </div>
-                    )}
                 </div>
             </header>
         );

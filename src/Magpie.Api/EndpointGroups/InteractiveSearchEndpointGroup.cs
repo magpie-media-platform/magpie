@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,13 +17,16 @@ namespace Magpie.Api.EndpointGroups;
 
 internal sealed class InteractiveSearchEndpointGroup : IApiEndpointGroup
 {
+    private const string NoDownloadClientProblemType = "urn:magpie:problem:no-download-client";
+    private const string AcquisitionInProgressProblemType = "urn:magpie:problem:acquisition-in-progress";
+
     public string Name => "interactive-search";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapPost("{contentHierarchyItemId:guid}", SearchAsync)
             .WithName(nameof(SearchAsync))
-            .Produces<IReadOnlyList<InteractiveSearchCandidate>>()
+            .Produces<InteractiveSearchResult>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireRequester();
 
@@ -43,7 +45,7 @@ internal sealed class InteractiveSearchEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         var candidates = await releaseSearchService
-            .SearchInteractiveAsync(contentHierarchyItemId, cancellationToken)
+            .SearchInteractiveResultAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
 
         return candidates is null ? Results.NotFound() : Results.Ok(candidates);
@@ -65,8 +67,14 @@ internal sealed class InteractiveSearchEndpointGroup : IApiEndpointGroup
             InteractiveReleaseGrabResult.Accepted =>
                 Results.Accepted($"/api/{Name}/{contentHierarchyItemId}/grab", result.ExecutionId),
             InteractiveReleaseGrabResult.ContentNotFound => Results.NotFound(),
-            InteractiveReleaseGrabResult.NoDownloadClient or InteractiveReleaseGrabResult.AlreadyInProgress =>
-                Results.Problem(detail: result.Detail, statusCode: StatusCodes.Status409Conflict),
+            InteractiveReleaseGrabResult.NoDownloadClient => Results.Problem(
+                detail: result.Detail,
+                statusCode: StatusCodes.Status409Conflict,
+                type: NoDownloadClientProblemType),
+            InteractiveReleaseGrabResult.AlreadyInProgress => Results.Problem(
+                detail: result.Detail,
+                statusCode: StatusCodes.Status409Conflict,
+                type: AcquisitionInProgressProblemType),
             _ => Results.Problem(
                 detail: result.Detail,
                 statusCode: StatusCodes.Status400BadRequest),

@@ -109,7 +109,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [rootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
 
         // Act
@@ -139,7 +139,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [leafId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [leafId] = new() { Id = leafId, EffectiveMonitoring = true }
+            [leafId] = new() { Id = leafId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
 
         // Act
@@ -153,6 +153,7 @@ public sealed class ReleaseSearchScanJobTests
                     It.Is<ContentHierarchyItemCriteria>(c =>
                         c.LeafOnly == true &&
                         c.EffectiveMonitoring == true &&
+                        c.ImportPending == false &&
                         c.Fulfillment.And.Any(criterion =>
                             criterion.Operator == CriteriaValueOperator.In &&
                             criterion.Values!.Contains(FulfillmentStatus.Missing) &&
@@ -184,9 +185,19 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [firstLeafId, secondLeafId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [firstLeafId] = new() { Id = firstLeafId, ParentId = rootId, EffectiveMonitoring = true },
-            [secondLeafId] = new() { Id = secondLeafId, ParentId = rootId, EffectiveMonitoring = true },
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [firstLeafId] = new()
+            {
+                Id = firstLeafId,
+                ParentId = rootId,
+                EffectiveMonitoring = MonitoringMode.Monitored
+            },
+            [secondLeafId] = new()
+            {
+                Id = secondLeafId,
+                ParentId = rootId,
+                EffectiveMonitoring = MonitoringMode.Monitored
+            },
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
 
         // Act
@@ -224,10 +235,10 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [leafId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [leafId] = new() { Id = leafId, ParentId = seasonId, EffectiveMonitoring = true },
-            [seasonId] = new() { Id = seasonId, ParentId = rootId, EffectiveMonitoring = true },
-            [rootId] = new() { Id = rootId, ParentId = libraryId, EffectiveMonitoring = true },
-            [libraryId] = new() { Id = libraryId, EffectiveMonitoring = false }
+            [leafId] = new() { Id = leafId, ParentId = seasonId, EffectiveMonitoring = MonitoringMode.Monitored },
+            [seasonId] = new() { Id = seasonId, ParentId = rootId, EffectiveMonitoring = MonitoringMode.Monitored },
+            [rootId] = new() { Id = rootId, ParentId = libraryId, EffectiveMonitoring = MonitoringMode.Monitored },
+            [libraryId] = new() { Id = libraryId, EffectiveMonitoring = MonitoringMode.Unmonitored }
         };
 
         // Act
@@ -251,7 +262,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [rootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
 
         // Act
@@ -274,7 +285,7 @@ public sealed class ReleaseSearchScanJobTests
         var rootId = Guid.NewGuid();
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
 
         // Act
@@ -294,7 +305,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [rootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
 
         // Act
@@ -318,7 +329,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [leafId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [leafId] = new() { Id = leafId, EffectiveMonitoring = false }
+            [leafId] = new() { Id = leafId, EffectiveMonitoring = MonitoringMode.Unmonitored }
         };
 
         // Act
@@ -339,8 +350,8 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [firstRootId, secondRootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [firstRootId] = new() { Id = firstRootId, EffectiveMonitoring = true },
-            [secondRootId] = new() { Id = secondRootId, EffectiveMonitoring = true }
+            [firstRootId] = new() { Id = firstRootId, EffectiveMonitoring = MonitoringMode.Monitored },
+            [secondRootId] = new() { Id = secondRootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
         _jobManager
             .Setup(m => m.ExecuteAsync(
@@ -376,7 +387,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [rootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
         var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
             .Select(_ => new JobExecution
@@ -424,7 +435,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [rootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
         var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
             .Select(_ => new JobExecution
@@ -460,7 +471,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [rootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
         var rows = Enumerable.Range(0, DefaultBackpressureThreshold)
             .Select(_ => new JobExecution
@@ -501,7 +512,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [rootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
         var context = _jobContext with
         {
@@ -532,7 +543,7 @@ public sealed class ReleaseSearchScanJobTests
         _unfulfilledLeafIds = [rootId];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
         {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = true }
+            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
         };
         using var cts = new CancellationTokenSource();
         _jobManager

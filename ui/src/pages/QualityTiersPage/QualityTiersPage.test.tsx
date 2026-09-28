@@ -486,6 +486,9 @@ describe('QualityTiersPage', () => {
 
         expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
         expect(screen.getByRole('button', { name: 'Select' })).toBeInTheDocument();
+        expect(
+            screen.getByRole('button', { name: 'Select' }).closest('[data-component="mobile-list-toolbar"]'),
+        ).toBeInTheDocument();
     });
 
     it('hides the select toggle and column entirely from viewers', async () => {

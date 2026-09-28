@@ -36,7 +36,7 @@ internal sealed class ContentDefaultsRepair(
         var rootFolder = await rootFolderService.GetAsync(rootFolderId, cancellationToken).ConfigureAwait(false);
         if (rootFolder is null)
         {
-            return DiagnosticRepairResult.Failed("The root folder no longer exists; re-run the doctor scan.");
+            return DiagnosticRepairResult.Failed("The root folder no longer exists.");
         }
 
         var definition = contentTypeRegistry.GetDefinitionFor(rootFolder.ContentType);

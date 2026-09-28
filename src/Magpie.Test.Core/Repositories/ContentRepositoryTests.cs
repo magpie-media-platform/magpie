@@ -11,6 +11,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -25,16 +26,37 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ContentRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IContentRepository _subject = null!;
     private FakeTimeProvider _time = null!;
     private ContentHierarchyItem _hierarchyItem = null!;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.UseSqlite(_template).Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
-        _context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        _context = new MagpieDbContext(options.UseSqlite(connection, contextOwnsConnection: true).Options);
         var metadata = new MetadataContainer { CreatedAt = DateTime.UtcNow };
         _hierarchyItem = new ContentHierarchyItem
         {
@@ -53,7 +75,8 @@ public sealed class ContentRepositoryTests
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             _time,
-            NullLogger<ContentRepository>.Instance);
+            NullLogger<ContentRepository>.Instance, Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IFileSystem>(), Mock.Of<IAuditRecordRepository>());
     }
 
     [TearDown]
@@ -119,7 +142,7 @@ public sealed class ContentRepositoryTests
     }
 
     [Test]
-    public async Task UpdateAsync_SetsFulfilledAt_WhenItemBecomesFulfilled()
+    public async Task UpdateAsync_KeepsUnknownDate_WhenStatusChangesWithoutMediaHistory()
     {
         // Arrange
         var item = new ContentItem
@@ -138,11 +161,14 @@ public sealed class ContentRepositoryTests
         // Assert
         Assert.That(
             (await _subject.GetByIdAsync(item.Id).ConfigureAwait(false))!.FulfilledAt,
-            Is.EqualTo(new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc)));
+            Is.Null);
     }
 
     [TestCase(FulfillmentStatus.Fulfilled, FulfillmentStatus.FulfilledExternally)]
     [TestCase(FulfillmentStatus.FulfilledExternally, FulfillmentStatus.Fulfilled)]
+    [TestCase(FulfillmentStatus.Fulfilled, FulfillmentStatus.Upgradable)]
+    [TestCase(FulfillmentStatus.Partial, FulfillmentStatus.Fulfilled)]
+    [TestCase(FulfillmentStatus.Upgradable, FulfillmentStatus.Partial)]
     public async Task UpdateAsync_KeepsFulfilledAt_WhenFulfillmentStaysFulfilled(
         FulfillmentStatus from,
         FulfillmentStatus to)

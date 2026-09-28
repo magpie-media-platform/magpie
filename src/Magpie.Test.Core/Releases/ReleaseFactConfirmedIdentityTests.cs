@@ -47,6 +47,7 @@ public sealed class ReleaseFactConfirmedIdentityTests
             registry.Object,
             [],
             TimeProvider.System,
+            Mock.Of<IFileSystem>(),
             NullLogger<ReleaseEvaluationService>.Instance);
         var show = new ContentHierarchyItem
         {

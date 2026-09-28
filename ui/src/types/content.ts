@@ -24,6 +24,8 @@ import type { PagedList } from './paging';
 export type FulfillmentStatusValue = 'Missing' | 'Upgradable' | 'Fulfilled' | 'FulfilledExternally' | 'Partial';
 export type ApiFulfillmentStatus = FulfillmentStatusValue;
 
+export type MonitoringMode = 'Unmonitored' | 'Monitored' | 'Shotgun';
+
 export type FulfillmentStatus = 'missing' | 'upgradable' | 'fulfilled' | 'fulfilledExternally' | 'partial';
 
 export function formatLevelLabel(level: string | undefined): string {
@@ -70,7 +72,12 @@ const FULFILLMENT_BADGE_MAP: Record<FulfillmentStatus, FulfillmentBadge> = {
     partial: { variant: 'partial', label: 'Partial' },
 };
 
-export function getFulfillmentBadge(status: FulfillmentStatus): FulfillmentBadge {
+const IMPORT_PENDING_BADGE: FulfillmentBadge = { variant: 'pending', label: 'Import pending' };
+
+export function getFulfillmentBadge(status: FulfillmentStatus, importPending = false): FulfillmentBadge {
+    if (importPending && status === 'missing') {
+        return IMPORT_PENDING_BADGE;
+    }
     return FULFILLMENT_BADGE_MAP[status] ?? FULFILLMENT_BADGE_MAP.missing;
 }
 
@@ -137,13 +144,19 @@ export type DownloadStatusValue =
     | 'Importing'
     | 'Imported'
     | 'Failed'
+    | 'Faulted'
     | 'Cancelled';
+
+export type ReleaseScopeStatus = 'Matched' | 'Unmatched';
 
 export interface ApiContentItem {
     id: string;
     contentHierarchyItemId: string;
     fulfillment: FulfillmentStatusValue;
     fulfilledAt?: string | null;
+    primaryMediaSize?: number;
+    primaryMediaFileCount?: number;
+    mediaReconciledAt?: string | null;
     requestedAt?: string | null;
     requestedByUserId?: string | null;
     requestedViaWishlistId?: string | null;
@@ -170,8 +183,11 @@ export interface ApiContentHierarchyItem {
     level: string;
     slug: string;
     name: string;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    ordinal?: number | null;
+    importPending?: boolean;
+    tags?: string[] | null;
+    monitoring: MonitoringMode | null;
+    effectiveMonitoring: MonitoringMode;
     path?: string | null;
     languagePreferences?: string[];
     settings?: Record<string, string>;
@@ -224,15 +240,20 @@ export interface ContentListItem {
     level: string;
     levelLabel: string;
     contentType: string;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    ordinal?: number;
+    monitoring: MonitoringMode | null;
+    effectiveMonitoring: MonitoringMode;
     fulfillment: FulfillmentStatus;
+    importPending?: boolean;
+    tags?: string[];
     year?: number;
     publishDate?: string;
     sequenceNumber?: number;
     overview?: string;
     dateAdded?: string;
     fulfilledAt?: string;
+    primaryMediaSize?: number;
+    primaryMediaFileCount?: number;
     lastSearched?: string;
     acquisitionStatus?: AcquisitionStatus;
     previews?: ContentPreviewClip[];
@@ -244,9 +265,10 @@ export interface ContentDetailItem {
     posterUrl?: string;
     level: string;
     levelLabel: string;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: MonitoringMode | null;
+    effectiveMonitoring: MonitoringMode;
     fulfillment: FulfillmentStatus;
+    importPending?: boolean;
     year?: number;
     publishDate?: string;
     overview?: string;
@@ -266,6 +288,7 @@ export interface ContentDetailItem {
     qualityTierListId?: string;
     contentType: string;
     rootFolderId?: string | null;
+    effectiveRootFolderId?: string | null;
     contentItemId?: string | null;
     acquisitionStatus?: AcquisitionStatus;
     previews: ContentPreviewClip[];
@@ -310,15 +333,20 @@ export function mapToContentListItem(item: ApiContentHierarchyItem): ContentList
         level: item.level,
         levelLabel: formatLevelLabel(item.level),
         contentType: item.contentType,
+        ordinal: item.ordinal ?? undefined,
         monitoring: item.monitoring,
         effectiveMonitoring: item.effectiveMonitoring,
         fulfillment: contentItem ? mapFulfillmentStatus(contentItem.fulfillment) : 'missing',
+        importPending: item.importPending ?? false,
+        tags: item.tags ?? undefined,
         year: extractYear(metadata) ?? undefined,
         publishDate: extractPublishDate(metadata) ?? undefined,
         sequenceNumber: extractSequenceNumber(metadata) ?? undefined,
         overview: extractOverview(metadata) ?? undefined,
         dateAdded: item.createdAt,
         fulfilledAt: contentItem?.fulfilledAt ?? undefined,
+        primaryMediaSize: contentItem?.mediaReconciledAt ? contentItem.primaryMediaSize : undefined,
+        primaryMediaFileCount: contentItem?.mediaReconciledAt ? contentItem.primaryMediaFileCount : undefined,
         lastSearched: contentItem?.dateLastSearched ?? undefined,
         acquisitionStatus: mapAcquisitionStatus(contentItem?.activeAcquisitionStatus),
         previews: extractPreviewClips(metadata),
@@ -338,6 +366,7 @@ export function mapToContentDetailItem(item: ApiContentHierarchyItem): ContentDe
         monitoring: item.monitoring,
         effectiveMonitoring: item.effectiveMonitoring,
         fulfillment: contentItem ? mapFulfillmentStatus(contentItem.fulfillment) : 'missing',
+        importPending: item.importPending ?? false,
         year: extractYear(metadata) ?? undefined,
         publishDate: extractPublishDate(metadata) ?? undefined,
         overview: extractOverview(metadata) ?? undefined,
@@ -356,6 +385,7 @@ export function mapToContentDetailItem(item: ApiContentHierarchyItem): ContentDe
         qualityTierListId: item.qualityTierListId ?? undefined,
         contentType: item.contentType,
         rootFolderId: item.rootFolderId ?? undefined,
+        effectiveRootFolderId: item.effectiveRootFolderId ?? undefined,
         contentItemId: contentItem?.id ?? undefined,
         acquisitionStatus: mapAcquisitionStatus(contentItem?.activeAcquisitionStatus),
         previews: extractPreviewClips(metadata),

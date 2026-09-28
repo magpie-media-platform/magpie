@@ -32,7 +32,6 @@ internal sealed class DatabaseMaintenanceJob(
         Scope = JobScope.Administrative,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromMinutes(30),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.Global,
         Parameters =
@@ -42,13 +41,20 @@ internal sealed class DatabaseMaintenanceJob(
                 "Whether scheduled database backups are enabled.",
                 DataType.Boolean,
                 false,
-                DefaultBackupEnabled.ToString().ToLowerInvariant()),
+                DefaultBackupEnabled.ToString().ToLowerInvariant())
+            {
+                ValidateScheduleValue = (_, _, _) => null
+            },
             new(
                 MagpieJobs.Parameters.BackupIntervalDays,
                 "Minimum days between scheduled database backups.",
                 DataType.Number,
                 false,
-                DefaultBackupIntervalDays.ToString(CultureInfo.InvariantCulture)),
+                DefaultBackupIntervalDays.ToString(CultureInfo.InvariantCulture))
+            {
+                ValidateScheduleValue = (value, parameters, utcNow) => ValidateInterval(
+                    value, parameters, utcNow, MagpieJobs.Parameters.BackupEnabled, DefaultBackupEnabled)
+            },
             new(
                 MagpieJobs.Parameters.BackupRetentionCount,
                 "Scheduled database backups to retain.",
@@ -60,13 +66,20 @@ internal sealed class DatabaseMaintenanceJob(
                 "Whether scheduled database optimization is enabled.",
                 DataType.Boolean,
                 false,
-                DefaultOptimizeEnabled.ToString().ToLowerInvariant()),
+                DefaultOptimizeEnabled.ToString().ToLowerInvariant())
+            {
+                ValidateScheduleValue = (_, _, _) => null
+            },
             new(
                 MagpieJobs.Parameters.OptimizeIntervalDays,
                 "Minimum days between database optimizations.",
                 DataType.Number,
                 false,
                 DefaultOptimizeIntervalDays.ToString(CultureInfo.InvariantCulture))
+            {
+                ValidateScheduleValue = (value, parameters, utcNow) => ValidateInterval(
+                    value, parameters, utcNow, MagpieJobs.Parameters.OptimizeEnabled, DefaultOptimizeEnabled)
+            }
         ],
     };
 
@@ -75,6 +88,20 @@ internal sealed class DatabaseMaintenanceJob(
     private const int DefaultBackupRetentionCount = 7;
     private const bool DefaultOptimizeEnabled = true;
     private const int DefaultOptimizeIntervalDays = 7;
+
+    private static string? ValidateInterval(
+        string? value,
+        IReadOnlyDictionary<string, string> parameters,
+        DateTime utcNow,
+        string enabledParameter,
+        bool defaultEnabled)
+    {
+        var enabled = parameters.TryGetValue(enabledParameter, out var rawEnabled) &&
+            bool.TryParse(rawEnabled, out var configuredEnabled) ? configuredEnabled : defaultEnabled;
+        return enabled && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var days) &&
+            days > utcNow.Ticks / TimeSpan.TicksPerDay
+                ? "exceeds the supported date range." : null;
+    }
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {

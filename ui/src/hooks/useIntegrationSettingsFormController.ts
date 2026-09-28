@@ -20,6 +20,7 @@ import {
 } from '@/hooks/useValidateSettings';
 import type { IntegrationSettingsTestRequest } from '@/hooks/useTestConnection';
 import { toStringSettings } from '@/lib/integrationSettings';
+import { focusFirstInvalidField } from '@/lib/focusFirstInvalidField';
 
 interface IntegrationSettingsFormValues {
     id?: string;
@@ -256,6 +257,7 @@ export function useIntegrationSettingsFormController<TValues extends Integration
             }
             setSubmitted(true);
             if (!validateRequiredFields()) {
+                focusFirstInvalidField(e?.currentTarget ?? null);
                 return false;
             }
 

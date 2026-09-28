@@ -2,17 +2,19 @@ import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback, useSta
 import { CircleNotchIcon, DownloadSimpleIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
-import { Badge, type BadgeVariant } from '@/components/ui/Badge';
+import { ReleaseStatusBadge } from '@/components/releases/ReleaseStatusBadge';
+import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { DataTable } from '@/components/ui/DataTable';
 import { MobileListToolbar } from '@/components/ui/MobileListToolbar';
 import { sortTableRows } from '@/lib/sortTableRows';
 
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
+import { canRegrab } from '@/hooks/useDownloads';
 import { formatDate } from '@/lib/dateFormatting';
 import { formatFileSize } from '@/lib/formatSize';
 
-import type { DownloadStatusValue } from '@/types';
+import type { DownloadStatusValue, ReleaseScopeStatus } from '@/types';
 
 import './ContentTabs.css';
 
@@ -45,7 +47,11 @@ export interface ReleaseRow {
 
     acquisitionStatus?: DownloadStatusValue | null;
 
+    acquisitionWaitingReason?: string | null;
+
     failureReason?: string | null;
+
+    status?: ReleaseScopeStatus;
 }
 
 export interface ReleasesTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
@@ -58,6 +64,10 @@ export interface ReleasesTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 
     onGrab: (release: ReleaseRow) => void;
 
     canGrab?: boolean;
+
+    onUnmatchChange?: (release: ReleaseRow, status: ReleaseScopeStatus) => void;
+
+    unmatchingReleaseIds?: ReadonlySet<string>;
 
     onTitleClick?: (release: ReleaseRow) => void;
 
@@ -104,36 +114,85 @@ function TitleCell({ release, onTitleClick }: { release: ReleaseRow; onTitleClic
     );
 }
 
-const RELEASE_STATUS_META: Record<DownloadStatusValue, { variant: BadgeVariant; label: string }> = {
-    Grabbed: { variant: 'grabbed', label: 'Grabbed' },
-    Queued: { variant: 'queued', label: 'Queued' },
-    Downloading: { variant: 'downloading', label: 'Downloading' },
-    Paused: { variant: 'paused', label: 'Paused' },
-    Stalled: { variant: 'stalled', label: 'Stalled' },
-    Downloaded: { variant: 'downloaded', label: 'Downloaded' },
-    Importing: { variant: 'importing', label: 'Importing' },
-    Imported: { variant: 'imported', label: 'Imported' },
-    Failed: { variant: 'failed', label: 'Failed' },
-    Cancelled: { variant: 'cancelled', label: 'Cancelled' },
-};
-
-function humanizeFailureReason(reason?: string | null): string | undefined {
-    if (!reason) {
-        return undefined;
+function StatusCell({
+    status,
+    failureReason,
+    waitingReason,
+    unmatched,
+}: {
+    status?: DownloadStatusValue | null;
+    failureReason?: string | null;
+    waitingReason?: string | null;
+    unmatched?: boolean;
+}) {
+    if (!unmatched) {
+        return <AcquisitionStatus status={status} failureReason={failureReason} waitingReason={waitingReason} />;
     }
-    return reason.replace(/([a-z])([A-Z])/g, '$1 $2');
+    const unmatchedBadge = (
+        <Badge variant="default" size="sm" dot data-acquisition-status="Unmatched">
+            Unmatched
+        </Badge>
+    );
+    if (!status && !waitingReason) {
+        return unmatchedBadge;
+    }
+    return (
+        <span className="releases-tab__statuses">
+            <AcquisitionStatus status={status} failureReason={failureReason} waitingReason={waitingReason} />
+            {unmatchedBadge}
+        </span>
+    );
 }
 
-function StatusCell({ status, failureReason }: { status?: DownloadStatusValue | null; failureReason?: string | null }) {
+function AcquisitionStatus({
+    status,
+    failureReason,
+    waitingReason,
+}: {
+    status?: DownloadStatusValue | null;
+    failureReason?: string | null;
+    waitingReason?: string | null;
+}) {
+    if (waitingReason) {
+        return (
+            <span data-acquisition-status="Waiting">
+                <Badge variant="queued" size="sm" dot>
+                    Waiting for capacity
+                </Badge>
+                <span className="releases-tab__waiting-reason">{waitingReason}</span>
+            </span>
+        );
+    }
     if (!status) {
         return <span className="releases-tab__empty-cell">-</span>;
     }
-    const meta = RELEASE_STATUS_META[status];
-    const reason = status === 'Failed' ? humanizeFailureReason(failureReason) : undefined;
+    return <ReleaseStatusBadge status={status} failureReason={failureReason} />;
+}
+
+function UnmatchButton({
+    release,
+    isUnmatching,
+    onUnmatchChange,
+}: {
+    release: ReleaseRow;
+    isUnmatching: boolean;
+    onUnmatchChange: (release: ReleaseRow, status: ReleaseScopeStatus) => void;
+}) {
     return (
-        <Badge variant={meta.variant} size="sm" dot title={reason} data-acquisition-status={status}>
-            {meta.label}
-        </Badge>
+        <Button
+            variant="ghost"
+            size="sm"
+            onClick={(event) => {
+                event.stopPropagation();
+                onUnmatchChange(release, release.status === 'Unmatched' ? 'Matched' : 'Unmatched');
+            }}
+            disabled={isUnmatching}
+            aria-busy={isUnmatching || undefined}
+            data-action={release.status === 'Unmatched' ? 'undo-unmatch' : 'unmatch'}
+            data-release-id={release.id}
+        >
+            {release.status === 'Unmatched' ? 'Undo unmatch' : 'Unmatch'}
+        </Button>
     );
 }
 
@@ -142,21 +201,41 @@ function ActionCell({
     isGrabbing,
     canGrab,
     onGrab,
+    isUnmatching,
+    onUnmatchChange,
 }: {
     release: ReleaseRow;
     isGrabbing: boolean;
     canGrab: boolean;
     onGrab: (release: ReleaseRow) => void;
+    isUnmatching: boolean;
+    onUnmatchChange?: (release: ReleaseRow, status: ReleaseScopeStatus) => void;
 }) {
-    if (!canGrab) {
-        return null;
-    }
-
     const status = release.acquisitionStatus;
-    if (status && status !== 'Failed' && status !== 'Cancelled') {
+    const showGrab = canGrab && !release.acquisitionWaitingReason && canRegrab(status);
+    if (!showGrab && !onUnmatchChange) {
         return null;
     }
 
+    return (
+        <span className="releases-tab__actions">
+            {showGrab && <GrabButton release={release} isGrabbing={isGrabbing} onGrab={onGrab} />}
+            {onUnmatchChange && (
+                <UnmatchButton release={release} isUnmatching={isUnmatching} onUnmatchChange={onUnmatchChange} />
+            )}
+        </span>
+    );
+}
+
+function GrabButton({
+    release,
+    isGrabbing,
+    onGrab,
+}: {
+    release: ReleaseRow;
+    isGrabbing: boolean;
+    onGrab: (release: ReleaseRow) => void;
+}) {
     return (
         <Button
             variant="secondary"
@@ -193,6 +272,8 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
             grabbingReleaseIds = new Set(),
             onGrab,
             canGrab = true,
+            onUnmatchChange,
+            unmatchingReleaseIds = new Set(),
             onTitleClick,
             emptyMessage = 'No releases found. Try Search Now to query indexers.',
             className,
@@ -234,6 +315,8 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                         <StatusCell
                             status={row.original.acquisitionStatus}
                             failureReason={row.original.failureReason}
+                            waitingReason={row.original.acquisitionWaitingReason}
+                            unmatched={row.original.status === 'Unmatched'}
                         />
                     ),
                 },
@@ -248,18 +331,20 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                     id: 'action',
                     header: '',
                     enableSorting: false,
-                    size: 90,
+                    size: onUnmatchChange ? 200 : 90,
                     cell: ({ row }) => (
                         <ActionCell
                             release={row.original}
                             isGrabbing={grabbingReleaseIds.has(row.original.id)}
                             canGrab={canGrab}
                             onGrab={handleGrab}
+                            isUnmatching={unmatchingReleaseIds.has(row.original.id)}
+                            onUnmatchChange={onUnmatchChange}
                         />
                     ),
                 },
             ],
-            [grabbingReleaseIds, canGrab, handleGrab, onTitleClick],
+            [grabbingReleaseIds, canGrab, handleGrab, onTitleClick, onUnmatchChange, unmatchingReleaseIds],
         );
 
         const getRowId = useCallback((row: ReleaseRow) => row.id, []);
@@ -321,6 +406,8 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                                         <StatusCell
                                             status={release.acquisitionStatus}
                                             failureReason={release.failureReason}
+                                            waitingReason={release.acquisitionWaitingReason}
+                                            unmatched={release.status === 'Unmatched'}
                                         />
                                         <span className="releases-tab__mobile-date">
                                             {formatDate(release.publishDate)}
@@ -331,6 +418,8 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                                         isGrabbing={isGrabbing}
                                         canGrab={canGrab}
                                         onGrab={handleGrab}
+                                        isUnmatching={unmatchingReleaseIds.has(release.id)}
+                                        onUnmatchChange={onUnmatchChange}
                                     />
                                 </div>
                             );

@@ -33,7 +33,6 @@ internal sealed class MediaInfoExtractItemJob(
         Enabled = true,
         OnDemand = false,
         FailurePolicy = JobFailurePolicy.Retry,
-        Timeout = TimeSpan.FromMinutes(5),
         SupportedTriggerModes = [JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTarget,
         LockPartitionFields = [MagpieJobs.Parameters.MediaFileId],
@@ -153,6 +152,13 @@ internal sealed class MediaInfoExtractItemJob(
             return MediaInfoScanResult.Skipped;
         }
 
+        var mediaFile = await mediaFileRepository.GetByIdAsync(mediaFileId, cancellationToken).ConfigureAwait(false);
+        if (mediaFile is null || mediaFile.FilePath != filePath ||
+            requireMissingMediaInfo && mediaFile.MediaInfo is not null)
+        {
+            return MediaInfoScanResult.Skipped;
+        }
+
         MediaInfo? mediaInfo;
         try
         {
@@ -165,7 +171,7 @@ internal sealed class MediaInfoExtractItemJob(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "The extractor failed to get the media info from {FilePath}", filePath);
-            return MediaInfoScanResult.Skipped;
+            throw;
         }
 
         if (mediaInfo is null)
@@ -173,15 +179,9 @@ internal sealed class MediaInfoExtractItemJob(
             return MediaInfoScanResult.Skipped;
         }
 
-        var mediaFile = await mediaFileRepository.GetByIdAsync(mediaFileId, cancellationToken).ConfigureAwait(false);
-        if (mediaFile is null || requireMissingMediaInfo && mediaFile.MediaInfo is not null)
-        {
-            return MediaInfoScanResult.Skipped;
-        }
-
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var mimeType = await fileSystem.LookupMimeTypeAsync(filePath, cancellationToken).ConfigureAwait(false);
-        await mediaFileRepository.UpdateAsync(
+        var updated = await mediaFileRepository.UpdateAsync(
             mediaFile with
             {
                 FileKind = fileSystem.ResolveFileKind(mimeType).ToString(),
@@ -192,7 +192,7 @@ internal sealed class MediaInfoExtractItemJob(
             },
             modifiedByUserId: null,
             cancellationToken).ConfigureAwait(false);
-        return MediaInfoScanResult.Updated;
+        return updated ? MediaInfoScanResult.Updated : MediaInfoScanResult.Skipped;
     }
 
     private long? ReadFileSize(string filePath)

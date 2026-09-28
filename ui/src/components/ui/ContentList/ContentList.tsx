@@ -17,7 +17,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ContentListActionsSlot, ContentListColumnsSlot } from '@/components/ui/Slot';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { formatShortDate } from '@/lib/dateFormatting';
-import type { AcquisitionStatus, FulfillmentStatus } from '@/types';
+import { formatFileSize } from '@/lib/formatSize';
+import type { AcquisitionStatus, FulfillmentStatus, MonitoringMode } from '@/types';
 
 import './ContentList.css';
 
@@ -38,11 +39,13 @@ export interface ContentItem {
 
     contentType?: string;
 
-    monitoring: boolean | null;
+    monitoring: MonitoringMode | null;
 
-    effectiveMonitoring: boolean;
+    effectiveMonitoring: MonitoringMode;
 
     fulfillment: FulfillmentStatus;
+
+    importPending?: boolean;
 
     year?: number;
 
@@ -51,6 +54,10 @@ export interface ContentItem {
     dateAdded?: string;
 
     fulfilledAt?: string;
+
+    primaryMediaSize?: number;
+
+    primaryMediaFileCount?: number;
 
     lastSearched?: string;
 
@@ -67,6 +74,7 @@ export interface ContentHeaderFilters {
     title: string;
     publishDateFrom: string;
     publishDateTo: string;
+    advancedFields?: readonly string[];
 }
 
 export interface ContentHeaderFilterHandlers {
@@ -108,7 +116,7 @@ export interface ContentListProps
 
 const MONITORING_FACETS: FacetOption[] = [
     { value: 'true', label: 'Monitored' },
-    { value: 'false', label: 'Not monitored' },
+    { value: 'false', label: 'Unmonitored' },
 ];
 
 const FULFILLMENT_FACETS: FacetOption[] = [
@@ -139,8 +147,8 @@ function MonitoringCell({
     monitoring,
     effectiveMonitoring,
 }: {
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: MonitoringMode | null;
+    effectiveMonitoring: MonitoringMode;
 }) {
     return (
         <ContentMonitoringIndicator
@@ -148,33 +156,27 @@ function MonitoringCell({
             effectiveMonitoring={effectiveMonitoring}
             className="content-list__monitor-eye"
             activeClassName="content-list__monitor-eye--on"
-            dataMonitoring={effectiveMonitoring ? 'true' : 'false'}
+            dataMonitoring={effectiveMonitoring !== 'Unmonitored' ? 'true' : 'false'}
         />
     );
 }
 
-function FulfillmentCell({
-    fulfillment,
-    effectiveMonitoring,
-}: {
-    fulfillment: FulfillmentStatus;
-    effectiveMonitoring: boolean;
-}) {
-    return <ContentFulfillmentBadge fulfillment={fulfillment} effectiveMonitoring={effectiveMonitoring} />;
+function FulfillmentCell({ fulfillment, importPending }: { fulfillment: FulfillmentStatus; importPending?: boolean }) {
+    return <ContentFulfillmentBadge fulfillment={fulfillment} importPending={importPending} />;
 }
 
 function StatusCell({
     fulfillment,
-    effectiveMonitoring,
+    importPending,
     acquisitionStatus,
 }: {
     fulfillment: FulfillmentStatus;
-    effectiveMonitoring: boolean;
+    importPending?: boolean;
     acquisitionStatus?: AcquisitionStatus;
 }) {
     return (
         <div className="content-list__status-cell">
-            <FulfillmentCell fulfillment={fulfillment} effectiveMonitoring={effectiveMonitoring} />
+            <FulfillmentCell fulfillment={fulfillment} importPending={importPending} />
             {acquisitionStatus && <AcquisitionBadge status={acquisitionStatus} />}
         </div>
     );
@@ -248,6 +250,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                                   <ColumnHeaderFilter
                                       type="text"
                                       label="Title"
+                                      advanced={headerFilters.advancedFields?.includes('title')}
                                       active={headerFilters.title.length > 0}
                                       value={headerFilters.title}
                                       onChange={(v) => headerFilterHandlers?.onTitleChange(v)}
@@ -266,6 +269,10 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                                   <ColumnHeaderFilter
                                       type="facet"
                                       label="Type"
+                                      advanced={
+                                          headerFilters.advancedFields?.includes('contentType') ||
+                                          headerFilters.advancedFields?.includes('level')
+                                      }
                                       active={headerFilters.contentType.length > 0}
                                       options={headerFilters.contentTypeOptions}
                                       value={headerFilters.contentType}
@@ -294,6 +301,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                                   <ColumnHeaderFilter
                                       type="facet"
                                       label="Monitoring"
+                                      advanced={headerFilters.advancedFields?.includes('monitoring')}
                                       active={headerFilters.monitoring.length > 0}
                                       options={MONITORING_FACETS}
                                       value={headerFilters.monitoring}
@@ -319,6 +327,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                                   <ColumnHeaderFilter
                                       type="facet"
                                       label="Status"
+                                      advanced={headerFilters.advancedFields?.includes('fulfillment')}
                                       active={headerFilters.fulfillment.length > 0}
                                       options={FULFILLMENT_FACETS}
                                       value={headerFilters.fulfillment}
@@ -331,7 +340,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                     cell: ({ row }) => (
                         <StatusCell
                             fulfillment={row.original.fulfillment}
-                            effectiveMonitoring={row.original.effectiveMonitoring}
+                            importPending={row.original.importPending}
                             acquisitionStatus={row.original.acquisitionStatus}
                         />
                     ),
@@ -352,6 +361,10 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                                   <ColumnHeaderFilter
                                       type="dateRange"
                                       label="Published"
+                                      advanced={
+                                          headerFilters.advancedFields?.includes('publishDateFrom') ||
+                                          headerFilters.advancedFields?.includes('publishDateTo')
+                                      }
                                       active={
                                           headerFilters.publishDateFrom.length > 0 ||
                                           headerFilters.publishDateTo.length > 0
@@ -380,6 +393,25 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                     size: 100,
                     sortUndefined: 'last',
                     cell: ({ row }) => <DateAddedCell dateAdded={row.original.fulfilledAt} />,
+                },
+                {
+                    id: 'primaryMediaSize',
+                    accessorKey: 'primaryMediaSize',
+                    header: 'Media size',
+                    size: 110,
+                    sortUndefined: 'last',
+                    cell: ({ row }) =>
+                        row.original.primaryMediaSize === undefined
+                            ? '—'
+                            : formatFileSize(row.original.primaryMediaSize),
+                },
+                {
+                    id: 'primaryMediaFileCount',
+                    accessorKey: 'primaryMediaFileCount',
+                    header: 'Media files',
+                    size: 100,
+                    sortUndefined: 'last',
+                    cell: ({ row }) => row.original.primaryMediaFileCount ?? '—',
                 },
             );
 

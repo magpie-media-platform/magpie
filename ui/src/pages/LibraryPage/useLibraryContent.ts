@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useContentList, contentQueryKeys } from '@/hooks/useContent';
 import { type LibraryLevelDefinition, type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { magpieQlAnd, magpieQlString } from '@/lib/magpieQl';
-import { type ApiFulfillmentStatus, type ContentListItem, type ContentQueryParams } from '@/types';
+import { type ContentListItem, type ContentQueryParams } from '@/types';
 
 import { PAGE_SIZE, SERVER_SORT_FIELD } from './libraryPageConstants';
 
@@ -13,9 +13,11 @@ interface UseLibraryContentArgs {
     currentContentType: LibraryTypeDefinition | null;
     routeContentTypeSlug: string | undefined;
     selectedLevel: LibraryLevelDefinition | null;
+    allLevels?: boolean;
     libraryTypesError: unknown;
+    isRestoringFilter?: boolean;
     debouncedFilterQuery: string;
-    fulfillment: ApiFulfillmentStatus | '';
+    filterQuery: string;
     sortField: string;
     sortDir: string;
     pageIndex: number;
@@ -26,9 +28,11 @@ export function useLibraryContent({
     currentContentType,
     routeContentTypeSlug,
     selectedLevel,
+    allLevels = false,
     libraryTypesError,
+    isRestoringFilter = false,
     debouncedFilterQuery,
-    fulfillment,
+    filterQuery,
     sortField,
     sortDir,
     pageIndex,
@@ -39,8 +43,11 @@ export function useLibraryContent({
         const params: ContentQueryParams = {
             pageNumber: pageIndex + 1,
             pageSize: PAGE_SIZE,
-            topLevelOnly: true,
         };
+
+        if (!allLevels) {
+            params.topLevelOnly = true;
+        }
 
         if (routeContentTypeSlug) {
             params.contentType = routeContentTypeSlug;
@@ -54,10 +61,6 @@ export function useLibraryContent({
             params.filter = debouncedFilterQuery.trim();
         }
 
-        if (fulfillment) {
-            params.fulfillment = fulfillment;
-        }
-
         const serverField = SERVER_SORT_FIELD[sortField];
         if (serverField) {
             params.sortBy = serverField;
@@ -65,7 +68,7 @@ export function useLibraryContent({
         }
 
         return params;
-    }, [routeContentTypeSlug, selectedLevel, debouncedFilterQuery, fulfillment, sortField, sortDir, pageIndex]);
+    }, [routeContentTypeSlug, selectedLevel, allLevels, debouncedFilterQuery, sortField, sortDir, pageIndex]);
 
     const contentListEnabled = !contentTypeSlug || currentContentType !== null || libraryTypesError !== null;
     const {
@@ -74,29 +77,29 @@ export function useLibraryContent({
         error,
         refetch,
     } = useContentList(queryParams, {
-        enabled: contentListEnabled,
+        enabled: contentListEnabled && !isRestoringFilter,
     });
 
-    const pageRowIds = useMemo(() => (contentResult?.items ?? []).map((item) => item.id), [contentResult?.items]);
-    const totalItems = contentResult?.totalItems ?? 0;
-    const contentItems: ContentListItem[] = contentResult?.items ?? [];
+    const pageRowIds = useMemo(
+        () => (isRestoringFilter ? [] : (contentResult?.items ?? []).map((item) => item.id)),
+        [contentResult?.items, isRestoringFilter],
+    );
+    const totalItems = isRestoringFilter ? 0 : (contentResult?.totalItems ?? 0);
+    const contentItems: ContentListItem[] = isRestoringFilter ? [] : (contentResult?.items ?? []);
 
     const bulkFilter = useMemo(() => {
-        const clauses = ['ParentId null'];
+        const clauses = allLevels ? [] : ['ParentId null'];
         if (routeContentTypeSlug) {
             clauses.push(`ContentType = ${magpieQlString(routeContentTypeSlug)}`);
         }
         if (selectedLevel) {
             clauses.push(`Level = ${magpieQlString(selectedLevel.slug)}`);
         }
-        if (fulfillment) {
-            clauses.push(`Fulfillment = ${fulfillment}`);
-        }
-        if (debouncedFilterQuery.trim()) {
-            clauses.push(`(${debouncedFilterQuery.trim()})`);
+        if (filterQuery.trim()) {
+            clauses.push(`(${filterQuery.trim()})`);
         }
         return magpieQlAnd(clauses);
-    }, [routeContentTypeSlug, selectedLevel, debouncedFilterQuery, fulfillment]);
+    }, [routeContentTypeSlug, selectedLevel, allLevels, filterQuery]);
 
     const handleRefresh = useCallback(async () => {
         await queryClient.invalidateQueries({ queryKey: contentQueryKeys.all });

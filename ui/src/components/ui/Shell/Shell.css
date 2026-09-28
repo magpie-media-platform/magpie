@@ -118,7 +118,7 @@
             outline: none;
         }
 
-        @media (max-width: 767px) {
+        @media (max-width: 1023px) {
             overflow-y: auto;
             overscroll-behavior-y: contain;
         }
@@ -132,10 +132,17 @@
         min-height: 0;
         overflow-y: auto;
 
-        @media (max-width: 767px) {
+        @media (max-width: 1023px) {
             flex: none;
             min-height: 100%;
             overflow: visible;
+        }
+    }
+
+    @media (max-width: 1023px) {
+        .app-shell__main-wrapper,
+        .admin-shell__main-wrapper {
+            padding-bottom: var(--mobile-selection-bar-clearance);
         }
     }
 

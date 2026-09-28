@@ -1,1 +1,6 @@
 GetDiskFreeSpaceEx
+GetVolumePathName
+GetVolumeNameForVolumeMountPoint
+CreateFile
+GetFileInformationByHandleEx
+GetFinalPathNameByHandle

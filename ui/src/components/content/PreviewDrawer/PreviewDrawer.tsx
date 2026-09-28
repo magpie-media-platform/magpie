@@ -1,4 +1,5 @@
-import { useEffect, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useLocalContentPreview } from '@/hooks/useLocalContentPreview';
 import { PlusIcon, CheckIcon, CaretDownIcon, FilmStripIcon, WarningCircleIcon, UserIcon } from '@phosphor-icons/react';
 
 import { ContentPoster } from '@/components/content/ContentCardPrimitives';
@@ -15,6 +16,7 @@ import {
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Sheet, SheetContent, SheetHeader, SheetFooter, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { PreviewPlayer, type PreviewClip } from '@/components/ui/PreviewPlayer';
 import {
     usePreviewByExternalId,
@@ -23,6 +25,7 @@ import {
 } from '@/hooks/usePreviewByExternalId';
 import { useLibraryTypes, type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { isNotFoundError } from '@/lib/errors';
+import { returnFocusOnClose } from '@/lib/returnFocus';
 import { formatTimeSpanDuration } from '@/lib/formatTime';
 import { resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from '@/types';
 
@@ -47,6 +50,10 @@ export interface PreviewDrawerProps {
     addDisabledReason?: string | null;
     addOptions?: Array<{ id: string; label: string }>;
     onAdd?: (target: PreviewDrawerTarget, optionId?: string) => void;
+    localContentId?: string;
+    localIdentity?: 'hierarchy' | 'item';
+    onOpenContent?: (contentId: string) => void;
+    onCloseAutoFocus?: (event: Event) => void;
 }
 
 function pickHero(preview: ContentPreview): PreviewClip | undefined {
@@ -94,10 +101,16 @@ export function PreviewDrawer({
     addDisabledReason,
     addOptions,
     onAdd,
+    localContentId,
+    localIdentity,
+    onOpenContent,
+    onCloseAutoFocus,
 }: PreviewDrawerProps) {
     const { subjectTypes } = useLibraryTypes();
     const previewMutation = usePreviewByExternalId();
-    const { mutate: runPreview, reset: resetPreview, data, error, isPending } = previewMutation;
+    const { mutate: runPreview, reset: resetPreview } = previewMutation;
+    const localPreview = useLocalContentPreview(open ? localContentId : undefined, localIdentity);
+    const { data, error, isPending } = localContentId ? localPreview : previewMutation;
 
     const providerType = target?.providerType;
     const externalIdKey = target?.externalIdKey;
@@ -105,8 +118,13 @@ export function PreviewDrawer({
     const contentType = target?.contentType;
     const levelSlug = target?.levelSlug;
 
+    const openerRef = useRef<HTMLElement | null>(null);
+    useLayoutEffect(() => {
+        if (open) openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }, [open]);
+
     useEffect(() => {
-        if (open && providerType && externalIdKey && externalId && contentType) {
+        if (open && !localContentId && providerType && externalIdKey && externalId && contentType) {
             runPreview({
                 providerType,
                 externalIdKey,
@@ -117,7 +135,17 @@ export function PreviewDrawer({
         } else if (!open) {
             resetPreview();
         }
-    }, [open, providerType, externalIdKey, externalId, contentType, levelSlug, runPreview, resetPreview]);
+    }, [
+        open,
+        localContentId,
+        providerType,
+        externalIdKey,
+        externalId,
+        contentType,
+        levelSlug,
+        runPreview,
+        resetPreview,
+    ]);
 
     const preview = data;
     const title = preview?.title?.trim() || target?.fallbackTitle || 'Preview';
@@ -127,10 +155,27 @@ export function PreviewDrawer({
     const runtime = formatTimeSpanDuration(preview?.duration);
     const relatedSubjectGroups = groupRelatedSubjects(preview?.relatedSubjects ?? []);
     const notFound = isNotFoundError(error);
+    const openLabel = `Open ${title}`;
+    const openLabelRef = useRef<HTMLSpanElement>(null);
+    const [openTooltip, setOpenTooltip] = useState(false);
+    // The tooltip shows the full label only when the ellipsis hides part of it.
+    const changeOpenTooltip = (next: boolean) => {
+        const label = openLabelRef.current;
+        setOpenTooltip(next && !!label && label.scrollWidth > label.clientWidth);
+    };
 
     return (
         <Sheet open={open} onOpenChange={onOpenChange}>
-            <SheetContent side="right" className="preview-drawer" data-testid="preview-drawer">
+            <SheetContent
+                side="right"
+                className="preview-drawer"
+                data-testid="preview-drawer"
+                onCloseAutoFocus={onCloseAutoFocus ?? returnFocusOnClose(openerRef)}
+                onClick={(event) => {
+                    // Keep this click out of the source overlay's deferred outside-click handler.
+                    if (localContentId) event.stopPropagation();
+                }}
+            >
                 <SheetHeader className="preview-drawer__header">
                     <SheetTitle className="preview-drawer__title">
                         {title}
@@ -157,8 +202,12 @@ export function PreviewDrawer({
                     {!isPending && notFound && (
                         <EmptyState
                             icon={<FilmStripIcon weight="duotone" />}
-                            title="No metadata found"
-                            description="No metadata found for this item. It can still be added, then refreshed later."
+                            title={localContentId ? 'Item unavailable' : 'No metadata found'}
+                            description={
+                                localContentId
+                                    ? 'This library item is no longer available.'
+                                    : 'No metadata found for this item. It can still be added, then refreshed later.'
+                            }
                             size="sm"
                             data-testid="preview-drawer-not-found"
                         />
@@ -168,7 +217,11 @@ export function PreviewDrawer({
                         <EmptyState
                             icon={<WarningCircleIcon weight="duotone" />}
                             title="Preview failed"
-                            description="Try again or add the item without a preview."
+                            description={
+                                localContentId
+                                    ? 'Close the preview and try again.'
+                                    : 'Try again or add the item without a preview.'
+                            }
                             size="sm"
                             data-testid="preview-drawer-error"
                         />
@@ -241,7 +294,7 @@ export function PreviewDrawer({
                                             <h3 className="preview-drawer__section-title">
                                                 {subjectKindGroupLabel(kind, subjects.length, subjectTypes)}
                                             </h3>
-                                            <ul className="preview-drawer__related-subject-list">
+                                            <ul className="preview-drawer__related-subject-list" role="list">
                                                 {subjects.map((subject, index) => (
                                                     <li
                                                         className="preview-drawer__related-subject-item"
@@ -270,7 +323,24 @@ export function PreviewDrawer({
                     )}
                 </div>
 
-                {onAdd && (
+                {localContentId && onOpenContent && (
+                    <SheetFooter className="preview-drawer__footer">
+                        <Tooltip content={openLabel} open={openTooltip} onOpenChange={changeOpenTooltip}>
+                            <Button
+                                variant="primary"
+                                className="preview-drawer__open"
+                                onClick={() => localPreview.data && onOpenContent(localPreview.data.localContentId)}
+                                disabled={!preview || isPending || !!error}
+                                data-action="open-content"
+                            >
+                                <span ref={openLabelRef} className="preview-drawer__open-label">
+                                    {openLabel}
+                                </span>
+                            </Button>
+                        </Tooltip>
+                    </SheetFooter>
+                )}
+                {!localContentId && onAdd && (
                     <SheetFooter className="preview-drawer__footer">
                         {!isAdded && addDisabledReason && (
                             <p

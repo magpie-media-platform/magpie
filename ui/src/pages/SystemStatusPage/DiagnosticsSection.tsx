@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { ArrowClockwiseIcon, InfoIcon, WarningIcon, WarningOctagonIcon, WrenchIcon } from '@phosphor-icons/react';
 
 import { Role, useAuth } from '@/auth';
@@ -42,6 +43,19 @@ function AffectedEntity({ token }: { token: string | null }): ReactNode {
     }
 
     const reference = display.reference ? <span className="diagnostics__affected-ref">{display.reference}</span> : null;
+
+    if (token?.startsWith('ContentHierarchyItem:'))
+        return (
+            <span className="diagnostics__affected-entity">
+                <LocalContentLink
+                    contentId={token.slice('ContentHierarchyItem:'.length)}
+                    className="diagnostics__affected-link"
+                >
+                    {display.label}
+                </LocalContentLink>
+                {reference}
+            </span>
+        );
 
     if (display.to) {
         return (

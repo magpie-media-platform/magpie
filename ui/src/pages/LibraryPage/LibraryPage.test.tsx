@@ -12,6 +12,7 @@ import { testEffectivePermissions } from '@/test/permissions';
 import type { ContentListResult } from '@/types';
 import type { ContentListItem } from '@/types/content';
 import { ApiError } from '@/lib/api';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 const mockNavigate = vi.fn();
 
@@ -58,8 +59,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2008,
         publishDate: '2008-01-20T00:00:00Z',
@@ -74,8 +75,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'upgradable',
         year: 2005,
         dateAdded: '2024-01-10T08:00:00Z',
@@ -88,8 +89,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'movie',
         levelLabel: 'Movie',
         contentType: 'movie',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'missing',
         year: 2024,
         dateAdded: '2024-01-25T16:45:00Z',
@@ -102,8 +103,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2024,
         dateAdded: '2024-01-22T11:00:00Z',
@@ -116,8 +117,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: false,
-        effectiveMonitoring: false,
+        monitoring: 'Unmonitored',
+        effectiveMonitoring: 'Unmonitored',
         fulfillment: 'missing',
         year: 2024,
         dateAdded: '2024-01-20T09:15:00Z',
@@ -130,8 +131,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'upgradable',
         year: 2024,
         dateAdded: '2024-01-23T14:20:00Z',
@@ -144,8 +145,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'movie',
         levelLabel: 'Movie',
         contentType: 'movie',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2023,
         dateAdded: '2024-01-05T12:00:00Z',
@@ -158,8 +159,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'movie',
         levelLabel: 'Movie',
         contentType: 'movie',
-        monitoring: false,
-        effectiveMonitoring: false,
+        monitoring: 'Unmonitored',
+        effectiveMonitoring: 'Unmonitored',
         fulfillment: 'fulfilledExternally',
         year: 2023,
         dateAdded: '2024-01-12T17:30:00Z',
@@ -171,8 +172,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2024,
         dateAdded: '2024-01-24T10:00:00Z',
@@ -185,8 +186,8 @@ const mockContentItems: ContentListItem[] = [
         level: 'show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2022,
         dateAdded: '2024-01-08T13:45:00Z',
@@ -292,6 +293,7 @@ function renderLibraryPage(role: Role = Role.Admin, initialEntries: string[] = [
                 </AuthProvider>
             </MemoryRouter>
         </QueryClientProvider>,
+        { wrapper: TooltipProvider },
     );
 }
 
@@ -506,10 +508,13 @@ describe('LibraryPage', () => {
             expect(screen.getAllByText('Upgradable').length).toBeGreaterThan(0);
         });
 
-        it('suppresses the fulfillment badge for an excluded item', () => {
+        it('shows fulfillment for an excluded item', () => {
+            // Arrange
+            // Act
             renderLibraryPage();
 
-            expect(screen.queryByText('External')).not.toBeInTheDocument();
+            // Assert
+            expect(screen.getAllByText('External').length).toBeGreaterThan(0);
         });
 
         it('renders level badges by hierarchy level, not collapsed content type', () => {
@@ -585,6 +590,24 @@ describe('LibraryPage', () => {
 
             expect(mockUseContentList).toHaveBeenLastCalledWith(expect.objectContaining({ topLevelOnly: true }));
         });
+
+        it('lists matching items at every level when the all-levels scope has a filter', async () => {
+            renderLibraryPage(Role.Admin, ['/library/all?filter=title%20contains%20%22dark%22&levels=all']);
+
+            await waitFor(() =>
+                expect(mockUseContentList).toHaveBeenLastCalledWith(
+                    expect.objectContaining({ filter: 'title contains "dark"' }),
+                ),
+            );
+            expect(mockUseContentList.mock.lastCall?.[0]).not.toHaveProperty('topLevelOnly');
+            expect(screen.getByText('Includes matching child items, not only top-level items.')).toBeInTheDocument();
+        });
+
+        it('keeps the top-level scope when the all-levels scope has no filter', () => {
+            renderLibraryPage(Role.Admin, ['/library/all?levels=all']);
+
+            expect(mockUseContentList).toHaveBeenLastCalledWith(expect.objectContaining({ topLevelOnly: true }));
+        });
     });
 
     describe('type-scoped content-type prefill', () => {
@@ -606,6 +629,7 @@ describe('LibraryPage', () => {
                         </AuthProvider>
                     </MemoryRouter>
                 </QueryClientProvider>,
+                { wrapper: TooltipProvider },
             );
         }
 
@@ -668,6 +692,7 @@ describe('LibraryPage', () => {
                         </AuthProvider>
                     </MemoryRouter>
                 </QueryClientProvider>,
+                { wrapper: TooltipProvider },
             );
         }
 
@@ -847,12 +872,12 @@ describe('LibraryPage', () => {
             renderLibraryPage();
 
             await openMonitoringFacet(user);
-            const notMonitored = await screen.findByRole('menuitemradio', { name: 'Not monitored' });
-            await user.click(notMonitored);
+            const unmonitored = await screen.findByRole('menuitemradio', { name: 'Unmonitored' });
+            await user.click(unmonitored);
 
             await waitFor(() => {
                 expect(mockUseContentList).toHaveBeenLastCalledWith(
-                    expect.objectContaining({ filter: 'monitoring = false' }),
+                    expect.objectContaining({ filter: 'monitoring = Unmonitored' }),
                 );
             });
         });
@@ -872,16 +897,16 @@ describe('LibraryPage', () => {
             expect(document.querySelector('[data-component="simple-filter-builder"]')).toBeInTheDocument();
             expect(document.querySelector('#sfb-monitoring')).not.toBeInTheDocument();
             const preview = document.querySelector('.filter-bar__query-text');
-            expect(preview).toHaveTextContent('monitoring = true');
+            expect(preview).toHaveTextContent('monitoring != Unmonitored');
         });
 
         it('clearing the facet removes the predicate from params.filter', async () => {
             const user = userEvent.setup();
-            renderLibraryPage(Role.Admin, ['/?filter=monitoring%20%3D%20false']);
+            renderLibraryPage(Role.Admin, ['/?filter=monitoring%20%3D%20Unmonitored']);
 
             await waitFor(() => {
                 expect(mockUseContentList).toHaveBeenLastCalledWith(
-                    expect.objectContaining({ filter: 'monitoring = false' }),
+                    expect.objectContaining({ filter: 'monitoring = Unmonitored' }),
                 );
             });
 
@@ -898,7 +923,7 @@ describe('LibraryPage', () => {
         });
 
         it('round-trips: a URL query with a predicate shows the header filter active', async () => {
-            renderLibraryPage(Role.Admin, ['/?filter=monitoring%20%3D%20true']);
+            renderLibraryPage(Role.Admin, ['/?filter=monitoring%20!%3D%20Unmonitored']);
 
             await waitFor(() => {
                 const monitoring = findColumnFilterTrigger('monitoring');
@@ -964,7 +989,7 @@ describe('LibraryPage', () => {
             });
         });
 
-        it('a Status facet selection drives the dedicated ?fulfillment= param, not the filter query', async () => {
+        it('a Status facet selection edits MQL without a separate fulfillment condition', async () => {
             const user = userEvent.setup();
             renderLibraryPage();
 
@@ -976,11 +1001,11 @@ describe('LibraryPage', () => {
 
             await waitFor(() => {
                 expect(mockUseContentList).toHaveBeenLastCalledWith(
-                    expect.objectContaining({ fulfillment: 'Missing' }),
+                    expect.objectContaining({ filter: 'fulfillment = Missing' }),
                 );
             });
-            const lastCall = mockUseContentList.mock.calls.at(-1)?.[0] as { filter?: string };
-            expect(lastCall.filter).toBeUndefined();
+            const lastCall = mockUseContentList.mock.calls.at(-1)?.[0] as { fulfillment?: string };
+            expect(lastCall.fulfillment).toBeUndefined();
         });
 
         it('hydrates the Status funnel active state from the ?fulfillment= param', async () => {
@@ -1203,7 +1228,9 @@ describe('LibraryPage', () => {
             });
             await user.click(screen.getByRole('button', { name: 'Delete' }));
 
-            expect(screen.getByText('Delete 1 item? This cannot be undone.')).toBeInTheDocument();
+            expect(screen.getByRole('dialog')).toHaveTextContent(
+                'Delete 1 item? This cannot be undone. Managed files will remain on disk.',
+            );
         });
 
         it('completes a successful bulk delete using the returned count', async () => {
@@ -1220,6 +1247,7 @@ describe('LibraryPage', () => {
                 'aria-checked',
                 'false',
             );
+            expect(screen.getByText('Managed files will remain on disk.', { exact: false })).toBeInTheDocument();
             await user.click(screen.getByRole('button', { name: /^Delete$/ }));
 
             await waitFor(() => {
@@ -1238,6 +1266,7 @@ describe('LibraryPage', () => {
             await user.click(screen.getByLabelText('Select Breaking Bad'));
             await user.click(await waitFor(() => document.querySelector('[data-action="bulk-delete"]') as HTMLElement));
             await user.click(screen.getByRole('switch', { name: 'Also delete files from disk' }));
+            expect(screen.getByText('Managed files will be deleted from disk.', { exact: false })).toBeInTheDocument();
             await user.click(screen.getByRole('button', { name: /^Delete$/ }));
 
             await waitFor(() => {
@@ -1357,7 +1386,7 @@ describe('LibraryPage', () => {
             expect(within(bar).getByText('0 selected')).toBeInTheDocument();
             expect(within(bar).getByRole('button', { name: /clear selection/i })).toBeDisabled();
             expect(within(bar).getByRole('button', { name: /^select all$/i })).toBeInTheDocument();
-            expect(within(mobileList).getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+            expect(within(mobileList).getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
             expect(bar.querySelector('.library-page__mobile-selection-actions')).not.toBeInTheDocument();
             expect(bar.querySelector('[data-action="bulk-tags"]')).not.toBeInTheDocument();
         });
@@ -1418,7 +1447,7 @@ describe('LibraryPage', () => {
             expect(within(bar).getByText('0 selected')).toBeInTheDocument();
             expect(within(bar).getByRole('button', { name: /clear selection/i })).toBeDisabled();
             expect(within(bar).getByRole('button', { name: /^select all$/i })).toBeInTheDocument();
-            expect(within(mobileList).getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+            expect(within(mobileList).getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
             expect(bar.querySelector('.library-page__mobile-selection-actions')).not.toBeInTheDocument();
             expect(within(mobileList).getByRole('button', { name: /select breaking bad card/i })).toHaveAttribute(
                 'aria-pressed',
@@ -1484,7 +1513,7 @@ describe('LibraryPage', () => {
             await user.click(selectButton);
             await user.click(within(mobileList).getByRole('button', { name: /select breaking bad card/i }));
 
-            const stopSelectingButton = within(mobileList).getByRole('button', { name: /stop selecting/i });
+            const stopSelectingButton = within(mobileList).getByRole('button', { name: 'Select', pressed: true });
             expect(stopSelectingButton).toHaveClass('mobile-list-toolbar__selection');
             await user.click(stopSelectingButton);
 
@@ -1514,7 +1543,7 @@ describe('LibraryPage', () => {
             await user.click(clearButton);
 
             expect(within(bar).getByText('0 selected')).toBeInTheDocument();
-            expect(within(mobileList).getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+            expect(within(mobileList).getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
             expect(within(mobileList).getByRole('button', { name: /select breaking bad card/i })).toHaveAttribute(
                 'aria-pressed',
                 'false',
@@ -1588,7 +1617,7 @@ describe('LibraryPage', () => {
             });
             const payload = mockBulkPatchContent.mock.calls[0][0];
             expect(payload.ids).toBeUndefined();
-            expect(payload.patch).toEqual({ monitoring: { value: true } });
+            expect(payload.patch).toEqual({ monitoring: { value: 'Monitored' } });
             expect(payload.filter).toBe('ParentId null');
         });
 
@@ -1698,6 +1727,7 @@ describe('LibraryPage', () => {
                         </ToastStateProvider>
                     </MemoryRouter>
                 </QueryClientProvider>,
+                { wrapper: TooltipProvider },
             );
         }
 
@@ -1746,11 +1776,11 @@ describe('LibraryPage', () => {
 
             await waitFor(() => {
                 expect(mockUseContentList).toHaveBeenLastCalledWith(
-                    expect.objectContaining({ fulfillment: 'Missing' }),
+                    expect.objectContaining({ filter: 'fulfillment = Missing' }),
                 );
             });
-            const lastCall = mockUseContentList.mock.calls.at(-1)?.[0] as { filter?: string };
-            expect(lastCall.filter).toBeUndefined();
+            const lastCall = mockUseContentList.mock.calls.at(-1)?.[0] as { fulfillment?: string };
+            expect(lastCall.fulfillment).toBeUndefined();
             const status = findColumnFilterTrigger('status');
             expect(status).toHaveAttribute('data-active', 'true');
             await user.click(status!);
@@ -1815,6 +1845,22 @@ describe('LibraryPage', () => {
             expect(screen.queryByRole('button', { name: /clear search and filters/i })).not.toBeInTheDocument();
         });
 
+        it.each([
+            [Role.Viewer, 0],
+            [Role.Requester, 1],
+        ])('gates the empty-library Add content CTA on content.add for role %s', (role, expected) => {
+            mockUseContentList.mockReturnValue({
+                data: { items: [], pageNumber: 1, pageSize: 100, totalItems: 0 },
+                isLoading: false,
+                error: null,
+            });
+
+            renderLibraryPage(role);
+
+            expect(screen.getByText('Your library is empty')).toBeInTheDocument();
+            expect(screen.queryAllByRole('link', { name: /add content/i })).toHaveLength(expected);
+        });
+
         it('scopes the Add content CTA to the content type being browsed', () => {
             mockUseContentList.mockReturnValue({
                 data: { items: [], pageNumber: 1, pageSize: 100, totalItems: 0 },
@@ -1839,6 +1885,7 @@ describe('LibraryPage', () => {
                         </AuthProvider>
                     </MemoryRouter>
                 </QueryClientProvider>,
+                { wrapper: TooltipProvider },
             );
 
             expect(screen.getByText('Your library is empty')).toBeInTheDocument();
@@ -1939,6 +1986,7 @@ describe('LibraryPage', () => {
                         </AuthProvider>
                     </MemoryRouter>
                 </QueryClientProvider>,
+                { wrapper: TooltipProvider },
             );
         }
 
@@ -2011,7 +2059,7 @@ describe('LibraryPage', () => {
                 name: 'My Active',
                 ownerId: 'user-1',
                 ownerLock: false,
-                query: 'monitoring = true',
+                query: 'monitoring != Unmonitored',
                 criteria: { contentHierarchyItem: { and: [{ field: 'monitoring' }] } },
                 criteriaCount: 1,
                 createdAt: '2024-01-01T00:00:00Z',
@@ -2025,7 +2073,7 @@ describe('LibraryPage', () => {
         async function editDirtyAndOpenSaveDialog(user: ReturnType<typeof userEvent.setup>) {
             const monitoring = findColumnFilterTrigger('monitoring');
             await user.click(monitoring!);
-            const excluded = await screen.findByRole('menuitemradio', { name: 'Not monitored' });
+            const excluded = await screen.findByRole('menuitemradio', { name: 'Unmonitored' });
             await user.click(excluded);
 
             const saveButton = await waitFor(
@@ -2052,6 +2100,27 @@ describe('LibraryPage', () => {
             expect(screen.getByRole('button', { name: /Update "My Active"/i })).toBeInTheDocument();
         });
 
+        it('shows a query parse error on the query when updating a saved filter', async () => {
+            const user = userEvent.setup();
+            mockUseContentFilters.mockReturnValue({
+                filters: [makeFilter({ ownerId: 'user-1' })],
+                isLoading: false,
+                error: null,
+                refetch: vi.fn(),
+            });
+
+            renderLibraryPage(Role.Requester, [DEEP_LINK]);
+            await editDirtyAndOpenSaveDialog(user);
+            mockParseMagpieQl.mockResolvedValue({ error: { message: 'Expected value' } });
+            const dialog = screen.getByRole('dialog');
+            await user.click(within(dialog).getByRole('button', { name: /Update "My Active"/i }));
+
+            const alert = await within(dialog).findByRole('alert');
+            expect(alert).toHaveTextContent('The filter query is not valid');
+            expect(alert).toHaveTextContent('Expected value');
+            expect(within(dialog).getByLabelText(/new filter name/i)).not.toHaveAttribute('aria-invalid', 'true');
+        });
+
         it('hides the Update path for a modified shared filter when the user is not a Manager', async () => {
             const user = userEvent.setup();
             mockUseContentFilters.mockReturnValue({
@@ -2068,7 +2137,10 @@ describe('LibraryPage', () => {
             expect(document.querySelector('[data-action="save-new-filter"]')).toBeInTheDocument();
         });
 
-        it('offers the Update path for a modified shared filter when the user is a Manager', async () => {
+        it.each([
+            [Role.Manager, false],
+            [Role.Admin, true],
+        ])('offers the Update path for a modified shared filter to role %s: %s', async (role, offered) => {
             const user = userEvent.setup();
             mockUseContentFilters.mockReturnValue({
                 filters: [makeFilter({ ownerId: null })],
@@ -2077,10 +2149,10 @@ describe('LibraryPage', () => {
                 refetch: vi.fn(),
             });
 
-            renderLibraryPage(Role.Manager, [DEEP_LINK]);
+            renderLibraryPage(role, [DEEP_LINK]);
             await editDirtyAndOpenSaveDialog(user);
 
-            expect(document.querySelector('[data-action="update-saved-filter"]')).toBeInTheDocument();
+            expect(document.querySelector('[data-action="update-saved-filter"]') !== null).toBe(offered);
         });
 
         it('labels the save control "Save filter" (not "Save changes") for a non-updatable shared filter', async () => {
@@ -2096,7 +2168,7 @@ describe('LibraryPage', () => {
 
             const monitoring = findColumnFilterTrigger('monitoring');
             await user.click(monitoring!);
-            const excluded = await screen.findByRole('menuitemradio', { name: 'Not monitored' });
+            const excluded = await screen.findByRole('menuitemradio', { name: 'Unmonitored' });
             await user.click(excluded);
 
             const saveButton = await waitFor(
@@ -2114,7 +2186,7 @@ describe('LibraryPage', () => {
                 name: 'My Active',
                 ownerId: 'user-1',
                 ownerLock: false,
-                query: 'monitoring = true',
+                query: 'monitoring != Unmonitored',
                 criteria: { contentHierarchyItem: { and: [{ field: 'monitoring' }] } },
                 criteriaCount: 1,
                 createdAt: '2024-01-01T00:00:00Z',
@@ -2149,6 +2221,7 @@ describe('LibraryPage', () => {
                         </AuthProvider>
                     </MemoryRouter>
                 </QueryClientProvider>,
+                { wrapper: TooltipProvider },
             );
         }
 
@@ -2171,12 +2244,76 @@ describe('LibraryPage', () => {
             expect(document.querySelector('[data-action="save-filter"]')).not.toBeInTheDocument();
         });
 
+        it('keeps a failed saved filter selected without querying the unrestricted library and retries it', async () => {
+            const user = userEvent.setup();
+            const refetch = vi.fn();
+            mockUseContentFilters.mockReturnValue({
+                filters: [{ ...makeSavedFilter(), query: '', queryError: new Error('Format failed') }],
+                isLoading: false,
+                error: new Error('Format failed'),
+                listError: null,
+                refetch,
+            });
+
+            renderWithProbe(Role.Requester, ['/library/all?savedFilter=filter-1']);
+
+            expect(await screen.findByRole('alert')).toHaveTextContent('Could not load saved filter');
+            expect(screen.getByTestId('location-probe')).toHaveTextContent('savedFilter=filter-1');
+            expect(mockUseContentList.mock.calls.every((call) => call[1]?.enabled === false)).toBe(true);
+            expect(screen.queryByText('Saved filter not found')).not.toBeInTheDocument();
+            await user.click(screen.getByRole('button', { name: 'Retry saved filter' }));
+            expect(refetch).toHaveBeenCalledOnce();
+            expect(mockUseContentList.mock.calls.every((call) => call[1]?.enabled === false)).toBe(true);
+            await user.click(screen.getByRole('button', { name: 'Clear saved filter' }));
+            expect(screen.getByTestId('location-probe')).not.toHaveTextContent('savedFilter=');
+            expect(mockUseContentList).toHaveBeenLastCalledWith(expect.objectContaining({ topLevelOnly: true }));
+        });
+
+        it('does not mistake a failed filter-list request for a deleted saved filter', async () => {
+            mockUseContentFilters.mockReturnValue({
+                filters: [],
+                isLoading: false,
+                error: new Error('List failed'),
+                listError: new Error('List failed'),
+                refetch: vi.fn(),
+            });
+
+            renderWithProbe(Role.Requester, ['/library/all?savedFilter=filter-1']);
+
+            expect(await screen.findByRole('alert')).toHaveTextContent('Could not load saved filter');
+            expect(screen.getByTestId('location-probe')).toHaveTextContent('savedFilter=filter-1');
+            expect(mockUseContentList.mock.calls.every((call) => call[1]?.enabled === false)).toBe(true);
+            expect(screen.queryByText('Saved filter not found')).not.toBeInTheDocument();
+        });
+
+        it('does not block a resolved saved filter when another filter fails to format', async () => {
+            mockUseContentFilters.mockReturnValue({
+                filters: [
+                    makeSavedFilter(),
+                    { ...makeSavedFilter(), id: 'filter-2', query: '', queryError: new Error('Format failed') },
+                ],
+                isLoading: false,
+                error: new Error('Format failed'),
+                listError: null,
+                refetch: vi.fn(),
+            });
+
+            renderWithProbe(Role.Requester, ['/library/all?savedFilter=filter-1']);
+
+            await waitFor(() =>
+                expect(mockUseContentList).toHaveBeenLastCalledWith(
+                    expect.objectContaining({ filter: 'monitoring != Unmonitored' }),
+                ),
+            );
+            expect(screen.queryByText('Could not load saved filter')).not.toBeInTheDocument();
+        });
+
         it('does not strip the id or fire the not-found toast while the saved-filter expression formats on first load', async () => {
             const baseFilter = makeSavedFilter();
             const refetch = vi.fn();
             const stillFormatting = { filters: [{ ...baseFilter, query: '' }], isLoading: false, error: null, refetch };
             const formatted = {
-                filters: [{ ...baseFilter, query: 'monitoring = true' }],
+                filters: [{ ...baseFilter, query: 'monitoring != Unmonitored' }],
                 isLoading: false,
                 error: null,
                 refetch,
@@ -2193,7 +2330,7 @@ describe('LibraryPage', () => {
 
             await waitFor(() => {
                 const calledWithSavedQuery = mockUseContentList.mock.calls.some(
-                    (c) => (c[0] as { filter?: string } | undefined)?.filter === 'monitoring = true',
+                    (c) => (c[0] as { filter?: string } | undefined)?.filter === 'monitoring != Unmonitored',
                 );
                 expect(calledWithSavedQuery).toBe(true);
             });
@@ -2208,7 +2345,7 @@ describe('LibraryPage', () => {
 
             await waitFor(() => {
                 expect(mockUseContentList).toHaveBeenLastCalledWith(
-                    expect.objectContaining({ filter: 'monitoring = true' }),
+                    expect.objectContaining({ filter: 'monitoring != Unmonitored' }),
                 );
             });
         });
@@ -2221,12 +2358,12 @@ describe('LibraryPage', () => {
 
             const monitoring = findColumnFilterTrigger('monitoring');
             await user.click(monitoring!);
-            const excluded = await screen.findByRole('menuitemradio', { name: 'Not monitored' });
+            const excluded = await screen.findByRole('menuitemradio', { name: 'Unmonitored' });
             await user.click(excluded);
 
             await waitFor(() => {
                 const probe = screen.getByTestId('location-probe');
-                expect(probe).toHaveTextContent('filter=monitoring+%3D+false');
+                expect(probe).toHaveTextContent('filter=monitoring+%3D+Unmonitored');
                 expect(probe).not.toHaveTextContent('savedFilter=');
             });
         });
@@ -2239,7 +2376,7 @@ describe('LibraryPage', () => {
 
             const monitoring = findColumnFilterTrigger('monitoring');
             await user.click(monitoring!);
-            const excluded = await screen.findByRole('menuitemradio', { name: 'Not monitored' });
+            const excluded = await screen.findByRole('menuitemradio', { name: 'Unmonitored' });
             await user.click(excluded);
 
             const banner = await waitFor(() => {
@@ -2269,7 +2406,7 @@ describe('LibraryPage', () => {
 
             const monitoring = findColumnFilterTrigger('monitoring');
             await user.click(monitoring!);
-            const excluded = await screen.findByRole('menuitemradio', { name: 'Not monitored' });
+            const excluded = await screen.findByRole('menuitemradio', { name: 'Unmonitored' });
             await user.click(excluded);
 
             const saveButton = await waitFor(() => {
@@ -2321,7 +2458,9 @@ describe('LibraryPage', () => {
             mockParseMagpieQl.mockResolvedValue({ criteria: { contentHierarchyItem: { and: [{}] } } });
             mockCreateFilterMutateAsync.mockResolvedValue({ id: 'new-filter-1', name: 'Fresh Filter' });
 
-            renderWithProbe(Role.Requester, ['/library/all?filter=monitoring%20%3D%20Active']);
+            renderWithProbe(Role.Requester, [
+                '/library/all?filter=monitoring%20!%3D%20Unmonitored%20and%20fulfillment%20%3D%20Missing',
+            ]);
 
             const saveButton = await waitFor(() => {
                 const btn = document.querySelector('[data-action="save-filter"]') as HTMLElement | null;
@@ -2337,11 +2476,41 @@ describe('LibraryPage', () => {
             await waitFor(() => {
                 expect(screen.getByTestId('location-probe')).toHaveTextContent('savedFilter=new-filter-1');
             });
+            await user.click(screen.getByRole('radio', { name: /^Any:/ }));
+            expect(screen.getByRole('combobox', { name: 'Status filter' })).toHaveTextContent('Missing');
+            expect(screen.getByTestId('location-probe')).toHaveTextContent('fulfillment');
+        });
+
+        it('shows a query parse error on the query and keeps the name valid', async () => {
+            const user = userEvent.setup();
+            mockUseContentFilters.mockReturnValue({ filters: [], isLoading: false, error: null, refetch: vi.fn() });
+            mockParseMagpieQl.mockResolvedValue({ error: { message: 'Expected value' } });
+
+            renderLibraryPage(Role.Requester, ['/library/all?filter=monitoring%20!%3D%20Unmonitored']);
+
+            const saveButton = await waitFor(() => {
+                const btn = document.querySelector('[data-action="save-filter"]') as HTMLElement | null;
+                expect(btn).toBeInTheDocument();
+                return btn!;
+            });
+            await user.click(saveButton);
+
+            const dialog = await screen.findByRole('dialog');
+            const nameInput = within(dialog).getByLabelText(/filter name/i);
+            await user.type(nameInput, 'Valid Name');
+            await user.click(within(dialog).getByRole('button', { name: /save filter/i }));
+
+            const alert = await within(dialog).findByRole('alert');
+            expect(alert).toHaveTextContent('The filter query is not valid');
+            expect(alert).toHaveTextContent('Expected value');
+            expect(nameInput).not.toHaveAttribute('aria-invalid', 'true');
+            expect(nameInput).toHaveValue('Valid Name');
+            expect(mockCreateFilterMutateAsync).not.toHaveBeenCalled();
         });
     });
 
     describe('single live-filter surface (no in-page saved picker)', () => {
-        function makeSavedFilter(query = 'monitoring = true') {
+        function makeSavedFilter(query = 'monitoring != Unmonitored') {
             return {
                 id: 'filter-1',
                 name: 'My Active',
@@ -2379,7 +2548,7 @@ describe('LibraryPage', () => {
         });
 
         it('applies a deep-linked saved filter and keeps the live editor visible', async () => {
-            const query = 'monitoring = true or title contains "critical"';
+            const query = 'monitoring != Unmonitored or title contains "critical"';
             mockUseContentFilters.mockReturnValue({
                 filters: [makeSavedFilter(query)],
                 isLoading: false,
@@ -2417,6 +2586,7 @@ describe('LibraryPage', () => {
                         </ToastProvider>
                     </MemoryRouter>
                 </QueryClientProvider>,
+                { wrapper: TooltipProvider },
             );
 
             expect(screen.getByText('No results found')).toBeInTheDocument();
@@ -2479,7 +2649,7 @@ describe('LibraryPage', () => {
             expect(screen.getByRole('list', { name: 'Content gallery' })).toHaveAttribute('role', 'list');
         });
 
-        it('renders one navigating link per item outside selection mode', () => {
+        it('renders separate poster and text navigation per item outside selection mode', () => {
             localStorage.setItem('library-view', JSON.stringify('gallery'));
 
             renderLibraryPage();
@@ -2487,7 +2657,7 @@ describe('LibraryPage', () => {
             const grid = screen.getByRole('list', { name: 'Content gallery' });
             const links = within(grid).getAllByRole('link');
 
-            expect(links).toHaveLength(mockContentItems.length);
+            expect(links).toHaveLength(mockContentItems.length * 2);
             expect(links[0]).toHaveAttribute('href', '/library/content-1');
             expect(within(links[0]).queryByRole('link')).not.toBeInTheDocument();
         });
@@ -2509,15 +2679,20 @@ describe('LibraryPage', () => {
             expect(document.querySelectorAll('[data-slot="content.gallery.poster"]')).toHaveLength(0);
         });
 
-        it('names each tile by its title alone and leaves the poster decorative', () => {
+        it('names each tile with its monitoring and fulfillment while leaving the poster decorative', () => {
+            // Arrange
             localStorage.setItem('library-view', JSON.stringify('gallery'));
 
+            // Act
             renderLibraryPage();
 
+            // Assert
             const grid = screen.getByRole('list', { name: 'Content gallery' });
 
             expect(within(grid).getByText('Breaking Bad')).toBeInTheDocument();
-            expect(within(grid).getByRole('link', { name: /^Breaking Bad/ })).toBeInTheDocument();
+            expect(
+                within(grid).getByRole('link', { name: 'Monitored Breaking Bad (2008) Fulfilled' }),
+            ).toBeInTheDocument();
             expect(within(grid).queryByAltText(/artwork/)).not.toBeInTheDocument();
         });
 
@@ -2539,7 +2714,7 @@ describe('LibraryPage', () => {
 
             const grid = screen.getByRole('list', { name: 'Content gallery' });
 
-            expect(within(grid).queryByRole('img')).not.toBeInTheDocument();
+            expect(grid.querySelector('img')).not.toBeInTheDocument();
             expect(grid.querySelector('.library-gallery-tile__poster--placeholder')).toBeInTheDocument();
         });
 
@@ -2556,9 +2731,12 @@ describe('LibraryPage', () => {
 
             const grid = screen.getByRole('list', { name: 'Content gallery' });
             expect(within(grid).queryAllByRole('link')).toHaveLength(0);
-            expect(within(grid).getAllByRole('button')).toHaveLength(mockContentItems.length);
-            expect(within(grid).getAllByRole('button')[0]).toHaveAttribute('aria-pressed', 'false');
-            expect(within(gallery).getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+            expect(within(grid).getAllByRole('button', { name: /^Select /, pressed: false })).toHaveLength(
+                mockContentItems.length,
+            );
+            expect(within(grid).getAllByRole('button', { name: /^Preview / })).toHaveLength(mockContentItems.length);
+            expect(within(grid).getAllByRole('button', { name: /^Select / })[0]).toHaveClass('selection-circle-toggle');
+            expect(within(gallery).getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
         });
 
         it('toggles selection when a tile is activated in selection mode', async () => {
@@ -2571,11 +2749,14 @@ describe('LibraryPage', () => {
             await user.click(within(gallery).getByRole('button', { name: /^select$/i }));
 
             const grid = screen.getByRole('list', { name: 'Content gallery' });
-            const tile = within(grid).getAllByRole('button')[0];
+            const poster = grid.querySelector('.library-gallery-tile__poster-target') as HTMLElement;
 
-            await user.click(tile);
+            await user.click(poster);
 
-            expect(within(grid).getAllByRole('button')[0]).toHaveAttribute('aria-pressed', 'true');
+            expect(within(grid).getAllByRole('button', { name: /^Select / })[0]).toHaveAttribute(
+                'aria-pressed',
+                'true',
+            );
         });
 
         it('offers both sort controls and flips direction from the gallery toolbar', async () => {

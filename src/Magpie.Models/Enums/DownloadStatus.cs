@@ -41,7 +41,7 @@ public enum DownloadStatus
     Imported = 6,
 
     /// <summary>
-    /// A terminal failure stopped the grab, the download, or the import.
+    /// A permanent failure stopped the grab, the download, or the import.
     /// </summary>
     Failed = 7,
 
@@ -53,5 +53,10 @@ public enum DownloadStatus
     /// <summary>
     /// The library import of the download is in progress.
     /// </summary>
-    Importing = 9
+    Importing = 9,
+
+    /// <summary>
+    /// A transient failure stopped the grab, the download, or the import. The release can be grabbed again.
+    /// </summary>
+    Faulted = 10
 }

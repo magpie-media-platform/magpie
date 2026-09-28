@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import {
     Dialog,
+    DialogBody,
     DialogContent,
     DialogDescription,
     DialogFooter,
@@ -190,7 +191,7 @@ export function SubItemFormDialog({
                         Adds this value as manual metadata, which takes priority over provider values.
                     </DialogDescription>
                 </DialogHeader>
-                <div className="metadata-inspector__dialog-body">
+                <DialogBody className="metadata-inspector__dialog-body">
                     {fields.map((field) => {
                         const fieldId = `subitem-${field.name}`;
                         const showError = submitted && errors[field.name];
@@ -228,7 +229,7 @@ export function SubItemFormDialog({
                             )}
                         </div>
                     )}
-                </div>
+                </DialogBody>
                 <DialogFooter>
                     <Button variant="ghost" onClick={onCancel} disabled={pending}>
                         Cancel

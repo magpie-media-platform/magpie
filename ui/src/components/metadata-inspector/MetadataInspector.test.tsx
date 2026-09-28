@@ -2,8 +2,11 @@ import type { ReactNode } from 'react';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { createMemoryRouter, Link, RouterProvider } from 'react-router-dom';
 
 import { LiveAnnouncerProvider } from '@/components/ui/LiveAnnouncer';
+
+import { UnsavedChangesBlocker, UnsavedChangesGuardProvider } from '@/hooks/useUnsavedChangesGuard';
 
 import { MetadataInspector } from './MetadataInspector';
 
@@ -714,6 +717,113 @@ describe('MetadataInspector', () => {
         expect(mockPatchMutate).toHaveBeenCalledTimes(1);
         expect(lastPatch().genres).toEqual({ remove: ['Action'] });
         expect(lastPatch().title).toBeUndefined();
+    });
+
+    it.each([
+        ['Keep Editing', '/content/c1?tab=metadata'],
+        ['Discard Changes', '/content/c1?tab=details'],
+    ])('asks before a tab change drops pending edits, then follows %s', async (choice, expectedPath) => {
+        // Arrange
+        mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary Title' })]));
+        const router = createMemoryRouter(
+            [
+                {
+                    path: '/content/:id',
+                    element: (
+                        <LiveAnnouncerProvider>
+                            <UnsavedChangesGuardProvider>
+                                <UnsavedChangesBlocker />
+                                <Link to="?tab=details">Details</Link>
+                                <MetadataInspector contentId="c1" />
+                            </UnsavedChangesGuardProvider>
+                        </LiveAnnouncerProvider>
+                    ),
+                },
+            ],
+            { initialEntries: ['/content/c1?tab=metadata'] },
+        );
+        render(<RouterProvider router={router} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
+        await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Operator Title' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+        const genres = document.querySelector('[data-subsection="genres"]') as HTMLElement;
+        fireEvent.click(within(genres).getByRole('button', { name: /add genre/i }));
+        await waitFor(() => expect(screen.getByText('Add genre')).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText(/Name/), { target: { value: 'Thriller' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+        expect(screen.getByTestId('unsaved-changes')).toHaveTextContent('2 unsaved changes');
+
+        // Act
+        fireEvent.click(screen.getByRole('link', { name: 'Details' }));
+        fireEvent.click(await screen.findByRole('button', { name: choice }));
+
+        // Assert
+        await waitFor(() => expect(router.state.location.pathname + router.state.location.search).toBe(expectedPath));
+        expect(mockPatchMutate).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['Duration', 'not a duration', 'Use hours, minutes and seconds, for example 01:45:00.'],
+        ['Publish date', 'someday', 'Use a year, month and day, for example 2010-07-16.'],
+    ])('keeps an invalid %s in the override dialog with its format', async (label, value, hint) => {
+        // Arrange
+        mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary Title' })]));
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        fireEvent.click(screen.getByRole('button', { name: `Edit ${label}` }));
+        await waitFor(() => expect(screen.getByText(`Override ${label}`)).toBeInTheDocument());
+
+        // Act
+        fireEvent.change(screen.getByLabelText('Value'), { target: { value } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+        // Assert
+        expect(screen.getByLabelText('Value')).toHaveValue(value);
+        expect(screen.getByLabelText('Value')).toHaveAccessibleDescription(
+            `${hint} ${label} is not in the expected format.`,
+        );
+        expect(screen.getByTestId('no-changes')).toBeInTheDocument();
+    });
+
+    it('stages a valid duration override', async () => {
+        // Arrange
+        mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary Title' })]));
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Duration' }));
+        await waitFor(() => expect(screen.getByText('Override Duration')).toBeInTheDocument());
+
+        // Act
+        fireEvent.change(screen.getByLabelText('Value'), { target: { value: '01:45:00' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+        saveChanges();
+
+        // Assert
+        expect(lastPatch().duration).toEqual({ value: '01:45:00' });
+    });
+
+    it('shows the host reason when a save is rejected', async () => {
+        // Arrange
+        mockPatchMutate.mockImplementation((_patch: unknown, options: { onError: (error: Error) => void }) =>
+            options.onError(new Error("The request body contains invalid JSON at '$.duration.value'.")),
+        );
+        mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Primary Title' })]));
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
+        await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Operator Title' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+        // Act
+        saveChanges();
+
+        // Assert
+        expect(mockToast).toHaveBeenCalledWith(
+            expect.objectContaining({
+                title: 'Save failed',
+                description: "The request body contains invalid JSON at '$.duration.value'.",
+            }),
+        );
+        expect(screen.getByTestId('unsaved-changes')).toHaveTextContent('1 unsaved change');
     });
 
     it('reverts staged changes without issuing a patch', async () => {

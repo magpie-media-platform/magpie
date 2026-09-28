@@ -1,74 +1,66 @@
 import { describe, expect, it } from 'vitest';
 
-import { Role } from '@/auth';
+import { Role, type Permission } from '@/auth';
+import { testHasPermission } from '@/test/permissions';
 
 import { canEditOwned } from './ownership';
 
-function makeHasRole(userRole: Role) {
-    return (minRole: Role) => userRole >= minRole;
-}
+const userId = 'user-1';
+const otherId = 'user-2';
 
 describe('canEditOwned', () => {
-    const userId = 'user-1';
-    const otherId = 'user-2';
+    it.each<[Role, Permission, string | null, boolean, boolean]>([
+        [Role.Viewer, 'wishlists.own', userId, false, false],
+        [Role.Viewer, 'wishlists.own', userId, true, false],
+        [Role.Viewer, 'wishlists.own', otherId, false, false],
+        [Role.Viewer, 'wishlists.own', otherId, true, false],
+        [Role.Viewer, 'wishlists.own', null, false, false],
+        [Role.Viewer, 'wishlists.own', null, true, false],
+        [Role.Requester, 'wishlists.own', userId, false, true],
+        [Role.Requester, 'wishlists.own', userId, true, true],
+        [Role.Requester, 'wishlists.own', otherId, false, false],
+        [Role.Requester, 'wishlists.own', otherId, true, false],
+        [Role.Requester, 'wishlists.own', null, false, false],
+        [Role.Requester, 'wishlists.own', null, true, false],
+        [Role.Manager, 'wishlists.own', userId, false, true],
+        [Role.Manager, 'wishlists.own', userId, true, true],
+        [Role.Manager, 'wishlists.own', otherId, false, false],
+        [Role.Manager, 'wishlists.own', otherId, true, false],
+        [Role.Manager, 'wishlists.own', null, false, false],
+        [Role.Manager, 'wishlists.own', null, true, false],
+        [Role.Admin, 'wishlists.own', userId, false, true],
+        [Role.Admin, 'wishlists.own', userId, true, true],
+        [Role.Admin, 'wishlists.own', otherId, false, true],
+        [Role.Admin, 'wishlists.own', otherId, true, false],
+        [Role.Admin, 'wishlists.own', null, false, true],
+        [Role.Admin, 'wishlists.own', null, true, true],
+        [Role.Viewer, 'filters.own', userId, false, true],
+        [Role.Viewer, 'filters.own', userId, true, true],
+        [Role.Viewer, 'filters.own', otherId, false, false],
+        [Role.Viewer, 'filters.own', null, false, false],
+        [Role.Manager, 'filters.own', otherId, false, false],
+        [Role.Manager, 'filters.own', null, false, false],
+        [Role.Admin, 'filters.own', otherId, false, true],
+        [Role.Admin, 'filters.own', otherId, true, false],
+        [Role.Admin, 'filters.own', null, false, true],
+    ])('role %s with %s on owner %s, locked %s, returns %s', (role, permission, ownerId, ownerLock, expected) => {
+        // Act
+        const result = canEditOwned(
+            { ownerId, ownerLock },
+            userId,
+            role === Role.Admin,
+            testHasPermission(role, permission),
+        );
 
-    it('allows owner to edit their own locked item', () => {
-        const item = { ownerId: userId, ownerLock: true };
-        expect(canEditOwned(item, userId, false, makeHasRole(Role.Requester), Role.Requester)).toBe(true);
+        // Assert
+        expect(result).toBe(expected);
     });
 
-    it('denies non-owner from editing a locked item', () => {
-        const item = { ownerId: otherId, ownerLock: true };
-        expect(canEditOwned(item, userId, false, makeHasRole(Role.Requester), Role.Requester)).toBe(false);
-    });
+    it('denies an owned item when the user is unknown', () => {
+        // Act
+        const result = canEditOwned({ ownerId: userId, ownerLock: false }, undefined, false, true);
 
-    it('denies non-owner manager from editing a locked item', () => {
-        const item = { ownerId: otherId, ownerLock: true };
-        expect(canEditOwned(item, userId, true, makeHasRole(Role.Manager), Role.Requester)).toBe(false);
-    });
-
-    it('allows admin to edit a locked item they do not own', () => {
-        const item = { ownerId: otherId, ownerLock: true };
-        expect(canEditOwned(item, userId, true, makeHasRole(Role.Admin), Role.Requester)).toBe(true);
-    });
-
-    it('allows manager to edit shared item (null ownerId)', () => {
-        const item = { ownerId: null, ownerLock: false };
-        expect(canEditOwned(item, userId, true, makeHasRole(Role.Manager), Role.Requester)).toBe(true);
-    });
-
-    it('denies non-manager from editing shared item', () => {
-        const item = { ownerId: null, ownerLock: false };
-        expect(canEditOwned(item, userId, false, makeHasRole(Role.Requester), Role.Requester)).toBe(false);
-    });
-
-    it('allows manager to edit unlocked item regardless of ownership', () => {
-        const item = { ownerId: otherId, ownerLock: false };
-        expect(canEditOwned(item, userId, true, makeHasRole(Role.Manager), Role.Requester)).toBe(true);
-    });
-
-    it('allows requester to edit their own unlocked item', () => {
-        const item = { ownerId: userId, ownerLock: false };
-        expect(canEditOwned(item, userId, false, makeHasRole(Role.Requester), Role.Requester)).toBe(true);
-    });
-
-    it('denies viewer from editing any item', () => {
-        const item = { ownerId: userId, ownerLock: false };
-        expect(canEditOwned(item, userId, false, makeHasRole(Role.Viewer), Role.Requester)).toBe(false);
-    });
-
-    it('denies requester from editing another users unlocked item', () => {
-        const item = { ownerId: otherId, ownerLock: false };
-        expect(canEditOwned(item, userId, false, makeHasRole(Role.Requester), Role.Requester)).toBe(false);
-    });
-
-    it('allows manager to edit shared locked item', () => {
-        const item = { ownerId: null, ownerLock: true };
-        expect(canEditOwned(item, userId, true, makeHasRole(Role.Manager), Role.Requester)).toBe(true);
-    });
-
-    it('handles undefined userId gracefully', () => {
-        const item = { ownerId: userId, ownerLock: false };
-        expect(canEditOwned(item, undefined, false, makeHasRole(Role.Requester), Role.Requester)).toBe(false);
+        // Assert
+        expect(result).toBe(false);
     });
 });

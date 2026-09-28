@@ -98,21 +98,28 @@ export interface SelectModeToggleProps {
     /** Whether the toggle belongs to the narrow-viewport layout only. */
     mobileOnly?: boolean;
 
+    disabled?: boolean;
+
     className?: string;
 }
 
-/** The button that enters and leaves selection mode. */
-export function SelectModeToggle({ active, onToggle, mobileOnly = true, className }: SelectModeToggleProps) {
+/**
+ * The button that enters and leaves selection mode. It keeps one name and one width in both states, so a toolbar
+ * does not reflow when selection mode changes. The pressed state shows that selection mode is on.
+ */
+export function SelectModeToggle({ active, onToggle, mobileOnly = true, disabled, className }: SelectModeToggleProps) {
     const button = (
         <Button
-            variant="default"
+            variant={active ? 'primary' : 'default'}
             size="sm"
             className={className}
             onClick={onToggle}
+            disabled={disabled}
+            aria-pressed={active}
             data-action={active ? 'exit-select-mode' : 'enter-select-mode'}
         >
             {active ? <XIcon weight="bold" aria-hidden="true" /> : <CheckSquareIcon weight="bold" aria-hidden="true" />}
-            {active ? 'Stop selecting' : 'Select'}
+            Select
         </Button>
     );
 

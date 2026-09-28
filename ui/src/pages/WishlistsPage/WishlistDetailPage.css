@@ -119,6 +119,10 @@
         align-items: center;
         gap: var(--space-xs);
         flex-shrink: 0;
+
+        @media (max-width: 639px) {
+            display: none;
+        }
     }
 
     .wishlist-detail-page__meta {

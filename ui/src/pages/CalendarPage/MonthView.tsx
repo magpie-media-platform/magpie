@@ -1,4 +1,5 @@
 import type { CalendarEvent } from '@/types/calendar';
+import { ContentFulfillmentBadge, ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 
 import {
@@ -44,7 +45,7 @@ export function MonthView({ currentDate, getEventsForDate, onDayClick }: MonthVi
                             type="button"
                             className={`calendar-page__day-cell ${!isCurrentMonth ? 'calendar-page__day-cell--other-month' : ''} ${isTodayDate ? 'calendar-page__day-cell--today' : ''}`}
                             onClick={() => onDayClick(date)}
-                            aria-label={formatDate(date)}
+                            aria-label={`${formatDate(date)}, ${dayEvents.length} ${dayEvents.length === 1 ? 'event' : 'events'}`}
                             data-date={formatDateKey(date)}
                             {...(isTodayDate ? { 'data-testid': 'calendar-page__day-cell--today' } : {})}
                         >
@@ -56,6 +57,7 @@ export function MonthView({ currentDate, getEventsForDate, onDayClick }: MonthVi
                                             key={evt.id}
                                             className={`calendar-page__day-event ${getFulfillmentClass(evt.fulfillment)}`}
                                             data-testid="calendar-page__day-event"
+                                            data-fulfillment={evt.fulfillment}
                                         >
                                             <ContentLineageTitle
                                                 className="calendar-page__day-event-title"
@@ -66,6 +68,18 @@ export function MonthView({ currentDate, getEventsForDate, onDayClick }: MonthVi
                                                 }}
                                                 fallback={{ contentType: evt.contentType, level: evt.level }}
                                             />
+                                            <span className="calendar-page__day-event-statuses">
+                                                <ContentMonitoringIndicator
+                                                    monitoring={evt.monitoring}
+                                                    effectiveMonitoring={evt.effectiveMonitoring}
+                                                    className="calendar-page__day-event-monitoring"
+                                                    activeClassName="calendar-page__day-event-monitoring--active"
+                                                />
+                                                <ContentFulfillmentBadge
+                                                    fulfillment={evt.fulfillment}
+                                                    className="calendar-page__day-event-badge"
+                                                />
+                                            </span>
                                         </div>
                                     ))}
                                     {dayEvents.length > 3 && (

@@ -44,9 +44,12 @@ internal sealed class MediaServerRefreshJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Retry,
-        Timeout = TimeSpan.FromMinutes(5),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
+        LockPartitionEventContextKeys = new Dictionary<string, string>
+        {
+            [MagpieJobs.Parameters.ContentHierarchyItemId] = MagpieEvents.Keys.ContentHierarchyItemId
+        },
         Parameters =
         [
             new(
@@ -55,6 +58,10 @@ internal sealed class MediaServerRefreshJob(
                 DataType.String,
                 false,
                 null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            }
         ],
     };
 
@@ -201,6 +208,8 @@ internal sealed class MediaServerRefreshJob(
             catch (Exception ex)
             {
                 serverActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                serverActivity?.AddException(ex);
+                serverActivity?.SetTag("error.type", ex.GetType().FullName);
                 logger.LogWarning(
                     ex,
                     "The job failed to refresh the libraries on media server {MediaServerName}",

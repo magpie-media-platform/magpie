@@ -16,7 +16,6 @@ namespace Magpie.Models;
 /// <param name="Parameters">The parameter values for this execution, keyed by parameter name</param>
 /// <param name="Event">The event that started the job, when any</param>
 /// <param name="CorrelationId">The correlation id that the original trigger set for the job chain</param>
-/// <param name="Deadline">The time the runtime cancels this execution for its run-time budget, when known</param>
 public sealed record JobContext(
     Guid ExecutionId,
     Guid? ScheduleTriggerId,
@@ -25,5 +24,4 @@ public sealed record JobContext(
     JobExecutionMode ExecutionMode,
     IReadOnlyDictionary<string, string> Parameters,
     MagpieEvent? Event,
-    Guid? CorrelationId = null,
-    DateTimeOffset? Deadline = null);
+    Guid? CorrelationId = null);

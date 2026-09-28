@@ -10,10 +10,12 @@ vi.mock('@/editor/FilterQueryEditor', () => ({
     FilterQueryEditor: ({
         value,
         onChange,
+        onSubmit,
         ...props
     }: {
         value: string;
         onChange: (v: string) => void;
+        onSubmit?: () => void;
         [key: string]: unknown;
     }) => (
         <div data-testid="filter-query-editor" data-value={value} {...props}>
@@ -22,6 +24,7 @@ vi.mock('@/editor/FilterQueryEditor', () => ({
                 value={value}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
             />
+            <button type="button" data-testid="query-mod-enter" onClick={onSubmit} />
         </div>
     ),
 }));
@@ -365,6 +368,29 @@ describe('FilterBar', () => {
             fireEvent.keyDown(screen.getByLabelText('Simple filter value'), { key: 'Enter' });
 
             expect(onSubmit).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            [false, 1],
+            [true, 0],
+        ])('runs the advanced query from the editor submit key once (loading %s)', (loading, expectedCalls) => {
+            // Arrange
+            const onSubmit = vi.fn();
+            render(
+                <FilterBar
+                    value="year > 2000 or year < 1990"
+                    onChange={mockOnChange}
+                    onSubmit={onSubmit}
+                    loading={loading}
+                    defaultExpanded
+                />,
+            );
+
+            // Act
+            fireEvent.click(screen.getByTestId('query-mod-enter'));
+
+            // Assert
+            expect(onSubmit).toHaveBeenCalledTimes(expectedCalls);
         });
 
         it('does not submit during IME composition', () => {

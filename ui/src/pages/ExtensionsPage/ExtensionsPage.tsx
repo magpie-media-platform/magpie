@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Switch } from '@/components/ui/Switch';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
 import { AdminExtensionsSlot } from '@/components/ui/Slot';
@@ -36,7 +37,7 @@ import {
 } from '@/hooks/useExtensionManagement';
 import { getErrorMessage } from '@/lib/errors';
 import { InstallExtensionDialog } from './InstallExtensionDialog';
-import { NuGetFeedsSection } from './NuGetFeedsSection';
+import { NuGetFeedsSection, type NuGetFeedsSectionHandle } from './NuGetFeedsSection';
 import { getStatusVariant, getStatusLabel } from './extensionStatus';
 
 import './ExtensionsPage.css';
@@ -151,6 +152,9 @@ export function ExtensionsPage() {
         [actions, toast],
     );
 
+    const [activeTab, setActiveTab] = useState('installed');
+    const feedsRef = useRef<NuGetFeedsSectionHandle>(null);
+
     const handleCheckUpdates = useCallback(async () => {
         try {
             const results = await actions.checkUpdates();
@@ -185,6 +189,29 @@ export function ExtensionsPage() {
 
     const extensionsDescription =
         'Extensions can be installed from NuGet or uploaded packages, then enabled, disabled, and updated here.';
+
+    const pageActions: QuickAction[] = [
+        {
+            id: 'add-extension',
+            label: 'Add extension',
+            icon: <PlusIcon weight="bold" />,
+            onClick: () => setInstallOpen(true),
+        },
+        activeTab === 'feeds'
+            ? {
+                  id: 'add-feed',
+                  label: 'Add feed',
+                  icon: <PlusIcon weight="bold" />,
+                  onClick: () => feedsRef.current?.add(),
+              }
+            : {
+                  id: 'check-updates',
+                  label: 'Check for updates',
+                  icon: <ArrowClockwiseIcon weight="bold" />,
+                  onClick: () => void handleCheckUpdates(),
+                  disabled: actions.isCheckingUpdates,
+              },
+    ];
 
     if (isLoading && extensions.length === 0) {
         return (
@@ -254,7 +281,7 @@ export function ExtensionsPage() {
                         }
                     />
 
-                    <Tabs defaultValue="installed" className="extensions-page__tabs">
+                    <Tabs value={activeTab} onValueChange={setActiveTab} className="extensions-page__tabs">
                         <TabsList aria-label="Extension sections">
                             <TabsTrigger value="installed" data-tab="installed">
                                 Installed
@@ -350,11 +377,13 @@ export function ExtensionsPage() {
                         </TabsContent>
 
                         <TabsContent value="feeds" forceMount>
-                            <NuGetFeedsSection />
+                            <NuGetFeedsSection ref={feedsRef} />
                         </TabsContent>
                     </Tabs>
                 </PullToRefresh>
             </AdminExtensionsSlot>
+
+            <QuickActionsButton actions={pageActions} title="Extension Actions" />
 
             <InstallExtensionDialog
                 open={installOpen}

@@ -75,6 +75,10 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
     {
         private readonly Dictionary<int, int> _branchIndexes = [];
 
+        internal QueryProgress? Progress { get; init; }
+
+        internal bool Incomplete { get; set; }
+
         internal int RequiredCount { get; } = requiredCount;
 
         internal List<string> Warnings { get; } = [];
@@ -816,7 +820,37 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         var requiredCount = plan.MaximumResults == int.MaxValue
             ? int.MaxValue
             : plan.MaximumResults + 1;
-        var context = new PlanExecutionContext(requiredCount, plan.MaximumResults);
+        var context = new PlanExecutionContext(requiredCount, plan.MaximumResults) { Progress = plan.Progress };
+        if (plan.Progress is { } progress)
+        {
+            var nodes = new Stack<PlanNode>();
+            nodes.Push(plan.Root);
+            while (nodes.Count > 0)
+            {
+                var node = nodes.Pop();
+                if (node is ResolvePlanNode resolve && progress.ResolvedSources.ContainsKey(node.Id))
+                {
+                    await ExecuteResolveAsync(resolve, context, cancellationToken).ConfigureAwait(false);
+                }
+
+                foreach (var child in Children(node))
+                {
+                    nodes.Push(child);
+                }
+            }
+
+            if (progress.ValidateOnly)
+            {
+                return new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [],
+                    Warnings = context.Warnings,
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = true }
+                };
+            }
+        }
+
         var execution = plan.Root is FilterPlanNode filter
             ? await ExecuteVerifiedNodeAsync(
                 filter.Child,
@@ -845,7 +879,8 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         }
 
         var matches = new List<MetadataSearchCandidate>();
-        foreach (var show in execution.Candidates.Take(plan.MaximumResults))
+        foreach (var show in execution.Candidates.Where(show => plan.Progress?.Delivered.Contains(show.Id) != true)
+            .Take(plan.MaximumResults))
         {
             var candidate = show.ToMetadataSearchCandidate();
             if (candidate is not null)
@@ -862,7 +897,8 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             PageInfo = new ProviderSearchPageInfo
             {
                 RequestedPage = 1,
-                HasMore = execution.Candidates.Count > plan.MaximumResults
+                HasMore = execution.Candidates.Count > plan.MaximumResults ||
+                    plan.Progress is not null && (context.Incomplete || context.Warnings.Count > 0)
             }
         };
         RecordUnobserved(context, plan.Root, "branch was not required");
@@ -1325,6 +1361,17 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         var result = people.Count == 0
             ? failed ? ResolveExecutionResult.Failed : ResolveExecutionResult.Empty
             : new ResolveExecutionResult(NodeExecutionStatus.Success, people);
+        if (context.Progress is { } progress && !failed)
+        {
+            var signature = JsonSerializer.Serialize(people.Select(person => person.Person.Id));
+            if (progress.ResolvedSources.TryGetValue(node.Id, out var previous) && previous != signature)
+            {
+                throw new MetadataSearchContinuationException("TVmaze resolved people changed. Start a new search.");
+            }
+
+            progress.ResolvedSources[node.Id] = signature;
+        }
+
         context.RecordBranch(new NodeExecutionOutcome
         {
             Id = node.Id,
@@ -1434,7 +1481,15 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         var pageRequests = 0;
         var rowsIn = 0;
         var rejectionsBefore = context.TotalRejections;
-        for (var page = 0; page < MaximumBrowsePages && survivors.Count < requiredCount; page++)
+        var firstPage = context.Progress?.BrowsePages.GetValueOrDefault(node.Id) ?? 0;
+        if (context.Progress?.ExhaustedBrowse.Contains(node.Id) == true)
+        {
+            return NodeExecutionResult.Empty;
+        }
+
+        var exhausted = false;
+        int? retryPage = null;
+        for (var page = firstPage; page < firstPage + MaximumBrowsePages && survivors.Count < requiredCount; page++)
         {
             IReadOnlyList<ShowDto>? shows;
             try
@@ -1463,6 +1518,12 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
 
             if (shows is null)
             {
+                exhausted = retryPage is null;
+                if (exhausted)
+                {
+                    context.Progress?.ExhaustedBrowse.Add(node.Id);
+                }
+
                 break;
             }
 
@@ -1476,7 +1537,18 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             rowsIn += verified.RowsIn;
             status = MergeVerificationStatus(status, verified.Status);
             AddShows(verified.Candidates, survivors, showIds, requiredCount);
+            if (verified.Status is NodeExecutionStatus.Failed or NodeExecutionStatus.Unavailable)
+            {
+                retryPage ??= page;
+            }
+
+            if (context.Progress is { } progress)
+            {
+                progress.BrowsePages[node.Id] = retryPage ?? page;
+            }
         }
+
+        context.Incomplete |= !exhausted;
 
         var result = survivors.Count > 0
             ? new NodeExecutionResult(
@@ -1533,6 +1605,11 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         var rejectionsBefore = context.TotalRejections;
         foreach (var candidate in candidates)
         {
+            if (context.Progress?.Delivered.Contains(candidate.Id) == true)
+            {
+                continue;
+            }
+
             if (survivors.Count >= requiredCount)
             {
                 break;

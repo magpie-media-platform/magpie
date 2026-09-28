@@ -69,6 +69,7 @@
 
     fieldset {
         border: none;
+        min-inline-size: 0;
     }
 
     input::-webkit-outer-spin-button,

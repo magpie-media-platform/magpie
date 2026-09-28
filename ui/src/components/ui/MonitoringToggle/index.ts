@@ -1,1 +1,1 @@
-export { MonitoringToggle, type MonitoringToggleProps } from './MonitoringToggle';
+export { MonitoringToggle, type MonitoringToggleProps, type MonitoringValue } from './MonitoringToggle';

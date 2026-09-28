@@ -64,4 +64,37 @@ public sealed class BuiltInSubjectKindDefinitionProviderTests
             Assert.That(definitionCount, Is.EqualTo(2));
         }
     }
+
+    [Test]
+    public void GetSubjectKindDefinitions_DeclaresEmittedPersonRoles_WhenKindIsPerson()
+    {
+        // Arrange
+        var provider = new BuiltInSubjectKindDefinitionProvider();
+
+        // Act
+        var roles = provider.GetSubjectKindDefinitions().Single(definition => definition.Slug == "person")
+            .RelationshipRoles.Select(role => role.Slug);
+
+        // Assert
+        string[] expected =
+        [
+            "cast", "guest-cast", "director", "writer", "crew", "author", "translator", "illustrator", "editor",
+            "contributor", "artist", "performer"
+        ];
+        Assert.That(roles, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void GetSubjectKindDefinitions_DeclaresEmittedStudioRoles_WhenKindIsStudio()
+    {
+        // Arrange
+        var provider = new BuiltInSubjectKindDefinitionProvider();
+
+        // Act
+        var roles = provider.GetSubjectKindDefinitions().Single(definition => definition.Slug == "studio")
+            .RelationshipRoles.Select(role => role.Slug);
+
+        // Assert
+        Assert.That(roles, Is.EqualTo((string[])["studio", "network"]));
+    }
 }

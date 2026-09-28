@@ -8,6 +8,7 @@ import { executeJobRequest, requireJobActionExecutionId, type JobActionDispositi
 
 interface StartRootFolderContentDiscoveryVariables {
     rootFolderId: string;
+    contentHierarchyItemId?: string;
     rootFolderName?: string;
     batch?: ScanBatchInfo;
 }
@@ -16,12 +17,13 @@ type StartRootFolderContentDiscoveryResult = JobActionDisposition;
 
 async function startRootFolderContentDiscovery({
     rootFolderId,
+    contentHierarchyItemId,
 }: StartRootFolderContentDiscoveryVariables): Promise<StartRootFolderContentDiscoveryResult> {
     // Immediate mode holds the HTTP request open for the full scan, so a large root folder times out.
     const request: RunJobRequest = {
         jobType: 'RootFolderContentDiscovery',
         mode: 'Queue',
-        parameters: { rootFolderId },
+        parameters: contentHierarchyItemId ? { rootFolderId, contentHierarchyItemId } : { rootFolderId },
     };
     const disposition = await executeJobRequest(request);
     requireJobActionExecutionId(disposition, 'Root folder content discovery');

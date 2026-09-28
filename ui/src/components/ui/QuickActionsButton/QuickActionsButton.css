@@ -1,4 +1,8 @@
 @layer components {
+    :root {
+        --fab-clearance: calc(56px + var(--space-lg) * 2);
+    }
+
     .quick-actions-button {
         display: block;
     }
@@ -32,6 +36,18 @@
         flex-direction: column;
         gap: var(--space-sm);
         padding: var(--space-md);
+    }
+
+    .quick-actions-button__sheet-extra {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+        padding: 0 var(--space-md) var(--space-md);
+
+        &:empty,
+        &:has(> :only-child:empty) {
+            display: none;
+        }
     }
 
     .quick-actions-button__action {
@@ -88,6 +104,13 @@
         flex: 1;
     }
 
+    .quick-actions-button__action-description {
+        display: block;
+        font-size: var(--text-sm);
+        font-weight: var(--weight-normal);
+        color: var(--text-secondary);
+    }
+
     .quick-actions-button__action--primary {
         background-color: color-mix(in srgb, var(--accent-primary) 15%, transparent);
         border-color: var(--accent-primary);
@@ -141,10 +164,18 @@
             bottom: calc(var(--space-lg) + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
         }
 
-        :has(.quick-actions-button) .pull-to-refresh__content::after {
-            content: '';
-            display: block;
-            height: calc(56px + var(--space-lg) * 2);
+        /* The bottom navigation already sits outside the main area, so only the button and its offset need room. */
+        :is(.app-shell__main-wrapper, .admin-shell__main-wrapper):has(.quick-actions-button__fab) {
+            padding-bottom: max(var(--fab-clearance), var(--mobile-selection-bar-clearance, 0px));
+        }
+
+        :root:has(.quick-actions-button__fab):not(:has(.mobile-selection-bar))
+            :is(.toast-viewport--bottom-right, .toast-viewport--bottom-left) {
+            bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + var(--fab-clearance));
+        }
+
+        :has(.mobile-selection-bar) .quick-actions-button__fab {
+            display: none;
         }
     }
 }

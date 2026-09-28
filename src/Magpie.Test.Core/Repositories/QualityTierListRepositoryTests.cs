@@ -14,6 +14,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -31,20 +32,38 @@ public sealed class QualityTierListRepositoryTests
     private Mock<IEventBus> _updateEvents = null!;
 
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IQualityTierListRepository _subject = null!;
     private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
     private Guid _userId;
     private Guid _qualityTierId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var user = new User
         {

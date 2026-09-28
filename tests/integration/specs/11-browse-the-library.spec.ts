@@ -24,8 +24,8 @@ interface ContentItem {
     level: string;
     contentType: string;
     parentId?: string | null;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
     contentItem?: {
         fulfillment: string;
         mediaFiles: Array<{ filePath: string }>;
@@ -181,8 +181,8 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                 await mobile.getByRole('button', { name: 'Select Journey Feature card' }).click();
                 await page.locator('.library-page__mobile-selection-actions [data-action="bulk-unmonitor"]').click();
                 await expect.poll(async () => (await api.get<ContentItem>(`/api/content/${ids.movie}`)).monitoring)
-                    .toBe(false);
-                await api.patch(`/api/content/${ids.movie}`, { monitoring: { value: true } });
+                    .toBe('Unmonitored');
+                await api.patch(`/api/content/${ids.movie}`, { monitoring: { value: 'Monitored' } });
             });
 
             await test.step('the library landing page offers each content type as its own entry point', async () => {

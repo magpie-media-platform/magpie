@@ -9,6 +9,7 @@ using Magpie.Core.Config;
 using Magpie.Core.Jobs.Runtime;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -49,6 +50,49 @@ public sealed class ProgressReporterTests
     public void TearDown()
     {
         _scopeServices.Dispose();
+    }
+
+    [Test]
+    public async Task FlushAsync_CancelsTheWait_WhenTheExecutionIsCancelled()
+    {
+        // Arrange
+        var write = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _executions.Setup(repository => repository.UpdateProgressAsync(_executionId, 100, "finished",
+                It.IsAny<CancellationToken>())).Returns(write.Task);
+        var subject = new ProgressReporter(_executionScopes.Object, _scopes.Object,
+            NullLogger<ProgressReporter>.Instance, new JobRuntimeOptions());
+        using var cancellation = new CancellationTokenSource();
+
+        // Act
+        subject.Report(1, "finished");
+        var flush = subject.FlushAsync(cancellation.Token);
+        await cancellation.CancelAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.ThrowsAsync<TaskCanceledException>(async () => await flush.ConfigureAwait(false));
+        write.SetResult(false);
+        await subject.DisposeAsync().ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task Report_LogsTheDroppedWrite_WhenTheExecutionIsNoLongerRunning()
+    {
+        // Arrange
+        var logger = new Mock<ILogger<ProgressReporter>>();
+        _executions.Setup(repository => repository.UpdateProgressAsync(_executionId, 100, "late",
+                It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        var subject = new ProgressReporter(_executionScopes.Object, _scopes.Object,
+            logger.Object, new JobRuntimeOptions());
+
+        // Act
+        subject.Report(1, "late");
+        await subject.FlushAsync().ConfigureAwait(false);
+
+        // Assert
+        logger.Verify(value => value.Log(LogLevel.Warning, It.IsAny<EventId>(),
+            It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("dropped a progress report",
+                StringComparison.Ordinal)), It.IsAny<Exception?>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
     }
 
     [Test]
@@ -95,37 +139,6 @@ public sealed class ProgressReporterTests
 
         // Assert
         Assert.That(_appliedMessages, Is.EqualTo(["step 1", "step 4"]));
-    }
-
-    [Test]
-    public async Task DisposeAsync_ReturnsBeforeTheWriteCompletes_WhenTheFlushExceedsItsBudget()
-    {
-        // Arrange
-        var write = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _executions
-            .Setup(repository => repository.UpdateProgressAsync(
-                It.IsAny<Guid>(),
-                It.IsAny<double?>(),
-                It.IsAny<string?>(),
-                It.IsAny<CancellationToken>()))
-            .Returns(write.Task);
-        var subject = new ProgressReporter(
-            _executionScopes.Object,
-            _scopes.Object,
-            NullLogger<ProgressReporter>.Instance,
-            new JobRuntimeOptions { ProgressFlushTimeout = TimeSpan.FromMilliseconds(50) });
-
-        // Act
-        subject.Report(0.5, "step 1");
-        await subject.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(write.Task.IsCompleted, Is.False);
-            _executions.Verify(repository => repository.UpdateProgressAsync(
-                _executionId, 50, "step 1", It.IsAny<CancellationToken>()), Times.Once);
-        }
     }
 
     [Test]

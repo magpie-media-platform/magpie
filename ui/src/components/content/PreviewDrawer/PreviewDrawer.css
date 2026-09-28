@@ -7,6 +7,23 @@
         }
     }
 
+    /* A long title ends in an ellipsis, so the button keeps one line and stays inside the footer. */
+    .preview-drawer__open {
+        min-width: 0;
+        max-width: 100%;
+
+        & .button__content {
+            min-width: 0;
+        }
+    }
+
+    .preview-drawer__open-label {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
     .preview-drawer__add-hint {
         margin: 0 0 var(--space-2xs) 0;
         font-size: var(--text-xs);

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowClockwiseIcon, FolderIcon, GaugeIcon, HardDrivesIcon, StethoscopeIcon } from '@phosphor-icons/react';
 
 import { Card } from '@/components/ui/Card';
-import { DiskSpaceWidget } from '@/components/ui/DiskSpaceWidget';
+import { DiskSpaceWidget, type DiskSpaceInfo } from '@/components/ui/DiskSpaceWidget';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SystemStatusSlot } from '@/components/ui/Slot/SystemSlots';
@@ -13,7 +13,6 @@ import { formatUptime } from '@/lib/formatTime';
 
 import { DiagnosticsSection } from './DiagnosticsSection';
 import { RestartHostPanel } from './RestartHostPanel';
-import { SchedulerStallBanner } from './SchedulerStallBanner';
 
 import './SystemStatusPage.css';
 
@@ -49,6 +48,13 @@ export function SystemStatusPage() {
     const navigate = useNavigate();
     const statusData = useSystemStatus();
 
+    const handleFolderClick = useCallback(
+        (folder: DiskSpaceInfo) => {
+            void navigate(`/admin/root-folders?edit=${encodeURIComponent(folder.id)}`);
+        },
+        [navigate],
+    );
+
     const handleViewAllFolders = useCallback(() => {
         void navigate('/admin/root-folders');
     }, [navigate]);
@@ -64,8 +70,6 @@ export function SystemStatusPage() {
                 />
 
                 <div className="system-status-page__content">
-                    <SchedulerStallBanner />
-
                     <section className="system-status-page__section" aria-labelledby="sysinfo-heading">
                         <h2 id="sysinfo-heading" className="system-status-page__section-title">
                             <HardDrivesIcon weight="duotone" aria-hidden="true" />
@@ -133,7 +137,7 @@ export function SystemStatusPage() {
                             folders={statusData.diskSpace}
                             totals={statusData.diskSpaceTotals}
                             loading={statusData.isLoading}
-                            onFolderClick={handleViewAllFolders}
+                            onFolderClick={handleFolderClick}
                             onViewAllClick={handleViewAllFolders}
                             headingLevel={3}
                         />

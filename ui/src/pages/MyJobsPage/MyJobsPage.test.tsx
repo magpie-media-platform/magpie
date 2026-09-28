@@ -670,7 +670,10 @@ describe('MyJobsPage manual trigger', () => {
             </TestWrapper>,
         );
 
-        const runButton = screen.getByRole('button', { name: /run a job/i });
+        const runButton = within(document.querySelector('.my-jobs-page__executions-toolbar') as HTMLElement).getByRole(
+            'button',
+            { name: /run a job/i },
+        );
         expect(runButton).toBeInTheDocument();
         expect(runButton).toBeEnabled();
     });
@@ -686,7 +689,11 @@ describe('MyJobsPage manual trigger', () => {
             </TestWrapper>,
         );
 
-        await user.click(screen.getByRole('button', { name: /run a job/i }));
+        await user.click(
+            within(document.querySelector('.my-jobs-page__executions-toolbar') as HTMLElement).getByRole('button', {
+                name: /run a job/i,
+            }),
+        );
 
         const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
         expect(dialog).toBeInTheDocument();
@@ -711,7 +718,11 @@ describe('MyJobsPage manual trigger', () => {
             </TestWrapper>,
         );
 
-        await user.click(screen.getByRole('button', { name: /run a job/i }));
+        await user.click(
+            within(document.querySelector('.my-jobs-page__executions-toolbar') as HTMLElement).getByRole('button', {
+                name: /run a job/i,
+            }),
+        );
 
         const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
         const jobSelect = dialog.querySelector('[data-field="jobType"]') as HTMLElement;
@@ -732,7 +743,11 @@ describe('MyJobsPage manual trigger', () => {
             </TestWrapper>,
         );
 
-        await user.click(screen.getByRole('button', { name: /run a job/i }));
+        await user.click(
+            within(document.querySelector('.my-jobs-page__executions-toolbar') as HTMLElement).getByRole('button', {
+                name: /run a job/i,
+            }),
+        );
 
         const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
         const jobSelect = dialog.querySelector('[data-field="jobType"]') as HTMLElement;
@@ -846,7 +861,11 @@ describe('MyJobsPage Schedules tab', () => {
         );
 
         await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
-        await user.click(screen.getByRole('button', { name: /add schedule/i }));
+        await user.click(
+            within(document.querySelector('.my-jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add schedule/i,
+            }),
+        );
 
         const templateTrigger = screen.getByRole('combobox', { name: /job template/i });
         await user.click(templateTrigger);
@@ -867,7 +886,11 @@ describe('MyJobsPage Schedules tab', () => {
         );
 
         await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
-        await user.click(screen.getByRole('button', { name: /add schedule/i }));
+        await user.click(
+            within(document.querySelector('.my-jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add schedule/i,
+            }),
+        );
 
         const nameInput = document.querySelector('[data-field="name"]') as HTMLInputElement;
         await user.type(nameInput, 'My Sync');
@@ -991,7 +1014,11 @@ describe('MyJobsPage Events tab', () => {
         );
 
         await user.click(screen.getByRole('tab', { name: /event triggers/i }));
-        await user.click(screen.getByRole('button', { name: /add event trigger/i }));
+        await user.click(
+            within(document.querySelector('.my-jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add event trigger/i,
+            }),
+        );
 
         const templateTrigger = screen.getByRole('combobox', { name: /job template/i });
         await user.click(templateTrigger);
@@ -1010,7 +1037,11 @@ describe('MyJobsPage Events tab', () => {
         );
 
         await user.click(screen.getByRole('tab', { name: /event triggers/i }));
-        await user.click(screen.getByRole('button', { name: /add event trigger/i }));
+        await user.click(
+            within(document.querySelector('.my-jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add event trigger/i,
+            }),
+        );
 
         const form = document.querySelector('[data-component="event-trigger-form"]') as HTMLElement;
         const nameInput = form.querySelector('[data-field="name"]') as HTMLInputElement;
@@ -1089,5 +1120,186 @@ describe('MyJobsPage URL persistence', () => {
         );
 
         expect(screen.getByRole('tab', { name: /history/i })).toHaveAttribute('data-state', 'active');
+    });
+});
+
+describe('MyJobsPage owned triggers outside the eligible catalog', () => {
+    const mediaInfoSpec: ApiJobSpec = {
+        jobType: 'MediaInfoExtractScan',
+        displayName: 'Media info extract scan',
+        category: 'Content',
+        scope: 'Administrative' as JobScopeValue,
+        enabled: true,
+        onDemand: false,
+        supportedTriggerModes: ['Schedule', 'Event'],
+        parameters: [{ name: 'maxAgeHours', description: 'Maximum age', type: 1, required: false, defaultValue: null }],
+    };
+
+    beforeEach(() => {
+        mockUseJobSpecs.mockImplementation((mode?: string) => ({
+            specs:
+                mode === 'Event'
+                    ? mockEventSpecs
+                    : mode === 'Schedule'
+                      ? mockScheduleSpecs
+                      : [...mockManualSpecs, mediaInfoSpec],
+            isLoading: false,
+            error: null,
+            refetch: vi.fn(),
+        }));
+    });
+
+    it('shows the template and parameters of an owned schedule, then offers only eligible templates on add', async () => {
+        const user = userEvent.setup();
+        mockUseScheduleTriggers.mockReturnValue(
+            scheduleTriggersReturn([
+                {
+                    id: 'trigger-media',
+                    name: 'Media scan',
+                    jobType: 'MediaInfoExtractScan',
+                    scope: 'Administrative' as JobScopeValue,
+                    schedule: '0 * * * *',
+                    executionMode: 'Queue',
+                    enabled: false,
+                    createdAt: '2024-01-01T00:00:00Z',
+                    createdByUserId: '1',
+                    parameters: { maxAgeHours: '72' },
+                },
+            ]),
+        );
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+        await user.click(document.querySelector('[data-action="edit"]') as HTMLElement);
+
+        expect(screen.getByRole('combobox', { name: /job template/i })).toHaveTextContent('Media info extract scan');
+        expect(document.querySelector('[data-field="parameter-maxAgeHours"]')).toHaveValue(72);
+
+        await user.click(screen.getByRole('button', { name: /cancel/i }));
+        await user.click(
+            within(document.querySelector('.my-jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add schedule/i,
+            }),
+        );
+        await user.click(screen.getByRole('combobox', { name: /job template/i }));
+
+        expect(screen.getByRole('option', { name: 'RSS Sync' })).toBeInTheDocument();
+        expect(screen.queryByRole('option', { name: 'Media info extract scan' })).not.toBeInTheDocument();
+    });
+
+    it('shows the template and parameters of an owned event trigger', async () => {
+        const user = userEvent.setup();
+        mockUseEventTriggers.mockReturnValue(
+            eventTriggersReturn([
+                {
+                    id: 'event-media',
+                    name: 'Media on import',
+                    jobType: 'MediaInfoExtractScan',
+                    scope: 'Administrative' as JobScopeValue,
+                    eventFilter: { eventName: { value: 'content\\.imported' } },
+                    enabled: false,
+                    delaySeconds: 0,
+                    createdAt: '2024-01-01T00:00:00Z',
+                    createdByUserId: '1',
+                    parameters: { maxAgeHours: '72' },
+                },
+            ]),
+        );
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+        await user.click(document.querySelector('[data-action="edit-event"]') as HTMLElement);
+
+        expect(screen.getByRole('combobox', { name: /job template/i })).toHaveTextContent('Media info extract scan');
+        expect(document.querySelector('[data-field="parameter-maxAgeHours"]')).toHaveValue(72);
+    });
+});
+
+describe('MyJobsPage trigger actions follow server authorization', () => {
+    it.each([
+        [Role.Requester, false],
+        [Role.Manager, true],
+    ])('shows Run now on a content trigger for role %s: %s', async (role, visible) => {
+        const user = userEvent.setup();
+        mockUseScheduleTriggers.mockReturnValue(
+            scheduleTriggersReturn([
+                {
+                    id: 'trigger-content',
+                    name: 'Refresh item',
+                    jobType: 'ContentMetadataRefreshItem',
+                    scope: 'User' as JobScopeValue,
+                    schedule: '0 0 1 * *',
+                    executionMode: 'Queue',
+                    enabled: false,
+                    createdAt: '2024-01-01T00:00:00Z',
+                    createdByUserId: '1',
+                },
+            ]),
+        );
+
+        render(
+            <TestWrapper role={role}>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+
+        expect(document.querySelector('[data-action="run-now"]') !== null).toBe(visible);
+    });
+
+    it.each([
+        [Role.Manager, false],
+        [Role.Admin, true],
+    ])('lets role %s manage an owned Administrative-scoped trigger: %s', async (role, manageable) => {
+        const user = userEvent.setup();
+        mockUseScheduleTriggers.mockReturnValue(
+            scheduleTriggersReturn([{ ...mockScheduleTriggers[0], scope: 'Administrative' as JobScopeValue }]),
+        );
+        mockUseEventTriggers.mockReturnValue(
+            eventTriggersReturn([{ ...mockEventTriggers[0], scope: 'Administrative' as JobScopeValue }]),
+        );
+
+        render(
+            <TestWrapper role={role}>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+        expect(document.querySelector('[data-action="edit"]') !== null).toBe(manageable);
+        expect(document.querySelector('[data-action="toggle"]')).toHaveProperty('disabled', !manageable);
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+        expect(document.querySelector('[data-action="edit-event"]') !== null).toBe(manageable);
+    });
+});
+
+describe('MyJobsPage phone actions button', () => {
+    it.each([
+        [/history/i, 'Run a job'],
+        [/scheduled jobs/i, 'Add Schedule'],
+        [/event triggers/i, 'Add Event Trigger'],
+    ])('offers the %s tab action as the floating button', async (tab, label) => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper role={Role.Manager}>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: tab }));
+
+        expect(document.querySelector('.quick-actions-button__fab')).toHaveAttribute('aria-label', label);
     });
 });

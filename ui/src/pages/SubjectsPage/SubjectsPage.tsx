@@ -19,6 +19,7 @@ import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useLiveUrlFilter } from '@/hooks/useLiveUrlFilter';
 import { useLibraryTypes, useTypeIconName, type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { TABLE_LAYOUT_QUERY, useCardLayout } from '@/hooks/ui/useCardLayout';
 import { extractImageUrl, extractTitle } from '@/lib/metadata';
@@ -166,14 +167,22 @@ export function SubjectsPage() {
 
     const filterQuery = urlState.filter;
     const scopedSubjectKind = subjectTypeSlug && subjectTypeSlug !== 'all' ? subjectTypeSlug : null;
-    const visibleFilterQuery = scopedSubjectKind ? removeSubjectKindClauses(filterQuery) : filterQuery;
+    const urlVisibleFilterQuery = scopedSubjectKind ? removeSubjectKindClauses(filterQuery) : filterQuery;
+    const commitFilter = useCallback(
+        (value: string, replace: boolean, state: { liveFilterCommit: string }) => {
+            setUrlState({ filter: value, page: '' }, { replace, state });
+        },
+        [setUrlState],
+    );
+    const liveFilter = useLiveUrlFilter({ value: urlVisibleFilterQuery, onCommit: commitFilter, replace: true });
+    const visibleFilterQuery = liveFilter.value;
     const debouncedFilter = useDebouncedValue(visibleFilterQuery, 300);
 
     useEffect(() => {
-        if (scopedSubjectKind && visibleFilterQuery !== filterQuery) {
-            setUrlState({ filter: visibleFilterQuery }, { replace: true });
+        if (scopedSubjectKind && urlVisibleFilterQuery !== filterQuery) {
+            setUrlState({ filter: urlVisibleFilterQuery }, { replace: true });
         }
-    }, [scopedSubjectKind, visibleFilterQuery, filterQuery, setUrlState]);
+    }, [scopedSubjectKind, urlVisibleFilterQuery, filterQuery, setUrlState]);
 
     const sortField: SortField = VALID_SORT_FIELDS.includes(urlState.sort as SortField)
         ? (urlState.sort as SortField)
@@ -239,9 +248,9 @@ export function SubjectsPage() {
 
     const handleFilterChange = useCallback(
         (value: string) => {
-            setUrlState(value.length > 0 ? { filter: value, page: '' } : { filter: '', page: '' }, { replace: true });
+            liveFilter.change(value);
         },
-        [setUrlState],
+        [liveFilter],
     );
 
     const handlePaginationChange = useCallback(
@@ -316,6 +325,20 @@ export function SubjectsPage() {
                         }
                     />
 
+                    <section className="subjects-page__controls" aria-label="Filters and sorting">
+                        <div className="subjects-page__filters">
+                            <FilterBar
+                                value={visibleFilterQuery}
+                                onChange={handleFilterChange}
+                                context="subject"
+                                defaultExpanded={visibleFilterQuery.length > 0 ? true : undefined}
+                                tableLayoutQuery={TABLE_LAYOUT_QUERY}
+                                defaultSubjectKind={scopedSubjectKind ?? undefined}
+                                lockSubjectKind={Boolean(scopedSubjectKind)}
+                            />
+                        </div>
+                    </section>
+
                     {error && subjects.length === 0 ? (
                         <EmptyState
                             icon={<WarningCircleIcon weight="duotone" />}
@@ -329,21 +352,6 @@ export function SubjectsPage() {
                         />
                     ) : (
                         <>
-                            <section className="subjects-page__controls" aria-label="Filters and sorting">
-                                <div className="subjects-page__filters">
-                                    <FilterBar
-                                        value={visibleFilterQuery}
-                                        onChange={handleFilterChange}
-                                        context="subject"
-                                        loading={isLoading}
-                                        defaultExpanded={visibleFilterQuery.length > 0 ? true : undefined}
-                                        tableLayoutQuery={TABLE_LAYOUT_QUERY}
-                                        defaultSubjectKind={scopedSubjectKind ?? undefined}
-                                        lockSubjectKind={Boolean(scopedSubjectKind)}
-                                    />
-                                </div>
-                            </section>
-
                             <div className="subjects-page__content">
                                 {usesCardLayout ? (
                                     items.length > 0 ? (
@@ -377,6 +385,7 @@ export function SubjectsPage() {
                                                 <Pager
                                                     page={pageNumber}
                                                     pageCount={pageCount}
+                                                    totalItems={totalItems}
                                                     onFirst={() =>
                                                         handlePaginationChange({ ...pagination, pageIndex: 0 })
                                                     }

@@ -25,8 +25,8 @@ interface ContentItem {
     level: string;
     contentType: string;
     parentId?: string | null;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
     rootFolderId?: string | null;
     effectiveRootFolderId: string;
     qualityTierListId?: string | null;
@@ -266,13 +266,13 @@ test.describe.serial('Journey 18: search, acquire and import each current conten
                     500,
                 );
                 await api.patch(`/api/content/${topId}`, {
-                    monitoring: { value: true },
+                    monitoring: { value: 'Monitored' },
                     rootFolderId: { value: root.id },
                     qualityTierListId: { value: root.defaults[fixture.level]!.qualityTierListId },
                 });
                 expect(await api.get<ContentItem>(`/api/content/${topId}`)).toMatchObject({
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     effectiveRootFolderId: root.id,
                     effectiveQualityTierListId: root.defaults[fixture.level]!.qualityTierListId,
                 });

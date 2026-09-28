@@ -6,7 +6,6 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -32,20 +31,6 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
     {
         PropertyNameCaseInsensitive = true
     };
-
-    private static readonly Regex ApiKeyPattern = new(
-        @"api_key=[^&\s""'<>]*",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    private static string ScrubApiKey(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return value ?? string.Empty;
-        }
-
-        return ApiKeyPattern.Replace(value!, "api_key=***");
-    }
 
     public Task<T?> GetAsync<T>(RequestContext context, Request request, CancellationToken cancellationToken)
         where T : class
@@ -130,11 +115,6 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
         };
     }
 
-    private static HttpRequestException Sanitized(HttpRequestException exception)
-    {
-        return new(ScrubApiKey(exception.Message));
-    }
-
     private static string BuildRequestTarget(
         string path,
         IReadOnlyList<(string Key, string Value)>? queryParameters,
@@ -172,7 +152,7 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
         if (activity is not null)
         {
             activity.SetTag("magpie.request.role", role);
-            activity.SetTag("magpie.request.target", ScrubApiKey(BuildRequestTarget(path, queryParameters, context)));
+            activity.SetTag("magpie.request.target", BuildRequestTarget(path, queryParameters, context));
             activity.SetTag("magpie.cache.hit", false);
             if (context.PlanNodeId is { } planNodeId)
             {
@@ -234,17 +214,9 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
 
         cancellationToken.ThrowIfCancellationRequested();
         using var request = new HttpRequestMessage(HttpMethod.Get, requestTarget);
-        var response = default(HttpResponseMessage)!;
-        try
-        {
-            var http = httpClientFactory.CreateClient(HttpClientName);
-            response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (HttpRequestException ex)
-        {
-            throw Sanitized(ex);
-        }
+        var http = httpClientFactory.CreateClient(HttpClientName);
+        var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
 
         using (response)
         {
@@ -258,14 +230,7 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
                 logger.LogWarning("TMDb rejected the request with HTTP 429 after its resilience retries");
             }
 
-            try
-            {
-                response.EnsureSuccessStatusCode();
-            }
-            catch (HttpRequestException ex)
-            {
-                throw Sanitized(ex);
-            }
+            response.EnsureSuccessStatusCode();
 
             var body = await ReadBoundedAsync(response, MaximumResponseBytes(profile), cancellationToken)
                 .ConfigureAwait(false);

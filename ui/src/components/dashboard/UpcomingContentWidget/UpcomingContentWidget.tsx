@@ -5,10 +5,11 @@ import { ArrowCounterClockwiseIcon, WarningCircleIcon } from '@phosphor-icons/re
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
+import { ContentFulfillmentBadge, ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
-import type { FulfillmentStatus } from '@/types';
+import type { FulfillmentStatus, MonitoringMode } from '@/types';
 
 import './UpcomingContentWidget.css';
 
@@ -36,6 +37,10 @@ export interface UpcomingContentItem {
     levelLabel?: string;
 
     fulfillment: FulfillmentStatus;
+
+    monitoring?: MonitoringMode | null;
+
+    effectiveMonitoring?: MonitoringMode;
 }
 
 export interface UpcomingContentWidgetProps extends HTMLAttributes<HTMLDivElement> {
@@ -144,8 +149,21 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
                     </span>
                     <span className="upcoming-content-widget__item-time">{formatTime(item.date)}</span>
                 </div>
+                <div className="upcoming-content-widget__item-statuses">
+                    {item.effectiveMonitoring !== undefined && (
+                        <ContentMonitoringIndicator
+                            monitoring={item.monitoring === undefined ? item.effectiveMonitoring : item.monitoring}
+                            effectiveMonitoring={item.effectiveMonitoring}
+                            className="upcoming-content-widget__item-monitoring"
+                            activeClassName="upcoming-content-widget__item-monitoring--active"
+                        />
+                    )}
+                    <ContentFulfillmentBadge
+                        fulfillment={item.fulfillment}
+                        className="upcoming-content-widget__item-fulfillment"
+                    />
+                </div>
             </div>
-            <span className="upcoming-content-widget__item-indicator" aria-hidden="true" />
         </>
     );
 

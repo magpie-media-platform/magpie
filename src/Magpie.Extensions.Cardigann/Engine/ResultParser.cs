@@ -124,12 +124,9 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             return;
         }
 
-        var identityValue = string.IsNullOrWhiteSpace(explicitHash)
-            ? normalizedHash
-            : explicitHash.ToLowerInvariant();
         if (release.IdentityKeys.Any(identity =>
             string.Equals(identity.Authority, BtihAuthority, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(identity.Value, identityValue, StringComparison.OrdinalIgnoreCase)))
+            string.Equals(identity.Value, normalizedHash, StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }
@@ -137,7 +134,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         release.IdentityKeys.Add(new ReleaseIdentityKey
         {
             Authority = BtihAuthority,
-            Value = identityValue,
+            Value = normalizedHash,
             Ordinal = release.IdentityKeys.Count,
         });
     }

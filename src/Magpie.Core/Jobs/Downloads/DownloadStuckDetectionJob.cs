@@ -45,7 +45,6 @@ internal sealed class DownloadStuckDetectionJob(
         Scope = JobScope.Administrative,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromMinutes(10),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters =
@@ -55,18 +54,24 @@ internal sealed class DownloadStuckDetectionJob(
                 "Minutes before a fetching download is considered stuck.",
                 DataType.Number,
                 false,
-                "20"),
+                "20") { ValidateScheduleValue = ValidateMinutes },
             new(
                 MagpieJobs.Parameters.StalledMinutes,
                 "Minutes before a stalled download is considered stuck.",
                 DataType.Number,
                 false,
-                "90")
+                "90") { ValidateScheduleValue = ValidateMinutes }
         ],
     };
 
     private const int DefaultFetchingMinutes = 20;
     private const int DefaultStalledMinutes = 90;
+
+    private static string? ValidateMinutes(
+        string? value, IReadOnlyDictionary<string, string> parameters, DateTime utcNow) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes) &&
+        minutes > utcNow.Ticks / TimeSpan.TicksPerMinute
+            ? "exceeds the supported date range." : null;
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
@@ -163,7 +168,7 @@ internal sealed class DownloadStuckDetectionJob(
 
         logger.LogInformation(
             "Stuck detection refreshed {Refreshed} downloads and moved {Transitioned} of {Candidates} to " +
-            "Failed/DownloadStuck (fetching threshold {FetchingThreshold}, stalled threshold {StalledThreshold})",
+            "Faulted/DownloadStuck (fetching threshold {FetchingThreshold}, stalled threshold {StalledThreshold})",
             refreshed,
             transitioned,
             candidates.Count,

@@ -13,7 +13,8 @@ public sealed record ContentFilterCriteria
     public CriteriaSet<ContentHierarchyItemCriteria> ContentHierarchyItem { get; init; } = new();
 
     /// <summary>
-    /// Criteria for the media files of the content.
+    /// The legacy top-level media-file criteria. Magpie rejects a filter that sets them. Use
+    /// <see cref="ContentHierarchyItemCriteria.MediaFiles"/>.
     /// </summary>
     public CriteriaSet<MediaFileCriteria> MediaFiles { get; init; } = new();
 }

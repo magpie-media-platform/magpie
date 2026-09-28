@@ -239,8 +239,8 @@ describe('ChildrenTab', () => {
             id: 'child-1',
             title: 'Season 1',
             number: 1,
-            monitoring: true,
-            effectiveMonitoring: true,
+            monitoring: 'Monitored',
+            effectiveMonitoring: 'Monitored',
             fulfillment: 'fulfilled',
             date: '2020-01-01',
         },
@@ -248,8 +248,8 @@ describe('ChildrenTab', () => {
             id: 'child-2',
             title: 'Season 2',
             number: 2,
-            monitoring: true,
-            effectiveMonitoring: true,
+            monitoring: 'Monitored',
+            effectiveMonitoring: 'Monitored',
             fulfillment: 'upgradable',
             date: '2021-01-01',
         },
@@ -257,8 +257,8 @@ describe('ChildrenTab', () => {
             id: 'child-3',
             title: 'Season 3',
             number: 3,
-            monitoring: false,
-            effectiveMonitoring: false,
+            monitoring: 'Unmonitored',
+            effectiveMonitoring: 'Unmonitored',
             fulfillment: 'missing',
             date: '2022-01-01',
         },
@@ -290,8 +290,8 @@ describe('ChildrenTab', () => {
                     title: longTitle,
                     subtitle: `Subtitle${'UnbrokenSubtitleSegment'.repeat(6)}`,
                     number: 1,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ]);
@@ -324,15 +324,15 @@ describe('ChildrenTab', () => {
             expect(screen.getAllByText('No seasons found').length).toBeGreaterThan(0);
         });
 
-        it('renders fulfillment badges for monitored children', () => {
+        it('renders fulfillment badges independently from child monitoring', () => {
+            // Arrange
+            // Act
             renderWithRouter(mockChildren);
+
+            // Assert
             expect(screen.getAllByText('Fulfilled').length).toBeGreaterThan(0);
             expect(screen.getAllByText('Upgradable').length).toBeGreaterThan(0);
-        });
-
-        it('suppresses the fulfillment badge for an excluded child', () => {
-            renderWithRouter(mockChildren);
-            expect(screen.queryByText('Missing')).not.toBeInTheDocument();
+            expect(screen.getAllByText('Missing').length).toBeGreaterThan(0);
         });
 
         it('surfaces the in-flight acquisition status in the status cell', () => {
@@ -341,8 +341,8 @@ describe('ChildrenTab', () => {
                     id: 'c1',
                     title: 'Season 1',
                     number: 1,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                     acquisitionStatus: 'downloading',
                 },
@@ -355,8 +355,8 @@ describe('ChildrenTab', () => {
 
         it('labels monitoring cells with explanatory wording', () => {
             renderWithRouter(mockChildren);
-            expect(screen.getAllByLabelText(/Monitored: Magpie will search/).length).toBeGreaterThan(0);
-            expect(screen.getAllByLabelText(/Not monitored: Magpie will not search/).length).toBeGreaterThan(0);
+            expect(screen.getAllByLabelText('Monitored').length).toBeGreaterThan(0);
+            expect(screen.getAllByLabelText('Unmonitored').length).toBeGreaterThan(0);
         });
 
         it('provides accessible compact sort controls defaulting to number ascending', async () => {
@@ -379,6 +379,9 @@ describe('ChildrenTab', () => {
                 'Title',
                 'Date',
                 'Status',
+                'Fulfilled',
+                'Media size',
+                'Media files',
             ]);
 
             await user.click(screen.getByRole('option', { name: 'Title' }));
@@ -393,23 +396,23 @@ describe('ChildrenTab', () => {
                     id: 'child-two',
                     title: 'Beta',
                     number: 2,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
                 {
                     id: 'child-none',
                     title: 'Extra',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
                 {
                     id: 'child-one',
                     title: 'Alpha',
                     number: 1,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ];
@@ -428,16 +431,16 @@ describe('ChildrenTab', () => {
                     id: 'child-one',
                     title: 'Zulu',
                     number: 1,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
                 {
                     id: 'child-two',
                     title: 'Alpha',
                     number: 2,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ];
@@ -459,23 +462,23 @@ describe('ChildrenTab', () => {
                     id: 'child-two',
                     title: 'Beta',
                     number: 2,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
                 {
                     id: 'child-none',
                     title: 'Extra',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
                 {
                     id: 'child-one',
                     title: 'Alpha',
                     number: 1,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ];
@@ -494,24 +497,24 @@ describe('ChildrenTab', () => {
                 {
                     id: 'child-zulu',
                     title: 'Zulu',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'upgradable',
                     date: '2024-02-01',
                 },
                 {
                     id: 'child-alpha',
                     title: 'Alpha',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                     date: '2024-03-01',
                 },
                 {
                     id: 'child-beta',
                     title: 'Beta',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'fulfilled',
                     date: '2024-01-01',
                 },
@@ -562,29 +565,28 @@ describe('ChildrenTab', () => {
                     title: 'Season 1',
                     number: 1,
                     monitoring: null,
-                    effectiveMonitoring: true,
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ];
             renderWithRouter(items);
-            expect(screen.getAllByLabelText(/Monitored \(inherited\): Magpie will search/).length).toBeGreaterThan(0);
-            expect(document.querySelectorAll('.children-tab__monitoring--inherited').length).toBeGreaterThan(0);
+            expect(screen.getAllByLabelText('Monitored (inherited)').length).toBeGreaterThan(0);
             expect(document.querySelectorAll('.children-tab__monitoring--active').length).toBeGreaterThan(0);
         });
 
-        it('shows a child with explicit disabled monitoring as not monitored', () => {
+        it('shows a child with explicit disabled monitoring as unmonitored', () => {
             const items: ChildItem[] = [
                 {
                     id: 'c1',
                     title: 'Season 1',
                     number: 1,
-                    monitoring: false,
-                    effectiveMonitoring: false,
+                    monitoring: 'Unmonitored',
+                    effectiveMonitoring: 'Unmonitored',
                     fulfillment: 'missing',
                 },
             ];
             renderWithRouter(items);
-            expect(screen.getAllByLabelText(/^Not monitored: Magpie will not search/).length).toBeGreaterThan(0);
+            expect(screen.getAllByLabelText('Unmonitored').length).toBeGreaterThan(0);
             expect(document.querySelectorAll('.children-tab__monitoring--inherited').length).toBe(0);
         });
 
@@ -594,32 +596,29 @@ describe('ChildrenTab', () => {
                     id: 'c1',
                     title: 'Season 1',
                     number: 1,
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ];
             renderWithRouter(items);
-            expect(screen.getAllByLabelText(/^Monitored: Magpie will search/).length).toBeGreaterThan(0);
+            expect(screen.getAllByLabelText('Monitored').length).toBeGreaterThan(0);
             expect(document.querySelectorAll('.children-tab__monitoring--inherited').length).toBe(0);
         });
 
-        it('shows inherited disabled monitoring as not monitored', () => {
+        it('shows inherited disabled monitoring as unmonitored', () => {
             const items: ChildItem[] = [
                 {
                     id: 'c1',
                     title: 'Season 1',
                     number: 1,
                     monitoring: null,
-                    effectiveMonitoring: false,
+                    effectiveMonitoring: 'Unmonitored',
                     fulfillment: 'missing',
                 },
             ];
             renderWithRouter(items);
-            expect(
-                screen.getAllByLabelText(/^Not monitored \(inherited\): Magpie will not search/).length,
-            ).toBeGreaterThan(0);
-            expect(document.querySelectorAll('.children-tab__monitoring--inherited').length).toBeGreaterThan(0);
+            expect(screen.getAllByLabelText('Unmonitored (inherited)').length).toBeGreaterThan(0);
         });
 
         it('uses the stored effective value without loading a parent state', () => {
@@ -629,7 +628,7 @@ describe('ChildrenTab', () => {
                     title: 'Season 1',
                     number: 1,
                     monitoring: null,
-                    effectiveMonitoring: true,
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ];
@@ -716,6 +715,7 @@ describe('FilesTab', () => {
             const header = screen.getByTestId('files-tab-header');
             expect(header).toHaveTextContent(/2 files/);
             expect(header).toHaveTextContent(/3.*GB/i);
+            expect(header.querySelector('.files-tab__summary')).toHaveTextContent(/2 files/);
         });
 
         it('renders file-added timestamps as local instant dates', () => {
@@ -739,6 +739,32 @@ describe('FilesTab', () => {
             expect(screen.getAllByText('Show/Season 01').length).toBeGreaterThan(0);
         });
 
+        it('keeps long spaced and unbroken filenames in the shared file panels', () => {
+            const spacedName = `${'A very long filename '.repeat(12)}.mkv`;
+            const unbrokenName = `${'unbroken'.repeat(40)}.mkv`;
+
+            render(
+                <FilesTab
+                    files={[
+                        { id: 'spaced', relativePath: `Folder/${spacedName}`, fileName: spacedName, size: 1024 },
+                        {
+                            id: 'unbroken',
+                            relativePath: `Folder/${unbrokenName}`,
+                            fileName: unbrokenName,
+                            size: 2048,
+                        },
+                    ]}
+                    onDeleteFile={vi.fn()}
+                    onUnlinkFile={vi.fn()}
+                />,
+            );
+
+            expect(screen.getByText(spacedName)).toHaveClass('files-tab__file-name');
+            expect(screen.getByText(unbrokenName)).toHaveClass('files-tab__file-name');
+            expect(screen.getByRole('button', { name: `Unlink ${unbrokenName}` })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: `Delete ${unbrokenName}` })).toBeInTheDocument();
+        });
+
         it('renders the shared empty state with icon and message when no files', () => {
             render(<FilesTab files={[]} emptyMessage="No files attached to this content" />);
             const emptyState = screen
@@ -754,9 +780,14 @@ describe('FilesTab', () => {
             expect(screen.getByTestId('files-tab-header')).toHaveTextContent(/1 file(?!s)/);
         });
 
-        it('renders the import action when files already exist', () => {
-            render(<FilesTab files={mockFiles} onImportFile={vi.fn()} />);
-            expect(screen.getByRole('button', { name: 'Import file' })).toBeInTheDocument();
+        it('keeps the import and rename actions in the files header', () => {
+            render(<FilesTab files={mockFiles} onImportFile={vi.fn()} onRenameFiles={vi.fn()} />);
+
+            const header = screen.getByTestId('files-tab-header');
+            expect(within(header).getByRole('button', { name: 'Import file' })).toBeInTheDocument();
+            expect(
+                within(header).getByRole('button', { name: 'Apply rename mask to selected files' }),
+            ).toBeInTheDocument();
         });
 
         it('renders the import action in the empty state', () => {

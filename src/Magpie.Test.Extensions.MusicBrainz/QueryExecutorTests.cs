@@ -8,8 +8,11 @@ using System.Threading.Tasks;
 using Magpie.Extensions.MusicBrainz;
 using Magpie.Extensions.MusicBrainz.Mapping;
 using Magpie.Extensions.MusicBrainz.QueryEngine;
+using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
+
+using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
 
@@ -6764,6 +6767,204 @@ public class QueryExecutorTests
         {
             Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["Three", "Four"]));
             Assert.That(result.PageInfo.HasMore, Is.True);
+        }
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_RetainsIntersectionEvaluation_WhenLaterPagesDrainPendingResults()
+    {
+        // Arrange
+        var requests = new List<string>();
+        _client.Setup(value => value.SearchAsync(It.IsAny<Request>(), It.IsAny<Settings>(),
+            It.IsAny<CancellationToken>()))
+            .Callback((Request request, Settings _, CancellationToken _) => requests.Add(request.RelativeTarget))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 3,
+                    Artists =
+                    [
+                        new ArtistDto { Id = "00000000-0000-0000-0000-000000000001", Name = "One" },
+                        new ArtistDto { Id = "00000000-0000-0000-0000-000000000002", Name = "Two" },
+                        new ArtistDto { Id = "00000000-0000-0000-0000-000000000003", Name = "Three" }
+                    ]
+                }
+            });
+        var settings = new Mock<ISettingsResolver>();
+        settings.Setup(value => value.ResolveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new Settings());
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns((QueryRequest request) =>
+            ScanPlan with
+            {
+                MaxResults = request.MaxResults,
+                Settings = request.Settings,
+                Root = new IntersectPlanNode
+                {
+                    Id = 3,
+                    Precondition = NoPrecondition,
+                    Contributes = "intersection",
+                    Children = [ScanFetch, ScanFetch with { Id = 2, OrdinaryTerm = "Another" }]
+                }
+            });
+        var searcher = new ContentMetadataSearcher(settings.Object, planner.Object, _subject, _cache.Object,
+            _client.Object, _coverClient.Object, NullLogger<ContentMetadataSearcher>.Instance);
+        var query = new ContentHierarchyItemCriteria
+        {
+            Level = new() { And = [new() { Value = "artist" }] }
+        };
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("music", query, 1, "", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("music", query, 5, "", first.Continuation)
+            .ConfigureAwait(false);
+        var retry = await searcher.ContinueSearchAsync("music", query, 5, "", first.Continuation)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches.Select(value => value.Title), Is.EqualTo(["One"]));
+            Assert.That(second.Page.Matches.Select(value => value.Title), Is.EqualTo(["Two", "Three"]));
+            Assert.That(retry.Page.Matches.Select(value => value.Title), Is.EqualTo(["Two", "Three"]));
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(requests, Has.Count.EqualTo(2));
+            Assert.That(requests[0], Does.Contain("Wanted"));
+            Assert.That(requests[1], Does.Contain("Another"));
+        }
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_ResumesArtistExpansion_WhenTheLastBrowsePageHasPendingRows()
+    {
+        // Arrange
+        var offsets = new List<int>();
+        _client.Setup(value => value.BrowseArtistsAsync(It.IsAny<ArtistBrowseCacheKey>(), It.IsAny<Settings>(),
+            It.IsAny<CancellationToken>()))
+            .Callback((ArtistBrowseCacheKey key, Settings _, CancellationToken _) => offsets.Add(key.Offset))
+            .ReturnsAsync((ArtistBrowseCacheKey key, Settings _, CancellationToken _) =>
+                new FetchResult<ArtistBrowseResponseDto>
+                {
+                    Outcome = FetchOutcome.Success,
+                    Value = new ArtistBrowseResponseDto
+                    {
+                        ArtistCount = 6,
+                        Artists = [.. Enumerable.Range(key.Offset + 1, 3).Select(id => new ArtistDto
+                        {
+                            Id = $"00000000-0000-0000-0000-{id:D12}", Name = $"Artist {id}"
+                        })]
+                    }
+                });
+        var composition = new ArtistComposition
+        {
+            RelatedEntity = ArtistCompositionEntity.ReleaseGroup,
+            Resolution = ArtistCompositionResolution.KnownMbid,
+            Expansion = ArtistCompositionExpansion.BrowseArtists,
+            Constraint = ArtistCompositionConstraint.Include,
+            FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+            ExternalIdSource = Constants.ProviderType,
+            RelatedMbid = "c0000000-0000-4000-8000-000000000003"
+        };
+        var fetch = ScanFetch with
+        {
+            Id = 2,
+            AccessMode = AccessMode.Browse,
+            BrowseComposition = composition,
+            Resolvers = [new ResolvePlanNode
+            {
+                Id = 1, Precondition = NoPrecondition, Contributes = "source", Composition = composition
+            }]
+        };
+        var settings = new Mock<ISettingsResolver>();
+        settings.Setup(value => value.ResolveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new Settings());
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns((QueryRequest request) =>
+            ScanPlan with { Root = fetch, MaxResults = request.MaxResults, Settings = request.Settings });
+        var searcher = new ContentMetadataSearcher(settings.Object, planner.Object, _subject, _cache.Object,
+            _client.Object, _coverClient.Object, NullLogger<ContentMetadataSearcher>.Instance);
+        var query = new ContentHierarchyItemCriteria
+        {
+            Level = new() { And = [new() { Value = "artist" }] }
+        };
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("music", query, 4, "", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("music", query, 4, "", first.Continuation)
+            .ConfigureAwait(false);
+        var retry = await searcher.ContinueSearchAsync("music", query, 4, "", first.Continuation)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches.Select(value => value.Title),
+                Is.EqualTo(["Artist 1", "Artist 2", "Artist 3", "Artist 4"]));
+            Assert.That(second.Page.Matches.Select(value => value.Title), Is.EqualTo(["Artist 5", "Artist 6"]));
+            Assert.That(retry.Page.Matches.Select(value => value.Title), Is.EqualTo(["Artist 5", "Artist 6"]));
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(offsets, Is.EqualTo([0, 3, 3, 3]));
+        }
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_KeepsFilteredLookahead_WhenRequestsResumeAndRetry()
+    {
+        // Arrange
+        var offsets = new List<int>();
+        _client.Setup(value => value.SearchAsync(It.IsAny<Request>(), It.IsAny<Settings>(),
+            It.IsAny<CancellationToken>()))
+            .Callback((Request request, Settings _, CancellationToken _) =>
+                offsets.Add(request.RelativeTarget.Contains("offset=100", StringComparison.Ordinal) ? 100 : 0))
+            .ReturnsAsync((Request request, Settings _, CancellationToken _) => new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 104,
+                    Offset = request.RelativeTarget.Contains("offset=100", StringComparison.Ordinal) ? 100 : 0,
+                    Artists = [.. Enumerable.Range(
+                        request.RelativeTarget.Contains("offset=100", StringComparison.Ordinal) ? 101 : 1,
+                        request.RelativeTarget.Contains("offset=100", StringComparison.Ordinal) ? 4 : 100)
+                        .Select(id => new ArtistDto
+                        {
+                            Id = $"00000000-0000-0000-0000-{id:D12}", Name = id % 2 == 0 ? "Keep" : "Drop"
+                        })]
+                }
+            });
+        var settings = new Mock<ISettingsResolver>();
+        settings.Setup(value => value.ResolveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new Settings());
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns((QueryRequest request) =>
+            ScanPlan with { MaxResults = request.MaxResults, Settings = request.Settings });
+        var searcher = new ContentMetadataSearcher(settings.Object, planner.Object, _subject, _cache.Object,
+            _client.Object, _coverClient.Object, NullLogger<ContentMetadataSearcher>.Instance);
+        var query = new ContentHierarchyItemCriteria
+        {
+            Level = new() { And = [new() { Value = "artist" }] }
+        };
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("music", query, 49, "", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("music", query, 4, "", first.Continuation)
+            .ConfigureAwait(false);
+        var retry = await searcher.ContinueSearchAsync("music", query, 4, "", first.Continuation)
+            .ConfigureAwait(false);
+        var independent = await searcher.ContinueSearchAsync("music", query, 49, "", null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches, Has.Count.EqualTo(49));
+            Assert.That(first.Page.Matches[^1].ExternalId, Is.EqualTo("00000000-0000-0000-0000-000000000098"));
+            Assert.That(second.Page.Matches.Select(value => value.ExternalId), Is.EqualTo([
+                "00000000-0000-0000-0000-000000000100", "00000000-0000-0000-0000-000000000102",
+                "00000000-0000-0000-0000-000000000104"]));
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(retry.Page.Matches.Select(value => value.ExternalId),
+                Is.EqualTo(second.Page.Matches.Select(value => value.ExternalId)));
+            Assert.That(independent.Page.Matches[0].ExternalId, Is.EqualTo("00000000-0000-0000-0000-000000000002"));
+            Assert.That(offsets, Is.EqualTo([0, 0, 100, 0, 100, 0]));
         }
     }
 }

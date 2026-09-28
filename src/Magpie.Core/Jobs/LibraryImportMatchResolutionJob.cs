@@ -28,6 +28,8 @@ namespace Magpie.Core.Jobs;
 
 internal sealed class LibraryImportMatchResolutionJob(
     ILibraryImportCandidateRepository libraryImportCandidateRepository,
+    IRootFolderRepository rootFolderRepository,
+    ILibraryImportService libraryImportService,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     IContentTypeRegistry contentTypeRegistry,
@@ -63,7 +65,6 @@ internal sealed class LibraryImportMatchResolutionJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Requeue,
-        Timeout = TimeSpan.FromHours(4),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters = [],
@@ -76,8 +77,6 @@ internal sealed class LibraryImportMatchResolutionJob(
     private const int MaximumFailureNoteLength = 512;
 
     private const int BatchSize = 200;
-
-    private static readonly TimeSpan CheckpointMargin = TimeSpan.FromSeconds(180);
 
     private static readonly TimeSpan ProviderRetryDelay = TimeSpan.FromMinutes(1);
 
@@ -191,7 +190,11 @@ internal sealed class LibraryImportMatchResolutionJob(
         var builder = new StringBuilder(value.Length);
         foreach (var ch in value)
         {
-            if (char.IsLetterOrDigit(ch))
+            if (ch == '&')
+            {
+                builder.Append("and");
+            }
+            else if (char.IsLetterOrDigit(ch))
             {
                 builder.Append(char.ToLowerInvariant(ch));
             }
@@ -350,6 +353,35 @@ internal sealed class LibraryImportMatchResolutionJob(
         return confidence;
     }
 
+    private static bool IsExactTitleMatch(
+        IReadOnlyDictionary<string, IReadOnlyList<string>> signals,
+        MetadataSearchCandidate result)
+    {
+        var queryYear = signals.GetFirstInt32(ParsedFileSignalKeys.Year);
+        foreach (var title in GetTitleCandidates(signals))
+        {
+            if (AreCompactTitlesEqual(title, result.Title))
+            {
+                return true;
+            }
+
+            var match = TrailingYearToken.Match(title);
+            if (queryYear is not { } year || !match.Success ||
+                match.Groups["year"].Value != year.ToString(CultureInfo.InvariantCulture) ||
+                !TryStripTrailingYear(title, out var titleWithoutYear))
+            {
+                continue;
+            }
+
+            if (AreCompactTitlesEqual(titleWithoutYear, result.Title))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static double ScoreTitle(
         string title,
         IReadOnlyDictionary<string, IReadOnlyList<string>> signals,
@@ -384,7 +416,6 @@ internal sealed class LibraryImportMatchResolutionJob(
     {
         var userId = context.ManualTriggerUserId;
         var correlationId = context.CorrelationId;
-        var deadline = context.Deadline;
 
         progressReporter.Report(0, "The match resolution will load unresolved candidates.");
 
@@ -394,20 +425,14 @@ internal sealed class LibraryImportMatchResolutionJob(
         var total = batch.Count;
         var resolved = 0;
         var retired = 0;
+        var completedResolution = false;
         var retryRequired = false;
         var processed = 0;
-        var checkpointed = false;
 
         foreach (var group in batch.Where(candidate => candidate.LayoutKey is not null)
             .GroupBy(candidate => candidate.LayoutKey!))
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            if (IsBudgetLow(deadline))
-            {
-                checkpointed = true;
-                break;
-            }
 
             var members = group.ToList();
             progressReporter.ReportFraction(
@@ -416,9 +441,10 @@ internal sealed class LibraryImportMatchResolutionJob(
             try
             {
                 if (await ResolveGroupAsync(group.Key, members, searchCache, userId, correlationId, cancellationToken)
-                    .ConfigureAwait(false))
+                    .ConfigureAwait(false) is { } count)
                 {
-                    resolved += members.Count;
+                    resolved += count;
+                    completedResolution = true;
                 }
                 else
                 {
@@ -442,9 +468,10 @@ internal sealed class LibraryImportMatchResolutionJob(
                         ex,
                         userId,
                         correlationId,
-                        cancellationToken).ConfigureAwait(false))
+                        cancellationToken).ConfigureAwait(false) is { } marked)
                     {
-                        retired++;
+                        retired += marked ? 1 : 0;
+                        completedResolution = true;
                     }
                 }
             }
@@ -452,61 +479,56 @@ internal sealed class LibraryImportMatchResolutionJob(
             processed += members.Count;
         }
 
-        if (!checkpointed)
+        foreach (var candidate in batch.Where(candidate => candidate.LayoutKey is null))
         {
-            foreach (var candidate in batch.Where(candidate => candidate.LayoutKey is null))
+            cancellationToken.ThrowIfCancellationRequested();
+
+            progressReporter.ReportFraction(
+                processed,
+                total,
+                $"The match resolution will resolve {Path.GetFileName(candidate.FilePath)}.");
+
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (IsBudgetLow(deadline))
+                if (await ResolveCandidateAsync(candidate, searchCache, userId, correlationId, cancellationToken)
+                    .ConfigureAwait(false) is { } count)
                 {
-                    checkpointed = true;
-                    break;
+                    resolved += count;
+                    completedResolution = true;
                 }
-
-                progressReporter.ReportFraction(
-                    processed,
-                    total,
-                    $"The match resolution will resolve {Path.GetFileName(candidate.FilePath)}.");
-
-                try
+                else
                 {
-                    if (await ResolveCandidateAsync(candidate, searchCache, userId, correlationId, cancellationToken)
-                        .ConfigureAwait(false))
-                    {
-                        resolved++;
-                    }
-                    else
-                    {
-                        retryRequired = true;
-                    }
+                    retryRequired = true;
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(
-                        ex,
-                        "The match resolution failed to resolve library import candidate {LibraryImportCandidateId}",
-                        candidate.Id);
-                    if (await TryPersistResolutionFailureAsync(
-                        candidate,
-                        ex,
-                        userId,
-                        correlationId,
-                        cancellationToken).ConfigureAwait(false))
-                    {
-                        retired++;
-                    }
-                }
-
-                processed++;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "The match resolution failed to resolve library import candidate {LibraryImportCandidateId}",
+                    candidate.Id);
+                if (await TryPersistResolutionFailureAsync(
+                    candidate,
+                    ex,
+                    userId,
+                    correlationId,
+                    cancellationToken).ConfigureAwait(false) is { } marked)
+                {
+                    retired += marked ? 1 : 0;
+                    completedResolution = true;
+                }
+            }
+
+            processed++;
         }
 
-        var progressed = batch.Count == 0 || checkpointed || resolved + retired > 0;
+        await AutoAssociateAsync(batch, userId, correlationId, cancellationToken).ConfigureAwait(false);
+
+        var progressed = batch.Count == 0 || completedResolution || retired > 0;
         if (progressed || retryRequired)
         {
             if (await HasUnresolvedCandidatesAsync(cancellationToken).ConfigureAwait(false))
@@ -522,16 +544,56 @@ internal sealed class LibraryImportMatchResolutionJob(
                 batch.Count);
         }
 
-        progressReporter.Report(
-            1,
-            checkpointed
-                ? $"The match resolution checkpointed after {resolved} of {total} candidate(s) to stay inside " +
-                    "its run-time budget."
-                : $"The match resolution completed. Resolved {resolved} of {total} candidate(s).");
+        progressReporter.Report(1, $"The match resolution completed. Resolved {resolved} of {total} candidate(s).");
     }
 
-    private bool IsBudgetLow(DateTimeOffset? deadline) =>
-        deadline is { } value && value - timeProvider.GetUtcNow() <= CheckpointMargin;
+    private async Task AutoAssociateAsync(
+        IReadOnlyList<LibraryImportCandidate> batch,
+        Guid? userId,
+        Guid? correlationId,
+        CancellationToken cancellationToken)
+    {
+        var targeted = batch
+            .Where(candidate => candidate.Matches.Count == 1 && candidate.ContentHierarchyItemId is not null)
+            .ToList();
+        var autoImportRootFolderIds = new HashSet<Guid>();
+        foreach (var rootFolderId in targeted.Select(candidate => candidate.RootFolderId).Distinct())
+        {
+            var rootFolder = await rootFolderRepository.GetByIdAsync(rootFolderId, cancellationToken)
+                .ConfigureAwait(false);
+            if (rootFolder?.AutoImport == true)
+            {
+                autoImportRootFolderIds.Add(rootFolderId);
+            }
+        }
+
+        var candidates = targeted
+            .Where(candidate => autoImportRootFolderIds.Contains(candidate.RootFolderId))
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await libraryImportService
+                .AssociateMissingFilesAsync(candidates, userId, correlationId, cancellationToken)
+                .ConfigureAwait(false);
+            logger.LogInformation(
+                "The match resolution queued {Queued} automatic association(s) and skipped {Skipped}",
+                result.Queued.Count,
+                result.Skipped.Count);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "The match resolution failed to queue automatic associations.");
+        }
+    }
 
     private async Task<List<LibraryImportCandidate>> LoadUnresolvedBatchAsync(CancellationToken cancellationToken)
     {
@@ -586,7 +648,7 @@ internal sealed class LibraryImportMatchResolutionJob(
         }
     }
 
-    private async Task<bool> ResolveCandidateAsync(
+    private async Task<int?> ResolveCandidateAsync(
         LibraryImportCandidate candidate,
         Dictionary<(string ContentType, string Query), MetadataSearchPage> searchCache,
         Guid? userId,
@@ -598,39 +660,45 @@ internal sealed class LibraryImportMatchResolutionJob(
         {
             candidate.Status = LibraryImportCandidateStatus.Pending;
             candidate.Notes = $"No definition provider exists for content type {candidate.ContentType}.";
-            await libraryImportCandidateRepository.UpdateAsync(candidate, userId, cancellationToken)
-                .ConfigureAwait(false);
-            return true;
+            return await libraryImportCandidateRepository.TryResolveMatchAsync(candidate, userId, cancellationToken)
+                .ConfigureAwait(false) ? 1 : 0;
         }
 
         var parsed = provider.Parse(candidate.FilePath, out var levelSlug);
 
         List<LibraryImportMatch>? matches;
-        string? quarantineReason;
+        string? notes;
         if (parsed is { } query)
         {
-            (matches, quarantineReason) = await ResolveConfidentMatchAsync(
+            (matches, notes) = await ResolveConfidentMatchAsync(
                 query, levelSlug, candidate.ContentType, searchCache, cancellationToken).ConfigureAwait(false);
         }
         else
         {
             matches = [];
-            quarantineReason = "The filename contains no title.";
+            notes = "The filename contains no title.";
         }
 
         if (matches is null)
         {
-            return false;
+            await SaveNotesAsync(candidate, notes, userId, cancellationToken).ConfigureAwait(false);
+            return null;
         }
 
         candidate.Status = LibraryImportCandidateStatus.Pending;
         candidate.Matches = matches;
-        candidate.Notes = quarantineReason;
-        await transactionManager.ExecuteWithTransactionAsync(
+        candidate.Notes = notes;
+        candidate.ContentHierarchyItemId = matches.Count == 1
+            ? await libraryImportService.ResolveLibraryTargetAsync(candidate, cancellationToken).ConfigureAwait(false)
+            : null;
+        return await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
-                await libraryImportCandidateRepository.UpdateAsync(candidate, userId, ct)
-                    .ConfigureAwait(false);
+                if (!await libraryImportCandidateRepository.TryResolveMatchAsync(candidate, userId, ct)
+                    .ConfigureAwait(false))
+                {
+                    return 0;
+                }
 
                 await WriteAuditAsync(
                     operation: "FileMatched",
@@ -640,16 +708,16 @@ internal sealed class LibraryImportMatchResolutionJob(
                         ? $"Match resolution confidently matched {Path.GetFileName(candidate.FilePath)} to a single " +
                             "import match."
                         : $"Match resolution held {Path.GetFileName(candidate.FilePath)} for manual resolve: " +
-                            $"{quarantineReason}",
+                            $"{notes}",
                     userId,
                     correlationId,
                     ct).ConfigureAwait(false);
+                return 1;
             },
             cancellationToken).ConfigureAwait(false);
-        return true;
     }
 
-    private async Task<bool> ResolveGroupAsync(
+    private async Task<int?> ResolveGroupAsync(
         string groupKey,
         List<LibraryImportCandidate> members,
         Dictionary<(string ContentType, string Query), MetadataSearchPage> searchCache,
@@ -661,11 +729,11 @@ internal sealed class LibraryImportMatchResolutionJob(
         var provider = contentTypeRegistry.FindProviderFor(contentType);
 
         List<LibraryImportMatch>? matches;
-        string? quarantineReason;
+        string? notes;
         if (provider is null)
         {
             matches = [];
-            quarantineReason = $"No definition provider exists for content type {contentType}.";
+            notes = $"No definition provider exists for content type {contentType}.";
         }
         else
         {
@@ -682,25 +750,44 @@ internal sealed class LibraryImportMatchResolutionJob(
                 signals[ParsedFileSignalKeys.Year] = [yearMatch.Groups["year"].Value];
             }
 
-            (matches, quarantineReason) = await ResolveConfidentMatchAsync(
+            (matches, notes) = await ResolveConfidentMatchAsync(
                 signals, rootLevelSlug, contentType, searchCache, cancellationToken).ConfigureAwait(false);
         }
 
         if (matches is null)
         {
-            return false;
+            foreach (var member in members)
+            {
+                await SaveNotesAsync(member, notes, userId, cancellationToken).ConfigureAwait(false);
+            }
+
+            return null;
         }
 
-        await transactionManager.ExecuteWithTransactionAsync(
+        foreach (var candidate in members)
+        {
+            candidate.Status = LibraryImportCandidateStatus.Pending;
+            candidate.Matches = [.. matches];
+            candidate.Notes = notes;
+            candidate.ContentHierarchyItemId = matches.Count == 1
+                ? await libraryImportService.ResolveLibraryTargetAsync(candidate, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+        }
+
+        return await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
+                var resolved = 0;
                 foreach (var candidate in members)
                 {
-                    candidate.Status = LibraryImportCandidateStatus.Pending;
-                    candidate.Matches = [.. matches];
-                    candidate.Notes = quarantineReason;
-                    await libraryImportCandidateRepository.UpdateAsync(candidate, userId, ct)
-                        .ConfigureAwait(false);
+                    if (!await libraryImportCandidateRepository.TryResolveMatchAsync(candidate, userId, ct)
+                        .ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+
+                    resolved++;
 
                     await WriteAuditAsync(
                         operation: "FileMatched",
@@ -710,17 +797,34 @@ internal sealed class LibraryImportMatchResolutionJob(
                             ? $"Match resolution confidently matched {Path.GetFileName(candidate.FilePath)} " +
                                 "to a single import match."
                             : $"Match resolution held {Path.GetFileName(candidate.FilePath)} for manual resolve: " +
-                                $"{quarantineReason}",
+                                $"{notes}",
                         userId,
                         correlationId,
                         ct).ConfigureAwait(false);
                 }
+
+                return resolved;
             },
             cancellationToken).ConfigureAwait(false);
-        return true;
     }
 
-    private async Task<(List<LibraryImportMatch>? Matches, string? QuarantineReason)> ResolveConfidentMatchAsync(
+    private async Task SaveNotesAsync(
+        LibraryImportCandidate candidate,
+        string? notes,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        if (candidate.Notes == notes)
+        {
+            return;
+        }
+
+        candidate.Notes = notes;
+        await libraryImportCandidateRepository.TryResolveMatchAsync(candidate, userId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<(List<LibraryImportMatch>? Matches, string? Notes)> ResolveConfidentMatchAsync(
         IReadOnlyDictionary<string, IReadOnlyList<string>> signals,
         string? levelSlug,
         string contentType,
@@ -766,20 +870,25 @@ internal sealed class LibraryImportMatchResolutionJob(
         {
             if (providerFailures.Count > 0)
             {
+                var warnings = string.Join(" ", providerFailures.Distinct(StringComparer.Ordinal));
                 logger.LogWarning(
                     "The metadata search for {Query} did not complete, so matching stays pending for" +
                     " retry: {Warnings}",
                     searchQueries[0],
-                    string.Join(" ", providerFailures.Distinct(StringComparer.Ordinal)));
-                return (null, null);
+                    warnings);
+                return (null, $"Matching will retry because the metadata search did not complete: {warnings}");
             }
 
             return ([], $"No metadata result matched {searchQueries[0]}.");
         }
 
         var scored = searchResults
-            .Select(result => (Item: result, Confidence: Score(signals, result)))
-            .OrderByDescending(scoredResult => scoredResult.Confidence)
+            .Select(result => (
+                Item: result,
+                Confidence: Score(signals, result),
+                ExactTitleMatch: IsExactTitleMatch(signals, result)))
+            .OrderByDescending(scoredResult => scoredResult.ExactTitleMatch)
+            .ThenByDescending(scoredResult => scoredResult.Confidence)
             .ToList();
 
         var confident = scored
@@ -796,7 +905,8 @@ internal sealed class LibraryImportMatchResolutionJob(
 
         var best = confident[0];
         var tied = confident
-            .Where(scoredResult => Math.Abs(scoredResult.Confidence - best.Confidence) <= MatchConfidenceTieTolerance)
+            .Where(scoredResult => scoredResult.ExactTitleMatch == best.ExactTitleMatch &&
+                Math.Abs(scoredResult.Confidence - best.Confidence) <= MatchConfidenceTieTolerance)
             .ToList();
 
         if (tied.Count > 1)
@@ -828,14 +938,14 @@ internal sealed class LibraryImportMatchResolutionJob(
         return results;
     }
 
-    private async Task<bool> TryPersistResolutionFailureAsync(
+    private async Task<bool?> TryPersistResolutionFailureAsync(
         LibraryImportCandidate candidate,
         Exception ex,
         Guid? userId,
         Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        var persisted = false;
+        bool? persisted = null;
         var reason = $"Match resolution failed: {ex.Message}";
         if (reason.Length > MaximumFailureNoteLength)
         {

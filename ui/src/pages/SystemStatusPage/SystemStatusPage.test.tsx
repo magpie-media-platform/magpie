@@ -127,12 +127,23 @@ describe('SystemStatusPage', () => {
         mockUseSlotExtensions.mockReturnValue(noExtensions);
     });
 
-    it('opens root folders without an unsupported row parameter', async () => {
+    it('opens the selected root folder for editing when a folder row is clicked', async () => {
         // Arrange
         await renderSystemStatus();
 
         // Act
         fireEvent.click(screen.getByText('TV Shows'));
+
+        // Assert
+        expect(mockNavigate).toHaveBeenCalledWith('/admin/root-folders?edit=rf-1');
+    });
+
+    it('opens the unqualified root folder list from Manage root folders', async () => {
+        // Arrange
+        await renderSystemStatus();
+
+        // Act
+        fireEvent.click(screen.getByRole('button', { name: 'Manage root folders' }));
 
         // Assert
         expect(mockNavigate).toHaveBeenCalledWith('/admin/root-folders');
@@ -155,6 +166,19 @@ describe('SystemStatusPage', () => {
 
         expect(screen.queryByRole('heading', { name: 'Integrations' })).not.toBeInTheDocument();
         expect(document.querySelectorAll('[data-component="health-card"]').length).toBe(0);
+    });
+
+    it('does not request the removed scheduler status endpoint', async () => {
+        // Arrange
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+        // Act
+        await renderSystemStatus();
+
+        // Assert
+        const urls = fetchSpy.mock.calls.map(([input]) => String(input));
+        expect(urls.filter((url) => url.includes('scheduler-status'))).toEqual([]);
+        fetchSpy.mockRestore();
     });
 
     describe('Doctor Section', () => {

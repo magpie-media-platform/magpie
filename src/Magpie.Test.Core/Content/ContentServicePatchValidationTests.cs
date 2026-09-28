@@ -141,4 +141,50 @@ public sealed class ContentServicePatchValidationTests
                 Times.Never);
         }
     }
+
+    [Test]
+    public void BulkDeleteAsync_ThrowsAndSkipsTheRepository_WhenFilterUsesLegacyMediaFiles()
+    {
+        // Arrange
+        var action = new BulkAction<ContentFilterCriteria>
+        {
+            Filter = new ContentFilterCriteria { MediaFiles = new() { And = [new MediaFileCriteria()] } }
+        };
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(() => _subject.BulkDeleteAsync(action, true, null));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                exception!.Message,
+                Is.EqualTo("The filter uses the removed top-level media file criteria. (Parameter 'filter')"));
+            _hierarchyItems.Verify(
+                repository => repository.BulkDeleteAsync(
+                    It.IsAny<BulkAction<ContentHierarchyItemCriteria>>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public void QueryAsync_ThrowsWithGuidance_WhenFilterUsesLegacyMediaFiles()
+    {
+        // Arrange
+        var query = new ContentQuery
+        {
+            Criteria = new ContentFilterCriteria { MediaFiles = new() { And = [new MediaFileCriteria()] } }
+        };
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(
+            () => _subject.QueryAsync(query, new() { PageNumber = 1, PageSize = 10 }, null));
+
+        // Assert
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo("The filter uses the removed top-level media file criteria. (Parameter 'filter')"));
+    }
 }

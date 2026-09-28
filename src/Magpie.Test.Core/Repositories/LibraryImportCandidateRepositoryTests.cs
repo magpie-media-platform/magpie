@@ -4,13 +4,11 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
-using Magpie.Data.SQLite;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -18,10 +16,9 @@ using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -36,21 +33,39 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class LibraryImportCandidateRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private ILibraryImportCandidateRepository _subject = null!;
     private List<MagpieEvent> _publishedEvents = null!;
     private Guid _userId;
     private Guid _rootFolderId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .ConfigureWarnings(warnings => warnings.Throw(CoreEventId.RowLimitingOperationWithoutOrderByWarning))
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var user = new User
         {
@@ -107,69 +122,86 @@ public sealed class LibraryImportCandidateRepositoryTests
         _context.Dispose();
     }
 
-    [Test]
-    public async Task Migrate_PreservesLayoutKeys_WhenTheSchemaIsCreated()
+    [TestCase(JobExecutionStatus.Queued, false)]
+    [TestCase(JobExecutionStatus.Running, false)]
+    [TestCase(JobExecutionStatus.CancellationRequested, false)]
+    [TestCase(JobExecutionStatus.Completed, true)]
+    [TestCase(JobExecutionStatus.Failed, true)]
+    [TestCase(JobExecutionStatus.Cancelled, true)]
+    public async Task TryReclaimInactiveImportAsync_ChecksExecutionOwnership_WhenCandidateIsOld(
+        JobExecutionStatus executionStatus, bool expected)
     {
         // Arrange
-        using var migratedContext = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        try
+        var candidate = new LibraryImportCandidate
         {
-            await migratedContext.Database.OpenConnectionAsync().ConfigureAwait(false);
-            await migratedContext.Database.MigrateAsync().ConfigureAwait(false);
-
-            var rootFolder = new RootFolder
-            {
-                Name = "TV",
-                Path = "/media/tv",
-                ContentType = "type-a",
-                CreatedAt = DateTime.UtcNow
-            };
-            migratedContext.RootFolders.Add(rootFolder);
-            await migratedContext.SaveChangesAsync().ConfigureAwait(false);
-
-            var loggerFactory = NullLoggerFactory.Instance;
-            var transactionManager = new TransactionManager(migratedContext, NullLogger<TransactionManager>.Instance);
-            var auditRecordRepository = new AuditRecordRepository(
-                migratedContext,
-                Mock.Of<IEventBus>(),
-                loggerFactory.CreateLogger<AuditRecordRepository>(),
-                transactionManager,
-                Mock.Of<IJobExecutionScopeFactory>(),
-                timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
-            ILibraryImportCandidateRepository subject = new LibraryImportCandidateRepository(
-                migratedContext,
-                auditRecordRepository,
-                transactionManager,
-                Mock.Of<IEventBus>(),
-                loggerFactory.CreateLogger<LibraryImportCandidateRepository>(),
-                timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
-
-            // Act
-            await subject.CreateAsync(
-                new LibraryImportCandidate
-                {
-                    RootFolderId = rootFolder.Id,
-                    ScanRunId = Guid.NewGuid(),
-                    FilePath = "/media/tv/Show/S01E01.mkv",
-                    ContentType = "type-a",
-                    Status = LibraryImportCandidateStatus.MatchingPending,
-                    LayoutKey = "/media/tv/Show"
-                },
-                _userId).ConfigureAwait(false);
-
-            // Assert
-            var entity = await migratedContext.LibraryImportCandidates.AsNoTracking().FirstAsync()
-                .ConfigureAwait(false);
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(entity.LayoutKey, Is.EqualTo("/media/tv/Show"));
-                Assert.That(entity.GroupKey, Is.EqualTo("/media/tv/Show"));
-            }
-        }
-        finally
+            Id = Guid.NewGuid(),
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/recover.mkv",
+            ContentType = "type-a",
+            Status = LibraryImportCandidateStatus.Importing,
+            CreatedAt = new DateTime(2026, 9, 8, 8, 0, 0, DateTimeKind.Utc)
+        };
+        _context.LibraryImportCandidates.Add(candidate);
+        _context.JobExecutions.Add(new JobExecution
         {
-            await migratedContext.Database.CloseConnectionAsync().ConfigureAwait(false);
+            JobType = "RootFolderContentImportItem",
+            Status = executionStatus,
+            Parameters = new() { ["candidateId"] = candidate.Id.ToString("B").ToUpperInvariant() },
+            NotBeforeAt = new DateTime(2026, 9, 9, 0, 0, 0, DateTimeKind.Utc),
+            LastHeartbeat = new DateTime(2026, 9, 8, 8, 0, 0, DateTimeKind.Utc)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var first = await _subject.TryReclaimInactiveImportAsync(candidate.Id,
+            new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc), _userId, CancellationToken.None)
+            .ConfigureAwait(false);
+        var second = await _subject.TryReclaimInactiveImportAsync(candidate.Id,
+            new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc), _userId, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first, Is.EqualTo(expected));
+            Assert.That(second, Is.False);
+            Assert.That(await _context.LibraryImportCandidates.AsNoTracking().Select(row => row.Status)
+                .SingleAsync().ConfigureAwait(false),
+                Is.EqualTo(expected ? LibraryImportCandidateStatus.Failed : LibraryImportCandidateStatus.Importing));
+            Assert.That(await _context.MediaFiles.CountAsync().ConfigureAwait(false), Is.Zero);
         }
+    }
+
+    [TestCase(LibraryImportCandidateStatus.Queued, 120, true)]
+    [TestCase(LibraryImportCandidateStatus.Importing, 60, true)]
+    [TestCase(LibraryImportCandidateStatus.Importing, 59, false)]
+    [TestCase(LibraryImportCandidateStatus.Pending, 120, false)]
+    public async Task TryReclaimInactiveImportAsync_RechecksActivityAndState_WhenNoExecutionExists(
+        LibraryImportCandidateStatus status, int ageMinutes, bool expected)
+    {
+        // Arrange
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/recover.mkv",
+            ContentType = "type-a",
+            Status = status,
+            CreatedAt = new DateTime(2026, 9, 8, 8, 0, 0, DateTimeKind.Utc),
+            ModifiedAt = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-ageMinutes)
+        };
+        _context.LibraryImportCandidates.Add(candidate);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var reclaimed = await _subject.TryReclaimInactiveImportAsync(candidate.Id,
+            new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc), _userId, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(reclaimed, Is.EqualTo(expected));
     }
 
     [Test]
@@ -942,7 +974,8 @@ public sealed class LibraryImportCandidateRepositoryTests
             _userId).ConfigureAwait(false);
 
         // Act
-        var deleted = await _subject.DeleteByRootFolderAsync(_rootFolderId, _userId, default).ConfigureAwait(false);
+        var deleted = await _subject.DeleteByRootFolderAsync(_rootFolderId, null, _userId, default)
+            .ConfigureAwait(false);
 
         // Assert
         var remaining = await _context.LibraryImportCandidates.AsNoTracking().ToListAsync().ConfigureAwait(false);
@@ -966,7 +999,8 @@ public sealed class LibraryImportCandidateRepositoryTests
     public async Task DeleteByRootFolderAsync_ReturnsZeroWithoutAudit_WhenNoRowsMatch()
     {
         // Act
-        var deleted = await _subject.DeleteByRootFolderAsync(_rootFolderId, _userId, default).ConfigureAwait(false);
+        var deleted = await _subject.DeleteByRootFolderAsync(_rootFolderId, null, _userId, default)
+            .ConfigureAwait(false);
 
         // Assert
         var audits = await _context.AuditRecords.AsNoTracking().CountAsync().ConfigureAwait(false);
@@ -1293,7 +1327,8 @@ public sealed class LibraryImportCandidateRepositoryTests
         await _subject.TryBeginImportAsync(importing.Id, _userId, default).ConfigureAwait(false);
 
         // Act
-        var deleted = await _subject.DeleteByRootFolderAsync(_rootFolderId, _userId, default).ConfigureAwait(false);
+        var deleted = await _subject.DeleteByRootFolderAsync(_rootFolderId, null, _userId, default)
+            .ConfigureAwait(false);
 
         // Assert
         var remaining = await _context.LibraryImportCandidates.AsNoTracking()
@@ -1379,6 +1414,504 @@ public sealed class LibraryImportCandidateRepositoryTests
             Assert.That(stored.Select(candidate => candidate.MatchCount), Is.All.EqualTo(1));
             Assert.That(stored[0].Matches[0].ExternalId, Is.EqualTo("44796"));
             Assert.That(updateAudits, Is.EqualTo(1));
+        }
+    }
+
+    [TestCase(LibraryImportCandidateStatus.Pending)]
+    [TestCase(LibraryImportCandidateStatus.Failed)]
+    [TestCase(LibraryImportCandidateStatus.MatchingPending)]
+    public async Task TryRejectAsync_RemovesMatchesAndTarget_WhenNoImportOwnsTheCandidate(
+        LibraryImportCandidateStatus status)
+    {
+        // Arrange
+        var candidate = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/Movie.2020.mkv",
+                ContentType = "type-a",
+                Status = status,
+                ContentHierarchyItemId = Guid.NewGuid(),
+                Matches =
+                [
+                    new LibraryImportMatch
+                    {
+                        Confidence = 1,
+                        ProviderType = "provider-a",
+                        ExternalIdKey = "provider-a",
+                        ExternalId = "44796",
+                        Title = "Movie"
+                    }
+                ]
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var rejected = await _subject.TryRejectAsync(candidate.Id, _userId, default).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(m => m.Id == candidate.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rejected, Is.True);
+            Assert.That(stored.Status, Is.EqualTo(LibraryImportCandidateStatus.Rejected));
+            Assert.That(stored.Matches, Is.Empty);
+            Assert.That(stored.MatchCount, Is.Zero);
+            Assert.That(stored.ContentHierarchyItemId, Is.Null);
+            Assert.That(stored.GroupKey, Is.EqualTo("query:type-a:movie.2020"));
+        }
+    }
+
+    [Test]
+    public async Task TryRejectAsync_LeavesTheImport_WhenAnImportOwnsTheCandidate()
+    {
+        // Arrange
+        var queued = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/queued.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        var importing = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/importing.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.TryClaimForImportAsync(queued.Id, _userId, default).ConfigureAwait(false);
+        await _subject.TryClaimForImportAsync(importing.Id, _userId, default).ConfigureAwait(false);
+        await _subject.TryBeginImportAsync(importing.Id, _userId, default).ConfigureAwait(false);
+
+        // Act
+        var queuedRejected = await _subject.TryRejectAsync(queued.Id, _userId, default).ConfigureAwait(false);
+        var importingRejected = await _subject.TryRejectAsync(importing.Id, _userId, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        var statuses = await _context.LibraryImportCandidates.AsNoTracking()
+            .OrderBy(m => m.FilePath).Select(m => m.Status).ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(queuedRejected, Is.False);
+            Assert.That(importingRejected, Is.False);
+            Assert.That(
+                statuses,
+                Is.EqualTo([LibraryImportCandidateStatus.Importing, LibraryImportCandidateStatus.Queued]));
+        }
+    }
+
+    [Test]
+    public async Task DeleteByRootFolderAsync_KeepsRejectedCandidates_WhenTheScanReplacesCandidates()
+    {
+        // Arrange
+        await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/pending.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        var rejected = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/rejected.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.TryRejectAsync(rejected.Id, _userId, default).ConfigureAwait(false);
+
+        // Act
+        var deleted = await _subject.DeleteByRootFolderAsync(_rootFolderId, null, _userId, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        var remaining = await _context.LibraryImportCandidates.AsNoTracking()
+            .Select(m => m.FilePath).ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.EqualTo(1));
+            Assert.That(remaining, Is.EqualTo(["/media/movies/rejected.mkv"]));
+        }
+    }
+
+    [Test]
+    public async Task DeleteByRootFolderAsync_DeletesOnlyTheNamedCandidates_WhenIdsAreGiven()
+    {
+        // Arrange
+        var inside = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/Inside/inside.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/Outside/outside.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var deleted = await _subject.DeleteByRootFolderAsync(_rootFolderId, [inside.Id], _userId, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        var remaining = await _context.LibraryImportCandidates.AsNoTracking()
+            .Select(m => m.FilePath).ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.EqualTo(1));
+            Assert.That(remaining, Is.EqualTo(["/media/movies/Outside/outside.mkv"]));
+        }
+    }
+
+    [Test]
+    public async Task BulkPatchAsync_KeepsARejectedCandidateUnmatched_WhenItsGroupIsMatched()
+    {
+        // Arrange
+        var rejected = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/rejected.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.TryRejectAsync(rejected.Id, _userId, default).ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.BulkPatchAsync(
+            new()
+            {
+                Ids = [rejected.Id],
+                Patch = new()
+                {
+                    Matches = new()
+                    {
+                        Value =
+                        [
+                            new LibraryImportMatch
+                            {
+                                Confidence = 1,
+                                ProviderType = "provider-a",
+                                ExternalIdKey = "provider-a",
+                                ExternalId = "44796",
+                                Title = "Movie"
+                            }
+                        ]
+                    }
+                }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(m => m.Id == rejected.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Count, Is.Zero);
+            Assert.That(stored.Status, Is.EqualTo(LibraryImportCandidateStatus.Rejected));
+            Assert.That(stored.Matches, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task BulkPatchAsync_MovesAMatchingPendingCandidateToPending_WhenTheUserMatchesIt()
+    {
+        // Arrange
+        var candidate = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/Movie.2020.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.MatchingPending
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.BulkPatchAsync(
+            new()
+            {
+                Ids = [candidate.Id],
+                Patch = new()
+                {
+                    Matches = new()
+                    {
+                        Value =
+                        [
+                            new LibraryImportMatch
+                            {
+                                Confidence = 1,
+                                ProviderType = "provider-a",
+                                ExternalIdKey = "provider-a",
+                                ExternalId = "12",
+                                Title = "Movie"
+                            }
+                        ]
+                    }
+                }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(m => m.Id == candidate.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Count, Is.EqualTo(1));
+            Assert.That(stored.Status, Is.EqualTo(LibraryImportCandidateStatus.Pending));
+            Assert.That(stored.Matches.Single().ExternalId, Is.EqualTo("12"));
+        }
+    }
+
+    [Test]
+    public async Task BulkPatchAsync_ClearsTheLibraryTarget_WhenTheMatchChanges()
+    {
+        // Arrange
+        var candidate = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/Movie.2020.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending,
+                ContentHierarchyItemId = Guid.NewGuid()
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        await _subject.BulkPatchAsync(
+            new()
+            {
+                Ids = [candidate.Id],
+                Patch = new()
+                {
+                    Matches = new()
+                    {
+                        Value =
+                        [
+                            new LibraryImportMatch
+                            {
+                                Confidence = 1,
+                                ProviderType = "provider-a",
+                                ExternalIdKey = "provider-a",
+                                ExternalId = "12",
+                                Title = "Other"
+                            }
+                        ]
+                    }
+                }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(m => m.Id == candidate.Id).ConfigureAwait(false);
+        Assert.That(stored.ContentHierarchyItemId, Is.Null);
+    }
+
+    [Test]
+    public async Task TryResolveMatchAsync_KeepsTheRejection_WhenTheUserRejectsDuringResolution()
+    {
+        // Arrange
+        var candidate = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/Movie.2020.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.MatchingPending
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.TryRejectAsync(candidate.Id, _userId, default).ConfigureAwait(false);
+
+        // Act
+        var resolved = await _subject.TryResolveMatchAsync(
+            candidate with
+            {
+                Status = LibraryImportCandidateStatus.Pending,
+                ContentHierarchyItemId = Guid.NewGuid(),
+                Matches =
+                [
+                    new LibraryImportMatch
+                    {
+                        Confidence = 1,
+                        ProviderType = "provider-a",
+                        ExternalIdKey = "provider-a",
+                        ExternalId = "44796",
+                        Title = "Movie"
+                    }
+                ]
+            },
+            null,
+            default).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(m => m.Id == candidate.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(resolved, Is.False);
+            Assert.That(stored.Status, Is.EqualTo(LibraryImportCandidateStatus.Rejected));
+            Assert.That(stored.ContentHierarchyItemId, Is.Null);
+        }
+    }
+
+    [TestCase(true, LibraryImportCandidateStatus.MatchingPending)]
+    [TestCase(false, LibraryImportCandidateStatus.Pending)]
+    public async Task TryRestoreAsync_ReturnsOnlyARejectedCandidateToMatching_WhenRestored(
+        bool rejectFirst, LibraryImportCandidateStatus expected)
+    {
+        // Arrange
+        var candidate = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/Movie.2020.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+        if (rejectFirst)
+        {
+            await _subject.TryRejectAsync(candidate.Id, _userId, default).ConfigureAwait(false);
+        }
+
+        // Act
+        var restored = await _subject.TryRestoreAsync(candidate.Id, _userId, default).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(m => m.Id == candidate.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(restored, Is.EqualTo(rejectFirst));
+            Assert.That(stored.Status, Is.EqualTo(expected));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsOnlyTheTargetedCandidates_WhenTargetIdsAreGiven()
+    {
+        // Arrange
+        var targetId = Guid.NewGuid();
+        await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/targeted.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending,
+                ContentHierarchyItemId = targetId
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/other-target.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending,
+                ContentHierarchyItemId = Guid.NewGuid()
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/untargeted.mkv",
+                ContentType = "type-a",
+                Status = LibraryImportCandidateStatus.Pending
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.QueryAsync(
+            new LibraryImportCandidateQuery { ContentHierarchyItemIds = [targetId] },
+            new() { PageNumber = 1, PageSize = 10 },
+            null,
+            default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(page.Items.Select(m => m.FilePath), Is.EqualTo(["/media/movies/targeted.mkv"]));
+    }
+
+    [TestCase(LibraryImportCandidateStatus.Pending, true)]
+    [TestCase(LibraryImportCandidateStatus.Failed, true)]
+    [TestCase(LibraryImportCandidateStatus.Queued, false)]
+    [TestCase(LibraryImportCandidateStatus.Rejected, false)]
+    public async Task TryUpdateTargetAsync_SavesTheItem_OnlyWhenNoImportOwnsTheMatchedCandidate(
+        LibraryImportCandidateStatus status, bool expected)
+    {
+        // Arrange
+        var targetId = Guid.NewGuid();
+        var candidate = await _subject.CreateAsync(
+            new LibraryImportCandidate
+            {
+                RootFolderId = _rootFolderId,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/media/movies/Movie.2020.mkv",
+                ContentType = "type-a",
+                Status = status,
+                Matches =
+                [
+                    new LibraryImportMatch
+                    {
+                        Confidence = 1,
+                        ProviderType = "provider-a",
+                        ExternalIdKey = "provider-a",
+                        ExternalId = "44796",
+                        Title = "Movie"
+                    }
+                ]
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var saved = await _subject.TryUpdateTargetAsync(candidate.Id, targetId, _userId, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.LibraryImportCandidates.AsNoTracking()
+            .SingleAsync(m => m.Id == candidate.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(saved, Is.EqualTo(expected));
+            Assert.That(stored.ContentHierarchyItemId, Is.EqualTo(expected ? targetId : null));
         }
     }
 }

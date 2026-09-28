@@ -17,6 +17,13 @@ public interface IUserRepository :
     IPatchRepository<Guid, User, UserPatch>
 {
     /// <summary>
+    /// Locks the user and enabled administrators until the current transaction ends.
+    /// </summary>
+    /// <param name="userId">The id of the user to change.</param>
+    /// <param name="cancellationToken">The token that cancels the operation.</param>
+    Task LockAuthorizationAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Replaces the stored password hash and salt of a user.
     /// </summary>
     /// <param name="userId">The id of the user</param>

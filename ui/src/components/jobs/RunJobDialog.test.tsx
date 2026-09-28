@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
+import { ToastList } from '@/components/ui/Toast/ToastList';
 import type { TemplateOption } from '@/lib/jobExecution';
 import { RunJobDialog } from './RunJobDialog';
 
@@ -20,6 +21,99 @@ const runnableJobs: TemplateOption[] = [
 ];
 
 describe('RunJobDialog parameters', () => {
+    it('leaves an inherited import collision policy out of the submitted parameters', async () => {
+        const user = userEvent.setup();
+        const runJob = vi.fn().mockResolvedValue({ executionId: 'import-1', status: null });
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <RunJobDialog
+                        open={true}
+                        onOpenChange={() => {}}
+                        runnableJobs={[
+                            {
+                                id: 'DownloadImportItem',
+                                name: 'Download import item',
+                                parameters: [
+                                    {
+                                        name: 'collisionMode',
+                                        description: 'When omitted, inherit the root-folder policy.',
+                                        type: 0,
+                                        required: false,
+                                        defaultValue: null,
+                                    },
+                                ],
+                            },
+                        ]}
+                        runJob={runJob}
+                    />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+        const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
+        await user.click(dialog.querySelector('[data-field="jobType"]') as HTMLElement);
+        await user.click(screen.getByRole('option', { name: 'Download import item' }));
+        expect(dialog.querySelector('[data-field="parameter-collisionMode"]')).toHaveValue('');
+        await user.click(within(dialog).getByRole('button', { name: /run job/i }));
+        await waitFor(() => expect(runJob).toHaveBeenCalled());
+        expect(runJob.mock.calls[0][0].parameters).toBeUndefined();
+    });
+
+    it('queues a job that cannot run immediately and says so', async () => {
+        const user = userEvent.setup();
+        const runJob = vi.fn().mockResolvedValue({ executionId: 'backup-1', status: 'Queued' });
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <RunJobDialog
+                        open={true}
+                        onOpenChange={() => {}}
+                        runnableJobs={[{ id: 'DatabaseBackup', name: 'Database backup', supportsImmediate: false }]}
+                        runJob={runJob}
+                    />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+        const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
+        await user.click(dialog.querySelector('[data-field="jobType"]') as HTMLElement);
+        await user.click(screen.getByRole('option', { name: 'Database backup' }));
+
+        expect(screen.getByTestId('run-job-dialog__caution')).toHaveTextContent('runs from the queue');
+        await user.click(within(dialog).getByRole('button', { name: /run job/i }));
+
+        await waitFor(() => expect(runJob).toHaveBeenCalledWith({ jobType: 'DatabaseBackup', mode: 'Queue' }));
+        expect(await screen.findByText('Job queued')).toBeInTheDocument();
+    });
+
+    it('shows a rejected parameter at its field with the server reason and keeps the values', async () => {
+        const user = userEvent.setup();
+        const runJob = vi.fn().mockRejectedValue(new Error('Parameter Limit must be a valid number.'));
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <RunJobDialog open={true} onOpenChange={() => {}} runnableJobs={runnableJobs} runJob={runJob} />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+        const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
+        await user.click(dialog.querySelector('[data-field="jobType"]') as HTMLElement);
+        await user.click(screen.getByRole('option', { name: 'Parameterized Job' }));
+        await user.type(dialog.querySelector('[data-field="parameter-Tag"]') as HTMLInputElement, 'movies');
+        await user.click(within(dialog).getByRole('button', { name: /run job/i }));
+
+        await waitFor(() =>
+            expect(within(dialog).getByText('Parameter Limit must be a valid number.')).toBeInTheDocument(),
+        );
+        expect(dialog.querySelector('[data-field="parameter-Limit"]')).toHaveAttribute('aria-invalid', 'true');
+        expect(dialog.querySelector('[data-field="parameter-Tag"]')).toHaveValue('movies');
+        expect(screen.queryByText('Failed to start job')).not.toBeInTheDocument();
+    });
+
     it('disables submit until a job is selected', async () => {
         const user = userEvent.setup();
 

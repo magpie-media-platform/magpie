@@ -115,12 +115,10 @@ public class SearchPipelineTests
     }
 
     [Test]
-    public async Task AdvancedSearchAsync_ReturnsSupersetWithoutWarnings_WhenRelationshipCannotBeEvaluated()
+    public async Task AdvancedSearchAsync_ReturnsEmptyWithoutRequests_WhenARequiredRelationshipCannotComeFromTvmaze()
     {
         // Arrange
         var client = new Mock<IClient>(MockBehavior.Strict);
-        client.Setup(value => value.SearchShowsAsync("Lost", It.IsAny<CancellationToken>()))
-            .ReturnsAsync([new SearchHitDto { Show = new ShowDto { Id = 82, Name = "Lost" } }]);
         var searcher = new ContentMetadataSearcher(
             client.Object,
             new SearchPlanner(NullLogger<SearchPlanner>.Instance),
@@ -165,12 +163,10 @@ public class SearchPipelineTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Matches, Has.Count.EqualTo(1));
-            Assert.That(result.Matches[0].ExternalId, Is.EqualTo("82"));
+            Assert.That(result.Matches, Is.Empty);
             Assert.That(result.Warnings, Is.Empty);
         }
 
-        client.Verify(value => value.SearchShowsAsync("Lost", It.IsAny<CancellationToken>()), Times.Once);
         client.VerifyNoOtherCalls();
     }
 }

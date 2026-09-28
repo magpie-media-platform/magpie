@@ -1,14 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Arguments;
+using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
+using Magpie.Sdk.Events;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
@@ -18,6 +21,7 @@ namespace Magpie.Core.Jobs;
 
 internal sealed class DownloadImportScanJob(
     IDownloadRepository downloadRepository,
+    IJobExecutionRepository jobExecutionRepository,
     IJobManager jobManager,
     TimeProvider timeProvider,
     ILogger<DownloadImportScanJob> logger,
@@ -45,6 +49,12 @@ internal sealed class DownloadImportScanJob(
                 DataType.Number,
                 false,
                 "10")
+            {
+                ValidateScheduleValue = (value, _, utcNow) =>
+                    int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes) &&
+                    minutes > utcNow.Ticks / TimeSpan.TicksPerMinute
+                        ? "exceeds the supported date range." : null
+            }
         ],
     };
 
@@ -69,11 +79,27 @@ internal sealed class DownloadImportScanJob(
             },
             cancellationToken).ConfigureAwait(false);
 
+        var committedRecovery = await downloadRepository.QueryAllAsync(new DownloadQuery
+        {
+            Status = DownloadStatus.Imported,
+            HasImportRecoveryState = true,
+            LastChangedAt = new Range<DateTime>(null, cutoff)
+        }, cancellationToken: cancellationToken).ConfigureAwait(false);
+        downloads = downloads.Concat(committedRecovery).DistinctBy(download => download.Id).ToList();
+
         if (downloads.Count == 0)
         {
             progressReporter.Report(1, "The download recovery completed.");
             return;
         }
+
+        // Text reference filters do not match all GUID forms that the item job accepts.
+        var downloadIds = downloads.Select(download => download.Id).ToHashSet();
+        var history = (await jobExecutionRepository.QueryAllAsync(
+            new JobExecutionQuery { JobType = MagpieJobs.Types.DownloadImportItem },
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+            .Where(execution => ResolveDownloadId(execution) is { } id && downloadIds.Contains(id))
+            .ToLookup(ResolveDownloadId);
 
         var enqueued = 0;
         var totalDownloads = downloads.Count;
@@ -87,16 +113,59 @@ internal sealed class DownloadImportScanJob(
 
             try
             {
+                var executions = history[download.Id];
+                if (executions.Any(execution => execution.Status is JobExecutionStatus.Queued or
+                    JobExecutionStatus.Running or JobExecutionStatus.CancellationRequested))
+                {
+                    continue;
+                }
+
+                var active = await jobExecutionRepository.QueryAllAsync(
+                    new JobExecutionQuery
+                    {
+                        JobType = MagpieJobs.Types.DownloadImportItem,
+                        Statuses =
+                        [
+                            JobExecutionStatus.Queued, JobExecutionStatus.Running,
+                            JobExecutionStatus.CancellationRequested
+                        ]
+                    }, cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (active.Any(execution =>
+                    execution.Status is JobExecutionStatus.Queued or JobExecutionStatus.Running or
+                        JobExecutionStatus.CancellationRequested && ResolveDownloadId(execution) == download.Id))
+                {
+                    continue;
+                }
+
+                var previous = executions.Where(execution =>
+                        !execution.Parameters.TryGetValue(MagpieJobs.Parameters.DryRun, out var rawDryRun) ||
+                        !bool.TryParse(rawDryRun, out var dryRun) || !dryRun)
+                    .OrderByDescending(execution => execution.CreatedAt)
+                    .ThenByDescending(execution => execution.Id).FirstOrDefault();
                 var parameters = new Dictionary<string, string>()
                 {
                     [MagpieJobs.Parameters.DownloadId] = download.Id.ToString("D")
                 };
+                if (download.Status == DownloadStatus.Importing && download.ImportCollisionMode is { } storedMode)
+                {
+                    parameters[MagpieJobs.Parameters.CollisionMode] = storedMode.ToString();
+                }
+                else if (previous is not null && previous.Parameters.TryGetValue(
+                    MagpieJobs.Parameters.CollisionMode, out var collisionMode) &&
+                    !string.IsNullOrWhiteSpace(collisionMode))
+                {
+                    parameters[MagpieJobs.Parameters.CollisionMode] = collisionMode;
+                }
+
                 await jobManager.ExecuteAsync(
                     new JobEnqueueRequest
                     {
                         JobType = MagpieJobs.Types.DownloadImportItem,
                         Parameters = parameters,
                         Mode = JobExecutionMode.Queue,
+                        OnlyIfInactive = true,
+                        UserId = previous?.CreatedByUserId,
+                        CorrelationId = jobContext.CorrelationId,
                     },
                     cancellationToken).ConfigureAwait(false);
                 enqueued++;
@@ -122,6 +191,15 @@ internal sealed class DownloadImportScanJob(
             "The job queued {Enqueued} DownloadImportItem execution(s) from {DownloadCount} candidate(s)",
             enqueued,
             totalDownloads);
+    }
+
+    private static Guid? ResolveDownloadId(JobExecution execution)
+    {
+        var rawId = execution.Parameters.TryGetValue(MagpieJobs.Parameters.DownloadId, out var parameter) &&
+            !string.IsNullOrWhiteSpace(parameter)
+            ? parameter
+            : execution.TriggerContext.GetValueOrDefault(MagpieEvents.Keys.DownloadId.ToEventContextKey());
+        return Guid.TryParse(rawId, out var id) ? id : null;
     }
 
     private TimeSpan ResolveSettleWindow(IReadOnlyDictionary<string, string> parameters)

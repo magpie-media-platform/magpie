@@ -173,7 +173,7 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
             try {
                 const result = await bulkSetMonitoringMutation.mutateAsync({
                     ...resolution.target,
-                    patch: { monitoring: { value: monitor } },
+                    patch: { monitoring: { value: monitor ? 'Monitored' : 'Unmonitored' } },
                 });
 
                 if (result.error) {

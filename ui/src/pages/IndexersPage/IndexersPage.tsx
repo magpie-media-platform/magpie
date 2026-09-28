@@ -10,7 +10,7 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useIndexers } from '@/hooks/useIndexers';
 
 import { ConfiguredManagement } from './ConfiguredManagement';
-import { AvailableCatalog } from './AvailableCatalog';
+import { AvailableCatalog } from '@/components/configuration/AvailableCatalog';
 import { FeedsManagement } from './FeedsManagement';
 
 import './IndexersPage.css';

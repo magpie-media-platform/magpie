@@ -35,5 +35,10 @@ public enum LibraryImportCandidateStatus
     /// <summary>
     /// The scan wrote the row and the match resolution job has not resolved it yet.
     /// </summary>
-    MatchingPending = 9
+    MatchingPending = 9,
+
+    /// <summary>
+    /// The user rejected the row, so rescans keep it unmatched until the user restores it.
+    /// </summary>
+    Rejected = 10
 }

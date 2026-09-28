@@ -11,8 +11,8 @@ function item(id: string, overrides: Partial<ContentListItem> = {}): ContentList
         level: 'episode',
         levelLabel: 'Episode',
         contentType: 'shows',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'missing',
         ...overrides,
     };
@@ -78,7 +78,7 @@ describe('countMissingDescendants', () => {
         const show = item('show', { level: 'show', fulfillment: 'partial' });
         const season = item('season', { level: 'season', fulfillment: 'partial' });
         const missing = item('missing');
-        const unmonitored = item('unmonitored', { effectiveMonitoring: false });
+        const unmonitored = item('unmonitored', { effectiveMonitoring: 'Unmonitored' });
         const upgradable = item('upgradable', { fulfillment: 'upgradable' });
         const loadChildren = vi.fn(async (id: string) => {
             if (id === 'show') {

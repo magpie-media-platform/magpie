@@ -106,6 +106,7 @@ const mockApiFolders: ApiRootFolder[] = [
         isDefault: true,
         defaultMonitoring: true,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         defaults: { movie: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-01T00:00:00Z',
     },
@@ -117,6 +118,7 @@ const mockApiFolders: ApiRootFolder[] = [
         isDefault: true,
         defaultMonitoring: true,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         defaults: { series: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-01T00:00:00Z',
     },
@@ -128,6 +130,7 @@ const mockApiFolders: ApiRootFolder[] = [
         isDefault: false,
         defaultMonitoring: null,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         defaults: { album: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-02T00:00:00Z',
     },
@@ -139,6 +142,7 @@ const mockApiFolders: ApiRootFolder[] = [
         isDefault: false,
         defaultMonitoring: false,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         defaults: { anime: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-03T00:00:00Z',
     },
@@ -150,6 +154,7 @@ const mockApiFolders: ApiRootFolder[] = [
         isDefault: true,
         defaultMonitoring: true,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         defaults: { book: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-04T00:00:00Z',
     },
@@ -217,7 +222,7 @@ afterEach(() => {
         });
 });
 
-function createTestWrapper(onClient?: (client: QueryClient) => void) {
+function createTestWrapper(onClient?: (client: QueryClient) => void, initialEntries?: string[]) {
     const queryClient = new QueryClient({
         defaultOptions: {
             queries: {
@@ -234,7 +239,7 @@ function createTestWrapper(onClient?: (client: QueryClient) => void) {
     return function TestWrapper({ children }: { children: ReactNode }) {
         return (
             <QueryClientProvider client={queryClient}>
-                <MemoryRouter>
+                <MemoryRouter initialEntries={initialEntries}>
                     <TooltipProvider>
                         <ToastProvider>
                             <ToastStateProvider>
@@ -276,6 +281,13 @@ describe('RootFoldersPage', () => {
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: 'Root Folders', level: 1 })).toBeInTheDocument();
         });
+    });
+
+    it('keeps the selection toggle on the list toolbar line', async () => {
+        render(<RootFoldersPage />, { wrapper: createTestWrapper() });
+
+        const toggle = await screen.findByRole('button', { name: 'Select', pressed: false });
+        expect(toggle.closest('[data-component="mobile-list-toolbar"]')).toBeInTheDocument();
     });
 
     it('renders no folder count pill', async () => {
@@ -557,6 +569,7 @@ describe('RootFoldersPage actions', () => {
             isDefault: false,
             defaultMonitoring: true,
             upgradeFileHandling: 'Replace',
+            autoImport: false,
             defaults: { movie: { qualityTierListId: 'quality-default' } },
             createdAt: '2024-01-05T00:00:00Z',
         });
@@ -595,6 +608,7 @@ describe('RootFoldersPage actions', () => {
                 defaultMonitoring: null,
                 renameTemplate: null,
                 upgradeFileHandling: 'Replace',
+                autoImport: false,
                 defaults: { movie: { qualityTierListId: 'quality-default' } },
             });
         });
@@ -663,6 +677,21 @@ describe('RootFoldersPage actions', () => {
             expect(screen.getByText('Edit Root Folder')).toBeInTheDocument();
             expect(screen.getAllByDisplayValue('Movies').length).toBeGreaterThanOrEqual(1);
         });
+    });
+
+    it('opens the edit form for the folder named in the ?edit= param', async () => {
+        render(<RootFoldersPage />, { wrapper: createTestWrapper(undefined, ['/?edit=folder-2']) });
+
+        expect(await screen.findByText('Edit Root Folder')).toBeInTheDocument();
+        expect(screen.getAllByDisplayValue('TV Shows').length).toBeGreaterThanOrEqual(1);
+        expect(screen.queryByDisplayValue('/media/movies')).not.toBeInTheDocument();
+    });
+
+    it('ignores an unknown ?edit= id without opening a dialog', async () => {
+        render(<RootFoldersPage />, { wrapper: createTestWrapper(undefined, ['/?edit=does-not-exist']) });
+
+        expect(await screen.findByRole('button', { name: /^edit movies$/i })).toBeInTheDocument();
+        expect(screen.queryByText('Edit Root Folder')).not.toBeInTheDocument();
     });
 
     it('refreshes a clean open editor and preserves a dirty draft', async () => {
@@ -859,6 +888,7 @@ describe('RootFoldersPage unknown content type badge', () => {
                 isDefault: false,
                 defaultMonitoring: true,
                 upgradeFileHandling: 'Replace',
+                autoImport: false,
                 defaults: {},
                 createdAt: '2024-01-01T00:00:00Z',
             },

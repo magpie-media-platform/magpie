@@ -193,6 +193,39 @@ public static class FilteringQueryableExtensions
     }
 
     /// <summary>
+    /// Applies long integer property criteria to a query.
+    /// </summary>
+    /// <typeparam name="TEntity">
+    /// The entity type of the query.
+    /// </typeparam>
+    /// <param name="query">
+    /// The query to filter.
+    /// </param>
+    /// <param name="criteria">
+    /// The criteria to apply to the property.
+    /// </param>
+    /// <param name="property">
+    /// The name of the property to filter on.
+    /// </param>
+    public static IQueryable<TEntity> ApplyCriteriaSet<TEntity>(
+        this IQueryable<TEntity> query,
+        CriteriaSet<PropertyCriterion<long>>? criteria,
+        string property) where TEntity : class
+    {
+        if (criteria?.And is null || !criteria.And.Any())
+        {
+            return query;
+        }
+
+        foreach (var c in criteria.And)
+        {
+            query = query.Where(BuildPredicate<TEntity>(c, property));
+        }
+
+        return query;
+    }
+
+    /// <summary>
     /// Applies date property criteria to a query.
     /// </summary>
     /// <typeparam name="TEntity">
@@ -501,13 +534,40 @@ public static class FilteringQueryableExtensions
         PropertyCriterion<int> criterion,
         string property) where TEntity : class
     {
+        var values = criterion.Values?.ToList();
         return criterion.Operator switch
         {
+            CriteriaValueOperator.Equals => e => EF.Property<int?>(e, property) == criterion.Value,
+            CriteriaValueOperator.NotEquals => e => EF.Property<int?>(e, property) != criterion.Value,
             CriteriaValueOperator.LessThan => e => EF.Property<int?>(e, property) < criterion.Value,
             CriteriaValueOperator.LessThanOrEqual => e => EF.Property<int?>(e, property) <= criterion.Value,
             CriteriaValueOperator.GreaterThan => e => EF.Property<int?>(e, property) > criterion.Value,
             CriteriaValueOperator.GreaterThanOrEqual => e => EF.Property<int?>(e, property) >= criterion.Value,
-            _ => BuildPredicate<TEntity, int>(criterion, property)
+            CriteriaValueOperator.IsNull => e => EF.Property<int?>(e, property) == null,
+            CriteriaValueOperator.IsNotNull => e => EF.Property<int?>(e, property) != null,
+            CriteriaValueOperator.In => e =>
+                EF.Property<int?>(e, property) != null &&
+                values != null &&
+                values.Contains(EF.Property<int?>(e, property)!.Value),
+            CriteriaValueOperator.NotIn => e =>
+                EF.Property<int?>(e, property) == null ||
+                values == null ||
+                !values.Contains(EF.Property<int?>(e, property)!.Value),
+            var op => throw new NotSupportedException($"Operator {op} is not supported for integer fields")
+        };
+    }
+
+    private static Expression<Func<TEntity, bool>> BuildPredicate<TEntity>(
+        PropertyCriterion<long> criterion,
+        string property) where TEntity : class
+    {
+        return criterion.Operator switch
+        {
+            CriteriaValueOperator.LessThan => e => EF.Property<long>(e, property) < criterion.Value,
+            CriteriaValueOperator.LessThanOrEqual => e => EF.Property<long>(e, property) <= criterion.Value,
+            CriteriaValueOperator.GreaterThan => e => EF.Property<long>(e, property) > criterion.Value,
+            CriteriaValueOperator.GreaterThanOrEqual => e => EF.Property<long>(e, property) >= criterion.Value,
+            _ => BuildPredicate<TEntity, long>(criterion, property)
         };
     }
 

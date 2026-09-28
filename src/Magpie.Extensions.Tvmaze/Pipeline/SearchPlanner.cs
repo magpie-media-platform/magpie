@@ -428,6 +428,8 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             }
         }
 
+        knownEmpty |= criteria.Relationships.Some.Any(group =>
+            group.Count > 0 && group.All(IsImpossibleRelationship));
         var hitFilters = filters.Where(filter => !RequiresAkas(filter)).ToArray();
         var akaFilters = filters.Where(filter => RequiresAkas(filter)).ToArray();
 
@@ -1830,6 +1832,12 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         return constraints.Length == 0 ||
             candidates.Any(candidate => constraints.All(criterion => CriterionGrammar.Matches(criterion, candidate)));
     }
+
+    private bool IsImpossibleRelationship(RelationshipCriteria relationship) =>
+        !relationship.RelatedMetadataContainerId.And.Any() &&
+        HasProviderRelationshipFacets(relationship) &&
+        ValidateRelationship(relationship) &&
+        CompileRelationshipAlternative(relationship) is { MatchesNetwork: false, MatchesPerson: false };
 
     private bool HasProviderRelationshipFacets(RelationshipCriteria relationship)
     {

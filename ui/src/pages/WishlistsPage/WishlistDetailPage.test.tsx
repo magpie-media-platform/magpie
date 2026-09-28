@@ -454,16 +454,66 @@ describe('WishlistDetailPage edit action', () => {
         });
     });
 
-    it('shows Edit button for Manager on unlocked wishlist', async () => {
+    it.each([
+        [Role.Manager, false],
+        [Role.Admin, true],
+    ])('shows Edit to role %s on another user unlocked wishlist: %s', async (role, shown) => {
         render(
-            <TestWrapper role={Role.Manager}>
+            <TestWrapper role={role} userId="user-other" initialPath="/wishlists/wl-1">
                 <WishlistDetailPage />
             </TestWrapper>,
         );
 
         await waitFor(() => {
-            expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: 'My Movies', level: 1 })).toBeInTheDocument();
         });
+
+        expect(screen.queryAllByRole('button', { name: 'Edit' }).length > 0).toBe(shown);
+    });
+
+    it('lists Refresh and Edit in the Wishlist Actions sheet for the owner', async () => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper role={Role.Manager} userId="user-1" initialPath="/wishlists/wl-1">
+                <WishlistDetailPage />
+            </TestWrapper>,
+        );
+
+        await user.click(await screen.findByRole('button', { name: 'Wishlist Actions' }));
+
+        const sheet = await screen.findByRole('dialog', { name: 'Wishlist Actions' });
+        expect(
+            within(within(sheet).getByRole('group', { name: 'Quick actions' }))
+                .getAllByRole('button')
+                .map((action) => action.textContent),
+        ).toEqual(['Refresh', 'Edit']);
+    });
+
+    it('explains the disabled Refresh action in the Wishlist Actions sheet', async () => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper initialPath="/wishlists/wl-4">
+                <WishlistDetailPage />
+            </TestWrapper>,
+        );
+
+        await user.click(await screen.findByRole('button', { name: 'Wishlist Actions' }));
+
+        const sheet = await screen.findByRole('dialog', { name: 'Wishlist Actions' });
+        const refresh = within(sheet).getByRole('button', { name: 'Refresh' });
+        expect(refresh).toBeDisabled();
+        expect(refresh).toHaveAccessibleDescription('Enable the wishlist to refresh it.');
+    });
+
+    it('shows no Wishlist Actions button to a manager who cannot refresh or edit the wishlist', async () => {
+        render(
+            <TestWrapper role={Role.Manager} userId="user-other" initialPath="/wishlists/wl-1">
+                <WishlistDetailPage />
+            </TestWrapper>,
+        );
+
+        await screen.findByRole('heading', { name: 'My Movies', level: 1 });
+        expect(document.querySelector('.quick-actions-button')).toBeNull();
     });
 
     it('hides Edit button for non-owner on locked wishlist', async () => {
@@ -493,6 +543,7 @@ describe('WishlistDetailPage edit action', () => {
         });
 
         const editButton = screen.getByRole('button', { name: 'Edit' });
+        expect(editButton).toHaveAttribute('aria-label', 'Edit');
         expect(editButton).toHaveAttribute('data-action', 'edit');
     });
 
@@ -773,9 +824,8 @@ describe('WishlistDetailPage refresh action', () => {
             </TestWrapper>,
         );
 
-        await waitFor(() => {
-            expect(screen.getByRole('button', { name: /refresh/i })).toBeInTheDocument();
-        });
+        const refreshButton = await screen.findByRole('button', { name: 'Refresh' });
+        expect(refreshButton).toHaveAttribute('aria-label', 'Refresh');
         expect(screen.queryByRole('button', { name: /preview/i })).not.toBeInTheDocument();
     });
 
@@ -834,5 +884,75 @@ describe('WishlistDetailPage refresh action', () => {
         await user.click(refreshButton);
 
         expect(await screen.findByText('Refresh Queued')).toBeInTheDocument();
+        expect(screen.queryByText('Searching for matches.')).not.toBeInTheDocument();
+    });
+
+    it('disables Refresh and explains why when the wishlist is disabled', async () => {
+        render(
+            <TestWrapper initialPath="/wishlists/wl-4">
+                <WishlistDetailPage />
+            </TestWrapper>,
+        );
+
+        const refreshButton = await screen.findByRole('button', { name: 'Refresh' });
+        expect(refreshButton).toBeDisabled();
+        expect(screen.getByText('Enable the wishlist to refresh it.')).toBeInTheDocument();
+    });
+
+    it('shows the reason and keeps the discoveries when the refresh does not complete', async () => {
+        const user = userEvent.setup();
+        const reason = 'The wishlist search was incomplete. Its completed matches were retained. Retry the refresh.';
+        mockApiPost.mockResolvedValue({ executionId: 'job-1', status: 'Queued' });
+        const wishlistApiGet = createMockApiGet(mockApiWishlists);
+        mockApiGet.mockImplementation((url: string) =>
+            url === '/jobs/job-1'
+                ? Promise.resolve({ id: 'job-1', status: 'Failed', statusMessage: reason })
+                : wishlistApiGet(url),
+        );
+
+        render(
+            <TestWrapper>
+                <WishlistDetailPage />
+            </TestWrapper>,
+        );
+
+        await user.click(await screen.findByRole('button', { name: 'Refresh' }));
+
+        expect(await screen.findByTestId('wishlist-detail-page__refresh-outcome')).toHaveTextContent(reason);
+        expect(screen.getByText('Die Hard')).toBeInTheDocument();
+    });
+
+    it('shows the reason, not a queue failure, when the refresh runs at once and does not complete', async () => {
+        const user = userEvent.setup();
+        const reason = 'The wishlist search was incomplete. Its completed matches were retained. Retry the refresh.';
+        mockApiPost.mockResolvedValue({ executionId: 'job-1', status: 'Failed', statusMessage: reason });
+
+        render(
+            <TestWrapper>
+                <WishlistDetailPage />
+            </TestWrapper>,
+        );
+
+        await user.click(await screen.findByRole('button', { name: 'Refresh' }));
+
+        expect(await screen.findByTestId('wishlist-detail-page__refresh-outcome')).toHaveTextContent(reason);
+        expect(screen.queryByText('Failed to queue a refresh for this wishlist.')).not.toBeInTheDocument();
+        expect(screen.getByText('Die Hard')).toBeInTheDocument();
+    });
+
+    it('reports a queue failure when the refresh request itself fails', async () => {
+        const user = userEvent.setup();
+        mockApiPost.mockRejectedValue(new Error('Network error'));
+
+        render(
+            <TestWrapper>
+                <WishlistDetailPage />
+            </TestWrapper>,
+        );
+
+        await user.click(await screen.findByRole('button', { name: 'Refresh' }));
+
+        expect(await screen.findByText('Failed to queue a refresh for this wishlist.')).toBeInTheDocument();
+        expect(screen.queryByTestId('wishlist-detail-page__refresh-outcome')).not.toBeInTheDocument();
     });
 });

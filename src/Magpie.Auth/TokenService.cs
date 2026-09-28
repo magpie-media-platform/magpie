@@ -83,6 +83,8 @@ internal sealed class TokenService(
         var tokenDescriptor = new SecurityTokenDescriptor
         {
             Subject = principal.Identity as ClaimsIdentity,
+            IssuedAt = issuedAt,
+            NotBefore = issuedAt,
             Expires = expiresAt,
             Issuer = options.Issuer,
             Audience = options.Audience,

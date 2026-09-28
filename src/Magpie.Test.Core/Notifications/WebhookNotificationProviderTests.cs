@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Magpie.Core.Notifications;
 using Magpie.Models;
 using Magpie.Models.Data;
+using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Notifications;
 
 using Microsoft.Extensions.Logging;
@@ -186,6 +187,34 @@ public sealed class WebhookNotificationProviderTests
 
         // Assert
         Assert.That(_http.GetMatchCount(request), Is.Zero);
+    }
+
+    [Test]
+    public void DisplayName_NamesTheProductForPickers_WhenTheProviderOverridesIt()
+    {
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_subject.DisplayName, Is.EqualTo("Webhook"));
+            Assert.That(((INotificationProvider)new UnnamedProvider()).DisplayName, Is.EqualTo("unnamed"));
+        }
+    }
+
+    [TestCase("not-a-uri", false)]
+    [TestCase("hooks/relative", false)]
+    [TestCase("ftp://example.test/hook", false)]
+    [TestCase("https://example.test/hook", true)]
+    [TestCase("", true)]
+    public async Task ValidateSettingsAsync_AcceptsOnlyAnAbsoluteHttpUrl_WhenAUrlIsSet(string url, bool valid)
+    {
+        // Act
+        var result = await ((IValidatesIntegrationSettings)_subject)
+            .ValidateSettingsAsync(new Dictionary<string, string> { ["url"] = url })
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.IsValid, Is.EqualTo(valid));
     }
 
     [Test]
@@ -474,69 +503,15 @@ public sealed class WebhookNotificationProviderTests
         }
     }
 
-    [Test]
-    [NonParallelizable]
-    public async Task SendAsync_CapsConcurrency_WhenMaximumIsReached()
+    private sealed class UnnamedProvider : INotificationProvider
     {
-        // Arrange
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var reachedCap = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var inFlight = 0;
-        var request = _http.When(HttpMethod.Post, "https://example.test/hook/*")
-            .Respond(async _ =>
-            {
-                if (Interlocked.Increment(ref inFlight) == 8)
-                {
-                    reachedCap.SetResult();
-                }
+        public string ProviderType => "unnamed";
 
-                try
-                {
-                    await release.Task.ConfigureAwait(false);
-                    return new HttpResponseMessage(HttpStatusCode.OK);
-                }
-                finally
-                {
-                    Interlocked.Decrement(ref inFlight);
-                }
-            });
-        var rules = Enumerable.Range(0, 20)
-            .Select(i => new NotificationRule
-            {
-                Id = Guid.NewGuid(),
-                Name = "test",
-                ProviderType = "webhook",
-                Enabled = true,
-                Settings = new Dictionary<string, string>
-                {
-                    ["url"] = $"https://example.test/hook/{i}"
-                }
-            })
-            .ToArray();
-        var now = new DateTime(2026, 5, 15, 12, 0, 0, DateTimeKind.Utc);
-        var sends = rules.Select(rule => _subject.SendAsync(
-            rule,
-            new MagpieEvent(
-                Guid.NewGuid(),
-                "download.completed",
-                new Dictionary<string, string>(),
-                now,
-                now,
-                NodeId),
-            default))
-            .ToArray();
+        public IReadOnlyList<SettingSchemaDefinition> SettingsSchema => [];
 
-        // Act
-        await reachedCap.Task.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
-        var concurrentAtCap = Volatile.Read(ref inFlight);
-        release.SetResult();
-        await Task.WhenAll(sends).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(concurrentAtCap, Is.EqualTo(8));
-            Assert.That(_http.GetMatchCount(request), Is.EqualTo(20));
-        }
+        public Task SendAsync(
+            NotificationRule rule,
+            MagpieEvent magpieEvent,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

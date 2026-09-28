@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
     ArrowLeftIcon,
@@ -19,15 +19,21 @@ import {
     PuzzlePieceIcon,
     LinkBreakIcon,
     WarningCircleIcon,
+    PencilSimpleLineIcon,
+    PlusIcon,
 } from '@phosphor-icons/react';
 
-import { useAuth } from '@/auth';
+import { useAuth, Role } from '@/auth';
+import { useContentOrigin, resolveContentOrigin } from '@/hooks/useContentOrigin';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog';
 import { FileBrowser } from '@/components/configuration/FileBrowser';
+import { FileRenameDialog } from '@/components/content/FileRenameDialog';
+import { PendingFileAssociations, PendingFilesIndicator } from '@/components/content/PendingFileAssociations';
+import { FileReassignDialog } from '@/components/content/FileReassignDialog';
 import { ReleaseDetailsDialog } from '@/components/releases/ReleaseDetailsDialog';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { ImagesGallery } from '@/components/ui/ImagesGallery';
@@ -48,6 +54,7 @@ import {
     ContentDetailsOverviewSlot,
 } from '@/components/ui/Slot/ContentSlots';
 import { ExtensionTabContents, useTabSlotExtensions } from '@/components/ui/Slot/ExtensionTabs';
+import { useSlotExtensions } from '@/extensions/useExtensions';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Tabs, TabsContent, DetailTabTrigger, DetailTabsList } from '@/components/ui/Tabs';
 import {
@@ -75,7 +82,7 @@ import {
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useGrabRelease } from '@/hooks/useReleases';
 import { useReleaseGrabGuard } from '@/hooks/useReleaseGrabGuard';
-import { useContentReleases } from '@/hooks/useContentReleases';
+import { useContentReleases, useSetContentReleaseUnmatched } from '@/hooks/useContentReleases';
 import { useDeleteContentFile } from '@/hooks/useDeleteContentFile';
 import {
     useAttachContentFile,
@@ -83,13 +90,13 @@ import {
     useUnlinkContentFile,
 } from '@/hooks/useContentFileMutations';
 import { useRemoveContent } from '@/hooks/useRemoveContent';
-import { useLatestDownloadForRelease } from '@/hooks/useDownloads';
+import { canRegrab, useLatestDownloadForRelease } from '@/hooks/useDownloads';
 import { getRootLevels, getStandardMetadataField, useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { buildUrl } from '@/lib/api';
 import { getErrorMessage, isNotFoundError } from '@/lib/errors';
-import { formatShortDate } from '@/lib/dateFormatting';
+import { formatPublishDate } from '@/lib/dateFormatting';
 import { humanizeSlug, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
-import { isInternalSource } from '@/lib/metadata';
+import { isInternalSource, referenceDisplayName } from '@/lib/metadata';
 import {
     buildAlternateTextRows,
     buildAwardGroups,
@@ -97,7 +104,7 @@ import {
     nonEmptyMetadataText,
     sortByOrdinal,
 } from '@/lib/materializedMetadataDisplay';
-import type { ContentListItem } from '@/types';
+import type { ContentListItem, ReleaseScopeStatus } from '@/types';
 
 import { RelatedSubjectsTab } from './RelatedSubjectsTab';
 import { ActivityTab } from './ActivityTab';
@@ -142,6 +149,7 @@ export function ContentDetailPage() {
         grandchildId?: string;
     }>();
     const activeContentId = grandchildId || childId || contentId;
+    const contentOrigin = useContentOrigin(activeContentId);
     const parentId = grandchildId ? childId : childId ? contentId : undefined;
     const rootId = grandchildId ? contentId : undefined;
 
@@ -185,11 +193,23 @@ export function ContentDetailPage() {
     const { activeTab, setActiveTab, navigate, childrenBasePath, rawTab } = useContentDetailParams(defaultTab);
 
     const { toast } = useToast();
-    const { hasPermission } = useAuth();
+    const { hasPermission, hasRole } = useAuth();
     const canEditContent = hasPermission('content.edit');
     const canRequestContent = hasPermission('content.request');
     const canManageContent = hasPermission('content.delete');
     const { ancestors } = useContentAncestors(contentData?.parentId);
+    const correctionShowId = useMemo(() => {
+        if (contentData?.contentType !== 'tv') {
+            return undefined;
+        }
+        if (contentData.level === 'show') {
+            return contentData.id;
+        }
+        if (!contentData.parentId || ancestors[ancestors.length - 1]?.id !== contentData.parentId) {
+            return undefined;
+        }
+        return ancestors.find((ancestor) => ancestor.contentType === 'tv' && ancestor.level === 'show')?.id;
+    }, [ancestors, contentData]);
 
     const typeIconName = useTypeIconName();
 
@@ -214,12 +234,24 @@ export function ContentDetailPage() {
     const unlinkFileMutation = useUnlinkContentFile();
     const fileBrowserLocationQuery = useContentFileBrowserLocation(activeContentId);
     const [importDialogOpen, setImportDialogOpen] = useState(false);
+    const [renameSelection, setRenameSelection] = useState<{ filePath?: string; mediaFileIds?: string[] } | null>(null);
     const [filePendingUnlink, setFilePendingUnlink] = useState<MediaFile | null>(null);
+    const [filePendingReassignment, setFilePendingReassignment] = useState<MediaFile | null>(null);
+    // The control that opened a file or remove dialog (a menu, a button or an actions sheet). Focus returns to it on
+    // close, or to the content actions trigger when an actions sheet item opened the dialog and is gone.
+    const actionReturnFocusRef = useRef<HTMLElement | null>(null);
+    const rememberActionFocus = useCallback(() => {
+        actionReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }, []);
+    const filesTabPanelRef = useRef<HTMLDivElement | null>(null);
+    const contentActionsTriggerRef = useRef<HTMLElement | null>(null);
     const removeContentMutation = useRemoveContent();
     const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
     const [removeDeleteFiles, setRemoveDeleteFiles] = useState(false);
 
     const releasesQuery = useContentReleases(activeContentId, { enabled: !!activeContentId });
+    const unmatchMutation = useSetContentReleaseUnmatched();
+    const setReleaseUnmatched = unmatchMutation.mutate;
 
     const [detailsRelease, setDetailsRelease] = useState<ReleaseRow | null>(null);
     const { download: detailsDownload, isLoading: detailsDownloadLoading } = useLatestDownloadForRelease(
@@ -245,6 +277,7 @@ export function ContentDetailPage() {
             monitoring: contentData.monitoring,
             effectiveMonitoring: contentData.effectiveMonitoring,
             fulfillment: contentData.fulfillment,
+            importPending: contentData.importPending,
             acquisitionStatus: contentData.acquisitionStatus,
             year: year !== undefined && !Number.isNaN(year) ? year : undefined,
             publishDate: nonEmptyMetadataText(metadata?.publishDate),
@@ -432,7 +465,7 @@ export function ContentDetailPage() {
                     ? [
                           {
                               url,
-                              displayName: nonEmptyMetadataText(reference.displayName) ?? url,
+                              displayName: referenceDisplayName(url, reference.displayName),
                               source: reference.source,
                               kind: reference.kind,
                           },
@@ -469,8 +502,12 @@ export function ContentDetailPage() {
             monitoring: item.monitoring,
             effectiveMonitoring: item.effectiveMonitoring,
             fulfillment: item.fulfillment,
+            importPending: item.importPending,
             acquisitionStatus: item.acquisitionStatus,
             date: item.publishDate,
+            fulfilledAt: item.fulfilledAt,
+            primaryMediaSize: item.primaryMediaSize,
+            primaryMediaFileCount: item.primaryMediaFileCount,
         }));
     }, [childrenResult?.items]);
 
@@ -491,11 +528,7 @@ export function ContentDetailPage() {
 
     useEffect(() => {
         for (const release of releasesQuery.rows) {
-            if (!succeededReleaseIds.has(release.id) || !release.acquisitionStatus) {
-                continue;
-            }
-
-            if (release.acquisitionStatus !== 'Failed' && release.acquisitionStatus !== 'Cancelled') {
+            if (succeededReleaseIds.has(release.id) && !canRegrab(release.acquisitionStatus)) {
                 clearGrab(release.id);
             }
         }
@@ -517,13 +550,13 @@ export function ContentDetailPage() {
             isMatch: release.isMatch ?? null,
             rejectionReason: release.rejectionReason ?? null,
             acquisitionStatus: succeededReleaseIds.has(release.id)
-                ? release.acquisitionStatus &&
-                  release.acquisitionStatus !== 'Failed' &&
-                  release.acquisitionStatus !== 'Cancelled'
-                    ? release.acquisitionStatus
-                    : 'Queued'
+                ? canRegrab(release.acquisitionStatus)
+                    ? 'Queued'
+                    : release.acquisitionStatus
                 : (release.acquisitionStatus ?? null),
+            acquisitionWaitingReason: release.acquisitionWaitingReason ?? null,
             failureReason: release.failureReason ?? null,
+            status: release.status ?? 'Matched',
         }));
     }, [releasesQuery.rows, succeededReleaseIds]);
 
@@ -756,6 +789,35 @@ export function ContentDetailPage() {
         [activeContentId, grabMutation, markGrabFailed, markGrabSucceeded, toast, tryBeginGrab],
     );
 
+    const handleUnmatchChange = useCallback(
+        (release: ReleaseRow, status: ReleaseScopeStatus) => {
+            if (!activeContentId) {
+                return;
+            }
+
+            setReleaseUnmatched(
+                { contentId: activeContentId, releaseId: release.id, status },
+                {
+                    onError: (error) => {
+                        toast({
+                            title: status === 'Unmatched' ? 'Unmatch failed' : 'Undo unmatch failed',
+                            description: getErrorMessage(error, 'Failed to change the release match.'),
+                            variant: 'error',
+                        });
+                    },
+                },
+            );
+        },
+        [activeContentId, setReleaseUnmatched, toast],
+    );
+    const unmatchingReleaseIds = useMemo(
+        () =>
+            new Set(
+                unmatchMutation.isPending && unmatchMutation.variables ? [unmatchMutation.variables.releaseId] : [],
+            ),
+        [unmatchMutation.isPending, unmatchMutation.variables],
+    );
+
     const handleGrabRelease = useCallback(
         (release: ReleaseRow) => {
             if (release.isMatch === false) {
@@ -768,14 +830,35 @@ export function ContentDetailPage() {
         [performGrabRelease],
     );
 
-    const handleRequestDeleteFile = useCallback((file: MediaFile) => {
-        setFilePendingDelete(file);
-    }, []);
+    const handleRequestDeleteFile = useCallback(
+        (file: MediaFile) => {
+            rememberActionFocus();
+            setFilePendingDelete(file);
+        },
+        [rememberActionFocus],
+    );
+
+    const handleRequestFileReassignment = useCallback(
+        (file: MediaFile) => {
+            rememberActionFocus();
+            setFilePendingReassignment(file);
+        },
+        [rememberActionFocus],
+    );
+
+    const handleRequestRename = useCallback(
+        (selection: { filePath?: string; mediaFileIds?: string[] }) => {
+            rememberActionFocus();
+            setRenameSelection(selection);
+        },
+        [rememberActionFocus],
+    );
 
     const handleOpenImportFile = useCallback(() => {
         if (attachFileMutation.isPending) {
             return;
         }
+        rememberActionFocus();
 
         void fileBrowserLocationQuery.refetch().then((result) => {
             if (result.isError || !result.data) {
@@ -789,7 +872,7 @@ export function ContentDetailPage() {
 
             setImportDialogOpen(true);
         });
-    }, [attachFileMutation.isPending, fileBrowserLocationQuery, toast]);
+    }, [attachFileMutation.isPending, fileBrowserLocationQuery, rememberActionFocus, toast]);
 
     const handleImportFile = useCallback(
         (filePath: string) => {
@@ -798,30 +881,18 @@ export function ContentDetailPage() {
             }
 
             setImportDialogOpen(false);
-            attachFileMutation.mutate(
-                { contentHierarchyItemId: activeContentId, filePath },
-                {
-                    onSuccess: (result) => {
-                        toast({
-                            title: 'File imported',
-                            description: result.isPrimary
-                                ? 'The file is attached as primary content.'
-                                : 'The file is attached as a sidecar.',
-                            variant: 'success',
-                        });
-                    },
-                    onError: (error) => {
-                        toast({ title: 'Import failed', description: getErrorMessage(error), variant: 'error' });
-                    },
-                },
-            );
+            setRenameSelection({ filePath });
         },
-        [activeContentId, attachFileMutation, toast],
+        [activeContentId, attachFileMutation],
     );
 
-    const handleRequestUnlinkFile = useCallback((file: MediaFile) => {
-        setFilePendingUnlink(file);
-    }, []);
+    const handleRequestUnlinkFile = useCallback(
+        (file: MediaFile) => {
+            rememberActionFocus();
+            setFilePendingUnlink(file);
+        },
+        [rememberActionFocus],
+    );
 
     const handleConfirmUnlinkFile = useCallback(() => {
         if (!activeContentId || !filePendingUnlink || unlinkFileMutation.isPending) {
@@ -875,9 +946,10 @@ export function ContentDetailPage() {
     }, [activeContentId, filePendingDelete, deleteFileMutation, toast]);
 
     const handleOpenRemoveDialog = useCallback(() => {
+        rememberActionFocus();
         setRemoveDeleteFiles(false);
         setRemoveDialogOpen(true);
-    }, []);
+    }, [rememberActionFocus]);
 
     const handleConfirmRemove = useCallback(() => {
         if (!activeContentId) {
@@ -895,7 +967,17 @@ export function ContentDetailPage() {
                         variant: 'success',
                     });
                     setRemoveDialogOpen(false);
-                    void navigate('/library');
+                    void resolveContentOrigin(
+                        contentOrigin,
+                        activeContentId,
+                        hasRole(Role.Manager),
+                        hasRole(Role.Admin),
+                    ).then((origin) =>
+                        navigate(`${origin.pathname}${origin.search}${origin.hash}`, {
+                            replace: true,
+                            state: origin.state,
+                        }),
+                    );
                 },
                 onError: () => {
                     toast({
@@ -908,7 +990,7 @@ export function ContentDetailPage() {
                 },
             },
         );
-    }, [activeContentId, removeContentMutation, removeDeleteFiles, toast, navigate]);
+    }, [activeContentId, removeContentMutation, removeDeleteFiles, toast, navigate, contentOrigin, hasRole]);
 
     const quickActions: QuickAction[] = useMemo(
         () => [
@@ -971,6 +1053,38 @@ export function ContentDetailPage() {
             handleInteractiveSearch,
             canManageContent,
             handleOpenRemoveDialog,
+        ],
+    );
+
+    const extensionActions = useSlotExtensions('content.details.actions');
+
+    const fabActions: QuickAction[] = useMemo(
+        () =>
+            effectiveTab === 'files' && canManageContent
+                ? [
+                      ...quickActions,
+                      {
+                          id: 'rename-all-files',
+                          label: 'Apply rename mask to descendant files',
+                          icon: <PencilSimpleLineIcon weight="bold" />,
+                          onClick: () => handleRequestRename({}),
+                      },
+                      {
+                          id: 'import-file',
+                          label: 'Import file',
+                          icon: <PlusIcon weight="bold" />,
+                          onClick: handleOpenImportFile,
+                          disabled: attachFileMutation.isPending,
+                      },
+                  ]
+                : quickActions,
+        [
+            effectiveTab,
+            canManageContent,
+            quickActions,
+            handleRequestRename,
+            handleOpenImportFile,
+            attachFileMutation.isPending,
         ],
     );
 
@@ -1128,13 +1242,13 @@ export function ContentDetailPage() {
                     contentRatings={contentRatings}
                     awards={awards}
                     actions={headerActions}
-                    hideMobileActions
                 />
             </ContentDetailsHeaderSlot>
 
             <ContentDetailsMetadataSlot className="content-detail-page__metadata-slot" {...detailSlotProps} />
 
             <RefreshStatusBadge contentId={activeContentId} />
+            <PendingFilesIndicator contentHierarchyItemId={activeContentId} onOpen={() => setActiveTab('files')} />
 
             {activeContentId && contentData && (
                 <DetailInfoGrid
@@ -1168,7 +1282,7 @@ export function ContentDetailPage() {
                     {content.publishDate && (
                         <DetailInfoRow
                             label="Publish Date"
-                            value={formatShortDate(content.publishDate)}
+                            value={formatPublishDate(content.publishDate, 'Unknown')}
                             data-testid="content-publish-date-row"
                         />
                     )}
@@ -1274,20 +1388,44 @@ export function ContentDetailPage() {
                             grabbingReleaseIds={grabbingReleaseIds}
                             canGrab={canRequestContent}
                             onGrab={handleGrabRelease}
+                            onUnmatchChange={hasRole(Role.Manager) ? handleUnmatchChange : undefined}
+                            unmatchingReleaseIds={unmatchingReleaseIds}
                             onTitleClick={setDetailsRelease}
                         />
                     </ErrorBoundary>
                 </TabsContent>
 
-                <TabsContent value="files">
+                <TabsContent ref={filesTabPanelRef} value="files">
                     <ErrorBoundary>
                         <ContentDetailsFilesSlot {...detailSlotProps}>
+                            {activeContentId && (
+                                <PendingFileAssociations
+                                    contentHierarchyItemId={activeContentId}
+                                    rootFolderId={contentData?.effectiveRootFolderId}
+                                    title={content.title}
+                                    canManage={canManageContent}
+                                />
+                            )}
                             <FilesTab
                                 files={filesData}
                                 emptyMessage="No files attached to this content"
                                 onImportFile={canManageContent ? handleOpenImportFile : undefined}
+                                onRenameFile={
+                                    canManageContent
+                                        ? (file) => handleRequestRename({ mediaFileIds: [file.id] })
+                                        : undefined
+                                }
+                                onRenameFiles={
+                                    canManageContent
+                                        ? (mediaFileIds) => handleRequestRename({ mediaFileIds })
+                                        : undefined
+                                }
+                                onRenameAllFiles={canManageContent ? () => handleRequestRename({}) : undefined}
                                 importing={attachFileMutation.isPending}
                                 onUnlinkFile={canManageContent ? handleRequestUnlinkFile : undefined}
+                                onReassignFile={
+                                    canManageContent && correctionShowId ? handleRequestFileReassignment : undefined
+                                }
                                 unlinkingFileId={isUnlinkingFile ? (filePendingUnlink?.id ?? null) : null}
                                 onDeleteFile={canManageContent ? handleRequestDeleteFile : undefined}
                                 deletingFileId={isDeletingFile ? (filePendingDelete?.id ?? null) : null}
@@ -1315,7 +1453,17 @@ export function ContentDetailPage() {
                 />
             </Tabs>
 
-            <QuickActionsButton actions={quickActions} title="Content Actions" data-content-id={activeContentId} />
+            <QuickActionsButton
+                actions={fabActions}
+                title="Content Actions"
+                triggerRef={contentActionsTriggerRef}
+                sheetContent={
+                    extensionActions.extensions.length > 0 ? (
+                        <ContentDetailsActionsSlot entityId={activeContentId} entityType={contentSlotEntityType} />
+                    ) : undefined
+                }
+                data-content-id={activeContentId}
+            />
 
             <ReleaseDetailsDialog
                 release={detailsRelease}
@@ -1336,14 +1484,17 @@ export function ContentDetailPage() {
                 itemName={filePendingUnlink?.fileName ?? ''}
                 description={
                     <>
-                        Unlink &quot;{filePendingUnlink?.fileName}&quot; from Magpie? This removes only the association.
-                        The host file stays on disk.
+                        Unlink &quot;
+                        <span className="content-detail-page__file-confirm-name">{filePendingUnlink?.fileName}</span>
+                        &quot; from Magpie? This removes only the association. The host file stays on disk.
                     </>
                 }
                 confirmVariant="warning"
                 confirmLabel="Unlink"
                 confirmBusyLabel="Unlinking..."
                 confirmIcon={<LinkBreakIcon weight="bold" aria-hidden="true" />}
+                returnFocusRef={actionReturnFocusRef}
+                fallbackFocusRef={filesTabPanelRef}
                 isDeleting={isUnlinkingFile}
                 onConfirm={handleConfirmUnlinkFile}
                 onCancel={() => {
@@ -1359,10 +1510,13 @@ export function ContentDetailPage() {
                 itemName={filePendingDelete?.fileName ?? ''}
                 description={
                     <>
-                        Delete &quot;{filePendingDelete?.fileName}&quot; from disk? This removes the file from disk and
-                        the library. This cannot be undone.
+                        Delete &quot;
+                        <span className="content-detail-page__file-confirm-name">{filePendingDelete?.fileName}</span>
+                        &quot; from disk? This removes the file from disk and the library. This cannot be undone.
                     </>
                 }
+                returnFocusRef={actionReturnFocusRef}
+                fallbackFocusRef={filesTabPanelRef}
                 isDeleting={isDeletingFile}
                 onConfirm={handleConfirmDeleteFile}
                 onCancel={() => {
@@ -1371,6 +1525,41 @@ export function ContentDetailPage() {
                     }
                 }}
             />
+
+            {renameSelection && activeContentId && (
+                <FileRenameDialog
+                    key={`${activeContentId}:${renameSelection.filePath ?? renameSelection.mediaFileIds?.join(',') ?? 'all'}`}
+                    contentId={activeContentId}
+                    {...renameSelection}
+                    onAssociate={async (filePath) => {
+                        const result = await attachFileMutation.mutateAsync({
+                            contentHierarchyItemId: activeContentId,
+                            filePath,
+                        });
+                        toast({
+                            title: 'File associated',
+                            description: result.isPrimary
+                                ? 'The file is attached as primary content.'
+                                : 'The file is attached as a sidecar.',
+                            variant: 'success',
+                        });
+                        return result;
+                    }}
+                    onClose={() => setRenameSelection(null)}
+                    returnFocusRef={actionReturnFocusRef}
+                    fallbackFocusRef={filesTabPanelRef}
+                />
+            )}
+            {filePendingReassignment && activeContentId && correctionShowId && (
+                <FileReassignDialog
+                    contentId={activeContentId}
+                    showId={correctionShowId}
+                    file={filePendingReassignment}
+                    onClose={() => setFilePendingReassignment(null)}
+                    returnFocusRef={actionReturnFocusRef}
+                    fallbackFocusRef={filesTabPanelRef}
+                />
+            )}
 
             {fileBrowserLocationQuery.data && (
                 <FileBrowser
@@ -1383,6 +1572,8 @@ export function ContentDetailPage() {
                     endpoint={buildUrl('/system/files', { scope: activeContentId })}
                     title="Import file"
                     description="Select an existing host file to attach to this content."
+                    returnFocusRef={actionReturnFocusRef}
+                    fallbackFocusRef={contentActionsTriggerRef}
                 />
             )}
 
@@ -1402,6 +1593,8 @@ export function ContentDetailPage() {
                     checked: removeDeleteFiles,
                     onChange: setRemoveDeleteFiles,
                 }}
+                returnFocusRef={actionReturnFocusRef}
+                fallbackFocusRef={contentActionsTriggerRef}
                 isDeleting={isRemoving}
                 onConfirm={handleConfirmRemove}
                 onCancel={() => {

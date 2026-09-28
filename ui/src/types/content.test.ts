@@ -42,6 +42,12 @@ describe('getFulfillmentBadge', () => {
         });
         expect(getFulfillmentBadge('partial')).toEqual({ variant: 'partial', label: 'Partial' });
     });
+
+    it('shows import pending only in place of missing', () => {
+        expect(getFulfillmentBadge('missing', true)).toEqual({ variant: 'pending', label: 'Import pending' });
+        expect(getFulfillmentBadge('fulfilled', true)).toEqual({ variant: 'fulfilled', label: 'Fulfilled' });
+        expect(getFulfillmentBadge('upgradable', true)).toEqual({ variant: 'upgradable', label: 'Upgradable' });
+    });
 });
 
 describe('formatLevelLabel', () => {
@@ -79,7 +85,7 @@ function makeItem(overrides: Partial<ApiContentHierarchyItem> = {}): ApiContentH
         slug: 'test-movie',
         name: 'Test Movie',
         monitoring: null,
-        effectiveMonitoring: true,
+        effectiveMonitoring: 'Monitored',
         createdAt: '2026-01-01T00:00:00Z',
         ...overrides,
     };
@@ -125,6 +131,30 @@ describe('mapToContentDetailItem', () => {
 });
 
 describe('mapToContentListItem', () => {
+    it.each([null, '2026-09-21T09:00:00Z'])('distinguishes unknown and zero totals with %s', (mediaReconciledAt) => {
+        const result = mapToContentListItem(
+            makeItem({
+                contentItem: {
+                    id: 'content-1',
+                    contentHierarchyItemId: 'item-1',
+                    fulfillment: 'Missing',
+                    createdAt: '2026-09-01T00:00:00Z',
+                    mediaReconciledAt,
+                    primaryMediaSize: 0,
+                    primaryMediaFileCount: 0,
+                },
+            }),
+        );
+
+        expect(result.primaryMediaSize).toBe(mediaReconciledAt ? 0 : undefined);
+        expect(result.primaryMediaFileCount).toBe(mediaReconciledAt ? 0 : undefined);
+    });
+
+    it('carries the tag names the list response already contains', () => {
+        expect(mapToContentListItem(makeItem({ tags: ['qa-exploration'] })).tags).toEqual(['qa-exploration']);
+        expect(mapToContentListItem(makeItem({ tags: null })).tags).toBeUndefined();
+    });
+
     it('carries the preview clips the list response already contains', () => {
         const result = mapToContentListItem(
             makeItem({

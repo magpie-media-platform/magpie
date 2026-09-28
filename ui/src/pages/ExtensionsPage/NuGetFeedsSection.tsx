@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, type ReactNode } from 'react';
+import { forwardRef, useState, useCallback, useImperativeHandle, useMemo } from 'react';
 import {
     PlusIcon,
     CloudIcon,
@@ -38,7 +38,12 @@ function toFormValues(source: PackageSource): PackageSourceFormValues {
     };
 }
 
-export function NuGetFeedsSection(): ReactNode {
+/** Lets the Extensions page open the Add Feed form from its phone actions button. */
+export interface NuGetFeedsSectionHandle {
+    add: () => void;
+}
+
+export const NuGetFeedsSection = forwardRef<NuGetFeedsSectionHandle>(function NuGetFeedsSection(_props, ref) {
     const {
         sources,
         isLoading,
@@ -70,6 +75,7 @@ export function NuGetFeedsSection(): ReactNode {
         setEditing(null);
         setFormOpen(true);
     }, []);
+    useImperativeHandle(ref, () => ({ add: handleAdd }), [handleAdd]);
 
     const handleEdit = useCallback((source: PackageSource) => {
         setEditing(toFormValues(source));
@@ -287,7 +293,7 @@ export function NuGetFeedsSection(): ReactNode {
             />
         </section>
     );
-}
+});
 
 NuGetFeedsSection.displayName = 'NuGetFeedsSection';
 

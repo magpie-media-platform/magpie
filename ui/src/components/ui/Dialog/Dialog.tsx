@@ -3,6 +3,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { XIcon } from '@phosphor-icons/react';
 
 import { OverlayBodyGuard } from '../OverlayBodyGuard';
+import { yieldEscapeToOpenCombobox } from './yieldEscapeToOpenCombobox';
 
 import './Dialog.css';
 
@@ -60,6 +61,7 @@ const DialogContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, D
             hideCloseButton = false,
             size = 'default',
             'aria-describedby': ariaDescribedBy,
+            onEscapeKeyDown,
             ...props
         },
         ref,
@@ -77,6 +79,10 @@ const DialogContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, D
                     data-dialog-content
                     data-size={size}
                     aria-describedby={ariaDescribedBy}
+                    onEscapeKeyDown={(event) => {
+                        onEscapeKeyDown?.(event);
+                        yieldEscapeToOpenCombobox(event);
+                    }}
                     {...props}
                 >
                     <OverlayBodyGuard />

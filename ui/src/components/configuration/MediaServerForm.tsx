@@ -24,6 +24,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFo
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { IntegrationSettingsForm } from '@/components/integrations/IntegrationSettingsForm';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
+import { returnFocusOnClose } from '@/lib/returnFocus';
 
 import './MediaServerForm.css';
 
@@ -73,7 +74,11 @@ export function MediaServerForm({
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [showStaleSaveDialog, setShowStaleSaveDialog] = useState(false);
 
-    const { types: providerTypes, isLoading: isLoadingProviderTypes } = useMediaServerProviderTypes();
+    const {
+        types: providerTypes,
+        labels: providerLabels,
+        isLoading: isLoadingProviderTypes,
+    } = useMediaServerProviderTypes();
 
     const resetFormErrors = useCallback(() => {
         setErrors({});
@@ -199,12 +204,7 @@ export function MediaServerForm({
                 side="right"
                 className="media-server-form__sheet"
                 data-component="media-server-form"
-                onCloseAutoFocus={(e) => {
-                    if (returnFocusRef?.current) {
-                        e.preventDefault();
-                        returnFocusRef.current.focus();
-                    }
-                }}
+                onCloseAutoFocus={returnFocusOnClose(returnFocusRef)}
             >
                 <SheetHeader>
                     <SheetTitle>{isEditing ? 'Edit Media Server' : 'Add Media Server'}</SheetTitle>
@@ -247,7 +247,7 @@ export function MediaServerForm({
                             {isEditing ? (
                                 <Input
                                     id="server-provider"
-                                    value={values.provider}
+                                    value={providerLabels[values.provider] ?? values.provider}
                                     readOnly
                                     disabled
                                     data-field="provider"
@@ -277,7 +277,7 @@ export function MediaServerForm({
                                     <SelectContent>
                                         {providerTypes.map((type) => (
                                             <SelectItem key={type} value={type}>
-                                                {type}
+                                                {providerLabels[type]}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>

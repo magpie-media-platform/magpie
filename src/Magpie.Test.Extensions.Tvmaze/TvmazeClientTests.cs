@@ -714,11 +714,18 @@ public class TvmazeClientTests
         http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82")
             .Respond("application/json", LookupJson);
         var spans = new List<Activity>();
+        using var trace = new Activity("test").Start();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == "magpie.extensions.tvmaze",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = spans.Add
+            ActivityStopped = activity =>
+            {
+                if (activity.TraceId == trace.TraceId)
+                {
+                    spans.Add(activity);
+                }
+            }
         };
         ActivitySource.AddActivityListener(listener);
         var httpClient = http.ToHttpClient();

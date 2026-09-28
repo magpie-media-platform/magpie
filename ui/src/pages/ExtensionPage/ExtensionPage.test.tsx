@@ -1,10 +1,11 @@
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { act, render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
 import { ExtensionProvider } from '@/extensions';
 import { ExtensionContext, type ExtensionContextValue } from '@/extensions/ExtensionProvider';
 import type { UIExtension } from '@/extensions/types';
+import { UnsavedChangesBlocker, UnsavedChangesGuardProvider } from '@/hooks/useUnsavedChangesGuard';
 
 import { ExtensionPage } from './ExtensionPage';
 
@@ -44,7 +45,66 @@ function renderReady(path: string, context: ExtensionContextValue, admin = false
     );
 }
 
+function renderGuarded() {
+    const router = createMemoryRouter(
+        [
+            {
+                path: '/admin/ext/:slug',
+                element: (
+                    <UnsavedChangesGuardProvider>
+                        <UnsavedChangesBlocker />
+                        <ExtensionPage admin />
+                    </UnsavedChangesGuardProvider>
+                ),
+            },
+            { path: '/', element: <h1>Dashboard</h1> },
+        ],
+        { initialEntries: ['/admin/ext/wikidata'] },
+    );
+    render(
+        <ExtensionContext.Provider value={makeReadyContext({})}>
+            <RouterProvider router={router} />
+        </ExtensionContext.Provider>,
+    );
+    return router;
+}
+
+function reportUnsavedChanges(dirty: boolean) {
+    act(() => {
+        document
+            .querySelector('[data-page="extension"] h1')!
+            .dispatchEvent(new CustomEvent('magpie-unsaved-changes', { bubbles: true, detail: { dirty } }));
+    });
+}
+
 describe('ExtensionPage', () => {
+    it('UnsavedChanges_AsksBeforeLeaving_WhenTheExtensionReportsADraft', async () => {
+        // Arrange
+        const router = renderGuarded();
+        reportUnsavedChanges(true);
+
+        // Act
+        await act(() => router.navigate('/'));
+
+        // Assert
+        expect(await screen.findByText('Unsaved Changes')).toBeInTheDocument();
+        expect(router.state.location.pathname).toBe('/admin/ext/wikidata');
+    });
+
+    it('UnsavedChanges_LeavesWithoutAsking_WhenTheExtensionReportsTheDraftSaved', async () => {
+        // Arrange
+        const router = renderGuarded();
+        reportUnsavedChanges(true);
+        reportUnsavedChanges(false);
+
+        // Act
+        await act(() => router.navigate('/'));
+
+        // Assert
+        expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
+        expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
+    });
+
     it('renders with data-page attribute', () => {
         renderWithRoute('/ext/my-plugin');
 

@@ -9,6 +9,7 @@ import { ProviderTypesWrapper } from '@/test/providerTypesTestUtils';
 import { createTestQueryClient } from '@/test/providerTypesTestQueryClient';
 import { ExtensionContext, type ExtensionContextValue } from '@/extensions/ExtensionProvider';
 import { SchemaDataType, type IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
+import { providerCatalogQueryKey } from '@/hooks/useProviderCatalog';
 
 vi.mock('@/lib/api', async () => {
     const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -95,6 +96,27 @@ describe('MediaServerForm', () => {
         );
 
         expect(screen.queryByText('Add Media Server')).not.toBeInTheDocument();
+    });
+
+    it('shows the registered product name in the integration picker and keeps the provider id as its value', async () => {
+        const user = userEvent.setup();
+        const client = createTestQueryClient();
+        client.setQueryData(providerCatalogQueryKey, [
+            { kind: 'mediaServer', providerType: 'jellyfin', displayName: 'Jellyfin', schema: [] },
+        ]);
+
+        render(
+            <MemoryRouter>
+                <ProviderTypesWrapper client={client}>
+                    <MediaServerForm open={true} onOpenChange={vi.fn()} onSubmit={vi.fn()} />
+                </ProviderTypesWrapper>
+            </MemoryRouter>,
+        );
+        await user.click(screen.getByRole('combobox', { name: /integration/i }));
+
+        await user.click(screen.getByRole('option', { name: 'Jellyfin' }));
+        expect(screen.getByRole('combobox', { name: /integration/i })).toHaveTextContent('Jellyfin');
+        expect(screen.queryByRole('option', { name: 'jellyfin' })).not.toBeInTheDocument();
     });
 
     it('renders the form when open', () => {
@@ -563,6 +585,8 @@ describe('MediaServerForm schema integration', () => {
                     state: expect.objectContaining({
                         host: 'http://jellyfin.local:8096',
                         apiKey: 'new-secret',
+                        libraryMappings:
+                            '[{"rootFolderPath":"/data/shows","contentType":"shows","serverLibraryId":""}]',
                     }),
                 }),
             );
@@ -571,6 +595,18 @@ describe('MediaServerForm schema integration', () => {
         const picker = screen.getByLabelText('Jellyfin library');
         await user.click(picker);
         await user.click(await screen.findByRole('option', { name: 'Shows' }));
+        await waitFor(() => {
+            expect(listLibraries).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    state: expect.objectContaining({
+                        libraryMappings:
+                            '[{"rootFolderPath":"/data/shows","contentType":"shows","serverLibraryId":"lib-shows"}]',
+                    }),
+                }),
+            );
+        });
+        await waitFor(() => expect(screen.getByLabelText('Jellyfin library')).toHaveTextContent('Shows'));
+        await waitFor(() => expect(screen.getByRole('button', { name: /save/i })).toBeEnabled());
         await user.click(screen.getByRole('button', { name: /save/i }));
 
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 
 using Magpie.Extensions.Movies.Parsing;
 using Magpie.Models;
@@ -16,10 +14,6 @@ namespace Magpie.Extensions.Movies;
 
 internal sealed class MoviesContentTypeDefinitionProvider : IReleaseMatchContentTypeDefinitionProvider
 {
-    private static readonly Regex SamplePattern = new(
-        @"(?:^|[._-])sample(?:$|[._-])|\[sample\]",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
     private static readonly ContentTypeDefinition MovieDefinition = new()
     {
         Slug = ContentTypeSlug,
@@ -76,6 +70,7 @@ internal sealed class MoviesContentTypeDefinitionProvider : IReleaseMatchContent
         MetadataField.References |
         MetadataField.Relationships |
         MetadataField.Images |
+        MetadataField.Previews |
         MetadataField.AlternateTexts |
         MetadataField.ContentRatings |
         MetadataField.Awards |
@@ -156,7 +151,7 @@ internal sealed class MoviesContentTypeDefinitionProvider : IReleaseMatchContent
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? Parse(string filePath, out string? levelSlug)
     {
         levelSlug = null;
-        if (SamplePattern.IsMatch(Path.GetFileNameWithoutExtension(filePath)))
+        if (ReleaseFiles.IsSample(filePath))
         {
             return null;
         }

@@ -18,6 +18,11 @@ public sealed record ProviderDescriptor
     public required string ProviderType { get; set; }
 
     /// <summary>
+    /// The display name of the provider.
+    /// </summary>
+    public required string DisplayName { get; set; }
+
+    /// <summary>
     /// The settings schema of the provider.
     /// </summary>
     public required IReadOnlyList<SettingSchemaDefinition> Schema { get; set; }

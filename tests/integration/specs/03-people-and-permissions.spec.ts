@@ -443,7 +443,7 @@ test.describe.serial("Journey 3: staff the household and prove everyone's reach"
             expect(
                 (
                     await authorizedRequest(managerAccessToken, 'PATCH', `/api/content/${MISSING_CONTENT_ID}`, {
-                        monitoring: { value: false },
+                        monitoring: { value: 'Unmonitored' },
                     })
                 ).status,
             ).toBe(404);

@@ -13,6 +13,7 @@ import type { JobScopeValue } from '@/hooks/useJobs';
 import { editableCriteriaToEventContext, eventContextToEditableCriteria } from '@/lib/eventContextCriteria';
 import type { EventTriggerFormValues, EventTriggerFilterItem } from './EventTriggerForm';
 import { buildJobParameterPatch, normalizeJobParameterValues } from './jobParameters';
+import { getErrorMessage } from '@/lib/errors';
 
 const ADMIN_SCOPE = 'Administrative' as const;
 
@@ -123,7 +124,11 @@ export function useEventTriggerCrud({ scope = ADMIN_SCOPE, queryParams }: UseEve
                 }
                 closeForm();
             } catch (error) {
-                toast({ title: 'Error', description: 'Failed to save event trigger', variant: 'error' });
+                toast({
+                    title: 'Error',
+                    description: getErrorMessage(error, 'Failed to save event trigger'),
+                    variant: 'error',
+                });
                 throw error;
             }
         },
@@ -151,8 +156,12 @@ export function useEventTriggerCrud({ scope = ADMIN_SCOPE, queryParams }: UseEve
             });
             closeDeleteDialog();
             setTriggerToDelete(null);
-        } catch {
-            toast({ title: 'Error', description: 'Failed to delete event trigger', variant: 'error' });
+        } catch (error) {
+            toast({
+                title: 'Error',
+                description: getErrorMessage(error, 'Failed to delete event trigger'),
+                variant: 'error',
+            });
         }
     }, [triggerToDelete, deleteTriggerApi, toast, closeDeleteDialog]);
 
@@ -161,8 +170,12 @@ export function useEventTriggerCrud({ scope = ADMIN_SCOPE, queryParams }: UseEve
             setTogglingTriggers((prev) => new Set([...prev, trigger.id]));
             try {
                 await updateTrigger({ id: trigger.id, patch: { enabled: { value: enabled } } });
-            } catch {
-                toast({ title: 'Error', description: 'Failed to update event trigger', variant: 'error' });
+            } catch (error) {
+                toast({
+                    title: 'Error',
+                    description: getErrorMessage(error, 'Failed to update event trigger'),
+                    variant: 'error',
+                });
             } finally {
                 setTogglingTriggers((prev) => {
                     const next = new Set(prev);

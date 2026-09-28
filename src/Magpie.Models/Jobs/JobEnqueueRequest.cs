@@ -51,6 +51,16 @@ public sealed record JobEnqueueRequest
     public DateTime? NotBeforeAt { get; set; }
 
     /// <summary>
+    /// The message that describes why the execution waits in the queue.
+    /// </summary>
+    public string? StatusMessage { get; set; }
+
+    /// <summary>
+    /// Whether to queue only when the same partition has no queued or active execution.
+    /// </summary>
+    public bool OnlyIfInactive { get; set; }
+
+    /// <summary>
     /// The id of the event trigger that started the job.
     /// </summary>
     public Guid? EventTriggerId { get; set; }

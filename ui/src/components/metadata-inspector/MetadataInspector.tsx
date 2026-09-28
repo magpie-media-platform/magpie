@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import {
     Dialog,
+    DialogBody,
     DialogContent,
     DialogDescription,
     DialogFooter,
@@ -43,6 +44,7 @@ import {
     useReorderSubjectMetadataContributions,
 } from '@/hooks/useSubjectMetadataInspector';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
+import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { humanizeCustomKey } from '@/lib/contentTypeDisplay';
 import { formatShortDate } from '@/lib/dateFormatting';
 import { getErrorMessage } from '@/lib/errors';
@@ -1174,8 +1176,25 @@ function resolveSubjectDefinitions(
 interface EditState {
     field: string;
     label: string;
+    valueKind: LibraryMetadataValueKind;
     initialValue: string;
 }
+
+const OVERRIDE_FORMATS: Partial<Record<LibraryMetadataValueKind, { hint: string; valid: (value: string) => boolean }>> =
+    {
+        duration: {
+            hint: 'Use hours, minutes and seconds, for example 01:45:00.',
+            valid: (value) => /^(\d+\.)?\d{1,2}:\d{2}(:\d{2}(\.\d{1,7})?)?$/.test(value),
+        },
+        date: {
+            hint: 'Use a year, month and day, for example 2010-07-16.',
+            valid: (value) => /^\d{4}-\d{2}-\d{2}/.test(value) && !Number.isNaN(Date.parse(value)),
+        },
+        number: {
+            hint: 'Use a number, for example 3.',
+            valid: (value) => /^-?\d+(\.\d+)?$/.test(value),
+        },
+    };
 
 interface SubItemFormState {
     kind: MetadataSubItemKey;
@@ -1264,6 +1283,7 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
         return Object.keys(buildDeltaPatch(baselineUser, workingUser)).length;
     }, [workingUser, baselineUser]);
     const dirty = changeCount > 0;
+    useUnsavedChangesGuard(dirty);
 
     const pendingFields = useMemo(() => {
         const keys = new Set<string>();
@@ -1413,6 +1433,7 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
         setEditState({
             field: field.key,
             label: field.label,
+            valueKind: field.valueKind,
             initialValue: current?.value ?? '',
         });
     };
@@ -1492,11 +1513,11 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
                 setShowStaleSaveDialog(false);
                 toast({ title: 'Metadata saved', variant: 'success' });
             },
-            onError: () => {
+            onError: (err) => {
                 endOwnSave(false);
                 toast({
                     title: 'Save failed',
-                    description: 'The host rejected the changes. Check the values and try again.',
+                    description: getErrorMessage(err, 'The host rejected the changes. Check the values and try again.'),
                     variant: 'error',
                 });
             },
@@ -1712,7 +1733,7 @@ function ContributionStack({
                 <p className="metadata-inspector__empty">No contributions yet.</p>
             ) : (
                 <>
-                    <ol className="metadata-inspector__stack-list">
+                    <ol className="metadata-inspector__stack-list" role="list">
                         {ordered.map((contribution) => {
                             const fieldValues = contribution.fieldValues ?? {};
                             const fieldRows = scalarFields
@@ -1874,7 +1895,7 @@ function ContributionStack({
                                                     <span className="metadata-inspector__stack-group-label">
                                                         {kind.label}
                                                     </span>
-                                                    <ul className="metadata-inspector__stack-group-list">
+                                                    <ul className="metadata-inspector__stack-group-list" role="list">
                                                         {lines.map((line, idx) => (
                                                             <li key={idx}>{line}</li>
                                                         ))}
@@ -2060,7 +2081,7 @@ function EditableSubsections({
                         {rows.length === 0 ? (
                             <p className="metadata-inspector__empty">No {kind.label.toLowerCase()}.</p>
                         ) : (
-                            <ul className="metadata-inspector__subsection-list">
+                            <ul className="metadata-inspector__subsection-list" role="list">
                                 {rows.map((row) => (
                                     <li
                                         key={`${row.providerType}-${row.itemId}`}
@@ -2147,6 +2168,17 @@ interface OverrideDialogProps {
 
 function OverrideDialog({ state, onCancel, onSave }: OverrideDialogProps) {
     const [value, setValue] = useState(state.initialValue);
+    const [invalid, setInvalid] = useState(false);
+    const format = OVERRIDE_FORMATS[state.valueKind];
+
+    const apply = () => {
+        const trimmed = value.trim();
+        if (format && trimmed !== '' && !format.valid(trimmed)) {
+            setInvalid(true);
+            return;
+        }
+        onSave(value);
+    };
 
     return (
         <Dialog open onOpenChange={(open) => (!open ? onCancel() : undefined)}>
@@ -2157,20 +2189,31 @@ function OverrideDialog({ state, onCancel, onSave }: OverrideDialogProps) {
                         Adds a manual value that takes priority over provider metadata. Save to apply it.
                     </DialogDescription>
                 </DialogHeader>
-                <div className="metadata-inspector__dialog-body">
+                <DialogBody className="metadata-inspector__dialog-body">
                     <Label htmlFor="metadata-inspector-value">Value</Label>
                     <Input
                         id="metadata-inspector-value"
                         value={value}
-                        onChange={(event) => setValue(event.target.value)}
+                        onChange={(event) => {
+                            setValue(event.target.value);
+                            setInvalid(false);
+                        }}
+                        error={invalid}
+                        errorMessage={invalid ? `${state.label} is not in the expected format.` : undefined}
+                        aria-describedby={format ? 'metadata-inspector-value-help' : undefined}
                         autoFocus
                     />
-                </div>
+                    {format && (
+                        <p id="metadata-inspector-value-help" className="metadata-inspector__dialog-help">
+                            {format.hint}
+                        </p>
+                    )}
+                </DialogBody>
                 <DialogFooter>
                     <Button variant="ghost" onClick={onCancel}>
                         Cancel
                     </Button>
-                    <Button variant="primary" onClick={() => onSave(value)}>
+                    <Button variant="primary" onClick={apply}>
                         Apply
                     </Button>
                 </DialogFooter>

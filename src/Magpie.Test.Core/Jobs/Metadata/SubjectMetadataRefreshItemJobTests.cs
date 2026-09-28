@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs.Metadata;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Sdk.Content;
@@ -31,6 +32,7 @@ public sealed class SubjectMetadataRefreshItemJobTests
     private Mock<ISubjectRepository> _subjectRepository = null!;
     private Mock<IMetadataContainerRepository> _containerRepository = null!;
     private SubjectMetadataRefreshItemJob _subject = null!;
+    private Mock<ISubjectMetadataProvider> _provider = null!;
 
     [SetUp]
     public void SetUp()
@@ -56,9 +58,9 @@ public sealed class SubjectMetadataRefreshItemJobTests
             .Returns((Func<CancellationToken, Task> operation, CancellationToken cancellationToken) =>
                 operation(cancellationToken));
 
-        var provider = new Mock<ISubjectMetadataProvider>();
-        provider.Setup(value => value.SupportedSubjectKinds).Returns(["person"]);
-        provider
+        _provider = new Mock<ISubjectMetadataProvider>();
+        _provider.Setup(value => value.SupportedSubjectKinds).Returns(["person"]);
+        _provider
             .Setup(value => value.TryGetMetadataAsync(
                 It.IsAny<Subject>(),
                 It.IsAny<IEnumerable<MetadataContribution>>(),
@@ -67,13 +69,34 @@ public sealed class SubjectMetadataRefreshItemJobTests
             .ReturnsAsync((MetadataContribution?)null);
 
         _subject = new SubjectMetadataRefreshItemJob(
-            [provider.Object],
+            [_provider.Object],
             _subjectRepository.Object,
             _containerRepository.Object,
             transactionManager.Object,
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 2, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<SubjectMetadataRefreshItemJob>.Instance,
             _progressReporter);
+    }
+
+    [Test]
+    public void RefreshAsync_DefersWithoutMarkingRefreshed_WhenTheProviderThrottles()
+    {
+        // Arrange
+        _provider.Setup(value => value.TryGetMetadataAsync(It.IsAny<Subject>(),
+                It.IsAny<IEnumerable<MetadataContribution>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+
+        // Act
+        var throttle = Assert.ThrowsAsync<UpstreamThrottledException>(() =>
+            _subject.RefreshAsync(SubjectId, null, null, _progressReporter));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(throttle!.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+            _subjectRepository.Verify(repository => repository.PatchAsync(It.IsAny<SubjectRowPatch>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]

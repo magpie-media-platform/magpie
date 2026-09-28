@@ -115,22 +115,10 @@
         align-items: center;
         gap: var(--space-sm);
         flex-shrink: 0;
-    }
 
-    .tier-list-detail-page__mobile-actions {
-        display: none;
-    }
-
-    .tier-list-detail-page__mobile-actions-content {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-xs);
-        padding: var(--space-xs);
-    }
-
-    .tier-list-detail-page__mobile-actions-content > button {
-        width: 100%;
-        justify-content: flex-start;
+        @media (max-width: 639px) {
+            display: none;
+        }
     }
 
     .tier-list-detail-page__description {
@@ -402,14 +390,6 @@
 
         .tier-list-detail-page__title {
             font-size: var(--text-xl);
-        }
-
-        .tier-list-detail-page__header-actions {
-            display: none;
-        }
-
-        .tier-list-detail-page__mobile-actions {
-            display: flex;
         }
 
         .tier-list-detail-page__tier-header {

@@ -28,6 +28,18 @@ export function formatShortDate(dateStr: string | null | undefined, fallback = '
     }
 }
 
+/**
+ * Formats a content publication date. A date stored as the start of a year (how a year-only date is kept)
+ * shows as that year.
+ */
+export function formatPublishDate(dateStr: string | null | undefined, fallback: string): string {
+    if (!dateStr) {
+        return fallback;
+    }
+    const year = parseUtcInstant(dateStr).getUTCFullYear();
+    return formatShortDate(dateStr, year > 1 ? String(year) : fallback);
+}
+
 export function formatDate(dateStr: string, fallback = '-'): string {
     return formatDateWithParser(dateStr, fallback, parseCalendarDate);
 }

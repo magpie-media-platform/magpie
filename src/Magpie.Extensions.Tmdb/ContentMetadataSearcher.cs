@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -39,6 +40,80 @@ internal sealed class ContentMetadataSearcher(
     public string ProviderType => Tmdb.Constants.ProviderType;
 
     public IEnumerable<string> SupportedContentTypes => ["movie", "tv"];
+
+    /// <inheritdoc />
+    public async Task<MetadataSearchBatch> ContinueSearchAsync(
+        string contentType,
+        ContentHierarchyItemCriteria query,
+        int maxResults,
+        string defaultLanguagePreference,
+        object? continuation,
+        CancellationToken cancellationToken = default)
+    {
+        var fingerprint = JsonSerializer.Serialize(new { contentType, query, defaultLanguagePreference });
+        if (continuation is not null &&
+            (continuation is not SearchCheckpoint previous || previous.Fingerprint != fingerprint))
+        {
+            throw new MetadataSearchContinuationException("The TMDb checkpoint does not match this search.");
+        }
+
+        if (!SupportedContentTypes.Contains(contentType, StringComparer.OrdinalIgnoreCase))
+        {
+            return new MetadataSearchBatch();
+        }
+
+        var route = contentType.ResolveAdvancedSearchRoute(query);
+        if (route is null)
+        {
+            return new MetadataSearchBatch { Page = EmptySearchPage() };
+        }
+
+        var prior = continuation as SearchCheckpoint;
+        var progress = prior?.Progress.Copy() ?? new QueryProgress();
+        var delivered = prior is null ? new HashSet<int>() : new HashSet<int>(prior.Delivered);
+        var execution = await queryEngine.SearchAsync(new QueryRequest
+        {
+            Route = route.Value,
+            Criteria = query.MergeMetadata(),
+            Page = 1,
+            DefaultLanguagePreference = defaultLanguagePreference,
+            Progress = progress,
+            ValidateOnly = maxResults == 0
+        }, cancellationToken).ConfigureAwait(false);
+        var matches = new List<MetadataSearchCandidate>();
+        var exhausted = true;
+        await foreach (var hit in execution.Hits.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (!delivered.Add(hit.Id))
+            {
+                continue;
+            }
+
+            matches.Add(hit.ToMetadataSearchCandidate());
+            if (matches.Count >= Math.Max(1, maxResults))
+            {
+                exhausted = false;
+                break;
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return new MetadataSearchBatch
+        {
+            Page = new MetadataSearchPage
+            {
+                Supported = execution.Supported,
+                Matches = matches,
+                Warnings = [.. execution.Warnings.Distinct()],
+                PageInfo = new ProviderSearchPageInfo
+                {
+                    RequestedPage = 1,
+                    HasMore = !exhausted || execution.Diagnostics.StreamFaulted || execution.Warnings.Count > 0
+                }
+            },
+            Continuation = new SearchCheckpoint(fingerprint, progress, delivered)
+        };
+    }
 
     public async Task<IEnumerable<MetadataSearchCandidate>> SearchAsync(
         ContentHierarchyLevelDefinition levelDefinition,
@@ -400,4 +475,6 @@ internal sealed class ContentMetadataSearcher(
             PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = hasMore }
         };
     }
+
+    private sealed record SearchCheckpoint(string Fingerprint, QueryProgress Progress, HashSet<int> Delivered);
 }

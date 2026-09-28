@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { LocalContentLink, LocalContentItemReference } from '@/components/content/LocalContentPreview';
 
 import { Badge } from '@/components/ui/Badge';
 import {
@@ -68,6 +69,16 @@ export function RelatedEventsModal({
                             {selfEntry && (
                                 <div className="related-events__self" data-testid="related-events__self">
                                     <h3 className="related-events__self-title">{entryLabel(selfEntry)}</h3>
+                                    {selfEntry.entityId && selfEntry.entityType === 'ContentHierarchyItem' && (
+                                        <LocalContentLink contentId={selfEntry.entityId}>
+                                            Open content preview
+                                        </LocalContentLink>
+                                    )}
+                                    {selfEntry.entityId && selfEntry.entityType === 'ContentItem' && (
+                                        <LocalContentItemReference contentItemId={selfEntry.entityId}>
+                                            Open content preview
+                                        </LocalContentItemReference>
+                                    )}
                                     <div className="related-events__self-meta">
                                         {isJob && selfEntry.status ? (
                                             <Badge variant={statusVariant} size="sm">

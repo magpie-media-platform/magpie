@@ -33,6 +33,7 @@ public sealed class TvmazeExtension : IExtension
     public void RegisterServices(IServiceCollection services)
     {
         services.AddHttpClient(TvmazeClient.HttpClientName)
+            .AddUpstreamCooldown()
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,

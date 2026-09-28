@@ -1,14 +1,22 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.Metrics;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Caching;
 using Magpie.Core.Config;
+using Magpie.Core.Observability;
 using Magpie.Core.Releases;
+using Magpie.Extensions.Cardigann;
+using Magpie.Extensions.Cardigann.Engine;
+using Magpie.Extensions.Cardigann.Engine.Session;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
@@ -19,6 +27,7 @@ using Magpie.Models.Paging;
 using Magpie.Models.Releases;
 using Magpie.Sdk.Caching;
 using Magpie.Sdk.Content;
+using Magpie.Sdk.Http;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Releases;
@@ -28,6 +37,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
+using Moq.Protected;
 
 using NUnit.Framework;
 
@@ -36,6 +46,13 @@ namespace Magpie.Test.Core.Releases;
 [TestFixture]
 public sealed class ReleaseSearchServiceTests
 {
+    private static readonly object[][] TurnFailures =
+    [
+        [new InvalidOperationException("boom"), "failed"],
+        [new OperationCanceledException(), "cancelled"],
+        [new UpstreamThrottledException(new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero)), "throttled"]
+    ];
+
     private Mock<IContentRepository> _contentRepository = null!;
     private Mock<IContentService> _contentService = null!;
     private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
@@ -60,6 +77,8 @@ public sealed class ReleaseSearchServiceTests
     private Mock<IReleaseEvaluationService> _releaseEvaluationService = null!;
     private IReleaseEvaluationService _realReleaseEvaluationService = null!;
     private IReleaseSearchService _subject = null!;
+    private MemoryCacheStore _cacheStore = null!;
+    private MemoryCacheFactory _cacheFactory = null!;
     private ContentHierarchyItem _hierarchyItem = null!;
     private MetadataContribution _metadataContribution = null!;
     private Guid _contentHierarchyItemId;
@@ -72,6 +91,8 @@ public sealed class ReleaseSearchServiceTests
     [SetUp]
     public void SetUp()
     {
+        _cacheStore = new MemoryCacheStore(TimeProvider.System);
+        _cacheFactory = new MemoryCacheFactory(_cacheStore);
         _contentHierarchyItemId = Guid.NewGuid();
         _contentItemId = Guid.NewGuid();
         _indexerId = Guid.NewGuid();
@@ -80,11 +101,17 @@ public sealed class ReleaseSearchServiceTests
         _publishedEvents = [];
         _downloadRepository = new Mock<IDownloadRepository> { CallBase = true };
         _downloadRepository
-            .Setup(repository => repository.ListImportedByContentHierarchyItemAsync(
-                It.IsAny<Guid>(),
-                It.IsAny<DateTime>(),
+            .Setup(repository => repository.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
+        _downloadRepository
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download> { Items = [] });
 
         _metadataContribution = new MetadataContribution
         {
@@ -105,7 +132,7 @@ public sealed class ReleaseSearchServiceTests
             Level = "episode",
             Slug = "pilot",
             Name = "Pilot",
-            EffectiveMonitoring = true,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow,
             MetadataContainerId = _contentHierarchyItemId,
             MetadataContainer = metadataContainer,
@@ -353,6 +380,7 @@ public sealed class ReleaseSearchServiceTests
             _contentTypeRegistry.Object,
             [_contentFactProvider.Object],
             TimeProvider.System,
+            Mock.Of<IFileSystem>(),
             NullLogger<ReleaseEvaluationService>.Instance);
         _releaseEvaluationService = new Mock<IReleaseEvaluationService>();
         _releaseEvaluationService
@@ -399,7 +427,8 @@ public sealed class ReleaseSearchServiceTests
             [],
             _releaseRepository.Object,
             _releaseScopeRepository.Object,
-            new ReleaseBlockList(_downloadRepository.Object, TimeProvider.System),
+            _downloadRepository.Object,
+            new ReleaseBlockList(_downloadRepository.Object),
             _downloadClients.Object,
             _contentTypeRegistry.Object,
             Mock.Of<IRootFolderService>(),
@@ -417,7 +446,7 @@ public sealed class ReleaseSearchServiceTests
                 TimeProvider.System,
                 NullLogger<ReleaseSearchQueryExecutor>.Instance,
                 _releaseEvaluationService.Object,
-            cacheFactory: Mock.Of<ICacheFactory>(),
+            cacheFactory: _cacheFactory,
             releaseComparers: [],
             searchOptions: new SearchOptions()),
             _releaseEvaluationService.Object,
@@ -426,6 +455,144 @@ public sealed class ReleaseSearchServiceTests
             new SearchOptions(),
             TimeProvider.System,
             NullLogger<ReleaseSearchService>.Instance);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _cacheFactory.Dispose();
+        _cacheStore.Dispose();
+    }
+
+    [Test]
+    public async Task SearchAsync_CompletesAndKeepsOtherResults_WhenACardigannConnectionMeetsTheSolverBackoff()
+    {
+        // Arrange
+        var secondIndexerId = Guid.NewGuid();
+        var secondConnectionId = Guid.NewGuid();
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId, ProviderType = "test-indexer", Name = "Unsolvable", CreatedAt = DateTime.UtcNow,
+                },
+                new Indexer
+                {
+                    Id = secondIndexerId, ProviderType = "second-test-indexer", Name = "Healthy",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId, IndexerId = _indexerId, Name = "Unsolvable", Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+                new IndexerConnection
+                {
+                    Id = secondConnectionId, IndexerId = secondIndexerId, Name = "Healthy", Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        var solverCalls = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
+            {
+                if (request.Method == HttpMethod.Post)
+                {
+                    solverCalls++;
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                    {
+                        Content = new StringContent(
+                            """{"status":"error","message":"Error: Error solving the challenge. """ +
+                            """Timeout after 60.0 seconds."}""")
+                    };
+                }
+
+                var challenge = new HttpResponseMessage(HttpStatusCode.Forbidden)
+                {
+                    Content = new StringContent("<html>Just a moment...</html>")
+                };
+                challenge.Headers.TryAddWithoutValidation("CF-RAY", "challenge");
+                return challenge;
+            });
+        var clients = new Mock<IHttpClientFactory>();
+        clients.Setup(factory => factory.CreateClient(It.IsAny<string>()))
+            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
+        var solverSettings = new SettingsGroup { Name = "magpie.cardigann" };
+        solverSettings.Settings.Add(new Setting { Key = "flareSolverrUrl", Value = "http://solver.test:8191" });
+        var settings = new Mock<ISettingsService>();
+        settings.Setup(service => service.GetExtensionGroupAsync(
+                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SettingsGroupDetail { Group = solverSettings });
+        var cooldown = new Mock<IUpstreamCooldown>();
+        cooldown.Setup(value => value.SendAsync(It.IsAny<HttpRequestMessage>(), It.IsAny<string?>(),
+                It.IsAny<Func<CancellationToken, Task<HttpResponseMessage>>>(), It.IsAny<CancellationToken>()))
+            .Returns((HttpRequestMessage _, string? _, Func<CancellationToken, Task<HttpResponseMessage>> send,
+                CancellationToken token) => send(token));
+        var parser = Mock.Of<IResultParser>();
+        var definition = new CardigannDefinition { Id = "test-indexer", Name = "Unsolvable" };
+        definition.Links.Add("https://tracker.test/");
+        definition.Search.Paths.Add(new SearchPath { Path = "/search" });
+        var cardigann = new CardigannIndexerIntegration(_indexerId, definition, parser,
+            new CardigannSessionManager(clients.Object, parser,
+                new FlareSolverrClient(clients.Object, settings.Object, _cacheFactory,
+                    NullLogger<FlareSolverrClient>.Instance, cooldown.Object, new SolverQueue(),
+                    TimeProvider.System),
+                new CardigannSessionState(), TimeProvider.System, NullLogger<CardigannSessionManager>.Instance),
+            NullLogger<CardigannIndexerIntegration>.Instance);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((ReleaseSearchRequest request, IReadOnlyDictionary<string, string> connectionSettings,
+                CancellationToken token) => cardigann.SearchAsync(request, connectionSettings, token));
+        _secondIndexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Protocol = "torrent", Title = "Pilot.1080p", ExternalId = "healthy" }]);
+
+        // Act
+        await _subject
+            .SearchAsync(
+                _contentHierarchyItemId,
+                _userId,
+                correlationId: null,
+                currentExecutionId: null,
+                Mock.Of<IProgressReporter>())
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(solverCalls, Is.EqualTo(1));
+        _contentRepository.Verify(
+            repository => repository.UpdateAsync(
+                It.Is<ContentItem>(content => content.Id == _contentItemId && content.DateLastSearched != default),
+                _userId,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _releaseRepository.Verify(
+            repository => repository.CreateAsync(
+                It.Is<Release>(release => release.ExternalId == "healthy"),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _indexerConnections.Verify(
+            repository => repository.PatchAsync(
+                It.Is<IndexerConnectionPatch>(patch => patch.Id == _connectionId &&
+                    patch.Status!.Value == IntegrationHealthStatus.Degraded),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -513,6 +680,193 @@ public sealed class ReleaseSearchServiceTests
             progress.Verify(value => value.Report(null, "The search will save the results."), Times.Once);
             progress.Verify(value => value.Report(1, "The release search completed."), Times.Once);
         }
+    }
+
+    [Test]
+    public async Task SearchAsync_RequestsTheIndexerAgain_WhenEquivalentSearchIsForced()
+    {
+        // Arrange
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId,
+                    ProviderType = "test-indexer",
+                    Name = "Test Indexer",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // Act
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null,
+            force: true).ConfigureAwait(false);
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null,
+            force: true).ConfigureAwait(false);
+
+        // Assert
+        _indexerIntegration.Verify(
+            integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [NonParallelizable]
+    [TestCaseSource(nameof(TurnFailures))]
+    public void SearchInteractiveResultAsync_RecordsOneTerminalOutcome_WhenTheTurnThrows(
+        Exception failure,
+        string expectedOutcome)
+    {
+        // Arrange
+        var outcomes = new List<string?>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == ReleaseTelemetry.Name && instrument.Name == "magpie.releases.search.turns")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            outcomes.Add(tags.ToArray().Single(tag => tag.Key == "outcome").Value as string));
+        meterListener.Start();
+        _releaseEvaluationService
+            .Setup(service => service.CreateEvaluationContextAsync(
+                _contentHierarchyItemId,
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(failure);
+
+        // Act
+        Assert.CatchAsync<Exception>(async () =>
+            await _subject.SearchInteractiveResultAsync(_contentHierarchyItemId).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(outcomes, Is.EqualTo([expectedOutcome]));
+    }
+
+    [NonParallelizable]
+    [TestCaseSource(nameof(TurnFailures))]
+    public void SearchAsync_RecordsOneTerminalOutcome_WhenTheTurnThrows(Exception failure, string expectedOutcome)
+    {
+        // Arrange
+        var outcomes = new List<string?>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == ReleaseTelemetry.Name && instrument.Name == "magpie.releases.search.turns")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            outcomes.Add(tags.ToArray().Single(tag => tag.Key == "outcome").Value as string));
+        meterListener.Start();
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(failure);
+
+        // Act
+        Assert.CatchAsync<Exception>(async () => await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null,
+            force: true).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(outcomes, Is.EqualTo([expectedOutcome]));
+    }
+
+    [Test]
+    public async Task SearchAsync_ReusesTheResponseCache_WhenEquivalentSearchIsNotForced()
+    {
+        // Arrange
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId,
+                    ProviderType = "test-indexer",
+                    Name = "Test Indexer",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // Act
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null).ConfigureAwait(false);
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null).ConfigureAwait(false);
+
+        // Assert
+        _indexerIntegration.Verify(
+            integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [TestCase(ReleaseMatchResult.NoMatch, 0)]
@@ -1000,11 +1354,337 @@ public sealed class ReleaseSearchServiceTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    [TestCase(true, FulfillmentStatus.Fulfilled)]
-    [TestCase(true, FulfillmentStatus.FulfilledExternally)]
-    [TestCase(false, FulfillmentStatus.Missing)]
+    [TestCase(DownloadStatus.Imported, 0)]
+    [TestCase(DownloadStatus.Failed, 1)]
+    [TestCase(null, 1)]
+    public async Task SearchAsync_AddsNoScopeToAKnownRelease_WhenAnImportOfItSettledItsContents(
+        DownloadStatus? priorDownloadStatus,
+        int expectedScopeCreates)
+    {
+        // Arrange
+        var releaseId = Guid.NewGuid();
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId,
+                    ProviderType = "test-indexer",
+                    Name = "Test Indexer",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Protocol = "torrent", Title = "Show.S01.1080p", ExternalId = "pack" }]);
+        _factProvider
+            .Setup(provider => provider.IsMatch(
+                It.IsAny<ContentTarget>(),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.IsAny<Release>(),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Confident);
+        _releaseRepository
+            .Setup(repository => repository.UpdateAsync(
+                It.IsAny<Release>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
+            {
+                release.Id = releaseId;
+                return true;
+            });
+        _downloadRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<DownloadQuery>(query =>
+                    query.ReleaseId == releaseId &&
+                    query.Statuses!.Contains(priorDownloadStatus ?? DownloadStatus.Imported)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = priorDownloadStatus is { } status
+                    ?
+                    [
+                        new Download
+                        {
+                            Id = Guid.NewGuid(),
+                            ReleaseId = releaseId,
+                            ExternalId = "client-id",
+                            Title = "Show.S01.1080p",
+                            Status = status,
+                        },
+                    ]
+                    : [],
+            });
+
+        // Act
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null).ConfigureAwait(false);
+
+        // Assert
+        _releaseScopeRepository.Verify(repository => repository.CreateAsync(
+            It.Is<ReleaseScope>(scope =>
+                scope.ReleaseId == releaseId &&
+                scope.ContentHierarchyItemId == _contentHierarchyItemId),
+            null,
+            It.IsAny<CancellationToken>()), Times.Exactly(expectedScopeCreates));
+    }
+
+    [Test]
+    public async Task SearchAsync_KeepsTheScopeOfAKnownRelease_WhenAnImportOfItSettledItsContents()
+    {
+        // Arrange
+        var releaseId = Guid.NewGuid();
+        var scopeId = Guid.NewGuid();
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId,
+                    ProviderType = "test-indexer",
+                    Name = "Test Indexer",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Protocol = "torrent", Title = "Show.S01.1080p", ExternalId = "pack" }]);
+        _factProvider
+            .Setup(provider => provider.IsMatch(
+                It.IsAny<ContentTarget>(),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.IsAny<Release>(),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Confident);
+        _releaseRepository
+            .Setup(repository => repository.UpdateAsync(
+                It.IsAny<Release>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
+            {
+                release.Id = releaseId;
+                return true;
+            });
+        _releaseScopeRepository
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<ReleaseScopeQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ReleaseScope>
+            {
+                Items =
+                [
+                    new ReleaseScope
+                    {
+                        Id = scopeId,
+                        ReleaseId = releaseId,
+                        ContentHierarchyItemId = _contentHierarchyItemId,
+                    },
+                ],
+            });
+        _downloadRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<DownloadQuery>(query => query.ReleaseId == releaseId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = releaseId,
+                        ExternalId = "client-id",
+                        Title = "Show.S01.1080p",
+                        Status = DownloadStatus.Imported,
+                    },
+                ],
+            });
+
+        // Act
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _releaseScopeRepository.Verify(
+                repository => repository.DeleteAsync(scopeId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            Assert.That(_publishedEvents.Select(published => published.Name), Does.Contain("release.matched"));
+        }
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task SearchAsync_KeepsTheUnmatchedScope_WhenAnAutomaticSearchSeesTheReleaseAgain(bool titleCoversItem)
+    {
+        // Arrange
+        var releaseId = Guid.NewGuid();
+        var scopeId = Guid.NewGuid();
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId,
+                    ProviderType = "test-indexer",
+                    Name = "Test Indexer",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Protocol = "torrent", Title = "Show.S01.1080p", ExternalId = "pack" }]);
+        _factProvider
+            .Setup(provider => provider.IsMatch(
+                It.IsAny<ContentTarget>(),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.IsAny<Release>(),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Confident);
+        _releaseRepository
+            .Setup(repository => repository.UpdateAsync(
+                It.IsAny<Release>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
+            {
+                release.Id = releaseId;
+                return true;
+            });
+        _releaseScopeRepository
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<ReleaseScopeQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ReleaseScope>
+            {
+                Items =
+                [
+                    new ReleaseScope
+                    {
+                        Id = scopeId,
+                        ReleaseId = releaseId,
+                        ContentHierarchyItemId = _contentHierarchyItemId,
+                        Status = ReleaseScopeStatus.Unmatched,
+                    },
+                ],
+            });
+        _releaseEvaluationService
+            .Setup(service => service.ResolveScopeAsync(
+                It.IsAny<Release>(),
+                It.IsAny<IReadOnlyList<ContentFact>>(),
+                _contentHierarchyItemId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(titleCoversItem
+                ? new ReleaseScopeResolution([_contentHierarchyItemId], [_contentHierarchyItemId])
+                : new ReleaseScopeResolution([], []));
+
+        // Act
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _releaseScopeRepository.Verify(
+                repository => repository.DeleteAsync(scopeId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            _releaseScopeRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<ReleaseScope>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _releaseScopeRepository.Verify(
+                repository => repository.UpdateAsync(
+                    It.IsAny<ReleaseScope>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            Assert.That(
+                _publishedEvents.Select(published => published.Name),
+                Does.Not.Contain("release.matched"));
+        }
+    }
+
+    [TestCase(MonitoringMode.Monitored, FulfillmentStatus.Fulfilled)]
+    [TestCase(MonitoringMode.Monitored, FulfillmentStatus.FulfilledExternally)]
+    [TestCase(MonitoringMode.Unmonitored, FulfillmentStatus.Missing)]
     public async Task SearchAsync_QueriesNoIndexer_WhenLeafDoesNotNeedAcquisition(
-        bool effectiveMonitoring,
+        MonitoringMode effectiveMonitoring,
         FulfillmentStatus fulfillment)
     {
         // Arrange
@@ -1127,7 +1807,7 @@ public sealed class ReleaseSearchServiceTests
                 correlationId: null,
                 currentExecutionId: null,
                 progress: null,
-                immediateOverride: true)
+                force: true)
             .ConfigureAwait(false);
 
         // Assert
@@ -1245,7 +1925,7 @@ public sealed class ReleaseSearchServiceTests
     }
 
     [Test]
-    public async Task SearchAsync_Skips_WhenARecentExecutionCompletedASearchAndTheSearchIsForced()
+    public async Task SearchAsync_Searches_WhenARecentExecutionCompletedASearchAndTheSearchIsForced()
     {
         // Arrange
         _jobExecutions
@@ -1286,8 +1966,57 @@ public sealed class ReleaseSearchServiceTests
                 correlationId: null,
                 currentExecutionId: null,
                 progress: null,
-                immediateOverride: true)
+                force: true)
             .ConfigureAwait(false);
+
+        // Assert
+        _contentHierarchyItems.Verify(
+            repository => repository.GetByIdAsync(
+                _contentHierarchyItemId,
+                It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
+    }
+
+    [Test]
+    public async Task SearchAsync_Skips_WhenAnotherSearchIsActiveAndTheSearchIsForced()
+    {
+        // Arrange
+        _jobExecutions
+            .Setup(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query =>
+                    query.JobType == "ReleaseSearchItem" &&
+                    query.Statuses != null &&
+                    query.Statuses.Contains(JobExecutionStatus.Running)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items =
+                [
+                    new JobExecution
+                    {
+                        Id = Guid.NewGuid(),
+                        JobType = "ReleaseSearchItem",
+                        Scope = JobScope.Content,
+                        Status = JobExecutionStatus.Running,
+                        CreatedAt = DateTime.UtcNow,
+                        Parameters = new Dictionary<string, string>
+                        {
+                            ["contentHierarchyItemId"] = _contentHierarchyItemId.ToString("D"),
+                        },
+                    },
+                ],
+            });
+
+        // Act
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null,
+            force: true).ConfigureAwait(false);
 
         // Assert
         _contentHierarchyItems.Verify(
@@ -1618,7 +2347,7 @@ public sealed class ReleaseSearchServiceTests
                 Level = "episode",
                 Slug = "rollercoaster",
                 Name = "Rollercoaster",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 CreatedAt = DateTime.UtcNow,
                 MetadataContainerId = _contentHierarchyItemId,
                 MetadataContainer = episodeContainer,
@@ -2112,6 +2841,113 @@ public sealed class ReleaseSearchServiceTests
     }
 
     [Test]
+    public async Task SearchInteractiveAsync_MarksEarlierDownloads_WhenReleasesWereImportedOrFailed()
+    {
+        // Arrange
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId,
+                    ProviderType = "test-indexer",
+                    Name = "Test Indexer",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                    Status = IntegrationHealthStatus.Healthy,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ReleaseSearchRequest _, IReadOnlyDictionary<string, string> _, CancellationToken _) =>
+            [
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Pilot.1080p.WEB-GRP",
+                    ExternalId = "imported-release",
+                    PublishDate = DateTime.UtcNow,
+                    IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "imported-key" } },
+                },
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Pilot.720p.WEB-GRP",
+                    ExternalId = "failed-release",
+                    PublishDate = DateTime.UtcNow,
+                    IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "failed-key" } },
+                },
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Pilot.2160p.WEB-GRP",
+                    ExternalId = "new-release",
+                    PublishDate = DateTime.UtcNow,
+                    IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "new-key" } },
+                },
+            ]);
+        _downloadRepository
+            .Setup(repository => repository.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    ExternalId = "imported",
+                    Title = "earlier import",
+                    Status = DownloadStatus.Imported,
+                    ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "imported-key" } },
+                },
+                new Download
+                {
+                    ExternalId = "failed",
+                    Title = "earlier failure",
+                    Status = DownloadStatus.Failed,
+                    FailureReason = DownloadFailureReason.NoUsableContent,
+                    ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "failed-key" } },
+                },
+            ]);
+
+        // Act
+        var candidates = await _subject.SearchInteractiveAsync(_contentHierarchyItemId).ConfigureAwait(false);
+
+        // Assert
+        var statuses = candidates!.ToDictionary(
+            candidate => candidate.Release.ExternalId!,
+            candidate => (candidate.AcquisitionStatus, candidate.FailureReason));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(statuses, Has.Count.EqualTo(3));
+            Assert.That(
+                statuses["imported-release"],
+                Is.EqualTo(((DownloadStatus?)DownloadStatus.Imported, (DownloadFailureReason?)null)));
+            Assert.That(
+                statuses["failed-release"],
+                Is.EqualTo((
+                    (DownloadStatus?)DownloadStatus.Failed,
+                    (DownloadFailureReason?)DownloadFailureReason.NoUsableContent)));
+            Assert.That(statuses["new-release"], Is.EqualTo(((DownloadStatus?)null, (DownloadFailureReason?)null)));
+        }
+    }
+
+    [Test]
     public async Task SearchInteractiveAsync_UsesFirstDecisiveReleaseComparer_WhenPrimaryRanksTie()
     {
         // Arrange
@@ -2284,7 +3120,7 @@ public sealed class ReleaseSearchServiceTests
     }
 
     [Test]
-    public async Task SearchAsync_FansOutToChildren_WhenNodeIsNonLeaf()
+    public async Task SearchAsync_PreservesForce_WhenNodeFansOutToChildren()
     {
         // Arrange
         var parentId = Guid.NewGuid();
@@ -2325,7 +3161,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "season",
                         Slug = "s1",
                         Name = "Season 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                     new ContentHierarchyItem
@@ -2336,7 +3172,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e2",
                         Name = "Episode 2",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                     new ContentHierarchyItem
@@ -2347,7 +3183,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                 ],
@@ -2384,7 +3220,7 @@ public sealed class ReleaseSearchServiceTests
 
         // Act
         await _subject
-            .SearchAsync(parentId, _userId, correlationId: null, currentExecutionId: null, progress: null)
+            .SearchAsync(parentId, _userId, correlationId: null, currentExecutionId: null, progress: null, force: true)
             .ConfigureAwait(false);
 
         // Assert
@@ -2398,7 +3234,8 @@ public sealed class ReleaseSearchServiceTests
                         r.Parameters["contentHierarchyItemId"] ==
                             nonLeafChildId.ToString("D") &&
                         r.Parameters["searchKind"] ==
-                            "node"),
+                            "node" &&
+                        r.Parameters["force"] == "true"),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             _jobManager.Verify(
@@ -2409,7 +3246,8 @@ public sealed class ReleaseSearchServiceTests
                         r.Parameters["contentHierarchyItemId"] ==
                             leafChildId.ToString("D") &&
                         r.Parameters["searchKind"] ==
-                            "leaf"),
+                            "leaf" &&
+                        r.Parameters["force"] == "true"),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             _contentService.Verify(
@@ -2464,7 +3302,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                     new ContentHierarchyItem
@@ -2475,7 +3313,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e2",
                         Name = "Episode 2",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                 ],
@@ -2539,7 +3377,10 @@ public sealed class ReleaseSearchServiceTests
             progress.Verify(p => p.Report(It.IsAny<double?>(), "The search queued 2 child searches."), Times.Once);
             _jobManager.Verify(
                 m => m.ExecuteAsync(
-                    It.Is<JobEnqueueRequest>(r => r.JobType == "ReleaseSearchItem"),
+                    It.Is<JobEnqueueRequest>(r =>
+                        r.JobType == "ReleaseSearchItem" &&
+                        r.Parameters != null &&
+                        r.Parameters["force"] == "false"),
                     It.IsAny<CancellationToken>()),
                 Times.Exactly(2));
         }
@@ -2585,7 +3426,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                 ],
@@ -2698,7 +3539,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                 ],
@@ -2836,6 +3677,79 @@ public sealed class ReleaseSearchServiceTests
     }
 
     [Test]
+    public async Task SearchAsync_QueuesRecentLeafSearch_WhenSearchIsForced()
+    {
+        // Arrange
+        var parentId = Guid.NewGuid();
+        var leafChildId = Guid.NewGuid();
+        _contentHierarchyItems
+            .Setup(repository => repository.GetByIdAsync(parentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyItem
+            {
+                Id = parentId,
+                ContentType = "tv",
+                Level = "show",
+                Slug = "show",
+                Name = "Show",
+                CreatedAt = DateTime.UtcNow,
+            });
+        _contentHierarchyItems
+            .Setup(repository => repository.GetChildCountsByParentAsync(
+                It.Is<IReadOnlyCollection<Guid>>(ids => ids.Contains(parentId)),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, int> { [parentId] = 1 });
+        _contentHierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.LeafOnly == true),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = leafChildId,
+                        ContentType = "tv",
+                        Level = "episode",
+                        Slug = "e1",
+                        Name = "Episode 1",
+                        CreatedAt = DateTime.UtcNow,
+                        ContentItem = new ContentItem
+                        {
+                            Id = Guid.NewGuid(),
+                            ContentHierarchyItemId = leafChildId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow,
+                            CreatedAt = DateTime.UtcNow,
+                        },
+                    },
+                ],
+            });
+
+        // Act
+        await _subject.SearchAsync(
+            parentId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null,
+            force: true).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            manager => manager.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.Parameters != null &&
+                    request.Parameters["contentHierarchyItemId"] == leafChildId.ToString("D") &&
+                    request.Parameters["searchKind"] == "leaf" &&
+                    request.Parameters["force"] == "true"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
     public async Task SearchAsync_QueuesLeafSearch_WhenEveryStoredReleaseHasFailed()
     {
         // Arrange
@@ -2903,9 +3817,8 @@ public sealed class ReleaseSearchServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<Release> { Items = [release], TotalItems = 1 });
         _downloadRepository
-            .Setup(repository => repository.ListFailedByReleaseIdentitiesAsync(
+            .Setup(repository => repository.ListByReleaseAsync(
                 It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
-                It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -2985,7 +3898,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "season",
                         Slug = "s1",
                         Name = "Season 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                     new ContentHierarchyItem
@@ -2996,7 +3909,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e2",
                         Name = "Episode 2",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                 ],
@@ -3202,7 +4115,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3228,6 +4141,84 @@ public sealed class ReleaseSearchServiceTests
                 It.IsAny<double?>(),
                 It.Is<string>(message => message.StartsWith("The search queued", StringComparison.Ordinal))),
             Times.Never);
+    }
+
+    [Test]
+    public async Task SearchAsync_TakesEscalationTurn_WhenParentSearchIsRecentAndSearchIsForced()
+    {
+        // Arrange
+        var nodeId = Guid.NewGuid();
+        var leafId = Guid.NewGuid();
+        _contentHierarchyItems
+            .Setup(repository => repository.GetByIdAsync(nodeId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyItem
+            {
+                Id = nodeId,
+                ContentType = "tv",
+                Level = "show",
+                Slug = "show",
+                Name = "Show",
+                CreatedAt = DateTime.UtcNow,
+                ContentItem = new ContentItem
+                {
+                    Id = Guid.NewGuid(),
+                    ContentHierarchyItemId = nodeId,
+                    Fulfillment = FulfillmentStatus.Missing,
+                    DateLastSearched = DateTime.UtcNow,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            });
+        _contentHierarchyItems
+            .Setup(repository => repository.GetChildCountsByParentAsync(
+                It.Is<IReadOnlyCollection<Guid>>(ids => ids.Contains(nodeId)),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, int> { [nodeId] = 1 });
+        _contentHierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.AncestorId != null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = leafId,
+                        ParentId = nodeId,
+                        ContentType = "tv",
+                        Level = "episode",
+                        Slug = "e1",
+                        Name = "Episode 1",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        CreatedAt = DateTime.UtcNow,
+                        ContentItem = new ContentItem
+                        {
+                            Id = Guid.NewGuid(),
+                            ContentHierarchyItemId = leafId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow,
+                            CreatedAt = DateTime.UtcNow,
+                        },
+                    },
+                ],
+            });
+        var progress = new Mock<IProgressReporter>();
+
+        // Act
+        await _subject.SearchAsync(
+            nodeId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress.Object,
+            force: true).ConfigureAwait(false);
+
+        // Assert
+        _releaseEvaluationService.Verify(
+            service => service.CreateEvaluationContextAsync(nodeId, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -3270,7 +4261,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3357,7 +4348,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3444,7 +4435,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3508,7 +4499,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3574,7 +4565,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "season",
                         Slug = "s1",
                         Name = "Season 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                     new ContentHierarchyItem
@@ -3585,7 +4576,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3649,7 +4640,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3737,7 +4728,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "season",
                         Slug = "s1",
                         Name = "Season 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                     new ContentHierarchyItem
@@ -3748,7 +4739,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3838,7 +4829,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "season",
                         Slug = "s1",
                         Name = "Season 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                     new ContentHierarchyItem
@@ -3849,7 +4840,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -3954,7 +4945,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "season",
                         Slug = "s1",
                         Name = "Season 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                     },
                     new ContentHierarchyItem
@@ -3965,7 +4956,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -4185,7 +5176,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "season",
                         Slug = "s1",
                         Name = "Season 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -4204,7 +5195,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -4300,7 +5291,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "season",
                         Slug = "s1",
                         Name = "Season 1",
-                        EffectiveMonitoring = false,
+                        EffectiveMonitoring = MonitoringMode.Unmonitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -4319,7 +5310,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -4420,6 +5411,50 @@ public sealed class ReleaseSearchServiceTests
         {
             Assert.That(requests, Is.Not.Empty);
             Assert.That(requests.Select(request => request.MaximumResults), Has.All.EqualTo(200));
+        }
+    }
+
+    [TestCase(false, 0)]
+    [TestCase(true, 1)]
+    public async Task SearchInteractiveResultAsync_ReportsIncompleteWithAvailableRows_WhenAnIndexerThrottles(
+        bool healthy, int expectedCandidates)
+    {
+        // Arrange
+        _indexers.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Indexer { Id = _indexerId, ProviderType = "test-indexer", Name = "Test Indexer" }]);
+        _indexerConnections.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new IndexerConnection
+                {
+                    Id = _connectionId, IndexerId = _indexerId, Name = "Throttled", Enabled = true,
+                    Settings = new() { ["throttled"] = "true" }
+                },
+                new IndexerConnection
+                {
+                    Id = Guid.NewGuid(), IndexerId = _indexerId, Name = "Healthy", Enabled = healthy
+                }
+            ]);
+        _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
+                It.Is<IReadOnlyDictionary<string, string>>(settings => settings.ContainsKey("throttled")),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
+                It.Is<IReadOnlyDictionary<string, string>>(settings => !settings.ContainsKey("throttled")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Title = "Pilot healthy", Protocol = "torrent", ExternalId = "healthy" }]);
+
+        // Act
+        var result = await _subject.SearchInteractiveResultAsync(_contentHierarchyItemId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.Candidates, Has.Count.EqualTo(expectedCandidates));
+            Assert.That(result.Partial, Is.True);
+            Assert.That(result.Warning, Does.Contain("throttled"));
+            Assert.That(result.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+            _indexerConnections.Verify(repository => repository.PatchAsync(It.IsAny<IndexerConnectionPatch>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
         }
     }
 
@@ -4824,7 +5859,7 @@ public sealed class ReleaseSearchServiceTests
                         Level = "episode",
                         Slug = "e1",
                         Name = "Episode 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         CreatedAt = DateTime.UtcNow,
                         ContentItem = new ContentItem
                         {
@@ -4965,7 +6000,7 @@ public sealed class ReleaseSearchServiceTests
                 Level = "episode",
                 Slug = "scoped",
                 Name = "Scoped",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 CreatedAt = DateTime.UtcNow,
             });
         _contentService
@@ -5179,7 +6214,7 @@ public sealed class ReleaseSearchServiceTests
                     request.UserId == _userId &&
                     request.Parameters!["releaseId"] == releaseId.ToString() &&
                     request.Parameters!["contentHierarchyItemId"] == _contentHierarchyItemId.ToString() &&
-                    request.Parameters!["ignoreFailedTaint"] == "True"),
+                    request.Parameters!["interactive"] == "True"),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(executionId);
 
@@ -5194,6 +6229,61 @@ public sealed class ReleaseSearchServiceTests
             Assert.That(outcome.Status, Is.EqualTo(InteractiveReleaseGrabResult.Accepted));
             Assert.That(outcome.ExecutionId, Is.EqualTo(executionId));
         }
+    }
+
+    [Test]
+    public async Task GrabInteractiveAsync_AddsTheScope_WhenAnImportOfTheReleaseSettledItsContents()
+    {
+        // Arrange
+        var releaseId = Guid.NewGuid();
+        _hierarchyItem.EffectiveQualityTierListId = Guid.NewGuid();
+        _hierarchyItem.ContentItem = new ContentItem { Id = _contentItemId };
+        _downloadClients
+            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
+            ]);
+        _releaseRepository
+            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
+            {
+                release.Id = releaseId;
+                return true;
+            });
+        _downloadRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<DownloadQuery>(query => query.ReleaseId == releaseId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = releaseId,
+                        ExternalId = "client-id",
+                        Title = "Show.S01.1080p",
+                        Status = DownloadStatus.Imported,
+                    },
+                ],
+            });
+
+        // Act
+        await _subject.GrabInteractiveAsync(
+            _contentHierarchyItemId, new Release { Title = "Show.S01.1080p", Protocol = "torrent" }, _userId)
+            .ConfigureAwait(false);
+
+        // Assert
+        _releaseScopeRepository.Verify(repository => repository.CreateAsync(
+            It.Is<ReleaseScope>(scope =>
+                scope.ReleaseId == releaseId &&
+                scope.ContentHierarchyItemId == _contentHierarchyItemId),
+            _userId,
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -5235,5 +6325,250 @@ public sealed class ReleaseSearchServiceTests
                 r => r.CreateAsync(It.IsAny<ContentItem>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
                 Times.Never);
         }
+    }
+
+    [TestCase(false, 0)]
+    [TestCase(true, 2)]
+    public async Task SearchAsync_SearchesAnItemWithAPendingImport_OnlyWhenTheUserForcesTheSearch(
+        bool force, int expectedIndexerQueries)
+    {
+        // Arrange
+        _hierarchyItem.ImportPending = true;
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId,
+                    ProviderType = "test-indexer",
+                    Name = "Test Indexer",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _contentFactProvider
+            .Setup(provider => provider.GetFactsAsync(It.IsAny<ContentTarget>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([[new ContentFact { Value = "Alternate Pilot" }]]);
+
+        // Act
+        await _subject
+            .SearchAsync(_contentHierarchyItemId, _userId, correlationId: null, currentExecutionId: null, null, force)
+            .ConfigureAwait(false);
+
+        // Assert
+        _indexerIntegration.Verify(
+            integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedIndexerQueries));
+    }
+
+    [TestCase(FulfillmentStatus.Missing, false, false, false, false)]
+    [TestCase(FulfillmentStatus.Fulfilled, true, false, true, false)]
+    [TestCase(FulfillmentStatus.Fulfilled, true, true, true, null)]
+    public async Task SearchAsync_IgnoresAnImportPendingLeafForEscalation_WhetherOrNotItWasSearchedBefore(
+        FulfillmentStatus otherLeafFulfillment,
+        bool pendingLeafSearchedBefore,
+        bool force,
+        bool expectDeferral,
+        bool? expectedLeafQueryImportPending)
+    {
+        // Arrange
+        var nodeId = Guid.NewGuid();
+        var otherLeafId = Guid.NewGuid();
+        var pendingLeafId = Guid.NewGuid();
+        var searchedAt = DateTime.UtcNow.AddDays(-30);
+        _contentHierarchyItems
+            .Setup(r => r.GetByIdAsync(nodeId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyItem
+            {
+                Id = nodeId,
+                ContentType = "tv",
+                Level = "show",
+                Slug = "show",
+                Name = "Show",
+                CreatedAt = DateTime.UtcNow,
+            });
+        _contentHierarchyItems
+            .Setup(r => r.GetChildCountsByParentAsync(
+                It.Is<IReadOnlyCollection<Guid>>(ids => ids.Contains(nodeId)),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, int> { [nodeId] = 2 });
+        _contentHierarchyItems
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AncestorId != null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = otherLeafId,
+                        ParentId = nodeId,
+                        ContentType = "tv",
+                        Level = "episode",
+                        Slug = "e1",
+                        Name = "Episode 1",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        CreatedAt = DateTime.UtcNow,
+                        ContentItem = new ContentItem
+                        {
+                            Id = Guid.NewGuid(),
+                            ContentHierarchyItemId = otherLeafId,
+                            Fulfillment = otherLeafFulfillment,
+                            DateLastSearched = searchedAt,
+                            CreatedAt = DateTime.UtcNow,
+                        },
+                    },
+                    new ContentHierarchyItem
+                    {
+                        Id = pendingLeafId,
+                        ParentId = nodeId,
+                        ContentType = "tv",
+                        Level = "episode",
+                        Slug = "e2",
+                        Name = "Episode 2",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ImportPending = true,
+                        CreatedAt = DateTime.UtcNow,
+                        ContentItem = new ContentItem
+                        {
+                            Id = Guid.NewGuid(),
+                            ContentHierarchyItemId = pendingLeafId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = pendingLeafSearchedBefore ? searchedAt : null,
+                            CreatedAt = DateTime.UtcNow,
+                        },
+                    },
+                ],
+            });
+        var progress = new Mock<IProgressReporter>();
+
+        // Act
+        await _subject
+            .SearchAsync(nodeId, _userId, correlationId: null, currentExecutionId: null, progress.Object, force)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            progress.Verify(
+                p => p.Report(It.IsAny<double?>(), "The search did not queue any child searches."),
+                Times.Exactly(expectDeferral ? 1 : 0));
+            _contentHierarchyItems.Verify(
+                r => r.QueryAsync(
+                    It.Is<ContentHierarchyItemCriteria>(c =>
+                        c.LeafOnly == true && c.ImportPending == expectedLeafQueryImportPending),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.AtLeastOnce);
+        }
+    }
+
+    [TestCase(false, 0)]
+    [TestCase(true, 1)]
+    public async Task SearchAsync_QueuesASeasonWhoseOnlyMissingLeafIsImportPending_OnlyWhenTheSearchIsForced(
+        bool force, int expectedSeasonSearches)
+    {
+        // Arrange
+        var nodeId = Guid.NewGuid();
+        var seasonId = Guid.NewGuid();
+        var leafId = Guid.NewGuid();
+        _contentHierarchyItems
+            .Setup(r => r.GetByIdAsync(nodeId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyItem
+            {
+                Id = nodeId,
+                ContentType = "tv",
+                Level = "show",
+                Slug = "show",
+                Name = "Show",
+                CreatedAt = DateTime.UtcNow,
+            });
+        _contentHierarchyItems
+            .Setup(r => r.GetChildCountsByParentAsync(
+                It.Is<IReadOnlyCollection<Guid>>(ids => ids.Contains(nodeId)),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, int> { [nodeId] = 1 });
+        _contentHierarchyItems
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AncestorId != null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = seasonId,
+                        ParentId = nodeId,
+                        ContentType = "tv",
+                        Level = "season",
+                        Slug = "s1",
+                        Name = "Season 1",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        CreatedAt = DateTime.UtcNow,
+                    },
+                    new ContentHierarchyItem
+                    {
+                        Id = leafId,
+                        ParentId = seasonId,
+                        ContentType = "tv",
+                        Level = "episode",
+                        Slug = "e1",
+                        Name = "Episode 1",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ImportPending = true,
+                        CreatedAt = DateTime.UtcNow,
+                        ContentItem = new ContentItem
+                        {
+                            Id = Guid.NewGuid(),
+                            ContentHierarchyItemId = leafId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            CreatedAt = DateTime.UtcNow,
+                        },
+                    },
+                ],
+            });
+
+        // Act
+        await _subject
+            .SearchAsync(nodeId, _userId, correlationId: null, currentExecutionId: null, null, force)
+            .ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.JobType == "ReleaseSearchItem" &&
+                    request.Parameters!["contentHierarchyItemId"] == seasonId.ToString("D")),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedSeasonSearches));
     }
 }

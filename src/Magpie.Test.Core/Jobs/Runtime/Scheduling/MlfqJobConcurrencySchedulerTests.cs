@@ -498,7 +498,6 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var waiting = scheduler.AcquireImmediateSlotAsync(default);
 
         // Assert
-        await Task.Delay(100).ConfigureAwait(false);
         Assert.That(waiting.IsCompleted, Is.False);
 
         fast.Dispose();

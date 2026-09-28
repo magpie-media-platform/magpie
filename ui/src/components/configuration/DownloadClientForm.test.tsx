@@ -178,6 +178,19 @@ describe('DownloadClientForm', () => {
         expect(onSubmit).not.toHaveBeenCalled();
     });
 
+    it('moves focus to the first invalid field when Save is blocked', async () => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <DownloadClientForm open={true} onOpenChange={vi.fn()} onSubmit={vi.fn()} />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => expect(screen.getByLabelText(/name/i)).toHaveFocus());
+    });
+
     it('shows validation error when integration is empty on submit', async () => {
         const user = userEvent.setup();
         const onSubmit = vi.fn();

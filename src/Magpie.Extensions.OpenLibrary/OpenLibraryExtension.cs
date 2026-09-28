@@ -35,9 +35,11 @@ public sealed class OpenLibraryExtension : IExtension
         services.AddHttpClient(
             OpenLibraryClient.HttpClientName,
             client => client.Timeout = TimeSpan.FromSeconds(20))
+            .AddUpstreamCooldown(followRedirects: true)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                AllowAutoRedirect = false
             });
 
         services.AddSingleton<IOpenLibraryClient, OpenLibraryClient>();

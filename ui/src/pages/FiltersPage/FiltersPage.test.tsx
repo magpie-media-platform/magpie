@@ -624,9 +624,14 @@ describe('FiltersPage Add Filter button', () => {
 });
 
 describe('FiltersPage Edit action', () => {
-    it('Manager can edit shared filters and unlocked personal filters', async () => {
+    it.each([
+        [Role.Viewer, 2],
+        [Role.Requester, 2],
+        [Role.Manager, 2],
+        [Role.Admin, 7],
+    ])('role %s sees Edit only where the server allows the write', async (role, expected) => {
         render(
-            <TestWrapper role={Role.Manager} userId="user-1">
+            <TestWrapper role={role} userId="user-1">
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -635,8 +640,7 @@ describe('FiltersPage Edit action', () => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
 
-        const editButtons = document.querySelectorAll('[data-action="edit"]');
-        expect(editButtons.length).toBe(7);
+        expect(document.querySelectorAll('[data-action="edit"]').length).toBe(expected);
     });
 
     it('Requester can only edit their own filters', async () => {
@@ -717,11 +721,11 @@ describe('FiltersPage overflow menu actions', () => {
         expect(trigger).toHaveAttribute('aria-label', 'More actions for Action Movies');
     });
 
-    it('Manager sees Delete option in overflow menu', async () => {
+    it('Admin sees Delete option in overflow menu for a shared filter', async () => {
         const user = userEvent.setup();
 
         render(
-            <TestWrapper role={Role.Manager}>
+            <TestWrapper role={Role.Admin}>
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -736,7 +740,7 @@ describe('FiltersPage overflow menu actions', () => {
         expect(deleteItem).toBeInTheDocument();
     });
 
-    it('Requester does not see Delete option in overflow menu', async () => {
+    it('Requester sees Delete option in overflow menu for their own filter', async () => {
         const user = userEvent.setup();
 
         render(
@@ -750,6 +754,25 @@ describe('FiltersPage overflow menu actions', () => {
         });
 
         await openOverflowMenu(user, 'filter-4');
+
+        const deleteItem = document.querySelector('[data-action="delete"]');
+        expect(deleteItem).toBeInTheDocument();
+    });
+
+    it('Manager does not see Delete option in overflow menu for a shared filter', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Manager}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        await openOverflowMenu(user, 'filter-1');
 
         const deleteItem = document.querySelector('[data-action="delete"]');
         expect(deleteItem).not.toBeInTheDocument();
@@ -780,7 +803,7 @@ describe('FiltersPage delete confirmation', () => {
         const user = userEvent.setup();
 
         render(
-            <TestWrapper role={Role.Manager}>
+            <TestWrapper role={Role.Admin}>
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -806,7 +829,7 @@ describe('FiltersPage delete confirmation', () => {
         const mockApiDelete = vi.mocked(apiDelete);
 
         render(
-            <TestWrapper role={Role.Manager}>
+            <TestWrapper role={Role.Admin}>
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -833,7 +856,7 @@ describe('FiltersPage delete confirmation', () => {
         mockApiDelete.mockResolvedValue(undefined);
 
         render(
-            <TestWrapper role={Role.Manager}>
+            <TestWrapper role={Role.Admin}>
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -863,7 +886,7 @@ describe('FiltersPage delete confirmation', () => {
         const user = userEvent.setup();
 
         render(
-            <TestWrapper role={Role.Manager}>
+            <TestWrapper role={Role.Admin}>
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -1014,7 +1037,7 @@ describe('FiltersPage stale edit guard', () => {
         const queryClient = createTestQueryClient();
 
         render(
-            <TestWrapper role={Role.Manager} queryClient={queryClient}>
+            <TestWrapper role={Role.Admin} queryClient={queryClient}>
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -1237,9 +1260,12 @@ describe('FiltersPage edit permissions with ownerLock', () => {
         expect(editButton).not.toBeInTheDocument();
     });
 
-    it('Manager can edit unlocked personal filters owned by others', async () => {
+    it.each([
+        [Role.Manager, false],
+        [Role.Admin, true],
+    ])('role %s sees Edit on an unlocked filter owned by another user: %s', async (role, shown) => {
         render(
-            <TestWrapper role={Role.Manager} userId="user-1">
+            <TestWrapper role={role} userId="user-1">
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -1249,8 +1275,7 @@ describe('FiltersPage edit permissions with ownerLock', () => {
         });
 
         const filter5 = document.querySelector('[data-filter-id="filter-5"]');
-        const editButton = filter5?.querySelector('[data-action="edit"]');
-        expect(editButton).toBeInTheDocument();
+        expect(filter5?.querySelector('[data-action="edit"]') != null).toBe(shown);
     });
 
     it('Owner can edit their own locked filters', async () => {
@@ -1628,6 +1653,29 @@ describe('FiltersPage search providers action', () => {
                 }),
             }),
         );
+    });
+});
+
+describe('FiltersPage search providers gate', () => {
+    it.each([
+        [Role.Viewer, false],
+        [Role.Requester, true],
+    ])('shows the search providers action on content.add for role %s', async (role, shown) => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={role}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(document.querySelectorAll('[data-query]').length).toBe(8);
+        });
+
+        await openOverflowMenu(user, 'filter-1');
+
+        expect(document.querySelector('[data-action="search-providers"]') !== null).toBe(shown);
     });
 });
 

@@ -61,6 +61,12 @@ public record LibraryImportCandidate
     public List<LibraryImportMatch> Matches { get; set; } = [];
 
     /// <summary>
+    /// The id of the existing library item that the file of the single match belongs to, or <c>null</c> when no
+    /// existing library item is known.
+    /// </summary>
+    public Guid? ContentHierarchyItemId { get; set; }
+
+    /// <summary>
     /// The number of metadata matches.
     /// </summary>
     public int MatchCount { get; set; }

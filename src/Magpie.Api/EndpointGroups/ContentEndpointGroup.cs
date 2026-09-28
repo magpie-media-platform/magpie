@@ -27,6 +27,27 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
 {
     public string Name => "content";
 
+    internal async Task<IResult> GetRenameTokenReferenceAsync(
+        [FromServices] IContentService files,
+        [FromBody] RenameTokenRequest request,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await files.GetRenameTokenReferenceAsync(request, cancellationToken).ConfigureAwait(false));
+
+    internal async Task<IResult> PreviewFileRenameAsync(
+        [FromServices] IContentService files,
+        Guid id,
+        [FromBody] FileRenameSelection selection,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await files.PreviewRenameMaskAsync(id, selection, cancellationToken).ConfigureAwait(false));
+
+    internal async Task<IResult> ExecuteFileRenameAsync(
+        [FromServices] IContentService files,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] FileRenamePreview preview,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await files.ExecuteRenameMaskAsync(id, preview, user.Id, cancellationToken).ConfigureAwait(false));
+
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", QueryContentAsync)
@@ -108,9 +129,32 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
 
+        builder.MapPost("rename-tokens", GetRenameTokenReferenceAsync)
+            .WithName(nameof(GetRenameTokenReferenceAsync))
+            .Produces<RenameTokenReference>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/files/rename-preview", PreviewFileRenameAsync)
+            .WithName(nameof(PreviewFileRenameAsync))
+            .Produces<FileRenamePreview>()
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/files/rename", ExecuteFileRenameAsync)
+            .WithName(nameof(ExecuteFileRenameAsync))
+            .Produces<FileRenamePreview>()
+            .RequireManager();
+
         builder.MapPost("{id:guid}/files/{mediaFileId:guid}/unlink", UnlinkContentFileAsync)
             .WithName(nameof(UnlinkContentFileAsync))
             .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/files/{mediaFileId:guid}/reassign", ReassignContentFileAsync)
+            .WithName(nameof(ReassignContentFileAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
 
@@ -142,12 +186,52 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             .Produces<IReadOnlyList<ContentRelease>>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
+
+        builder.MapPatch("{id:guid}/releases/{releaseId:guid}", PatchContentReleaseAsync)
+            .WithName(nameof(PatchContentReleaseAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapGet("file-cleanup", PlanFileCleanupAsync)
+            .WithName(nameof(PlanFileCleanupAsync))
+            .Produces<MediaFileCleanupPlan>()
+            .RequireAdmin();
+
+        builder.MapPost("file-cleanup/apply", ApplyFileCleanupAsync)
+            .WithName(nameof(ApplyFileCleanupAsync))
+            .Produces<IReadOnlyList<MediaFileCleanupRowResult>>()
+            .RequireAdmin();
     }
+
+    [MagpieCommand(
+        "file-cleanup",
+        "GET",
+        "file-cleanup",
+        "List the files on containers to reassign and the superseded copies to unlink, without a change")]
+    internal async Task<IResult> PlanFileCleanupAsync(
+        [FromServices] ILibraryImportService libraryImportService,
+        Guid? rootId,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await libraryImportService.PlanAsync(rootId, cancellationToken).ConfigureAwait(false));
+
+    [MagpieCommand(
+        "file-cleanup-apply",
+        "POST",
+        "file-cleanup/apply",
+        "Apply the approved rows of a file cleanup plan that still match the current plan")]
+    internal async Task<IResult> ApplyFileCleanupAsync(
+        [FromServices] ILibraryImportService libraryImportService,
+        AuthenticatedUser user,
+        [FromBody] MediaFileCleanupApplyRequest request,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await libraryImportService.ApplyAsync(request, user.Id, cancellationToken).ConfigureAwait(false));
 
     [MagpieCommand("list", "GET", "", "List library content")]
     internal async Task<IResult> QueryContentAsync(
         [FromServices] IFilterService filterService,
         [FromServices] IContentService contentService,
+        Guid? contentItemId,
         string? filter,
         string? contentType,
         string? level,
@@ -172,6 +256,7 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
 
         var query = new ContentQuery
         {
+            ContentItemId = contentItemId,
             Criteria = parsed,
             ContentType = contentType,
             Level = level,
@@ -423,6 +508,19 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
         return Results.Ok(result);
     }
 
+    internal async Task<IResult> ReassignContentFileAsync(
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
+        Guid id,
+        Guid mediaFileId,
+        [FromBody] ReassignContentFileRequest request,
+        CancellationToken cancellationToken)
+    {
+        var reassigned = await contentService.ReassignFileAsync(id, mediaFileId, request, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+        return reassigned ? Results.NoContent() : Results.NotFound();
+    }
+
     internal async Task<IResult> UnlinkContentFileAsync(
         [FromServices] IContentService contentService,
         AuthenticatedUser user,
@@ -503,6 +601,21 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return releases is null ? Results.NotFound() : Results.Ok(releases);
+    }
+
+    internal async Task<IResult> PatchContentReleaseAsync(
+        [FromServices] IReleaseService releaseService,
+        AuthenticatedUser user,
+        Guid id,
+        Guid releaseId,
+        [FromBody] ContentReleasePatch patch,
+        CancellationToken cancellationToken)
+    {
+        var patched = await releaseService
+            .PatchContentReleaseAsync(id, releaseId, patch, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
     }
 
     private static IResult FilterParseProblem(MagpieQlParseError error)

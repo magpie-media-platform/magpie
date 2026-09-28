@@ -553,7 +553,7 @@ public sealed class MediaServerRefreshJobTests
             Level = "level",
             Slug = "item",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _contentHierarchyItems
@@ -623,7 +623,7 @@ public sealed class MediaServerRefreshJobTests
             Level = "level",
             Slug = "item",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _contentHierarchyItems
@@ -694,7 +694,7 @@ public sealed class MediaServerRefreshJobTests
             Level = "level",
             Slug = "item",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _contentHierarchyItems
@@ -765,7 +765,7 @@ public sealed class MediaServerRefreshJobTests
             Level = "level",
             Slug = "item",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _contentHierarchyItems
@@ -836,7 +836,7 @@ public sealed class MediaServerRefreshJobTests
             Level = "level",
             Slug = "item",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _contentHierarchyItems
@@ -907,7 +907,7 @@ public sealed class MediaServerRefreshJobTests
             Level = "level",
             Slug = "item",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _contentHierarchyItems
@@ -1036,7 +1036,7 @@ public sealed class MediaServerRefreshJobTests
             Slug = "item",
             Name = "Item",
             Path = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _contentHierarchyItems

@@ -103,6 +103,11 @@ internal sealed class RootFolderRepository(
             fields.Add("upgradeFileHandling");
         }
 
+        if (patch.AutoImport is not null)
+        {
+            fields.Add("autoImport");
+        }
+
         if (patch.Defaults is not null)
         {
             fields.Add("defaults");
@@ -157,6 +162,11 @@ internal sealed class RootFolderRepository(
         if (current.UpgradeFileHandling != model.UpgradeFileHandling)
         {
             fields.Add("upgradeFileHandling");
+        }
+
+        if (current.AutoImport != model.AutoImport)
+        {
+            fields.Add("autoImport");
         }
 
         var currentDefaults = current.Defaults
@@ -387,6 +397,7 @@ internal sealed class RootFolderRepository(
                                 .SetProperty(r => r.RenameTemplate, model.RenameTemplate)
                                 .SetProperty(r => r.DefaultImportCollisionMode, model.DefaultImportCollisionMode)
                                 .SetProperty(r => r.UpgradeFileHandling, model.UpgradeFileHandling)
+                                .SetProperty(r => r.AutoImport, model.AutoImport)
                                 .SetProperty(r => r.Defaults, model.Defaults)
                                 .SetProperty(r => r.ModifiedAt, now)
                                 .SetProperty(r => r.ModifiedByUserId, modifiedByUserId),
@@ -534,6 +545,11 @@ internal sealed class RootFolderRepository(
                     if (patch.UpgradeFileHandling is not null)
                     {
                         model.UpgradeFileHandling = patch.UpgradeFileHandling.Value;
+                    }
+
+                    if (patch.AutoImport is not null)
+                    {
+                        model.AutoImport = patch.AutoImport.Value;
                     }
 
                     if (patch.Defaults is not null)

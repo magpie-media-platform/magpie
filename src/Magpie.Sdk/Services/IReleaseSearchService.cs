@@ -40,6 +40,20 @@ public interface IReleaseSearchService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Runs an interactive search and reports incomplete provider branches.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item to search for</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The search result, or null when the item is absent</returns>
+    async Task<InteractiveSearchResult?> SearchInteractiveResultAsync(
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default)
+    {
+        var candidates = await SearchInteractiveAsync(contentHierarchyItemId, cancellationToken).ConfigureAwait(false);
+        return candidates is null ? null : new InteractiveSearchResult { Candidates = candidates };
+    }
+
+    /// <summary>
     /// Searches the indexers for a content hierarchy item and stores the resulting releases.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item to search for</param>
@@ -47,7 +61,7 @@ public interface IReleaseSearchService
     /// <param name="correlationId">The id that groups related calls, or <see langword="null"/> when standalone</param>
     /// <param name="currentExecutionId">The job execution that runs the search, or <see langword="null"/></param>
     /// <param name="progress">The reporter for progress updates, or <see langword="null"/> when there is none</param>
-    /// <param name="immediateOverride">Whether the search also runs for an item that needs no acquisition</param>
+    /// <param name="force">Whether the search bypasses normal suppression and eligibility checks</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task SearchAsync(
         Guid contentHierarchyItemId,
@@ -55,6 +69,6 @@ public interface IReleaseSearchService
         Guid? correlationId,
         Guid? currentExecutionId,
         IProgressReporter? progress,
-        bool immediateOverride = false,
+        bool force = false,
         CancellationToken cancellationToken = default);
 }

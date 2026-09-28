@@ -27,6 +27,8 @@ const LIBRARY_SORT_OPTIONS: MobileListSortOption[] = [
     { id: 'publishDate', label: 'Published', initialDirection: 'desc' },
     { id: 'dateAdded', label: 'Date Added', initialDirection: 'desc' },
     { id: 'fulfilledDate', label: 'Fulfilled', initialDirection: 'desc' },
+    { id: 'primaryMediaSize', label: 'Media size', initialDirection: 'desc' },
+    { id: 'primaryMediaFileCount', label: 'Media files', initialDirection: 'desc' },
 ];
 
 interface LibraryContentSectionProps {
@@ -54,7 +56,7 @@ interface LibraryContentSectionProps {
     pageCount: number;
     currentPage: number;
     goToPage: (page: number) => void;
-    canEditContent: boolean;
+    canAddContent: boolean;
     addContentTo: string;
     onClearSearchAndFilters: () => void;
     view: 'list' | 'gallery';
@@ -85,7 +87,7 @@ export function LibraryContentSection({
     pageCount,
     currentPage,
     goToPage,
-    canEditContent,
+    canAddContent,
     addContentTo,
     onClearSearchAndFilters,
     view,
@@ -108,7 +110,7 @@ export function LibraryContentSection({
             title="Your library is empty"
             description="Added content will appear here. Use Add Content to start building the library."
             action={
-                canEditContent ? (
+                canAddContent ? (
                     <Button asChild variant="primary" size="sm">
                         <Link to={addContentTo} data-action="add-content">
                             <PlusIcon weight="bold" aria-hidden="true" />
@@ -197,6 +199,7 @@ export function LibraryContentSection({
                             className="library-page__gallery-pager"
                             page={currentPage}
                             pageCount={pageCount}
+                            totalItems={totalItems}
                             onFirst={() => goToPage(1)}
                             onPrevious={() => goToPage(currentPage - 1)}
                             onNext={() => goToPage(currentPage + 1)}
@@ -263,6 +266,7 @@ export function LibraryContentSection({
                                     className="library-page__mobile-pager"
                                     page={currentPage}
                                     pageCount={pageCount}
+                                    totalItems={totalItems}
                                     onFirst={() => goToPage(1)}
                                     onPrevious={() => goToPage(currentPage - 1)}
                                     onNext={() => goToPage(currentPage + 1)}

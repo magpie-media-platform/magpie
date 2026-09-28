@@ -23,7 +23,12 @@ internal sealed class MediaFileConfiguration : IEntityTypeConfiguration<MediaFil
             .HasForeignKey(e => e.ContentItemId)
             .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Download>()
+            .WithMany()
+            .HasForeignKey(e => e.DownloadId)
+            .OnDelete(DeleteBehavior.SetNull);
         builder.HasIndex(e => e.ContentItemId);
+        builder.HasIndex(e => e.DownloadId);
         builder.HasIndex(e => e.FilePath).IsUnique();
         builder.HasIndex(e => e.PathKey).IsUnique();
     }

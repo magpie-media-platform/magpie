@@ -3,10 +3,11 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,6 +15,7 @@ using Magpie.Extensions.MusicBrainz.Mapping;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
+using Magpie.Sdk.Content;
 
 namespace Magpie.Extensions.MusicBrainz.QueryEngine;
 
@@ -45,10 +47,6 @@ internal sealed class QueryExecutor(
         FailureWarning(FetchOutcome.ResponseTooLarge),
         FailureWarning(FetchOutcome.Unavailable)
     ];
-
-    private static readonly Regex SecretQueryValue = new(
-        "([?&](?:api_?key|access_?token|token|secret|password|signature)=)[^&]*",
-        RegexOptions.IgnoreCase);
 
     public async Task<QueryResult> ExecuteAsync(QueryPlan plan, CancellationToken cancellationToken)
     {
@@ -1204,6 +1202,11 @@ internal sealed class QueryExecutor(
         QueryPlan plan,
         CancellationToken cancellationToken)
     {
+        if (plan.Progress is not null)
+        {
+            return ExecuteContinuationAsync(plan, cancellationToken);
+        }
+
         return plan.Root is null
             ? Task.FromResult(Empty(plan))
             : ExecuteNodeAsync(plan, plan.Root, new Dictionary<int, QueryResult>(), bound: null, cancellationToken);
@@ -1478,7 +1481,8 @@ internal sealed class QueryExecutor(
                 executionFilter,
                 anchor,
                 cancellationToken).ConfigureAwait(false),
-            AccessMode.Search when executionFilter is not null || executionFetch.UsesReleaseIndexComposition =>
+            AccessMode.Search when plan.Progress is not null || executionFilter is not null ||
+                executionFetch.UsesReleaseIndexComposition =>
                 await ExecuteVerifiedAsync(executionPlan, executionFetch, executionFilter, cancellationToken)
                     .ConfigureAwait(false),
             AccessMode.Search => await ExecutePageAsync(executionPlan, executionFetch, cancellationToken)
@@ -1520,7 +1524,7 @@ internal sealed class QueryExecutor(
             ExcludedArtistMbids = [],
             Warnings = anchor.Warnings
         };
-        return filter is not null
+        return filter is not null || plan.Progress is not null
             ? ExecuteVerifiedAsync(plan, fetch, filter, cancellationToken, query)
             : ExecuteArtistCompositionPageAsync(plan, fetch, query, cancellationToken);
     }
@@ -1885,6 +1889,17 @@ internal sealed class QueryExecutor(
         ArtistCompositionQuery? artistCompositionQuery,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (plan.Progress is not null)
+        {
+            await foreach (var hit in ContinueVerifiedHitsAsync(plan, fetch, filter, diagnostics,
+                scanFingerprint, artistCompositionQuery, cancellationToken).ConfigureAwait(false))
+            {
+                yield return hit;
+            }
+
+            yield break;
+        }
+
         var yielded = 0;
         while (true)
         {
@@ -1920,6 +1935,80 @@ internal sealed class QueryExecutor(
             if (snapshot.Exhausted)
             {
                 yield break;
+            }
+        }
+    }
+
+    private async IAsyncEnumerable<SearchHit> ContinueVerifiedHitsAsync(
+        QueryPlan plan,
+        FetchPlanNode fetch,
+        FilterPlanNode? filter,
+        VerifiedScanDiagnostics diagnostics,
+        string signature,
+        ArtistCompositionQuery? artistCompositionQuery,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var progress = plan.Progress!;
+        if (!progress.Sources.TryGetValue(fetch.Id, out var source))
+        {
+            source = new SourceProgress();
+            progress.Sources.Add(fetch.Id, source);
+        }
+
+        if (source.Signature is not null && source.Signature != signature)
+        {
+            throw new MetadataSearchContinuationException("MusicBrainz resolved sources changed. Start a new search.");
+        }
+
+        source.Signature = signature;
+        while (!source.Exhausted)
+        {
+            var scan = new VerifiedScan(source.Offset);
+            var yielded = 0;
+            var loaded = false;
+            while (true)
+            {
+                var snapshot = scan.Read();
+                while (yielded < snapshot.HitCount)
+                {
+                    var hit = scan.HitAt(yielded++);
+                    if (!source.Seen.Contains(IdentityKey(hit)))
+                    {
+                        yield return hit;
+                        source.Seen.Add(IdentityKey(hit));
+                    }
+                }
+
+                if (loaded && snapshot.PendingCount == 0)
+                {
+                    if (snapshot.Warnings.Count > 0)
+                    {
+                        diagnostics.Warnings = snapshot.Warnings;
+                        yield break;
+                    }
+
+                    source.Exhausted = snapshot.SourceExhausted && !snapshot.Truncated;
+                    if (snapshot.Truncated)
+                    {
+                        diagnostics.Truncated = true;
+                        yield break;
+                    }
+
+                    source.Offset = snapshot.NextOffset;
+                    break;
+                }
+
+                var fetched = await ExtendScanAsync(plan, fetch, filter, scan, artistCompositionQuery,
+                    cancellationToken).ConfigureAwait(false);
+                if (fetched is not { Outcome: FetchOutcome.Success, Value: { } updated })
+                {
+                    diagnostics.Outcome = fetched.Outcome;
+                    yield break;
+                }
+
+                scan = updated;
+                loaded = true;
+                diagnostics.Warnings = scan.Read().Warnings;
             }
         }
     }
@@ -2651,6 +2740,11 @@ internal sealed class QueryExecutor(
 
         foreach (var candidate in candidates)
         {
+            if (plan.Progress?.Delivered.Contains(IdentityKey(candidate)) == true)
+            {
+                continue;
+            }
+
             examined++;
             var evaluated = residuals.Count == 0
                 ? new ResidualEvaluationResult { Accepted = true }
@@ -2711,6 +2805,14 @@ internal sealed class QueryExecutor(
             Offset = request.Offset
         };
         using var activity = StartRequest(role, request.RelativeTarget);
+        if (settings.FreshSearch)
+        {
+            var fresh = await client.SearchAsync(request, settings, cancellationToken).ConfigureAwait(false);
+            EndRequest(activity, role, false, fresh.Value is null ? 0 : RawHitCount(request.Target, fresh.Value),
+                fresh.Outcome);
+            return fresh;
+        }
+
         var loaded = false;
         var fetched = await cache.GetSearchPageAsync(
             key,
@@ -2828,7 +2930,7 @@ internal sealed class QueryExecutor(
         if (activity is not null)
         {
             activity.SetTag("magpie.request.role", role);
-            activity.SetTag("magpie.request.target", ScrubSecrets(target));
+            activity.SetTag("magpie.request.target", target);
         }
 
         return activity;
@@ -2860,8 +2962,6 @@ internal sealed class QueryExecutor(
 
         activity.Dispose();
     }
-
-    private string ScrubSecrets(string target) => SecretQueryValue.Replace(target, "$1redacted");
 
     private async Task<FetchResult<ResidualEntityData>> GetEntityDataAsync(
         SearchHit hit,
@@ -3565,6 +3665,473 @@ internal sealed class QueryExecutor(
         return diagnostic;
     }
 
+    private async Task<QueryResult> ExecuteContinuationAsync(QueryPlan plan, CancellationToken cancellationToken)
+    {
+        if (plan.Root is null)
+        {
+            return Empty(plan);
+        }
+
+        var warnings = new List<string>(plan.Warnings);
+        var outcomes = new Dictionary<int, QueryResult>();
+        var hits = new List<SearchHit>();
+        var seen = new HashSet<string>(plan.Progress!.Delivered, StringComparer.OrdinalIgnoreCase);
+        var exhausted = true;
+        try
+        {
+            foreach (var resolver in plan.Root.Flatten().OfType<ResolvePlanNode>()
+                .GroupBy(node => node.Id).Select(group => group.First())
+                .Where(node => plan.Progress.ResolverIdentities.ContainsKey(node.Id)))
+            {
+                var resolved = await ExecuteResolveNodeAsync(plan, resolver, cancellationToken).ConfigureAwait(false);
+                RecordResolution(plan.Progress, resolver, resolved);
+                outcomes[resolver.Id] = resolved;
+                warnings.AddRange(resolved.Warnings);
+                if (resolved.PageInfo.HasMore)
+                {
+                    throw new IncompleteEvaluationException();
+                }
+            }
+
+            if (plan.Progress.ValidateOnly)
+            {
+                return EmptyWithWarnings(plan, warnings);
+            }
+
+            await foreach (var hit in ContinueNodeAsync(plan, plan.Root, outcomes, warnings, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (!seen.Add(IdentityKey(hit)))
+                {
+                    continue;
+                }
+
+                hits.Add(hit);
+                if (hits.Count > plan.MaxResults)
+                {
+                    exhausted = false;
+                    hits.RemoveAt(plan.MaxResults);
+                    break;
+                }
+            }
+        }
+        catch (HttpRequestException)
+        {
+            warnings.Add("MusicBrainz could not complete the search. More results may remain.");
+            exhausted = false;
+        }
+        catch (IncompleteEvaluationException)
+        {
+            exhausted = false;
+        }
+
+        return new QueryResult
+        {
+            Supported = true,
+            Hits = hits,
+            PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = !exhausted || warnings.Count > 0 },
+            Warnings = [.. warnings.Distinct()]
+        };
+    }
+
+    private async IAsyncEnumerable<SearchHit> ContinueNodeAsync(
+        QueryPlan plan,
+        PlanNode node,
+        Dictionary<int, QueryResult> outcomes,
+        List<string> warnings,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        switch (node)
+        {
+            case ResolvePlanNode resolve:
+                var resolved = await ExecuteResolveNodeAsync(plan, resolve, cancellationToken).ConfigureAwait(false);
+                RecordResolution(plan.Progress!, resolve, resolved);
+                outcomes[resolve.Id] = resolved;
+                warnings.AddRange(resolved.Warnings);
+                foreach (var hit in resolved.Hits)
+                {
+                    yield return hit;
+                }
+
+                break;
+            case FetchPlanNode fetch:
+                await foreach (var hit in ContinueFetchAsync(plan, fetch, null, outcomes, warnings, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    yield return hit;
+                }
+
+                break;
+            case FilterPlanNode filter when filter.Child is FetchPlanNode { AccessMode: AccessMode.Search } search:
+                await foreach (var hit in ContinueFetchAsync(
+                    plan, search, filter, outcomes, warnings, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    yield return hit;
+                }
+
+                break;
+            case FilterPlanNode filter:
+                var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var exclusion in filter.Exclusions)
+                {
+                    var values = await EvaluationAsync(plan, exclusion, outcomes, warnings, cancellationToken)
+                        .ConfigureAwait(false);
+                    excluded.UnionWith(values.Select(IdentityKey));
+                }
+
+                await foreach (var hit in ContinueNodeAsync(plan, filter.Child, outcomes, warnings, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    var resolvers = filter.Child.Flatten().OfType<ResolvePlanNode>().ToArray();
+                    var filters = ApplyResolvedRelationships(filter.Filters, resolvers, outcomes);
+                    if (excluded.Contains(IdentityKey(hit)) || filters is null || !Survives(filters, hit))
+                    {
+                        continue;
+                    }
+
+                    var evaluated = filter.Residuals.Count == 0
+                        ? new ResidualEvaluationResult { Accepted = true }
+                        : await EvaluateCandidateAsync(filter.Residuals, plan.Settings, hit, cancellationToken)
+                            .ConfigureAwait(false);
+                    warnings.AddRange(evaluated.Warnings);
+                    if (!evaluated.Accepted && evaluated.Warnings.Count > 0)
+                    {
+                        throw new IncompleteEvaluationException();
+                    }
+
+                    if (evaluated.Accepted)
+                    {
+                        yield return evaluated.Candidate ?? hit;
+                    }
+                }
+
+                break;
+            case UnionPlanNode union:
+                foreach (var child in union.Children)
+                {
+                    await foreach (var hit in ContinueNodeAsync(plan, child, outcomes, warnings, cancellationToken)
+                        .ConfigureAwait(false))
+                    {
+                        yield return hit;
+                    }
+                }
+
+                break;
+            case IntersectPlanNode intersect:
+                if (!plan.Progress!.PendingIntersections.TryGetValue(intersect.Id, out var pending))
+                {
+                    var branches = new List<IReadOnlyList<SearchHit>>();
+                    foreach (var child in intersect.Children)
+                    {
+                        branches.Add(await EvaluationAsync(plan, child, outcomes, warnings, cancellationToken)
+                            .ConfigureAwait(false));
+                    }
+
+                    pending = branches.Count == 0 ? [] : branches[0].ToList();
+                    foreach (var branch in branches.Skip(1))
+                    {
+                        var identities = branch.Select(IdentityKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        pending.RemoveAll(hit => !identities.Contains(IdentityKey(hit)));
+                    }
+
+                    plan.Progress.PendingIntersections[intersect.Id] = pending;
+                }
+
+                while (pending.Count > 0)
+                {
+                    yield return pending[0];
+                    pending.RemoveAt(0);
+                }
+
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(node));
+        }
+    }
+
+    private async Task<IReadOnlyList<SearchHit>> EvaluationAsync(
+        QueryPlan plan,
+        PlanNode node,
+        Dictionary<int, QueryResult> outcomes,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        var progress = plan.Progress!;
+        var values = progress.Evaluation.GetValueOrDefault(node.Id) ?? [];
+        if (progress.CompleteEvaluations.Contains(node.Id))
+        {
+            return values;
+        }
+
+        progress.Evaluation[node.Id] = values;
+        var warningCount = warnings.Count;
+        var identities = values.Select(IdentityKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        await foreach (var hit in ContinueNodeAsync(plan, node, outcomes, warnings, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (identities.Add(IdentityKey(hit)))
+            {
+                values.Add(hit);
+            }
+        }
+
+        if (warnings.Count > warningCount)
+        {
+            throw new IncompleteEvaluationException();
+        }
+
+        progress.CompleteEvaluations.Add(node.Id);
+        return values;
+    }
+
+    private async IAsyncEnumerable<SearchHit> ContinueFetchAsync(
+        QueryPlan plan,
+        FetchPlanNode fetch,
+        FilterPlanNode? filter,
+        Dictionary<int, QueryResult> outcomes,
+        List<string> warnings,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var resolved = new Dictionary<int, QueryResult>();
+        foreach (var resolver in fetch.Resolvers)
+        {
+            var result = outcomes.TryGetValue(resolver.Id, out var cached) ? cached :
+                await ExecuteResolveNodeAsync(plan, resolver, cancellationToken).ConfigureAwait(false);
+            RecordResolution(plan.Progress!, resolver, result);
+            outcomes[resolver.Id] = result;
+            resolved[resolver.Id] = result;
+            warnings.AddRange(result.Warnings);
+            if (result.PageInfo.HasMore || result.Warnings.Count > 0)
+            {
+                warnings.Add("MusicBrainz could not resolve every search source. More results may remain.");
+                throw new IncompleteEvaluationException();
+            }
+
+            if (!result.Supported)
+            {
+                yield break;
+            }
+        }
+
+        if (fetch.Precondition is { Kind: PlanPreconditionKind.NodeNonEmpty, NodeId: { } required } &&
+            outcomes.TryGetValue(required, out var requiredOutcome) && requiredOutcome.Hits.Count == 0)
+        {
+            yield break;
+        }
+
+        var anchor = fetch.AnchorSource is null ? null :
+            await EvaluationAsync(plan, fetch.AnchorSource, outcomes, warnings, cancellationToken)
+                .ConfigureAwait(false);
+        if (anchor is { Count: 0 })
+        {
+            yield break;
+        }
+
+        var filters = ApplyResolvedRelationships(fetch.Filters, fetch.Resolvers, resolved);
+        var localFilters = filter is null ? [] : ApplyResolvedRelationships(filter.Filters, fetch.Resolvers, resolved);
+        if (filters is null || localFilters is null)
+        {
+            yield break;
+        }
+
+        var signature = JsonSerializer.Serialize(new
+        {
+            filters,
+            localFilters,
+            Sources = resolved.Select(pair => new { pair.Key, Ids = pair.Value.Hits.Select(IdentityKey) }),
+            Anchor = anchor?.Select(IdentityKey)
+        });
+        if (plan.Progress!.ResolvedSources.TryGetValue(fetch.Id, out var previous) && previous != signature)
+        {
+            throw new MetadataSearchContinuationException("MusicBrainz resolved sources changed. Start a new search.");
+        }
+
+        plan.Progress.ResolvedSources[fetch.Id] = signature;
+        fetch = fetch with { Filters = filters };
+        filter = filter is null ? null : filter with { Filters = localFilters };
+        if (fetch.AccessMode == AccessMode.Search)
+        {
+            var excluded = new List<string>();
+            foreach (var exclusion in filter?.Exclusions ?? [])
+            {
+                var values = await EvaluationAsync(plan, exclusion, outcomes, warnings, cancellationToken)
+                    .ConfigureAwait(false);
+                excluded.AddRange(values.Select(hit => hit.PrimaryMbid));
+            }
+
+            var composition = anchor is null && excluded.Count == 0 ? null : new ArtistCompositionQuery
+            {
+                IncludedArtistMbids = anchor?.Select(hit => hit.PrimaryMbid).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(value => value, StringComparer.Ordinal).ToArray() ?? [],
+                ExcludedArtistMbids = [.. excluded.Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(value => value, StringComparer.Ordinal)],
+                Warnings = []
+            };
+            var diagnostics = new VerifiedScanDiagnostics();
+            try
+            {
+                await foreach (var hit in ContinueVerifiedHitsAsync(plan, fetch, filter, diagnostics,
+                    signature + JsonSerializer.Serialize(composition), composition, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    yield return hit;
+                }
+            }
+            finally
+            {
+                warnings.AddRange(diagnostics.Warnings);
+                if (diagnostics.Outcome != FetchOutcome.Success)
+                {
+                    warnings.Add(FailureWarning(diagnostics.Outcome));
+                }
+
+                if (diagnostics.Truncated)
+                {
+                    warnings.Add(ScanTruncationWarning);
+                }
+            }
+
+            yield break;
+        }
+
+        if (fetch.AccessMode == AccessMode.Browse && fetch.BrowseComposition is null)
+        {
+            var artists = (fetch.DirectValue is null ? [] : new[] { fetch.DirectValue })
+                .Concat(resolved.Values.SelectMany(result => result.Hits).Select(hit => hit.PrimaryMbid))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            foreach (var artist in artists)
+            {
+                var key = fetch.Id + ":" + artist;
+                if (!plan.Progress.BrowseSources.TryGetValue(key, out var source))
+                {
+                    source = new SourceProgress();
+                    plan.Progress.BrowseSources.Add(key, source);
+                }
+
+                while (!source.Exhausted)
+                {
+                    var response = await SearchPageAsync(LinkedBrowseRequest(fetch.Target, artist,
+                        BrowsePageSize, source.Offset), plan.Settings, "browse", cancellationToken)
+                        .ConfigureAwait(false);
+                    if (response is not { Outcome: FetchOutcome.Success, Value: { } page })
+                    {
+                        warnings.Add(FailureWarning(response.Outcome));
+                        yield break;
+                    }
+
+                    var hits = ApplyResolvedArtistTypes(filter?.Filters ?? fetch.Filters, MapPage(fetch.Target, page))
+                        .ToArray();
+                    while (source.Consumed < hits.Length)
+                    {
+                        yield return hits[source.Consumed];
+                        source.Consumed++;
+                    }
+
+                    var rows = RawHitCount(fetch.Target, page);
+                    source.Exhausted = rows == 0 || source.Offset + rows >= page.Count;
+                    if (!source.Exhausted)
+                    {
+                        source.Offset += rows;
+                        source.Consumed = 0;
+                    }
+                }
+            }
+
+            yield break;
+        }
+
+        if (fetch.AccessMode == AccessMode.Browse &&
+            fetch.BrowseComposition is { Expansion: not ArtistCompositionExpansion.BandMembers } compositionBrowse)
+        {
+            foreach (var identity in resolved.Values.SelectMany(result => result.Hits)
+                .Select(hit => hit.PrimaryMbid).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var sourceKey = fetch.Id + ":" + identity;
+                if (!plan.Progress.BrowseSources.TryGetValue(sourceKey, out var source))
+                {
+                    source = new SourceProgress();
+                    plan.Progress.BrowseSources.Add(sourceKey, source);
+                }
+
+                while (!source.Exhausted)
+                {
+                    var key = new ArtistBrowseCacheKey
+                    {
+                        RelatedEntity = compositionBrowse.RelatedEntity,
+                        RelatedMbid = identity,
+                        Capabilities = compositionBrowse.ExpansionCapabilities,
+                        Limit = BrowsePageSize,
+                        Offset = source.Offset
+                    };
+                    var response = await client.BrowseArtistsAsync(key, plan.Settings, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (response is not { Outcome: FetchOutcome.Success, Value: { } page })
+                    {
+                        warnings.Add(FailureWarning(response.Outcome));
+                        yield break;
+                    }
+
+                    var artists = NormalizeArtists(page.Artists ?? []);
+                    while (source.Consumed < artists.Count)
+                    {
+                        if (artists[source.Consumed].ToHit() is { } hit)
+                        {
+                            yield return hit;
+                        }
+
+                        source.Consumed++;
+                    }
+
+                    var rows = page.Artists?.Count ?? 0;
+                    source.Exhausted = rows == 0 || source.Offset + rows >= page.ArtistCount;
+                    if (!source.Exhausted)
+                    {
+                        source.Offset += rows;
+                        source.Consumed = 0;
+                    }
+                }
+            }
+
+            yield break;
+        }
+
+        var resultPlan = plan with { Progress = null, RequestedPage = 1, MaxResults = int.MaxValue };
+        var finite = fetch.AccessMode switch
+        {
+            AccessMode.Lookup => await ExecuteEntityAsync(resultPlan, fetch, filter, cancellationToken)
+                .ConfigureAwait(false),
+            AccessMode.IsrcLookup => await ExecuteIsrcAsync(resultPlan, fetch, filter, cancellationToken)
+                .ConfigureAwait(false),
+            AccessMode.Browse => await ExecuteBrowseFetchAsync(
+                resultPlan, fetch, filter, resolved, null, cancellationToken)
+                .ConfigureAwait(false),
+            _ => throw new ArgumentOutOfRangeException(nameof(fetch))
+        };
+        warnings.AddRange(finite.Warnings);
+        foreach (var hit in finite.Hits)
+        {
+            yield return hit;
+        }
+    }
+
+    private void RecordResolution(QueryProgress progress, ResolvePlanNode node, QueryResult result)
+    {
+        if (result.Warnings.Count > 0 || result.PageInfo.HasMore)
+        {
+            return;
+        }
+
+        var identity = JsonSerializer.Serialize(result.Hits.Select(hit => new { hit.PrimaryMbid, hit.ArtistType }));
+        if (progress.ResolverIdentities.TryGetValue(node.Id, out var previous) && previous != identity)
+        {
+            throw new MetadataSearchContinuationException(
+                "MusicBrainz resolved identities changed. Start a new search.");
+        }
+
+        progress.ResolverIdentities[node.Id] = identity;
+    }
+
     private sealed record ResolvedArtistComposition
     {
         public required FetchOutcome Outcome { get; init; }
@@ -3628,4 +4195,6 @@ internal sealed class QueryExecutor(
 
         public IReadOnlyList<string> Warnings { get; set; } = [];
     }
+
+    private sealed class IncompleteEvaluationException : Exception;
 }

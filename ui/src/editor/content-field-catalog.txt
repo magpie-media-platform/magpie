@@ -1,0 +1,39 @@
+collection award body:string category:string country:string language:string name:string status:string year:number
+collection awards body:string category:string country:string language:string name:string status:string year:number
+collection contentRating body:string rating:string
+collection contentRatings body:string rating:string
+collection externalId source:string value:string
+collection externalIds source:string value:string
+collection genre name:string
+collection genres name:string
+collection image height:number language:string mimeType:string source:string type:string url:string width:number
+collection images height:number language:string mimeType:string source:string type:string url:string width:number
+collection mediaFile fileKind:string filePath:string fileSize:long mimeType:string
+collection mediaFiles fileKind:string filePath:string fileSize:long mimeType:string
+collection relationship externalId:string externalIdSource:string kind:string name:string qualifier:string relatedMetadataContainerId:guid subject:string type:string
+collection relationships externalId:string externalIdSource:string kind:string name:string qualifier:string relatedMetadataContainerId:guid subject:string type:string
+collection tag name:string
+collection tags name:string
+scalar activeAcquisitionStatus enum Cancelled|Downloaded|Downloading|Failed|Faulted|Grabbed|Imported|Importing|Paused|Queued|Stalled
+scalar contentType string
+scalar duration timespan
+scalar fulfillment enum Fulfilled|FulfilledExternally|Missing|Partial|Upgradable
+scalar hasSearchableTitle boolean
+scalar importPending boolean
+scalar language string
+scalar level string
+scalar monitoring enum Monitored|Shotgun|Unmonitored
+scalar name string
+scalar originalTitle string
+scalar overview string
+scalar parentId guid
+scalar path string
+scalar pendingMetadataRefresh boolean
+scalar primaryMediaFileCount number
+scalar primaryMediaSize long
+scalar productionStatus string
+scalar publishDate date
+scalar qualityStatus enum Met|UpgradeWanted
+scalar rootFolderId guid
+scalar slug string
+scalar title string

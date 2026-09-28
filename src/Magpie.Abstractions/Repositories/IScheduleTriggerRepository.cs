@@ -16,6 +16,13 @@ public interface IScheduleTriggerRepository :
     IPatchRepository<Guid, ScheduleTrigger, ScheduleTriggerPatch>
 {
     /// <summary>
+    /// Locks a schedule trigger until the current transaction ends.
+    /// </summary>
+    /// <param name="triggerId">The id of the schedule trigger.</param>
+    /// <param name="cancellationToken">The token that cancels the operation.</param>
+    Task LockAsync(Guid triggerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Claims the next run of a trigger with optimistic concurrency, in a single atomic step.
     /// </summary>
     /// <param name="triggerId">The id of the schedule trigger</param>

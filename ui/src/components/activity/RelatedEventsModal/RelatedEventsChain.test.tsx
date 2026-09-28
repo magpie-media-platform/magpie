@@ -154,7 +154,8 @@ describe('RelatedEventsChain', () => {
     it.each([
         ['parent', 'Page 1 of 26', 20],
         ['child-499', 'Page 26 of 26', 1],
-    ])('bounds a fan-out tree and opens the page containing %s', async (selectedId, pageLabel, count) => {
+    ])('Pagination_ShowsExactChainCount_WhenOpeningPageContaining%s', async (selectedId, pageLabel, count) => {
+        // Arrange
         const user = userEvent.setup();
         vi.mocked(apiGet).mockResolvedValue({
             root: {
@@ -174,6 +175,7 @@ describe('RelatedEventsChain', () => {
             },
             totalCount: 501,
         });
+        // Act
         render(
             wrap(
                 <RelatedEventsChain
@@ -188,16 +190,30 @@ describe('RelatedEventsChain', () => {
                 />,
             ),
         );
+        // Assert
         await screen.findByText(pageLabel);
         expect(screen.getAllByRole('listitem')).toHaveLength(count);
         expect(screen.getByTestId('related-events__self-step')).toHaveTextContent('Selected Job');
         const pager = within(screen.getByRole('navigation', { name: 'Job chain pagination' }));
+        expect(pager.getByText('501 results')).toBeInTheDocument();
+
+        // Act
         await user.click(pager.getByRole('button', { name: 'Go to first page' }));
+
+        // Assert
         expect(screen.getAllByRole('listitem')).toHaveLength(20);
+
+        // Act
         await user.click(pager.getByRole('button', { name: 'Go to next page' }));
+
+        // Assert
         expect(screen.getAllByRole('listitem')).toHaveLength(20);
         expect(screen.getAllByText(/^Parent: /)).toHaveLength(20);
+
+        // Act
         await user.click(pager.getByRole('button', { name: 'Go to last page' }));
+
+        // Assert
         expect(screen.getAllByRole('listitem')).toHaveLength(1);
         expect(screen.getByText('Page 26 of 26')).toBeInTheDocument();
     });
@@ -218,6 +234,7 @@ describe('RelatedEventsChain', () => {
             expect(screen.getByTestId('related-events__chain')).toBeInTheDocument();
         });
         expect(screen.queryByTestId('related-events-capped')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('related-events-content-capped')).not.toBeInTheDocument();
     });
 
     it('says where the chain was truncated when the execution tree hit the node limit', async () => {
@@ -236,6 +253,48 @@ describe('RelatedEventsChain', () => {
         expect(screen.getByTestId('related-events-capped').textContent).toContain(
             'This chain is truncated at 2 activities.',
         );
+        expect(screen.queryByTestId('related-events-content-capped')).not.toBeInTheDocument();
+    });
+
+    it.each([
+        { treeTruncated: false, label: 'only the content activity' },
+        { treeTruncated: true, label: 'both result sets' },
+    ])('reports each truncated result set with its own count when $label hit the limit', async ({ treeTruncated }) => {
+        const entry: MagpieActivityEntry = {
+            id: 'audit-1',
+            kind: MagpieActivityEntryKind.AuditRecord,
+            timestamp: '2024-05-01T09:00:00Z',
+            correlationId,
+            label: 'GrabSkipped',
+            category: 'Content',
+            status: null,
+            detail: 'No acceptable release.',
+        };
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({ items: [entry], totalItems: 1500, pageNumber: 1, pageSize: 1000 });
+            }
+            return Promise.resolve({ ...mockExecutionTree, truncated: treeTruncated });
+        });
+
+        render(
+            wrap(
+                <RelatedEventsChain
+                    executionId={executionId}
+                    correlationId={correlationId}
+                    seedEntityId="content-1"
+                    active
+                />,
+            ),
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('related-events-content-capped')).toBeInTheDocument();
+        });
+        expect(screen.getByTestId('related-events-content-capped').textContent).toContain(
+            'Only the latest 1 of 1500 activities for this item were searched.',
+        );
+        expect(screen.queryByTestId('related-events-capped') !== null).toBe(treeTruncated);
     });
 
     it('puts a same-correlation activity with no lineage edge in a distinct group, not the arrow chain', async () => {
@@ -284,6 +343,46 @@ describe('RelatedEventsChain', () => {
         const also = screen.getByTestId('related-events__also');
         expect(within(also).getByTestId('related-events__self-step')).toBeInTheDocument();
         expect(also.querySelector('.related-events__connector')).toBeNull();
+    });
+
+    it('Pagination_ShowsExactRelatedCount_WhenRelatedEntriesSpanPages', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({
+                    items: Array.from({ length: 21 }, (_, index) => ({
+                        id: `audit-${index}`,
+                        kind: MagpieActivityEntryKind.AuditRecord,
+                        timestamp: '2024-05-01T09:00:00Z',
+                        correlationId,
+                        label: 'GrabSkipped',
+                        category: 'Content',
+                        status: null,
+                        detail: 'No acceptable release.',
+                    })),
+                    totalItems: 21,
+                    pageNumber: 1,
+                    pageSize: 1000,
+                });
+            }
+            return Promise.resolve(mockExecutionTree);
+        });
+
+        // Act
+        render(wrap(<RelatedEventsChain executionId={null} correlationId={correlationId} seedEntityId="content-1" />));
+
+        // Assert
+        const pager = within(await screen.findByRole('navigation', { name: 'Related activity pagination' }));
+        expect(pager.getByText('Page 1 of 2')).toBeInTheDocument();
+        expect(pager.getByText('21 results')).toBeInTheDocument();
+
+        // Act
+        await user.click(pager.getByRole('button', { name: 'Go to next page' }));
+
+        // Assert
+        expect(pager.getByText('Page 2 of 2')).toBeInTheDocument();
+        expect(pager.getByText('21 results')).toBeInTheDocument();
     });
 
     it('renders a lone activity with no relations sanely, with no arrows and no also section', async () => {

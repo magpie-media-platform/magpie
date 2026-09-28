@@ -133,6 +133,30 @@ describe('useScanCompletionTracker', () => {
         expect(screen.getByText(/Scan complete/i)).toBeInTheDocument();
     });
 
+    it('refreshes the import queue and content when a tracked scan completes', async () => {
+        const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+        let pendingCalls = 0;
+        mockApiGet.mockImplementation(async (url: string) => {
+            if (url.startsWith('/import/candidates')) {
+                pendingCalls += 1;
+                return makePage(0);
+            }
+            if (url.startsWith('/jobs/')) {
+                return makeJobExecution({ status: pendingCalls > 0 ? 'Completed' : 'Running' });
+            }
+            throw new Error(`unexpected url ${url}`);
+        });
+
+        render(
+            <Providers>
+                <TrackOnMount executionId="exec-1" rootFolderName="Movies" />
+            </Providers>,
+        );
+
+        await screen.findByText('"Movies" is up to date. Nothing new to import.');
+        expect(invalidate).toHaveBeenCalledWith({ queryKey: ['content'] });
+    });
+
     it('toasts an "up to date" message when no new files are found', async () => {
         let pendingSnapshotCaptured = false;
 

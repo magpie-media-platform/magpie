@@ -1,8 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, vi } from 'vitest';
 
 import { PathControl } from './PathControl';
+import type { EffectiveRootFolder } from '@/types';
 
 const mockApply = vi.fn();
 const mockUseEffectiveRootFolder = vi.fn();
@@ -115,5 +117,92 @@ describe('PathControl', () => {
 
         rerender(<PathControl contentHierarchyItemId="content-1" rawPath="/media/selected" />);
         expect(screen.getByTestId('path-control__value')).toHaveTextContent(/^\/media\/selected$/);
+    });
+
+    it('reports a failed lookup with a retry action instead of the empty value', async () => {
+        const user = userEvent.setup();
+        const refetch = vi.fn();
+        mockUseEffectiveRootFolder.mockReturnValue({
+            data: undefined,
+            isLoading: false,
+            error: new Error('Request failed'),
+            isFetching: false,
+            refetch,
+        });
+
+        render(<PathControl contentHierarchyItemId="content-1" rawPath={null} />);
+
+        expect(screen.getByTestId('path-control__value')).toHaveTextContent('Path could not be loaded');
+        expect(screen.queryByText('No path')).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Retry loading path' }));
+        expect(refetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the explicit path when the root folder lookup fails', () => {
+        mockUseEffectiveRootFolder.mockReturnValue({
+            data: undefined,
+            isLoading: false,
+            error: new Error('Request failed'),
+            isFetching: false,
+            refetch: vi.fn(),
+        });
+
+        render(<PathControl contentHierarchyItemId="content-1" rawPath="/media/explicit" />);
+
+        expect(screen.getByTestId('path-control__value')).toHaveTextContent(/^\/media\/explicit$/);
+        expect(screen.queryByRole('button', { name: 'Retry loading path' })).not.toBeInTheDocument();
+    });
+
+    it('keeps the empty value copy for a successful empty lookup', () => {
+        mockUseEffectiveRootFolder.mockReturnValue({
+            data: { rootFolderId: null, source: 'None', resolvingHierarchyItemId: null, isOverriddenOnItem: false },
+            isLoading: false,
+            error: null,
+        });
+
+        render(<PathControl contentHierarchyItemId="content-1" rawPath={null} />);
+
+        expect(screen.getByTestId('path-control__value')).toHaveTextContent('No path');
+        expect(screen.queryByRole('button', { name: 'Retry loading path' })).not.toBeInTheDocument();
+    });
+
+    it('keeps a focused busy retry while a real failed lookup refetches, then shows the value', async () => {
+        const user = userEvent.setup();
+        let finishRetry: (value: EffectiveRootFolder) => void = () => {};
+        const lookup = vi
+            .fn<() => Promise<EffectiveRootFolder>>()
+            .mockRejectedValueOnce(new Error('Request failed'))
+            .mockImplementationOnce(() => new Promise((resolve) => (finishRetry = resolve)));
+        mockUseEffectiveRootFolder.mockImplementation(() =>
+            useQuery({ queryKey: ['effective-root-folder', 'content-1'], queryFn: lookup }),
+        );
+
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <PathControl contentHierarchyItemId="content-1" rawPath={null} />
+            </QueryClientProvider>,
+        );
+        const retry = await screen.findByRole('button', { name: 'Retry loading path' });
+        await user.click(retry);
+
+        expect(retry).toBeInTheDocument();
+        expect(retry).toHaveAttribute('aria-disabled', 'true');
+        expect(retry).toHaveAttribute('aria-busy', 'true');
+        expect(retry).toHaveFocus();
+        expect(screen.getByTestId('path-control__value')).toHaveTextContent('Path could not be loaded');
+
+        act(() =>
+            finishRetry({
+                rootFolderId: 'root-1',
+                rootFolderName: 'Movies-Main',
+                rootFolderPath: '/media/movies',
+                source: 'ContentTypeDefault',
+                resolvingHierarchyItemId: null,
+                isOverriddenOnItem: false,
+            }),
+        );
+
+        expect(await screen.findByText('/media/movies')).toBeInTheDocument();
+        expect(screen.getByTestId('path-control__trigger')).toHaveFocus();
     });
 });

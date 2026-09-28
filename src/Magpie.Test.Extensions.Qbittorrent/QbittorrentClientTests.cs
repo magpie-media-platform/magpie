@@ -91,8 +91,9 @@ public class QbittorrentClientTests
         _handler.VerifyNoOutstandingExpectation();
     }
 
-    [Test]
-    public async Task LoginAsync_True_WhenCredentialsAreAccepted()
+    [TestCase(HttpStatusCode.OK, "Ok.")]
+    [TestCase(HttpStatusCode.NoContent, "")]
+    public async Task LoginAsync_True_WhenCredentialsAreAccepted(HttpStatusCode statusCode, string responseBody)
     {
         // Arrange
         string? body = null;
@@ -102,7 +103,7 @@ public class QbittorrentClientTests
                 body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
                 return true;
             })
-            .Respond("text/plain", "Ok.");
+            .Respond(statusCode, "text/plain", responseBody);
 
         // Act
         var first = await _client.LoginAsync(_credentialSettings, default).ConfigureAwait(false);
@@ -122,6 +123,7 @@ public class QbittorrentClientTests
     }
 
     [TestCase(HttpStatusCode.OK, "Fails.")]
+    [TestCase(HttpStatusCode.Unauthorized, "")]
     [TestCase(HttpStatusCode.Forbidden, "")]
     public async Task LoginAsync_False_WhenCredentialsAreRejected(HttpStatusCode statusCode, string body)
     {
@@ -134,6 +136,30 @@ public class QbittorrentClientTests
 
         // Assert
         Assert.That(result, Is.False);
+        _handler.VerifyNoOutstandingExpectation();
+    }
+
+    [TestCase(HttpStatusCode.OK, "Ok.")]
+    [TestCase(HttpStatusCode.NoContent, "")]
+    public async Task GetVersionAsync_Version_WhenLoginIsAccepted(HttpStatusCode statusCode, string body)
+    {
+        // Arrange
+        var loginRequest = _handler.Expect(HttpMethod.Post, "http://qbit.local:8080/api/v2/auth/login")
+            .Respond(statusCode, "text/plain", body);
+        var versionRequest = _handler.Expect(HttpMethod.Get, "http://qbit.local:8080/api/v2/app/version")
+            .Respond("text/plain", "v5.2.3");
+
+        // Act
+        var version = await _client.GetVersionAsync(_credentialSettings, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(version, Is.EqualTo("v5.2.3"));
+            Assert.That(_handler.GetMatchCount(loginRequest), Is.EqualTo(1));
+            Assert.That(_handler.GetMatchCount(versionRequest), Is.EqualTo(1));
+        }
+
         _handler.VerifyNoOutstandingExpectation();
     }
 
@@ -195,7 +221,6 @@ public class QbittorrentClientTests
     }
 
     [TestCase(HttpStatusCode.OK, true)]
-    [TestCase(HttpStatusCode.NotFound, false)]
     public async Task DeleteAsync_Result_WhenWebUiReturnsStatus(HttpStatusCode statusCode, bool expected)
     {
         // Arrange
@@ -220,6 +245,24 @@ public class QbittorrentClientTests
             Assert.That(body, Does.Contain("deleteFiles=false"));
         }
 
+        _handler.VerifyNoOutstandingExpectation();
+    }
+
+    [TestCase(HttpStatusCode.BadRequest)]
+    [TestCase(HttpStatusCode.NotFound)]
+    [TestCase(HttpStatusCode.TooManyRequests)]
+    public void DeleteAsync_Throws_WhenWebUiRejectsRequest(HttpStatusCode statusCode)
+    {
+        // Arrange
+        _handler.Expect(HttpMethod.Post, "http://qbit.local:8080/api/v2/torrents/delete")
+            .Respond(statusCode);
+
+        // Act
+        var exception = Assert.ThrowsAsync<HttpRequestException>(() =>
+            _client.DeleteAsync(_anonymousSettings, Hash, false, default));
+
+        // Assert
+        Assert.That(exception, Is.Not.Null);
         _handler.VerifyNoOutstandingExpectation();
     }
 

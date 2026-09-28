@@ -145,8 +145,8 @@ internal static class CandidateFilterExtensions
         foreach (var group in subjects)
         {
             if (deferDetailFilters ||
-                appliedCriteria?.AppliedSubjectGroups.Contains(group) == true ||
-                satisfiedSubjectGroups?.Contains(group) == true)
+                appliedCriteria?.AppliedSubjectGroups.Contains(group, ResolvedSubjectGroupComparer.Instance) == true ||
+                satisfiedSubjectGroups?.Contains(group, ResolvedSubjectGroupComparer.Instance) == true)
             {
                 continue;
             }

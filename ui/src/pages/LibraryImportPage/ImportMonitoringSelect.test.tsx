@@ -4,14 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { ImportMonitoringSelect } from './ImportMonitoringSelect';
 
 describe('ImportMonitoringSelect', () => {
-    it.each([
-        ['Unmonitored', 'Not monitored'],
-        ['Future', 'Future only'],
-    ] as const)('shows the label for %s instead of the wire value', (value, label) => {
-        render(<ImportMonitoringSelect value={value} onChange={vi.fn()} />);
+    it('shows the label for Future instead of the wire value', () => {
+        render(<ImportMonitoringSelect value="Future" onChange={vi.fn()} />);
 
-        expect(screen.getByRole('combobox', { name: 'Import monitoring' })).toHaveTextContent(label);
-        expect(screen.queryByText(value)).toBeNull();
+        expect(screen.getByRole('combobox', { name: 'Import monitoring' })).toHaveTextContent('Future only');
+        expect(screen.queryByText('Future')).toBeNull();
     });
 
     it('shows the placeholder when nothing is chosen', () => {

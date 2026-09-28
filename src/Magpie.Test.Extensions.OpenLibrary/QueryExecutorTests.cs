@@ -8,10 +8,12 @@ using System.Threading.Tasks;
 using Magpie.Extensions.OpenLibrary;
 using Magpie.Extensions.OpenLibrary.Mapping;
 using Magpie.Extensions.OpenLibrary.QueryEngine;
+using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Sdk.Caching;
+using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -1548,9 +1550,9 @@ public sealed class QueryExecutorTests
         Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL1W"]));
     }
 
-    [TestCase((int)QueryField.Person, "Alice", "person_bob")]
+    [TestCase((int)QueryField.Person, "Alice", "bob")]
     [TestCase((int)QueryField.Place, "Paris", "london")]
-    [TestCase((int)QueryField.Time, "Victorian", "modern_era")]
+    [TestCase((int)QueryField.Time, "Victorian", "modern")]
     public async Task ExecuteSearchAsync_DropsHit_WhenAlignedFacetCriteriaSpanDifferentFacets(
         int facet,
         string textValue,
@@ -1575,11 +1577,11 @@ public sealed class QueryExecutorTests
                         AuthorKeys = ["OL1A"],
                         AuthorNames = ["Author"],
                         Persons = ["Alice", "Bob"],
-                        PersonKeys = ["person_alice", "person_bob"],
+                        PersonKeys = ["alice", "bob"],
                         Places = ["Paris", "London"],
-                        PlaceKeys = ["paris", "london"],
+                        PlaceKeys = ["london", "paris"],
                         Times = ["Victorian", "Modern"],
-                        TimeKeys = ["victorian_era", "modern_era"]
+                        TimeKeys = ["modern", "victorian"]
                     }
                 ]
             });
@@ -2308,6 +2310,73 @@ public sealed class QueryExecutorTests
             Assert.That(query, Does.Contain("\"Publisher 01\""));
             Assert.That(query, Does.Contain("\"Publisher 10\""));
             Assert.That(query, Does.Contain("\"Publisher 12\""));
+        }
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_ReplaysOnlyTheLastOffset_WhenTheBatchSpansSourcePages()
+    {
+        // Arrange
+        var offsets = new List<string>();
+        _client.Setup(value => value.GetJsonAsync<SearchResponseDto>(
+            It.IsAny<ApiRequest>(), _context, It.IsAny<CancellationToken>()))
+            .Callback((ApiRequest request, RequestContext _, CancellationToken _) =>
+                offsets.Add(request.Parameters.Single(value => value.Key == "offset").Value))
+            .ReturnsAsync((ApiRequest request, RequestContext _, CancellationToken _) => new SearchResponseDto
+            {
+                NumFound = 102,
+                NumFoundExact = true,
+                Docs = [.. Enumerable.Range(request.Parameters.Single(value => value.Key == "offset").Value == "0"
+                    ? 1 : 101, request.Parameters.Single(value => value.Key == "offset").Value == "0" ? 100 : 2)
+                    .Select(id => new SearchDocumentDto { Key = $"/works/OL{id}W", Title = $"Book {id}" })]
+            });
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns((QueryRequest request) => new QueryPlan
+        {
+            Root = new PlanNode
+            {
+                Kind = PlanNodeKind.Fetch,
+                SourceTerms = [new SourceTerm { Field = "title", Values = ["Book"] }],
+                PagingMode = FetchPagingMode.Direct
+            },
+            Hierarchy = request.Hierarchy,
+            Advanced = true,
+            MaxResults = request.MaxResults
+        });
+        var definition = new Mock<IContentTypeDefinitionProvider>();
+        definition.SetupGet(value => value.Definition).Returns(new ContentTypeDefinition
+        {
+            Slug = "books",
+            DisplayName = "Books",
+            LevelDefinitions = [new ContentHierarchyLevelDefinition
+            {
+                Slug = "book", DisplayName = "Book", CustomMetadataFields = []
+            }]
+        });
+        var searcher = new ContentMetadataSearcher([definition.Object],
+            new SearchEngine(planner.Object, _subject, NullLogger<SearchEngine>.Instance),
+            NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("books", new(), 98, "", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("books", new(), 4, "", first.Continuation)
+            .ConfigureAwait(false);
+        var retry = await searcher.ContinueSearchAsync("books", new(), 4, "", first.Continuation)
+            .ConfigureAwait(false);
+        var independent = await searcher.ContinueSearchAsync("books", new(), 98, "", null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches, Has.Count.EqualTo(98));
+            Assert.That(first.Page.Matches[^1].ExternalId, Is.EqualTo("OL98W"));
+            Assert.That(second.Page.Matches.Select(value => value.ExternalId),
+                Is.EqualTo(["OL99W", "OL100W", "OL101W", "OL102W"]));
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(retry.Page.Matches.Select(value => value.ExternalId),
+                Is.EqualTo(["OL99W", "OL100W", "OL101W", "OL102W"]));
+            Assert.That(independent.Page.Matches[0].ExternalId, Is.EqualTo("OL1W"));
+            Assert.That(offsets, Is.EqualTo(["0", "0", "100", "0", "100", "0"]));
         }
     }
 }

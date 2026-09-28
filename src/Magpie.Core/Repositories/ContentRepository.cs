@@ -8,6 +8,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -26,10 +27,13 @@ internal sealed class ContentRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     TimeProvider timeProvider,
-    ILogger<ContentRepository> logger) : IContentRepository
+    ILogger<ContentRepository> logger,
+    IContentTypeRegistry contentTypeRegistry,
+    IFileSystem fileSystem,
+    IAuditRecordRepository auditRecordRepository) : IContentRepository
 {
     private static bool IsFulfilled(FulfillmentStatus status) =>
-        status is FulfillmentStatus.Fulfilled or FulfillmentStatus.FulfilledExternally;
+        status is not FulfillmentStatus.Missing;
 
     private IQueryable<ContentItem> ApplySort(IQueryable<ContentItem> items, SortParameter? sort)
     {
@@ -123,13 +127,6 @@ internal sealed class ContentRepository(
         try
         {
             contentItem.CreatedByUserId = createdByUserId;
-            if (IsFulfilled(contentItem.Fulfillment))
-            {
-                contentItem.FulfilledAt ??= contentItem.CreatedAt == default
-                    ? timeProvider.GetUtcNow().UtcDateTime
-                    : contentItem.CreatedAt;
-            }
-
             context.ContentItems.Add(contentItem);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return contentItem;
@@ -196,6 +193,47 @@ internal sealed class ContentRepository(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> UpdateMediaStateAsync(
+        ContentItem contentItem,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
+                {
+                    await UpdateFulfillmentAsync(
+                        contentItem.Id,
+                        contentItem.Fulfillment,
+                        contentItem.ModifiedAt ?? timeProvider.GetUtcNow().UtcDateTime,
+                        modifiedByUserId,
+                        ct).ConfigureAwait(false);
+                    return await context.ContentItems
+                        .Where(item => item.Id == contentItem.Id)
+                        .ExecuteUpdateAsync(
+                            update => update
+                                .SetProperty(item => item.FulfilledAt,
+                                    contentItem.Fulfillment == FulfillmentStatus.Missing
+                                        ? null : contentItem.FulfilledAt)
+                                .SetProperty(item => item.QualityStatus, contentItem.QualityStatus)
+                                .SetProperty(item => item.PrimaryMediaSize, contentItem.PrimaryMediaSize)
+                                .SetProperty(item => item.PrimaryMediaFileCount, contentItem.PrimaryMediaFileCount)
+                                .SetProperty(item => item.CurrentFileQualityRank, contentItem.CurrentFileQualityRank)
+                                .SetProperty(item => item.MediaReconciledAt, contentItem.MediaReconciledAt),
+                            ct).ConfigureAwait(false) > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex, "The content repository failed to save media state for {ContentItemId}.", contentItem.Id);
+            throw;
+        }
+    }
+
     public async Task<bool> DeleteAsync(
         Guid id,
         Guid? deletedByUserId,
@@ -245,11 +283,7 @@ internal sealed class ContentRepository(
                 .FirstOrDefaultAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            var fulfilledAt = IsFulfilled(fulfillment)
-                ? current is not null && IsFulfilled(current.Fulfillment)
-                    ? current.FulfilledAt
-                    : now
-                : null;
+            var fulfilledAt = IsFulfilled(fulfillment) ? current?.FulfilledAt : null;
 
             await context.ContentItems
                 .Where(c => c.Id == contentItemId)
@@ -276,7 +310,7 @@ internal sealed class ContentRepository(
                     TopLevel = current.ParentId is null,
                     RootFolderId = current.RootFolderId,
                     QualityTierListId = current.QualityTierListId,
-                    Monitoring = current.EffectiveMonitoring,
+                    Monitoring = current.EffectiveMonitoring != MonitoringMode.Unmonitored,
                     Fulfillment = fulfillment.ToString(),
                     WishlistId = current.RequestedViaWishlistId,
                     Previous = new()
@@ -288,7 +322,7 @@ internal sealed class ContentRepository(
                         TopLevel = current.ParentId is null,
                         RootFolderId = current.RootFolderId,
                         QualityTierListId = current.QualityTierListId,
-                        Monitoring = current.EffectiveMonitoring,
+                        Monitoring = current.EffectiveMonitoring != MonitoringMode.Unmonitored,
                         Fulfillment = from.ToString()
                     }
                 };
@@ -305,6 +339,203 @@ internal sealed class ContentRepository(
         {
             logger.LogError(ex, "The content item repository failed to update the fulfillment of item " +
                 "{ContentItemId}.", contentItemId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task ReconcileMediaStateAsync(
+        Guid hierarchyItemId,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var nestedTransaction = context.Database.CurrentTransaction is not null;
+            var completed = false;
+            while (!completed)
+            {
+                completed = await transactionManager.ExecuteWithTransactionAsync(async ct =>
+                {
+                    var rootId = hierarchyItemId;
+                    var visited = new HashSet<Guid>();
+                    while (visited.Add(rootId))
+                    {
+                        var row = await context.ContentHierarchyItems.AsNoTracking()
+                            .Where(item => item.Id == rootId).Select(item => new { item.ParentId })
+                            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+                        if (row is null)
+                        {
+                            return true;
+                        }
+
+                        if (row.ParentId is not { } parentId)
+                        {
+                            break;
+                        }
+
+                        rootId = parentId;
+                    }
+
+                    await context.ContentHierarchyItems.Where(item => item.Id == rootId)
+                        .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.ModifiedAt,
+                            item => item.ModifiedAt), ct).ConfigureAwait(false);
+
+                    var lockedRootId = hierarchyItemId;
+                    visited.Clear();
+                    while (visited.Add(lockedRootId))
+                    {
+                        var row = await context.ContentHierarchyItems.AsNoTracking()
+                            .Where(item => item.Id == lockedRootId).Select(item => new { item.ParentId })
+                            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+                        if (row is null)
+                        {
+                            return true;
+                        }
+
+                        if (row.ParentId is not { } parentId)
+                        {
+                            break;
+                        }
+
+                        lockedRootId = parentId;
+                    }
+
+                    if (lockedRootId != rootId)
+                    {
+                        if (nestedTransaction)
+                        {
+                            throw new DbUpdateConcurrencyException(
+                                "The media hierarchy changed during reconciliation.");
+                        }
+
+                        return false;
+                    }
+
+                    var nodes = await context.ContentHierarchyItems.AsNoTracking()
+                        .Where(item => item.Id == rootId).Include(item => item.ContentItem)
+                        .ThenInclude(item => item!.MediaFiles).ToListAsync(ct).ConfigureAwait(false);
+                    for (var offset = 0; offset < nodes.Count;)
+                    {
+                        var ids = nodes.Skip(offset).Select(item => item.Id).ToArray();
+                        offset = nodes.Count;
+                        nodes.AddRange(await context.ContentHierarchyItems.AsNoTracking()
+                            .Where(item => item.ParentId != null && ids.Contains(item.ParentId.Value))
+                            .Include(item => item.ContentItem).ThenInclude(item => item!.MediaFiles)
+                            .ToListAsync(ct).ConfigureAwait(false));
+                    }
+
+                    var children = nodes.Where(item => item.ParentId != null).ToLookup(item => item.ParentId!.Value);
+                    foreach (var node in nodes.AsEnumerable().Reverse())
+                    {
+                        var level = contentTypeRegistry.GetDefinitionFor(node.ContentType)?.LevelDefinitions
+                            .FirstOrDefault(item => item.Slug == node.Level);
+                        var now = timeProvider.GetUtcNow().UtcDateTime;
+                        var current = node.ContentItem ?? await CreateAsync(new ContentItem
+                        {
+                            ContentHierarchyItemId = node.Id,
+                            CreatedAt = now,
+                            Fulfillment = FulfillmentStatus.Missing
+                        }, modifiedByUserId, ct).ConfigureAwait(false);
+                        if (level is null || children[node.Id].Any(item => item.ContentItem?.MediaReconciledAt == null))
+                        {
+                            node.ContentItem = current with { MediaReconciledAt = null };
+                            if (current.MediaReconciledAt != null)
+                            {
+                                await UpdateMediaStateAsync(node.ContentItem, modifiedByUserId, ct)
+                                    .ConfigureAwait(false);
+                            }
+
+                            continue;
+                        }
+
+                        var files = current.MediaFiles
+                            .Where(file => FileSystem.IsPrimaryFile(fileSystem, level, file))
+                            .ToList();
+
+                        var childItems = children[node.Id].Select(item => item.ContentItem!).ToList();
+                        var states = childItems.Select(item => item.Fulfillment).ToList();
+                        if (files.Count > 0 || childItems.Count == 0)
+                        {
+                            states.Add(files.Count == 0 ? FulfillmentStatus.Missing
+                                : current.QualityStatus == QualityStatus.UpgradeWanted
+                                    ? FulfillmentStatus.Upgradable : FulfillmentStatus.Fulfilled);
+                        }
+
+                        var fulfillment = current.Fulfillment == FulfillmentStatus.FulfilledExternally
+                            ? current.Fulfillment
+                            : states.All(state => state == FulfillmentStatus.Missing) ? FulfillmentStatus.Missing
+                            : states.Any(state => state is FulfillmentStatus.Missing or FulfillmentStatus.Partial)
+                                ? FulfillmentStatus.Partial
+                            : states.Contains(FulfillmentStatus.Upgradable) ? FulfillmentStatus.Upgradable
+                            : FulfillmentStatus.Fulfilled;
+                        var dates = files.Select(file => file.ReplacedAt ??
+                                (file.CreatedAt == default ? (DateTime?)null : file.CreatedAt))
+                            .Append(files.Count > 0 && files.All(file =>
+                                file.ReplacedAt == null && file.CreatedAt == default)
+                                ? current.FulfilledAt : null)
+                            .Concat(childItems.Where(item => item.Fulfillment != FulfillmentStatus.FulfilledExternally)
+                                .Select(item => item.FulfilledAt));
+                        var date = fulfillment == FulfillmentStatus.Missing ? null
+                            : fulfillment == FulfillmentStatus.FulfilledExternally ? current.FulfilledAt : dates.Max();
+                        var size = files.Sum(file => file.FileSize) + childItems.Sum(item => item.PrimaryMediaSize);
+                        var count = files.Count + childItems.Sum(item => item.PrimaryMediaFileCount);
+                        node.ContentItem = current with
+                        {
+                            Fulfillment = fulfillment,
+                            FulfilledAt = date,
+                            PrimaryMediaSize = size,
+                            PrimaryMediaFileCount = count,
+                            MediaReconciledAt = now,
+                            ModifiedAt = now
+                        };
+                        if (current.Fulfillment == fulfillment && current.FulfilledAt == date &&
+                            current.PrimaryMediaSize == size && current.PrimaryMediaFileCount == count &&
+                            current.MediaReconciledAt != null)
+                        {
+                            continue;
+                        }
+
+                        await UpdateMediaStateAsync(node.ContentItem, modifiedByUserId, ct).ConfigureAwait(false);
+                        await auditRecordRepository.CreateAsync(new AuditRecord
+                        {
+                            Category = AuditCategories.Content,
+                            Operation = "MediaStateReconciled",
+                            EntityType = nameof(ContentItem),
+                            EntityId = current.Id.ToString(),
+                            ParentEntityId = node.Id.ToString(),
+                            Detail = $"Reconciled {count} primary media files and {size} bytes.",
+                            Timestamp = now,
+                            UserId = modifiedByUserId
+                        }, ct).ConfigureAwait(false);
+                        var impact = new ContentEventImpact
+                        {
+                            HierarchyItemId = node.Id,
+                            ItemId = current.Id,
+                            ParentId = node.ParentId,
+                            MetadataContainerId = node.MetadataContainerId,
+                            ContentType = node.ContentType,
+                            Level = node.Level,
+                            TopLevel = node.ParentId == null,
+                            RootFolderId = node.EffectiveRootFolderId,
+                            QualityTierListId = node.EffectiveQualityTierListId,
+                            Monitoring = node.EffectiveMonitoring != MonitoringMode.Unmonitored,
+                            Fulfillment = fulfillment.ToString()
+                        };
+                        await transactionManager.OnCommittedAsync(token => eventBus.PublishAsync(
+                            ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(impact,
+                                [nameof(ContentItem.PrimaryMediaSize), nameof(ContentItem.PrimaryMediaFileCount),
+                                nameof(ContentItem.FulfilledAt)]), token), ct).ConfigureAwait(false);
+                    }
+
+                    return true;
+                }, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The content repository failed to reconcile media state for {HierarchyItemId}.",
+                hierarchyItemId);
             throw;
         }
     }

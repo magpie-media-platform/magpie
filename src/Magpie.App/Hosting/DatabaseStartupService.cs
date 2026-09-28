@@ -46,6 +46,15 @@ internal sealed class DatabaseStartupService(
 
             await BackfillMediaFilePathKeysAsync(scope.ServiceProvider, context, cancellationToken)
                 .ConfigureAwait(false);
+            var contentRepository = scope.ServiceProvider.GetRequiredService<IContentRepository>();
+            var roots = await context.ContentHierarchyItems.AsNoTracking()
+                .Where(item => item.ParentId == null).Select(item => item.Id)
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var root in roots)
+            {
+                await contentRepository.ReconcileMediaStateAsync(root, null, cancellationToken).ConfigureAwait(false);
+            }
+
             await ProtectStoredSettingsAsync(
                 context,
                 scope.ServiceProvider.GetRequiredService<IDataProtectionService>(),

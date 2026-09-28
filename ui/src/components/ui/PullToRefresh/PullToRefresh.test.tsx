@@ -280,6 +280,73 @@ describe('PullToRefresh', () => {
             expect(container.firstChild).toHaveAttribute('data-state', 'idle');
         });
 
+        it('uses the full-width page wrapper as the desktop scroll owner', () => {
+            const { container } = render(
+                <main>
+                    <div data-component="app-shell-main-wrapper">
+                        <PullToRefresh onRefresh={mockOnRefresh}>
+                            <div>Content</div>
+                        </PullToRefresh>
+                    </div>
+                </main>,
+            );
+
+            const scrollContainer = container.querySelector<HTMLElement>('[data-component="app-shell-main-wrapper"]');
+            const content = container.querySelector('.pull-to-refresh__content');
+            Object.defineProperty(scrollContainer, 'scrollTop', { value: 100, writable: true });
+
+            fireEvent.touchStart(content!, createTouchEvent(0));
+            fireEvent.touchMove(content!, createTouchEvent(100));
+
+            expect(container.querySelector('.pull-to-refresh')).toHaveAttribute('data-state', 'idle');
+        });
+
+        it('uses the full-width main area as the mobile scroll owner', () => {
+            vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
+
+            const { container } = render(
+                <main data-scroll-container="">
+                    <PullToRefresh onRefresh={mockOnRefresh}>
+                        <div>Content</div>
+                    </PullToRefresh>
+                </main>,
+            );
+
+            const scrollContainer = container.querySelector<HTMLElement>('[data-scroll-container]');
+            const content = container.querySelector('.pull-to-refresh__content');
+            Object.defineProperty(scrollContainer, 'scrollTop', { value: 100, writable: true });
+
+            fireEvent.touchStart(content!, createTouchEvent(0));
+            fireEvent.touchMove(content!, createTouchEvent(100));
+
+            expect(container.querySelector('.pull-to-refresh')).toHaveAttribute('data-state', 'idle');
+        });
+
+        it('uses the main scroll owner at tablet width', () => {
+            // Arrange
+            vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(900);
+            const { container } = render(
+                <main data-scroll-container="">
+                    <div data-component="app-shell-main-wrapper">
+                        <PullToRefresh onRefresh={mockOnRefresh}>
+                            <div>Content</div>
+                        </PullToRefresh>
+                    </div>
+                </main>,
+            );
+            const main = container.querySelector<HTMLElement>('[data-scroll-container]');
+            const content = container.querySelector('.pull-to-refresh__content');
+            Object.defineProperty(main, 'scrollTop', { value: 100, writable: true });
+
+            // Act
+            fireEvent.touchStart(content!, createTouchEvent(0));
+            fireEvent.touchMove(content!, createTouchEvent(100));
+
+            // Assert
+            expect(container.querySelector('.pull-to-refresh')).toHaveAttribute('data-state', 'idle');
+            expect(mockOnRefresh).not.toHaveBeenCalled();
+        });
+
         it('shows release label when ready', () => {
             const { container } = render(
                 <PullToRefresh onRefresh={mockOnRefresh} threshold={40} releaseLabel="Let go!">

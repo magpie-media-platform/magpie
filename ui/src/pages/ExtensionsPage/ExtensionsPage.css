@@ -63,6 +63,12 @@
         margin-left: auto;
     }
 
+    @media (max-width: 639px) {
+        .extensions-page :is([data-action='add-extension'], [data-action='check-updates'], [data-action='add-feed']) {
+            display: none;
+        }
+    }
+
     .extensions-page__list {
         display: flex;
         flex-direction: column;

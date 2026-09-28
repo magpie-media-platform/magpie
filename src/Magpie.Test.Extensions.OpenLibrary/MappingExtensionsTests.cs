@@ -139,6 +139,93 @@ public sealed class MappingExtensionsTests
     }
 
     [Test]
+    public void ToSourcePage_PairsFacetNamesWithTheirOwnKeys_WhenKeyArraysAreSortedDifferently()
+    {
+        // Arrange
+        var response = JsonSerializer.Deserialize<SearchResponseDto>(
+            """
+            {
+              "numFound": 1,
+              "numFoundExact": true,
+              "start": 0,
+              "docs": [
+                {
+                  "key": "/works/OL27482W",
+                  "title": "The Hobbit",
+                  "person": [
+                    "Bilbo Baggins",
+                    "Gandalf",
+                    "Balin",
+                    "Bard the Bowman",
+                    "Gollum",
+                    "J. R. R. Tolkien (1892-1973)",
+                    "AC/DC"
+                  ],
+                  "person_key": [
+                    "acdc",
+                    "ac_dc",
+                    "balin",
+                    "bard_the_bowman",
+                    "bilbo_baggins",
+                    "gandalf",
+                    "j._r._r._tolkien_(1892-1973)",
+                    "smaug"
+                  ],
+                  "place": ["Middle-earth", "Lake-town", "Iron Hills", "Erebor"],
+                  "place_key": ["erebor_mountain", "iron_hills", "lake-town", "lake_town", "middle-earth"],
+                  "time": ["Third-Age"],
+                  "time_key": ["third-age"]
+                }
+              ]
+            }
+            """);
+
+        // Act
+        var hit = response!.ToSourcePage().Hits.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                hit.Persons,
+                Is.EqualTo(
+                [
+                    new SubjectFacetPair("Bilbo Baggins", "bilbo_baggins"),
+                    new SubjectFacetPair("Gandalf", "gandalf"),
+                    new SubjectFacetPair("Balin", "balin"),
+                    new SubjectFacetPair("Bard the Bowman", "bard_the_bowman"),
+                    new SubjectFacetPair("Gollum", null),
+                    new SubjectFacetPair("J. R. R. Tolkien (1892-1973)", "j._r._r._tolkien_(1892-1973)"),
+                    new SubjectFacetPair("AC/DC", "acdc")
+                ]));
+            Assert.That(
+                hit.Places,
+                Is.EqualTo(
+                [
+                    new SubjectFacetPair("Middle-earth", "middle-earth"),
+                    new SubjectFacetPair("Lake-town", "lake-town"),
+                    new SubjectFacetPair("Iron Hills", "iron_hills"),
+                    new SubjectFacetPair("Erebor", null)
+                ]));
+            Assert.That(hit.Times, Is.EqualTo([new SubjectFacetPair("Third-Age", "third-age")]));
+        }
+    }
+
+    [TestCase("AC/DC", "acdc")]
+    [TestCase("Bilbo Baggins", "bilbo_baggins")]
+    [TestCase("?H$e##l{o}[0] -world!", "helo0_-world!")]
+    [TestCase("  Tolkien, J. R. R. ", "tolkien_j._r._r.")]
+    [TestCase("", "")]
+    public void ToOpenLibrarySubjectKey_MatchesOpenLibrary_WhenNamesHavePunctuation(string name, string expected)
+    {
+        // Act
+        var key = name.ToOpenLibrarySubjectKey();
+
+        // Assert
+        Assert.That(key, Is.EqualTo(expected));
+    }
+
+    [Test]
     public void ToSourcePage_ClampsPaging_WhenCountsAreNegative()
     {
         // Arrange

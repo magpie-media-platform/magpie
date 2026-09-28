@@ -28,11 +28,11 @@ function touchKey(key: string) {
 
 export function useScrollRestoration() {
     const { pathname } = useLocation();
-    const isMobile = useMediaQuery('(max-width: 767px)');
+    const mainOwnsScroll = useMediaQuery('(max-width: 1023px)');
 
     useEffect(() => {
         const scroller = document.querySelector<HTMLElement>(
-            isMobile
+            mainOwnsScroll
                 ? '[data-component="app-shell-main"], [data-component="admin-shell-main"]'
                 : '[data-component="app-shell-main-wrapper"], [data-component="admin-shell-main-wrapper"]',
         );
@@ -83,5 +83,5 @@ export function useScrollRestoration() {
             }
             scroller.removeEventListener('scroll', onScroll);
         };
-    }, [isMobile, pathname]);
+    }, [mainOwnsScroll, pathname]);
 }

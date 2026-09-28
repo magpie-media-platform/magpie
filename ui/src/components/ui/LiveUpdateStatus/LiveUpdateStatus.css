@@ -1,0 +1,44 @@
+@layer components {
+    .live-update-status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
+        border: 0;
+        border-radius: var(--radius-md);
+        background: transparent;
+        cursor: pointer;
+
+        &:focus-visible {
+            outline: 2px solid var(--text-primary);
+            outline-offset: 2px;
+        }
+    }
+
+    .live-update-status__dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #eab308;
+        box-shadow: 0 0 0 1px var(--text-primary);
+    }
+
+    .live-update-status[data-state='connected'] .live-update-status__dot {
+        background: #22c55e;
+    }
+
+    .live-update-status[data-state='failed'] .live-update-status__dot {
+        background: #ef4444;
+    }
+
+    .live-update-status[data-state='unsupported'] .live-update-status__dot {
+        background: #000;
+    }
+
+    .live-update-status__error {
+        max-width: 28rem;
+        overflow-wrap: anywhere;
+    }
+}

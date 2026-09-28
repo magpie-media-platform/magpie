@@ -46,17 +46,15 @@
         min-width: 0;
         font-weight: var(--weight-medium);
         color: var(--text-primary);
+        overflow-wrap: anywhere;
     }
 
     .library-import-group-page__bucket-path {
         min-width: 0;
-        overflow: hidden;
         color: var(--text-secondary);
         font-family: var(--font-mono);
         font-size: var(--text-sm);
         font-weight: var(--weight-normal);
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .library-import-group-page__bucket-count {

@@ -3,6 +3,7 @@ import { createElement, type ReactNode } from 'react';
 import { renderHook, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { installSharedWorkerHarness } from '@/test/sharedWorkerHarness';
 
 import { AuthContext, Role, type AuthContextValue } from '@/auth';
 
@@ -99,6 +100,7 @@ function installFakeEventSource() {
         }
     }
     (globalThis as unknown as { EventSource: typeof FakeEventSource }).EventSource = FakeEventSource;
+    installSharedWorkerHarness(FakeEventSource);
 }
 
 function metadataRefreshedFrame(itemId: string): string {

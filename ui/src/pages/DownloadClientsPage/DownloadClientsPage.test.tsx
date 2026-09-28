@@ -170,6 +170,14 @@ describe('DownloadClientsPage', () => {
         expect(screen.getByRole('heading', { name: 'Download Clients', level: 1 })).toBeInTheDocument();
     });
 
+    it('keeps the selection toggle on the list toolbar line', () => {
+        const queryClient = createTestQueryClient();
+        render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        const toggle = screen.getByRole('button', { name: 'Select', pressed: false });
+        expect(toggle.closest('[data-component="mobile-list-toolbar"]')).toBeInTheDocument();
+    });
+
     it('renders the page subtitle as a capitalised, full-stopped sentence', () => {
         const queryClient = createTestQueryClient();
         render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });

@@ -61,6 +61,9 @@ public sealed class ContentMetadataRefreshItemJobTests
         };
 
         _contentRepository = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        _contentRepository.Setup(repository => repository.GetLineageAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
         _contentRepository
             .Setup(repository => repository.GetByIdAsync(_itemId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ContentHierarchyItem
@@ -102,6 +105,12 @@ public sealed class ContentMetadataRefreshItemJobTests
             .ReturnsAsync([]);
 
         _subjectRepository = new Mock<ISubjectRepository> { CallBase = true };
+        _subjectRepository.Setup(repository => repository.ListIdsByExternalIdentityAsync(
+                It.IsAny<string>(), It.IsAny<IReadOnlyCollection<ExternalId>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _subjectRepository.Setup(repository => repository.ListIdentityDetailsAsync(
+                It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
         _subjectRepository
             .Setup(repository => repository.CreateAsync(
                 It.IsAny<Subject>(),
@@ -249,6 +258,48 @@ public sealed class ContentMetadataRefreshItemJobTests
                     It.IsAny<Relationship>(),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
+        }
+    }
+
+    [Test]
+    public void RefreshAsync_SavesHealthyMetadataBeforeDeferral_WhenAnotherProviderThrottles()
+    {
+        // Arrange
+        var healthy = new Mock<IContentHierarchyMetadataProvider>();
+        healthy.SetupGet(provider => provider.ProviderType).Returns("healthy");
+        healthy.SetupGet(provider => provider.SupportedContentTypes).Returns(["movie"]);
+        healthy.Setup(provider => provider.TryGetMetadataAsync(
+                It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution { ProviderType = "healthy", Title = "The Matrix" }
+            });
+        var throttled = new Mock<IContentHierarchyMetadataProvider>();
+        throttled.SetupGet(provider => provider.ProviderType).Returns("throttled");
+        throttled.SetupGet(provider => provider.SupportedContentTypes).Returns(["movie"]);
+        throttled.Setup(provider => provider.TryGetMetadataAsync(
+                It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        var subject = new ContentMetadataRefreshItemJob(
+            [healthy.Object, throttled.Object], _contentRepository.Object, _containerRepository.Object,
+            _subjectRepository.Object, _eventBus.Object, _contentTypeRegistry.Object, _transactionManager.Object,
+            _jobManager.Object, _subjectKindRegistry.Object, TimeProvider.System,
+            NullLogger<ContentMetadataRefreshItemJob>.Instance, _progressReporter);
+
+        // Act
+        var result = Assert.ThrowsAsync<UpstreamThrottledException>(() =>
+            subject.RefreshAsync(_itemId, null, null, _progressReporter));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+            _containerRepository.Verify(repository => repository.AddContributionAsync(_containerId,
+                It.Is<MetadataContribution>(value => value.ProviderType == "healthy" && value.Title == "The Matrix"),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Once);
+            _eventBus.Verify(bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(value => value.Name == "metadata.refreshed"),
+                It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 
@@ -593,7 +644,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_CreatesSubject_WhenFallbackIdentityIsAmbiguous()
+    public async Task RefreshAsync_LeavesAssociationUnresolved_WhenFallbackIdentityIsAmbiguous()
     {
         // Arrange
         _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
@@ -692,7 +743,10 @@ public sealed class ContentMetadataRefreshItemJobTests
                     It.IsAny<Subject>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
-                Times.Exactly(3));
+                Times.Exactly(2));
+            _containerRepository.Verify(repository => repository.AddRelationshipAsync(
+                It.Is<Relationship>(relationship => relationship.Qualifier == "c"),
+                It.IsAny<CancellationToken>()), Times.Never);
             testLogger.Verify(
                 value => value.Log(
                     LogLevel.Warning,
@@ -710,6 +764,28 @@ public sealed class ContentMetadataRefreshItemJobTests
     {
         // Arrange
         var persistedContainerId = Guid.NewGuid();
+        var persistedSubjectId = Guid.NewGuid();
+        _subjectRepository.Setup(repository => repository.ListIdentityDetailsAsync(
+                It.Is<IReadOnlyCollection<Guid>>(ids => ids.Contains(persistedSubjectId)),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Subject
+            {
+                Id = persistedSubjectId,
+                Kind = "person",
+                MetadataContainerId = persistedContainerId,
+                MetadataContainer = new MetadataContainer
+                {
+                    Id = persistedContainerId,
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "imdb",
+                            ExternalIds = { new ExternalId { Source = "imdb", Value = "nm9" } }
+                        }
+                    }
+                }
+            }]);
         _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
         [
             new SubjectKindDefinition
@@ -720,27 +796,10 @@ public sealed class ContentMetadataRefreshItemJobTests
             }
         ]);
         _subjectRepository
-            .Setup(repository => repository.QueryAsync(
-                It.Is<SubjectQuery>(query =>
-                    query.Kind == "person" &&
-                    query.ExternalId != null &&
-                    query.ExternalId.Source.And.Single().Value == "imdb" &&
-                    query.ExternalId.Value.And.Single().Value == "nm9"),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
+            .Setup(repository => repository.ListIdsByExternalIdentityAsync("person",
+                It.Is<IReadOnlyCollection<ExternalId>>(ids => ids.Any(id => id.Source == "imdb" && id.Value == "nm9")),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Subject>
-            {
-                Items =
-                [
-                    new Subject
-                    {
-                        Id = Guid.NewGuid(),
-                        Kind = "person",
-                        MetadataContainerId = persistedContainerId
-                    }
-                ]
-            });
+            .ReturnsAsync([persistedSubjectId]);
         var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
         provider.Setup(value => value.ProviderType).Returns(ProviderType);
         provider.Setup(value => value.SupportedContentTypes).Returns(["movie"]);
@@ -928,28 +987,33 @@ public sealed class ContentMetadataRefreshItemJobTests
     {
         // Arrange
         var existingContainerId = Guid.NewGuid();
-        _subjectRepository
-            .Setup(repository => repository.QueryAsync(
-                It.Is<SubjectQuery>(query =>
-                    query.Kind == "person" &&
-                    query.ExternalId != null &&
-                    query.ExternalId.Source.And.Single().Value == "catalog" &&
-                    query.ExternalId.Value.And.Single().Value == "shared"),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
+        var existingSubjectId = Guid.NewGuid();
+        _subjectRepository.Setup(repository => repository.ListIdentityDetailsAsync(
+                It.Is<IReadOnlyCollection<Guid>>(ids => ids.Contains(existingSubjectId)),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Subject>
+            .ReturnsAsync([new Subject
             {
-                Items =
-                [
-                    new Subject
+                Id = existingSubjectId,
+                Kind = "person",
+                MetadataContainerId = existingContainerId,
+                MetadataContainer = new MetadataContainer
+                {
+                    Id = existingContainerId,
+                    Contributions =
                     {
-                        Id = Guid.NewGuid(),
-                        Kind = "person",
-                        MetadataContainerId = existingContainerId
+                        new MetadataContribution
+                        {
+                            ProviderType = "catalog",
+                            ExternalIds = { new ExternalId { Source = "catalog", Value = "shared" } }
+                        }
                     }
-                ]
-            });
+                }
+            }]);
+        _subjectRepository
+            .Setup(repository => repository.ListIdsByExternalIdentityAsync("person",
+                It.Is<IReadOnlyCollection<ExternalId>>(ids => ids.Any(id =>
+                    id.Source == "catalog" && id.Value == "shared")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([existingSubjectId]);
         var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
         provider.Setup(value => value.ProviderType).Returns(ProviderType);
         provider.Setup(value => value.SupportedContentTypes).Returns(["movie"]);
@@ -1852,7 +1916,7 @@ public sealed class ContentMetadataRefreshItemJobTests
                 Level = "movie",
                 Slug = "the-matrix",
                 Name = "the-matrix",
-                Monitoring = true,
+                Monitoring = MonitoringMode.Monitored,
                 PendingMetadataRefresh = true
             });
 
@@ -1908,7 +1972,7 @@ public sealed class ContentMetadataRefreshItemJobTests
                 Level = "movie",
                 Slug = "the-matrix",
                 Name = "the-matrix",
-                Monitoring = true,
+                Monitoring = MonitoringMode.Monitored,
                 PendingMetadataRefresh = true
             })
             .ReturnsAsync(new ContentHierarchyItem
@@ -1920,7 +1984,7 @@ public sealed class ContentMetadataRefreshItemJobTests
                 Level = "movie",
                 Slug = "the-matrix",
                 Name = "the-matrix",
-                Monitoring = false,
+                Monitoring = MonitoringMode.Unmonitored,
                 PendingMetadataRefresh = true
             });
 

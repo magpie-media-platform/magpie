@@ -125,7 +125,7 @@ describe('useLibraryBulkActions', () => {
 
             expect(api.apiPatch).toHaveBeenCalledWith('/content/bulk', {
                 ids: ['content-1'],
-                patch: { monitoring: { value: true } },
+                patch: { monitoring: { value: 'Monitored' } },
             });
         });
 
@@ -140,7 +140,7 @@ describe('useLibraryBulkActions', () => {
 
             expect(api.apiPatch).toHaveBeenCalledWith('/content/bulk', {
                 ids: ['content-1', 'content-2'],
-                patch: { monitoring: { value: false } },
+                patch: { monitoring: { value: 'Unmonitored' } },
             });
         });
 
@@ -215,7 +215,7 @@ describe('useLibraryBulkActions', () => {
 
             expect(api.apiPatch).toHaveBeenCalledWith('/content/bulk', {
                 filter: SCOPE_FILTER,
-                patch: { monitoring: { value: false } },
+                patch: { monitoring: { value: 'Unmonitored' } },
             });
         });
 
@@ -272,6 +272,21 @@ describe('useLibraryBulkActions', () => {
             expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete', {
                 filter: SCOPE_FILTER,
                 deleteFromLibrary: false,
+            });
+        });
+
+        it('deletes files for every matching item when the file choice is on', async () => {
+            const { result } = renderBulkActions();
+
+            act(() => result.current.selection.selectAllAcrossPages());
+            act(() => result.current.actions.setBulkDeleteFiles(true));
+            await act(async () => {
+                await result.current.actions.handleConfirmBulkDelete();
+            });
+
+            expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete', {
+                filter: SCOPE_FILTER,
+                deleteFromLibrary: true,
             });
         });
 

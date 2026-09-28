@@ -28,7 +28,7 @@ describe('SaveFilterDialog', () => {
     });
 
     it('displays external error', async () => {
-        render(<SaveFilterDialog {...defaultProps} error="Save failed" />);
+        render(<SaveFilterDialog {...defaultProps} nameError="Save failed" />);
 
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
@@ -37,14 +37,24 @@ describe('SaveFilterDialog', () => {
         expect(screen.getByText('Save failed')).toBeInTheDocument();
     });
 
+    it('shows a query error apart from the name field', async () => {
+        render(<SaveFilterDialog {...defaultProps} filterQuery="title =" queryError="Expected value" />);
+
+        const alert = await screen.findByRole('alert');
+
+        expect(alert).toHaveTextContent('The filter query is not valid');
+        expect(alert).toHaveTextContent('Expected value');
+        expect(screen.getByLabelText(/filter name/i)).not.toHaveAttribute('aria-invalid', 'true');
+    });
+
     it('clears synced error when error prop becomes null', async () => {
-        const { rerender } = render(<SaveFilterDialog {...defaultProps} error="Save failed" />);
+        const { rerender } = render(<SaveFilterDialog {...defaultProps} nameError="Save failed" />);
 
         await waitFor(() => {
             expect(screen.getByText('Save failed')).toBeInTheDocument();
         });
 
-        rerender(<SaveFilterDialog {...defaultProps} error={null} />);
+        rerender(<SaveFilterDialog {...defaultProps} nameError={null} />);
 
         await waitFor(() => {
             expect(screen.queryByText('Save failed')).not.toBeInTheDocument();

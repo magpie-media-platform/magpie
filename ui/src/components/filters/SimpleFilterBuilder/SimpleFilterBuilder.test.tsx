@@ -1,9 +1,12 @@
 import { startTransition, useState } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 import { type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
+import { useLiveUrlFilter } from '@/hooks/useLiveUrlFilter';
+import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 
 import { SimpleFilterBuilder } from './SimpleFilterBuilder';
 import { isSimpleQuery } from '@/lib/simpleFilterQuery';
@@ -33,14 +36,20 @@ function DeferredControlledBuilder({ initial = '' }: { initial?: string }) {
     );
 }
 
-function ResettableControlledBuilder({ initial = '' }: { initial?: string }) {
+function ResettableControlledBuilder({ initial = '', onChange }: { initial?: string; onChange?: (v: string) => void }) {
     const [query, setQuery] = useState(initial);
     return (
         <>
             <button type="button" onClick={() => setQuery('')}>
                 Reset
             </button>
-            <SimpleFilterBuilder value={query} onChange={setQuery} />
+            <SimpleFilterBuilder
+                value={query}
+                onChange={(v) => {
+                    setQuery(v);
+                    onChange?.(v);
+                }}
+            />
         </>
     );
 }
@@ -367,23 +376,23 @@ describe('SimpleFilterBuilder', () => {
 
         it('preserves the monitoring clause across edits even without a visible control', async () => {
             const user = userEvent.setup();
-            render(<SimpleFilterBuilder value="monitoring = true" onChange={mockOnChange} />);
+            render(<SimpleFilterBuilder value="monitoring != Unmonitored" onChange={mockOnChange} />);
 
             await user.type(screen.getByLabelText('Title'), 'X');
 
-            expect(mockOnChange).toHaveBeenLastCalledWith('monitoring = true and title contains "X"');
+            expect(mockOnChange).toHaveBeenLastCalledWith('monitoring != Unmonitored and title contains "X"');
         });
 
         it('keeps a monitoring-only query simple and re-emits it unchanged', () => {
-            expect(isSimpleQuery('monitoring = true', 'content')).toBe(true);
+            expect(isSimpleQuery('monitoring != Unmonitored', 'content')).toBe(true);
 
-            render(<ControlledBuilder initial="monitoring = true" onChange={mockOnChange} />);
+            render(<ControlledBuilder initial="monitoring != Unmonitored" onChange={mockOnChange} />);
 
             fireEvent.change(screen.getByLabelText('Tag'), { target: { value: 'x' } });
-            expect(mockOnChange).toHaveBeenLastCalledWith('monitoring = true and tag has "x"');
+            expect(mockOnChange).toHaveBeenLastCalledWith('monitoring != Unmonitored and tag has "x"');
 
             fireEvent.change(screen.getByLabelText('Tag'), { target: { value: '' } });
-            expect(mockOnChange).toHaveBeenLastCalledWith('monitoring = true');
+            expect(mockOnChange).toHaveBeenLastCalledWith('monitoring != Unmonitored');
         });
 
         it('round-trips title field', async () => {
@@ -489,10 +498,7 @@ describe('SimpleFilterBuilder', () => {
 
         it('escapes a double-quote in the relationship name and round-trips it', () => {
             const { rerender } = render(
-                <SimpleFilterBuilder
-                    value='Relationships has (Name contains "" and Type = "person")'
-                    onChange={mockOnChange}
-                />,
+                <SimpleFilterBuilder value='Relationships has (Type = "person")' onChange={mockOnChange} />,
             );
 
             fireEvent.change(screen.getByLabelText('Related'), { target: { value: 'Robert "Bob"' } });
@@ -626,7 +632,7 @@ describe('SimpleFilterBuilder', () => {
 
         it('round-trips complex content query with all fields', () => {
             const query =
-                'contentType = "tv" and monitoring = true and title contains "Drama" and genre has "Thriller" and tag has "must-watch"';
+                'contentType = "tv" and monitoring != Unmonitored and title contains "Drama" and genre has "Thriller" and tag has "must-watch"';
 
             render(<SimpleFilterBuilder value={query} onChange={mockOnChange} />);
 
@@ -847,6 +853,43 @@ describe('SimpleFilterBuilder', () => {
             expect(screen.getByRole('checkbox', { name: 'after' })).toHaveAttribute('aria-checked', 'false');
         });
 
+        it('empties the text inputs and does not restore them when the parent resets an edit that started empty', async () => {
+            const user = userEvent.setup();
+            render(<ResettableControlledBuilder onChange={mockOnChange} />);
+
+            fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Film' } });
+            expect(mockOnChange).toHaveBeenLastCalledWith('title contains "Film"');
+            await user.click(screen.getByRole('button', { name: 'Reset' }));
+            expect(screen.getByLabelText('Title')).toHaveValue('');
+
+            fireEvent.change(screen.getByLabelText('Related'), { target: { value: 'Quinn' } });
+            expect(mockOnChange).toHaveBeenLastCalledWith('Relationships has (Name contains "Quinn")');
+            await user.click(screen.getByRole('button', { name: 'Reset' }));
+            expect(screen.getByLabelText('Related')).toHaveValue('');
+
+            await user.type(screen.getByLabelText('Tag'), 'x');
+
+            expect(mockOnChange).toHaveBeenLastCalledWith('tag has "x"');
+        });
+
+        it('clears a retained neutral year when the parent resets an edit that started from the neutral query', async () => {
+            const user = userEvent.setup();
+            render(<ResettableControlledBuilder onChange={mockOnChange} />);
+
+            await user.type(yearInput(), '1999');
+            await user.click(screen.getByRole('checkbox', { name: 'before' }));
+            await user.click(screen.getByRole('checkbox', { name: 'after' }));
+            fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Film' } });
+            expect(mockOnChange).toHaveBeenLastCalledWith('title contains "Film"');
+
+            await user.click(screen.getByRole('button', { name: 'Reset' }));
+
+            expect(screen.getByLabelText('Title')).toHaveValue('');
+            expect(yearInput()).toHaveValue(null);
+            expect(screen.getByRole('checkbox', { name: 'before' })).toHaveAttribute('aria-checked', 'false');
+            expect(screen.getByRole('checkbox', { name: 'after' })).toHaveAttribute('aria-checked', 'false');
+        });
+
         it('clears the retained neutral draft when the parent explicitly resets the query', async () => {
             const user = userEvent.setup();
             render(<ResettableControlledBuilder initial='tag has "fav"' />);
@@ -979,10 +1022,15 @@ describe('SimpleFilterBuilder', () => {
         });
 
         it('handles case-insensitive field names with preserved monitoring', () => {
-            render(<SimpleFilterBuilder value='CONTENTTYPE = "movie" AND MONITORING = true' onChange={mockOnChange} />);
+            render(
+                <SimpleFilterBuilder
+                    value='CONTENTTYPE = "movie" AND MONITORING != Unmonitored'
+                    onChange={mockOnChange}
+                />,
+            );
 
             expect(screen.getByRole('combobox', { name: 'Content Type' })).toHaveTextContent('Movies');
-            expect(isSimpleQuery('CONTENTTYPE = "movie" AND MONITORING = true', 'content')).toBe(true);
+            expect(isSimpleQuery('CONTENTTYPE = "movie" AND MONITORING != Unmonitored', 'content')).toBe(true);
         });
 
         it('parses a case-insensitive publishDate clause', () => {
@@ -1173,7 +1221,7 @@ describe('SimpleFilterBuilder', () => {
 
         it('returns true for valid content queries', () => {
             expect(isSimpleQuery('contentType = "movie"', 'content')).toBe(true);
-            expect(isSimpleQuery('monitoring = true', 'content')).toBe(true);
+            expect(isSimpleQuery('monitoring != Unmonitored', 'content')).toBe(true);
             expect(isSimpleQuery('title contains "test"', 'content')).toBe(true);
             expect(isSimpleQuery('genre has "Action"', 'content')).toBe(true);
             expect(isSimpleQuery('tag has "favorite"', 'content')).toBe(true);
@@ -1191,7 +1239,7 @@ describe('SimpleFilterBuilder', () => {
             expect(isSimpleQuery('publishDate <= "1999-12-31"', 'content')).toBe(true);
             expect(isSimpleQuery('publishDate >= "1999-01-01"', 'content')).toBe(true);
             expect(isSimpleQuery('(publishDate < "1999-01-01" or publishDate > "1999-12-31")', 'content')).toBe(true);
-            expect(isSimpleQuery('contentType = "movie" and monitoring = true', 'content')).toBe(true);
+            expect(isSimpleQuery('contentType = "movie" and monitoring != Unmonitored', 'content')).toBe(true);
             expect(isSimpleQuery('Relationships has (Name contains "Johansson" and Type = "person")', 'content')).toBe(
                 true,
             );
@@ -1224,11 +1272,11 @@ describe('SimpleFilterBuilder', () => {
         });
 
         it('returns false for nested conditions', () => {
-            expect(isSimpleQuery('(contentType = "movie" and monitoring = true)', 'content')).toBe(false);
+            expect(isSimpleQuery('(contentType = "movie" and monitoring != Unmonitored)', 'content')).toBe(false);
         });
 
         it('returns false for NOT conditions', () => {
-            expect(isSimpleQuery('not monitoring = true', 'content')).toBe(false);
+            expect(isSimpleQuery('not monitoring != Unmonitored', 'content')).toBe(false);
         });
     });
 
@@ -1276,5 +1324,52 @@ describe('SimpleFilterBuilder', () => {
 
             expect(mockOnChange).toHaveBeenLastCalledWith('contentType = "movie"');
         });
+    });
+
+    it('change_PreservesSimpleFields_WhenEntryContinuesAfterRouteSettles', async () => {
+        // Arrange
+        function LiveBuilder() {
+            const [state, setState] = useUrlFilterState({ filter: '' });
+            const location = useLocation();
+            const liveFilter = useLiveUrlFilter({
+                value: state.filter,
+                onCommit: (value, replace) => setState({ filter: value }, { replace }),
+            });
+            return (
+                <>
+                    <SimpleFilterBuilder value={liveFilter.value} onChange={liveFilter.change} />
+                    <output data-testid="route">{location.search}</output>
+                </>
+            );
+        }
+
+        render(
+            <MemoryRouter initialEntries={['/library/content/movie']}>
+                <LiveBuilder />
+            </MemoryRouter>,
+        );
+
+        // Act
+        const title = screen.getByLabelText('Title');
+        fireEvent.change(title, { target: { value: 'A' } });
+        await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('filter='));
+
+        fireEvent.change(title, { target: { value: 'AB' } });
+        fireEvent.change(screen.getByLabelText('Tag'), { target: { value: 'new' } });
+        fireEvent.change(screen.getByLabelText('Related'), { target: { value: 'Ada' } });
+        fireEvent.change(screen.getByLabelText('Release year'), { target: { value: '2020' } });
+        // Assert
+        expect(title).toHaveValue('AB');
+        expect(screen.getByLabelText('Tag')).toHaveValue('new');
+        expect(screen.getByLabelText('Related')).toHaveValue('Ada');
+        expect(screen.getByLabelText('Release year')).toHaveValue(2020);
+
+        await waitFor(() => {
+            const filter = new URLSearchParams(screen.getByTestId('route').textContent ?? '').get('filter');
+            expect(filter).toContain('AB');
+            expect(filter).toContain('new');
+            expect(filter).toContain('Ada');
+        });
+        expect(screen.getByLabelText('Release year')).toHaveValue(2020);
     });
 });

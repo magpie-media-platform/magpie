@@ -5,7 +5,6 @@ using System.Threading.Tasks;
 
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Enums;
 using Magpie.Sdk.Api;
 using Magpie.Sdk.Services;
 
@@ -103,7 +102,7 @@ internal sealed class EventTriggersEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         var patched = await jobManager
-            .PatchEventTriggerAsync(id, patch, user.Id, user.IsInRole(Role.Admin), cancellationToken)
+            .PatchEventTriggerAsync(id, patch, user.Id, user.Role, cancellationToken)
             .ConfigureAwait(false);
 
         return patched ? Results.NoContent() : Results.NotFound();
@@ -117,7 +116,7 @@ internal sealed class EventTriggersEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         var deleted = await jobManager
-            .DeleteEventTriggerAsync(id, user.Id, user.IsInRole(Role.Admin), cancellationToken)
+            .DeleteEventTriggerAsync(id, user.Id, user.Role, cancellationToken)
             .ConfigureAwait(false);
 
         return deleted ? Results.NoContent() : Results.NotFound();

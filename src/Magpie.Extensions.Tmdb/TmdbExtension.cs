@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net.Http;
 
 using Magpie.Extensions.Tmdb.QueryEngine;
@@ -38,6 +39,8 @@ public sealed class TmdbExtension : IExtension
             {
                 client.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
             })
+            .AddUpstreamCooldown(request => request.RequestUri?.Query.TrimStart('?').Split('&')
+                .FirstOrDefault(value => value.StartsWith("api_key=", StringComparison.Ordinal)))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AllowAutoRedirect = false

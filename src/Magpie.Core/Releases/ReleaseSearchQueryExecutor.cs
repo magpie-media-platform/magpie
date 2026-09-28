@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -42,8 +43,6 @@ internal sealed class ReleaseSearchQueryExecutor(
     SearchOptions searchOptions) : IReleaseSearchQueryExecutor
 {
     private const string RequestNotSupportedReason = "request-not-supported";
-
-    private static readonly TimeSpan ConnectionPhaseDeadline = TimeSpan.FromSeconds(120);
 
     private enum ContributionKind
     {
@@ -368,11 +367,17 @@ internal sealed class ReleaseSearchQueryExecutor(
             var plannedRoutes = routes.Select((route, routeIndex) =>
             {
                 var resolved = integration is null
-                    ? route.Request with { Categories = categories, MaximumResults = maximumResults }
+                    ? route.Request with
+                    {
+                        Categories = categories,
+                        MaximumResults = maximumResults,
+                        IsInteractive = !automatic
+                    }
                     : ResolveAdvertisedSpellings(route.Request, integration.SearchFacets) with
                     {
                         Categories = categories,
                         MaximumResults = maximumResults,
+                        IsInteractive = !automatic,
                     };
                 return new PlannedRoute(
                     $"connection-{connectionIndex + 1}-request-{routeIndex + 1}",
@@ -433,7 +438,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         activity?.SetTag("magpie.query.node.id", "root");
         activity?.SetTag("magpie.query.node.kind", "union");
         activity?.SetTag("magpie.query.maximum_results", maximumResults);
-        activity?.SetTag("magpie.query.connection_count", planned.Length);
+        activity?.SetTag("magpie.query.connection_count", planned.Count(connection => connection.CanExecute));
         activity?.SetTag("magpie.query.plan_json", serializedPlan);
         if (activity?.IsAllDataRequested == true)
         {
@@ -502,6 +507,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         var attempted = branches.Count(branch => branch.Attempted);
         var succeeded = branches.Count(branch => branch.Attempted && branch.Failure is null);
         var partial = failures.Count > 0;
+        var retryAt = branches.Select(branch => branch.RetryAt).Max();
 
         activity?.SetTag("magpie.query.raw_results", branches.Sum(branch => branch.RawCount));
         activity?.SetTag("magpie.query.evaluated_results", combined.Count);
@@ -510,7 +516,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         activity?.SetTag("magpie.query.partial", partial);
         RecordContributions(activity, rootUnion.Contributions);
 
-        if (attempted > 0 && succeeded == 0)
+        if (attempted > 0 && succeeded == 0 && retryAt is null)
         {
             activity?.SetStatus(ActivityStatusCode.Error, "Every attempted connection failed.");
             activity?.SetTag("magpie.query.terminal_reason", "failed");
@@ -528,7 +534,12 @@ internal sealed class ReleaseSearchQueryExecutor(
             ConnectionsAttempted = attempted,
             ConnectionsSucceeded = succeeded,
             Partial = partial,
-            Warning = warning,
+            Warning = retryAt is null
+                ? partial ? "One or more providers failed. The search is incomplete." : warning
+                : failures.Values.Any(error => error != "upstream-throttled")
+                    ? "Some providers are throttled and other providers failed. The search is incomplete."
+                    : "One or more upstream providers are throttled. The search is incomplete.",
+            RetryAt = retryAt,
         };
     }
 
@@ -568,6 +579,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         var evaluatedCount = 0;
         var attempted = false;
         string? failure = null;
+        var throttles = new ConcurrentBag<UpstreamThrottledException>();
 
         try
         {
@@ -768,7 +780,7 @@ internal sealed class ReleaseSearchQueryExecutor(
             RecordContributions(activity, coalesceContributions);
             if (failure is not null)
             {
-                activity?.SetStatus(ActivityStatusCode.Error, "provider-error");
+                activity?.SetStatus(ActivityStatusCode.Error, failure);
             }
 
             activity?.SetTag("magpie.query.terminal_reason", failure is not null
@@ -777,7 +789,10 @@ internal sealed class ReleaseSearchQueryExecutor(
                     ? "accepted"
                     : "exhausted");
 
-            return new ConnectionExecution(planned, results, executedRoutes, attempted, failure, rawCount);
+            return new ConnectionExecution(planned, results, executedRoutes, attempted, failure, rawCount)
+            {
+                RetryAt = throttles.Select(throttle => (DateTimeOffset?)throttle.RetryAt).Max()
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -862,6 +877,11 @@ internal sealed class ReleaseSearchQueryExecutor(
             }
             catch (RouteCachePopulationException ex)
             {
+                if (ex.RetryAt is { } retryAt)
+                {
+                    throttles.Add(new UpstreamThrottledException(retryAt));
+                }
+
                 routeResult = new CachedRouteResult([], ex.Attempted, ex.Failure, 0);
             }
 
@@ -899,7 +919,7 @@ internal sealed class ReleaseSearchQueryExecutor(
             requestActivity?.SetTag("magpie.query.raw_results", rawReleases.Length);
             if (routeFailure is not null)
             {
-                requestActivity?.SetStatus(ActivityStatusCode.Error, "provider-error");
+                requestActivity?.SetStatus(ActivityStatusCode.Error, routeFailure);
             }
 
             requestActivity?.SetTag("magpie.query.terminal_reason", routeFailure is null ? "complete" : "failed");
@@ -918,6 +938,7 @@ internal sealed class ReleaseSearchQueryExecutor(
 
             async ValueTask<CachedRouteResult> PopulateAsync(CancellationToken token)
             {
+                UpstreamThrottledException? throttle = null;
                 var result = await RunPhaseConnectionAsync(
                     planned.Connection,
                     planned.Order,
@@ -928,10 +949,11 @@ internal sealed class ReleaseSearchQueryExecutor(
                     applicableIndexerIds,
                     onConnectionStarted,
                     preserveDuplicateObservations: true,
-                    cancellationToken: token).ConfigureAwait(false);
+                    cancellationToken: token,
+                    onThrottled: value => throttle = value).ConfigureAwait(false);
                 if (result.Failure is { } failure)
                 {
-                    throw new RouteCachePopulationException(result.Attempted, failure.Error);
+                    throw new RouteCachePopulationException(result.Attempted, failure.Error, throttle?.RetryAt);
                 }
 
                 return new CachedRouteResult(
@@ -963,8 +985,8 @@ internal sealed class ReleaseSearchQueryExecutor(
             catch (Exception ex)
             {
                 logger.LogWarning(
-                    "Release evaluation failed with failure type {FailureType}",
-                    ex.GetType().Name);
+                    ex,
+                    "Release evaluation failed");
                 return new EvaluatedRelease(
                     observation.Release,
                     observation.ReleaseFacts,
@@ -1593,7 +1615,8 @@ internal sealed class ReleaseSearchQueryExecutor(
             ISet<Guid> applicableIndexerIds,
             Action<int, string>? onConnectionStarted,
             bool preserveDuplicateObservations,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Action<UpstreamThrottledException>? onThrottled = null)
     {
         var attempted = false;
         var stopwatch = Stopwatch.StartNew();
@@ -1695,10 +1718,9 @@ internal sealed class ReleaseSearchQueryExecutor(
             var query = resolved with { Categories = categories };
             activity?.SetTag("magpie.request.role", query.IdSearchParameter is null ? "keyword" : "external-id");
             activity?.SetTag("magpie.request.target", JsonSerializer.Serialize(query, JsonSerializerOptions.Web));
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(ConnectionPhaseDeadline);
             var found = await integration
-                .SearchAsync(query, connection.Settings, deadline.Token)
+                .SearchAsync(query, connection.Settings, cancellationToken)
+                .WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
 
             var releases = new List<Release>();
@@ -1770,17 +1792,24 @@ internal sealed class ReleaseSearchQueryExecutor(
         }
         catch (Exception ex)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, "provider-error");
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            if (ex is UpstreamThrottledException throttle)
+            {
+                onThrottled?.Invoke(throttle);
+                attempted = throttle.RequestSent;
+            }
+
             Record(attempted ? "attempted" : "error", 0, failed: true);
             ReleaseTelemetry.IndexerQueryFailures.Add(
                 1,
                 indexerIdTag,
                 new KeyValuePair<string, object?>("kind", "exception"));
             logger.LogWarning(
-                "The indexer search failed for connection {ConnectionName} ({ConnectionId}) with {FailureType}",
+                ex,
+                "The indexer search failed for connection {ConnectionName} ({ConnectionId})",
                 connection.Name,
-                connection.Id,
-                ex.GetType().Name);
+                connection.Id);
             return (
                 index,
                 connection.Id,
@@ -1868,6 +1897,11 @@ internal sealed class ReleaseSearchQueryExecutor(
         var connectionsById = connections.ToDictionary(connection => connection.Id);
         foreach (var (connectionId, error) in failures)
         {
+            if (error == "upstream-throttled")
+            {
+                continue;
+            }
+
             if (!connectionsById.TryGetValue(connectionId, out var connection) ||
                 connection.Status == IntegrationHealthStatus.Stabilizing)
             {
@@ -2045,6 +2079,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 Id = scope.Id,
                 ReleaseId = scope.ReleaseId,
                 ContentHierarchyItemId = scope.ContentHierarchyItemId,
+                Status = scope.Status,
             });
         }
 
@@ -2079,7 +2114,7 @@ internal sealed class ReleaseSearchQueryExecutor(
     }
 
     private string ClassifyProviderFailure(Exception exception) =>
-        $"provider-error:{exception.GetType().Name}";
+        exception is UpstreamThrottledException ? "upstream-throttled" : $"provider-error:{exception.GetType().Name}";
 
     private sealed record PlannedRoute(
         string NodeId,
@@ -2188,7 +2223,10 @@ internal sealed class ReleaseSearchQueryExecutor(
         IReadOnlyList<ReleaseSearchPhase> ExecutedRoutes,
         bool Attempted,
         string? Failure,
-        int RawCount);
+        int RawCount)
+    {
+        internal DateTimeOffset? RetryAt { get; init; }
+    }
 
     private sealed record CachedRouteResult(
         IReadOnlyList<Release> Releases,
@@ -2231,10 +2269,13 @@ internal sealed class ReleaseSearchQueryExecutor(
         }
     }
 
-    private sealed class RouteCachePopulationException(bool attempted, string failure) : Exception
+    private sealed class RouteCachePopulationException(bool attempted, string failure, DateTimeOffset? retryAt)
+        : Exception
     {
         internal bool Attempted { get; } = attempted;
 
         internal string Failure { get; } = failure;
+
+        internal DateTimeOffset? RetryAt { get; } = retryAt;
     }
 }

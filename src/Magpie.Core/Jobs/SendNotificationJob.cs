@@ -33,7 +33,6 @@ internal sealed class SendNotificationJob(
         Enabled = true,
         OnDemand = false,
         FailurePolicy = JobFailurePolicy.Retry,
-        Timeout = TimeSpan.FromMinutes(2),
         SupportedTriggerModes = [JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.Parallel,
         Parameters =

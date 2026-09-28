@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useOpenLocalContentPreview } from '@/components/content/LocalContentPreview';
 import { FilmSlateIcon, MagnifyingGlassIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { ContentList, type ContentItem } from '@/components/ui/ContentList';
@@ -8,7 +8,11 @@ import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/Mo
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
 import { Pager } from '@/components/ui/Pager';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { ContentFulfillmentBadge, ContentTypeBadge } from '@/components/content/ContentCardPrimitives';
+import {
+    ContentFulfillmentBadge,
+    ContentMonitoringIndicator,
+    ContentTypeBadge,
+} from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { formatShortDate } from '@/lib/dateFormatting';
@@ -17,7 +21,7 @@ import type { ContentListItem } from '@/types';
 import { type SubjectContentController } from './useSubjectContent';
 import './SubjectContentTab.css';
 
-const CONTENT_COLUMN_VISIBILITY = { monitoring: false, dateAdded: false, fulfilledDate: false };
+const CONTENT_COLUMN_VISIBILITY = { dateAdded: false, fulfilledDate: false };
 const CONTENT_HEADER_FILTER_COLUMNS = ['title', 'contentType', 'fulfillment'] as const;
 const CONTENT_SORT_OPTIONS: MobileListSortOption[] = [
     { id: 'publishDate', label: 'Published', initialDirection: 'desc' },
@@ -28,6 +32,7 @@ function SubjectContentMobileCard({ item }: { item: ContentListItem }) {
     return (
         <MobileMediaCard
             to={`/library/${item.id}`}
+            previewContentId={item.id}
             posterUrl={item.posterUrl}
             posterAlt={`${item.title} artwork`}
             title={
@@ -37,9 +42,17 @@ function SubjectContentMobileCard({ item }: { item: ContentListItem }) {
                 />
             }
             data-content-id={item.id}
+            titleAccessory={
+                <ContentMonitoringIndicator
+                    monitoring={item.monitoring}
+                    effectiveMonitoring={item.effectiveMonitoring}
+                    className="subject-content-tab__mobile-monitoring"
+                    activeClassName="subject-content-tab__mobile-monitoring--active"
+                />
+            }
         >
             <ContentTypeBadge level={item.level} levelLabel={item.levelLabel} contentType={item.contentType} />
-            <ContentFulfillmentBadge fulfillment={item.fulfillment} effectiveMonitoring={item.effectiveMonitoring} />
+            <ContentFulfillmentBadge fulfillment={item.fulfillment} />
             <span className="subject-content-tab__mobile-published">{formatShortDate(item.publishDate, '--')}</span>
         </MobileMediaCard>
     );
@@ -61,14 +74,14 @@ export function SubjectContentTab({
     goToPage,
     hasActiveFilters,
 }: SubjectContentController) {
-    const navigate = useNavigate();
+    const openPreview = useOpenLocalContentPreview();
     const usesCardLayout = useCardLayout();
 
     const handleContentClick = useCallback(
         (item: ContentItem) => {
-            void navigate(`/library/${item.id}`);
+            openPreview(item.id);
         },
-        [navigate],
+        [openPreview],
     );
 
     const emptyState = hasActiveFilters ? (
@@ -131,6 +144,7 @@ export function SubjectContentTab({
                         className="subject-content-tab__mobile-pager"
                         page={currentPage}
                         pageCount={pageCount}
+                        totalItems={totalItems}
                         onFirst={() => goToPage(1)}
                         onPrevious={() => goToPage(currentPage - 1)}
                         onNext={() => goToPage(currentPage + 1)}

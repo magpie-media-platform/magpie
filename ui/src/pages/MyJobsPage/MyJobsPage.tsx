@@ -8,6 +8,7 @@ import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Switch } from '@/components/ui/Switch';
 import { JobExecutionFilters, type JobExecutionFilterState } from '@/components/ui/JobExecutionFilters';
@@ -60,6 +61,7 @@ function specsToTemplateOptions(specs: ReturnType<typeof useJobSpecs>['specs']):
             name: spec.displayName || spec.jobType,
             enabled: spec.enabled,
             onDemand: spec.onDemand,
+            supportsImmediate: spec.supportsImmediate,
             scope: spec.scope,
             supportedTriggerModes: spec.supportedTriggerModes,
             requesterTriggerModes: spec.requesterTriggerModes,
@@ -180,11 +182,30 @@ export function MyJobsPage() {
             ),
         [eventSpecs],
     );
+    // Editing resolves an owned trigger's template from the full catalog; creating offers only eligible templates.
+    const allScheduleTemplateOptions = useMemo(
+        () =>
+            specsToTemplateOptions(manualSpecs).filter((option) =>
+                option.supportedTriggerModes?.includes(SCHEDULE_TRIGGER_MODE),
+            ),
+        [manualSpecs],
+    );
+    const allEventTemplateOptions = useMemo(
+        () =>
+            specsToTemplateOptions(manualSpecs).filter((option) =>
+                option.supportedTriggerModes?.includes(EVENT_TRIGGER_MODE),
+            ),
+        [manualSpecs],
+    );
     const runnableJobOptions = useMemo(
         () => specsToTemplateOptions(manualSpecs).filter((option) => canRunJobOnDemand(option, user?.role)),
         [manualSpecs, user?.role],
     );
     const hasRunnableJobs = runnableJobOptions.length > 0;
+    const runnableJobTypes = useMemo(
+        () => new Set(runnableJobOptions.map((option) => option.id)),
+        [runnableJobOptions],
+    );
 
     const userScheduleTriggers = schedCrud.triggers;
     const userEventTriggers = eventCrud.triggers;
@@ -220,6 +241,38 @@ export function MyJobsPage() {
     if (hasRunnableJobs) {
         executionsEmptyDescription += ' Run a job to see your execution history here.';
     }
+
+    const tabActions: QuickAction[] =
+        activeTab === 'executions'
+            ? hasRunnableJobs
+                ? [
+                      {
+                          id: 'run-job',
+                          label: 'Run a job',
+                          icon: <LightningIcon weight="bold" />,
+                          onClick: () => setRunDialogOpen(true),
+                      },
+                  ]
+                : []
+            : !canManageTriggers
+              ? []
+              : activeTab === 'schedules'
+                ? [
+                      {
+                          id: 'add-schedule',
+                          label: 'Add Schedule',
+                          icon: <CalendarBlankIcon weight="bold" />,
+                          onClick: schedCrud.handleAdd,
+                      },
+                  ]
+                : [
+                      {
+                          id: 'add-event-trigger',
+                          label: 'Add Event Trigger',
+                          icon: <LightningIcon weight="bold" />,
+                          onClick: eventCrud.handleAdd,
+                      },
+                  ];
 
     return (
         <div className="my-jobs-page" data-page="my-jobs">
@@ -343,6 +396,7 @@ export function MyJobsPage() {
                                 data-component="executions-pager"
                                 page={page}
                                 pageCount={totalPages}
+                                totalItems={totalExecutions}
                                 onFirst={() => setPage(1)}
                                 onPrevious={() => setPage(page - 1)}
                                 onNext={() => setPage(page + 1)}
@@ -380,7 +434,11 @@ export function MyJobsPage() {
                             )}
                             <ScheduleTriggersTab
                                 crud={schedCrud}
-                                templates={scheduleTemplateOptions}
+                                templates={
+                                    schedCrud.formInitialValues ? allScheduleTemplateOptions : scheduleTemplateOptions
+                                }
+                                runnableJobTypes={runnableJobTypes}
+                                userScopeOnly={!canViewAdminJobs}
                                 canManage={canManageTriggers}
                                 canRun={hasRunnableJobs}
                             />
@@ -412,13 +470,17 @@ export function MyJobsPage() {
                             )}
                             <EventTriggersTab
                                 crud={eventCrud}
-                                templates={eventTemplateOptions}
+                                templates={eventCrud.formInitialValues ? allEventTemplateOptions : eventTemplateOptions}
+                                userScopeOnly={!canViewAdminJobs}
                                 canManage={canManageTriggers}
+                                ownerRole={user?.role}
                             />
                         </div>
                     </TabsContent>
                 </Tabs>
             </PullToRefresh>
+
+            <QuickActionsButton actions={tabActions} title="Job Actions" />
 
             <RunJobDialog
                 open={runDialogOpen}

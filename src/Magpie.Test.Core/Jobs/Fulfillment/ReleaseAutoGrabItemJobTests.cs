@@ -164,7 +164,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                         Level = "movie",
                         Slug = "chosen",
                         Name = "Chosen",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Missing }
                     }
                 ]
@@ -178,7 +178,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                 Level = "movie",
                 Slug = "chosen",
                 Name = "Chosen",
-                EffectiveMonitoring = true
+                EffectiveMonitoring = MonitoringMode.Monitored
             });
         _releaseService
             .Setup(s => s.SelectBestReleaseAsync(
@@ -241,7 +241,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                         Level = "movie",
                         Slug = "chosen",
                         Name = "Chosen",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Missing }
                     }
                 ]
@@ -255,7 +255,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                 Level = "movie",
                 Slug = "chosen",
                 Name = "Chosen",
-                EffectiveMonitoring = true
+                EffectiveMonitoring = MonitoringMode.Monitored
             });
         _releaseService
             .Setup(s => s.SelectBestReleaseAsync(
@@ -314,7 +314,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                         Level = "movie",
                         Slug = "chosen",
                         Name = "Chosen",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Missing }
                     }
                 ]
@@ -392,7 +392,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                         Level = "movie",
                         Slug = "done",
                         Name = "Done",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Fulfilled }
                     }
                 ]
@@ -411,8 +411,11 @@ public sealed class ReleaseAutoGrabItemJobTests
             Times.Never);
     }
 
-    [Test]
-    public async Task ExecuteAsync_DoesNotEnqueue_WhenItemIsNotEffectivelyMonitored()
+    [TestCase(MonitoringMode.Unmonitored, false)]
+    [TestCase(MonitoringMode.Monitored, true)]
+    public async Task ExecuteAsync_DoesNotEnqueue_WhenItemIsUnmonitoredOrAFileWaitsToImport(
+        MonitoringMode monitoring,
+        bool importPending)
     {
         // Arrange
         var contentItemId = Guid.NewGuid();
@@ -434,7 +437,8 @@ public sealed class ReleaseAutoGrabItemJobTests
                         Level = "movie",
                         Slug = "unmonitored",
                         Name = "Unmonitored",
-                        EffectiveMonitoring = false,
+                        EffectiveMonitoring = monitoring,
+                        ImportPending = importPending,
                         ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Missing }
                     }
                 ]
@@ -486,7 +490,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                         Level = "movie",
                         Slug = "nomatch",
                         Name = "No match",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Missing }
                     }
                 ]
@@ -500,7 +504,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                 Level = "movie",
                 Slug = "nomatch",
                 Name = "No match",
-                EffectiveMonitoring = true
+                EffectiveMonitoring = MonitoringMode.Monitored
             });
         var context = _jobContext with
         {
@@ -514,5 +518,100 @@ public sealed class ReleaseAutoGrabItemJobTests
         _jobManager.Verify(
             m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [TestCase(MonitoringMode.Shotgun, false, 2, 1)]
+    [TestCase(MonitoringMode.Monitored, false, 1, 0)]
+    [TestCase(MonitoringMode.Shotgun, true, 0, 0)]
+    public async Task ExecuteAsync_QueuesEveryShotgunRelease_WhenContentUsesShotgun(
+        MonitoringMode monitoring,
+        bool importPending,
+        int expectedQueued,
+        int expectedShotgunSelections)
+    {
+        // Arrange
+        var contentItemId = Guid.NewGuid();
+        var hierarchyItemId = Guid.NewGuid();
+        var best = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Best release",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        var other = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Other release",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = hierarchyItemId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "chosen",
+                        Name = "Chosen",
+                        EffectiveMonitoring = monitoring,
+                        ImportPending = importPending,
+                        ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Missing }
+                    }
+                ]
+            });
+        _releaseService
+            .Setup(s => s.SelectBestReleaseAsync(
+                contentItemId,
+                _userId,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(best);
+        _releaseService
+            .Setup(s => s.SelectAcceptableReleasesAsync(
+                contentItemId,
+                _userId,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([best, other]);
+        var context = _jobContext with
+        {
+            Parameters = new Dictionary<string, string> { ["contentItemId"] = contentItemId.ToString() }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(r =>
+                        r.JobType == "ReleaseDownloadItem" &&
+                        r.Parameters!["contentHierarchyItemId"] == hierarchyItemId.ToString()),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedQueued));
+            _releaseService.Verify(
+                s => s.SelectAcceptableReleasesAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedShotgunSelections));
+        }
     }
 }

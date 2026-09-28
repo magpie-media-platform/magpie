@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -60,6 +61,120 @@ internal sealed class ContentMetadataSearcher(
             },
             cancellationToken).ConfigureAwait(false);
         return [.. result.Hits.Select(hit => hit.ToCandidate())];
+    }
+
+    /// <inheritdoc />
+    public async Task<MetadataSearchBatch> ContinueSearchAsync(
+        string contentType,
+        ContentHierarchyItemCriteria query,
+        int maxResults,
+        string defaultLanguagePreference,
+        object? continuation,
+        CancellationToken cancellationToken = default)
+    {
+        var settings = await settingsResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
+        var metadata = query.MergeMetadata();
+        var targets = ResolveTargets(query, metadata);
+        var fingerprint = JsonSerializer.Serialize(new
+        {
+            contentType,
+            query,
+            defaultLanguagePreference,
+            settings,
+            targets
+        });
+        if (continuation is not null &&
+            (continuation is not SearchCheckpoint previous || previous.Fingerprint != fingerprint))
+        {
+            throw new MetadataSearchContinuationException("The MusicBrainz checkpoint does not match this search.");
+        }
+
+        if (contentType != Constants.ContentTypeSlug)
+        {
+            return new MetadataSearchBatch();
+        }
+
+        if (!MatchesScope(query.ContentType.And.ToArray(), contentType) || targets.Count == 0)
+        {
+            return new MetadataSearchBatch { Page = EmptySupported() };
+        }
+
+        var previousState = continuation as SearchCheckpoint;
+        var progress = previousState?.Progress.Select(value => value.Copy()).ToArray() ??
+            targets.Select(_ => new QueryProgress()).ToArray();
+        var exhausted = previousState?.Exhausted.ToArray() ?? new bool[targets.Count];
+        var pending = previousState?.Pending.ToList() ?? [];
+        var warnings = new List<string>();
+        if (maxResults == 0)
+        {
+            for (var index = 0; index < targets.Count; index++)
+            {
+                progress[index].ValidateOnly = true;
+                var validation = await ExecutePlanAsync(new QueryRequest
+                {
+                    Target = targets[index],
+                    Criteria = metadata,
+                    RequestedPage = 1,
+                    MaxResults = 1,
+                    Settings = settings with { FreshSearch = true },
+                    Progress = progress[index]
+                }, cancellationToken).ConfigureAwait(false);
+                warnings.AddRange(validation.Warnings);
+            }
+
+            return new MetadataSearchBatch
+            {
+                Page = EmptySupported() with { Warnings = warnings },
+                Continuation = continuation
+            };
+        }
+
+        for (var index = 0; index < targets.Count && pending.Count < maxResults; index++)
+        {
+            if (exhausted[index])
+            {
+                continue;
+            }
+
+            var result = await ExecutePlanAsync(new QueryRequest
+            {
+                Target = targets[index],
+                Criteria = metadata,
+                RequestedPage = 1,
+                MaxResults = Math.Max(1, maxResults - pending.Count),
+                Settings = settings with { FreshSearch = true },
+                Progress = progress[index]
+            }, cancellationToken).ConfigureAwait(false);
+            warnings.AddRange(result.Warnings);
+            foreach (var hit in result.Hits)
+            {
+                if (progress[index].Delivered.Add(hit.Target + ":" + hit.PrimaryMbid))
+                {
+                    pending.Add(hit);
+                }
+            }
+
+            exhausted[index] = !result.PageInfo.HasMore && result.Warnings.Count == 0;
+        }
+
+        var matches = pending.Take(maxResults).Select(hit => hit.ToCandidate()).ToArray();
+        pending = pending.Skip(maxResults).ToList();
+        cancellationToken.ThrowIfCancellationRequested();
+        return new MetadataSearchBatch
+        {
+            Page = new MetadataSearchPage
+            {
+                Supported = true,
+                Matches = matches,
+                Warnings = [.. warnings.Distinct()],
+                PageInfo = new ProviderSearchPageInfo
+                {
+                    RequestedPage = 1,
+                    HasMore = pending.Count > 0 || exhausted.Any(value => !value)
+                }
+            },
+            Continuation = new SearchCheckpoint(fingerprint, progress, exhausted, pending)
+        };
     }
 
     public async Task<MetadataSearchPage> AdvancedSearchAsync(
@@ -414,7 +529,7 @@ internal sealed class ContentMetadataSearcher(
 
     private async Task<QueryResult> ExecutePlanAsync(QueryRequest request, CancellationToken cancellationToken)
     {
-        var plan = queryPlanner.Plan(request);
+        var plan = queryPlanner.Plan(request) with { Progress = request.Progress };
         if (plan.TraceProvenance.Includes(QueryTraceProvenance.Disposition.Refused))
         {
             return new QueryResult
@@ -431,4 +546,10 @@ internal sealed class ContentMetadataSearcher(
 
         return await queryExecutor.ExecuteAsync(plan, cancellationToken).ConfigureAwait(false);
     }
+
+    private sealed record SearchCheckpoint(
+        string Fingerprint,
+        IReadOnlyList<QueryProgress> Progress,
+        IReadOnlyList<bool> Exhausted,
+        IReadOnlyList<SearchHit> Pending);
 }

@@ -19,6 +19,18 @@ public interface IJobExecutionRepository :
     IBulkDeleteRepository<JobExecution, JobExecutionQuery>
 {
     /// <summary>
+    /// Creates an execution or returns the unchanged queued or active owner of its lock partition.
+    /// </summary>
+    /// <param name="model">The queued execution with a lock partition</param>
+    /// <param name="createdByUserId">The id of the user that starts the execution</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<JobExecution> CreateIfInactiveAsync(
+        JobExecution model,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("The repository does not support atomic inactive-only enqueue.");
+
+    /// <summary>
     /// Gets a page of executions that a node can claim, oldest first, with an equal share for each job type.
     /// </summary>
     /// <param name="paging">The paging parameters</param>
@@ -55,32 +67,53 @@ public interface IJobExecutionRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Records a request to cancel an execution.
+    /// Returns owned running work to the queue until its upstream cooldown ends.
+    /// </summary>
+    /// <param name="executionId">The id of the execution</param>
+    /// <param name="nodeId">The node that owns the execution</param>
+    /// <param name="notBeforeAt">The earliest UTC time to resume the work</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> TryDeferRunningAsync(Guid executionId, string nodeId, DateTime notBeforeAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cancels a job execution.
     /// </summary>
     /// <param name="executionId">The id of the job execution</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<JobCancellationRequestResult?> RequestCancellationAsync(
+    /// <returns>The job cancellation, or null when the job execution was not cancelled</returns>
+    Task<JobCancellation?> CancelAsync(
         Guid executionId,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the heartbeat time of a running execution.
+    /// Cancels a job execution.
     /// </summary>
-    /// <param name="executionId">The id of the job execution</param>
+    /// <param name="execution">The job execution as it was read</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task TouchHeartbeatAsync(Guid executionId, CancellationToken cancellationToken = default);
+    /// <returns>The job cancellation, or null when the job execution was not cancelled</returns>
+    Task<JobCancellation?> CancelAsync(
+        JobExecution execution,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Sets the timeout deadline of a running execution, only while the given node owns it.
+    /// Updates the heartbeat time of a running execution that the node owns.
     /// </summary>
     /// <param name="executionId">The id of the job execution</param>
-    /// <param name="nodeId">The id of the node that owns the running execution</param>
-    /// <param name="timeoutAt">The UTC time after which the execution counts as timed out</param>
+    /// <param name="nodeId">The id of the node that runs the execution</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<bool> TrySetRunningTimeoutAsync(
-        Guid executionId,
-        string nodeId,
-        DateTime timeoutAt,
+    /// <returns><see langword="true"/> when the node still owns the execution, otherwise <see langword="false"/>.</returns>
+    Task<bool> TouchHeartbeatAsync(Guid executionId, string nodeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Recovers an inactive execution only if its status, owner and heartbeat have not changed.
+    /// </summary>
+    /// <param name="expected">The execution observed by the recovery scan</param>
+    /// <param name="reason">The reason for recovery</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> TryRecoverInactiveAsync(
+        JobExecution expected,
+        string reason,
         CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useContentList } from '@/hooks/useContent';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import type { ContentQueryParams } from '@/types';
@@ -9,9 +10,11 @@ import { useSubjectContent } from './useSubjectContent';
 
 vi.mock('@/hooks/useContent', () => ({ useContentList: vi.fn() }));
 vi.mock('@/hooks/useLibraryTypes', () => ({ useLibraryTypes: vi.fn() }));
+vi.mock('@/hooks/ui/useCardLayout', () => ({ useCardLayout: vi.fn() }));
 
 const mockUseContentList = vi.mocked(useContentList);
 const mockUseLibraryTypes = vi.mocked(useLibraryTypes);
+const mockUseCardLayout = vi.mocked(useCardLayout);
 
 function lastParams(): ContentQueryParams {
     return mockUseContentList.mock.calls.at(-1)![0] as ContentQueryParams;
@@ -23,6 +26,7 @@ const SCOPE = `Relationships has (RelatedMetadataContainerId = "${CONTAINER_ID}"
 describe('useSubjectContent', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        mockUseCardLayout.mockReturnValue(false);
         mockUseLibraryTypes.mockReturnValue({ contentTypes: [] } as unknown as ReturnType<typeof useLibraryTypes>);
         mockUseContentList.mockReturnValue({
             data: { items: [], pageNumber: 1, pageSize: 25, totalItems: 0 },
@@ -60,7 +64,7 @@ describe('useSubjectContent', () => {
 
         act(() => result.current.headerFilterHandlers.onTitleChange('Breaking'));
 
-        await waitFor(() => expect(lastParams().filter).toBe(`${SCOPE} and title contains "Breaking"`));
+        await waitFor(() => expect(lastParams().filter).toBe(`${SCOPE} and (title contains "Breaking")`));
         expect(lastParams().pageNumber).toBe(1);
     });
 
@@ -69,7 +73,7 @@ describe('useSubjectContent', () => {
 
         act(() => result.current.headerFilterHandlers.onContentTypeChange(JSON.stringify(['movie', null])));
 
-        await waitFor(() => expect(lastParams().filter).toBe(`${SCOPE} and contentType = "movie"`));
+        await waitFor(() => expect(lastParams().filter).toBe(`${SCOPE} and (contentType = "movie")`));
     });
 
     it('translates a level-specific type selection into contentType and level MagpieQL criteria', async () => {
@@ -78,17 +82,17 @@ describe('useSubjectContent', () => {
         act(() => result.current.headerFilterHandlers.onContentTypeChange(JSON.stringify(['tv', 'tv-season'])));
 
         await waitFor(() =>
-            expect(lastParams().filter).toBe(`${SCOPE} and contentType = "tv" and level = "tv-season"`),
+            expect(lastParams().filter).toBe(`${SCOPE} and (contentType = "tv" and level = "tv-season")`),
         );
     });
 
-    it('sends the status filter as the fulfillment parameter, not inside MagpieQL', async () => {
+    it('sends the status filter only inside MagpieQL', async () => {
         const { result } = renderHook(() => useSubjectContent(CONTAINER_ID));
 
         act(() => result.current.headerFilterHandlers.onFulfillmentChange('Missing'));
 
-        await waitFor(() => expect(lastParams().fulfillment).toBe('Missing'));
-        expect(lastParams().filter).toBe(SCOPE);
+        await waitFor(() => expect(lastParams().filter).toBe(`${SCOPE} and (fulfillment = Missing)`));
+        expect(lastParams().fulfillment).toBeUndefined();
     });
 
     it('composes title and status filters together', async () => {
@@ -99,8 +103,8 @@ describe('useSubjectContent', () => {
 
         await waitFor(() => {
             const params = lastParams();
-            expect(params.filter).toBe(`${SCOPE} and title contains "Bad"`);
-            expect(params.fulfillment).toBe('Fulfilled');
+            expect(params.filter).toBe(`${SCOPE} and (title contains "Bad" and fulfillment = Fulfilled)`);
+            expect(params.fulfillment).toBeUndefined();
         });
     });
 
@@ -139,6 +143,32 @@ describe('useSubjectContent', () => {
 
         expect(result.current.totalItems).toBe(60);
         expect(result.current.pageCount).toBe(3);
+    });
+
+    it('does not apply header filters in the card layout, which has no filter controls', async () => {
+        // Arrange
+        const { result, rerender } = renderHook(() => useSubjectContent(CONTAINER_ID));
+        act(() => result.current.headerFilterHandlers.onTitleChange('zzz-nomatch'));
+        await waitFor(() => expect(lastParams().filter).toBe(`${SCOPE} and (title contains "zzz-nomatch")`));
+        act(() => result.current.onPaginationChange({ pageIndex: 1, pageSize: 25 }));
+
+        // Act
+        mockUseCardLayout.mockReturnValue(true);
+        rerender();
+
+        // Assert
+        expect(lastParams().filter).toBe(SCOPE);
+        expect(lastParams().pageNumber).toBe(1);
+        expect(result.current.hasActiveFilters).toBe(false);
+
+        // Act
+        mockUseCardLayout.mockReturnValue(false);
+        rerender();
+
+        // Assert
+        expect(lastParams().filter).toBe(`${SCOPE} and (title contains "zzz-nomatch")`);
+        expect(result.current.hasActiveFilters).toBe(true);
+        expect(result.current.headerFilters.title).toBe('zzz-nomatch');
     });
 
     it('disables the query until a metadata container id is present', () => {

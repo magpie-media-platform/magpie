@@ -167,7 +167,7 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
     const [acceptingKeys, setAcceptingKeys] = useState<Set<string>>(() => new Set());
     const [isBulkAccepting, setIsBulkAccepting] = useState(false);
     const [acceptAction, setAcceptAction] = useState<ImportAcceptAction | null>(null);
-    const bulkAcceptMutation = useBulkAcceptLibraryImportCandidates();
+    const { mutateAsync: acceptCandidates } = useBulkAcceptLibraryImportCandidates();
 
     const buildUrl = useCallback(
         (nextPath: string[]) => libraryImportPath({ groupKey, rootFolderId, title: queryTitle, path: nextPath }),
@@ -207,7 +207,7 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
         async (bucket: Bucket, monitoringMode: LibraryImportMonitoringMode) => {
             setAcceptingKeys((prev) => new Set(prev).add(bucket.key));
             try {
-                const result = await bulkAcceptMutation.mutateAsync({
+                const result = await acceptCandidates({
                     ids: bucket.candidates.map((c) => c.id),
                     monitoringMode,
                 });
@@ -235,7 +235,7 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
                 });
             }
         },
-        [bulkAcceptMutation, toast],
+        [acceptCandidates, toast],
     );
 
     const handleBulkAccept = useCallback(
@@ -256,7 +256,7 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
 
             setIsBulkAccepting(true);
             try {
-                const result = await bulkAcceptMutation.mutateAsync({ ids, monitoringMode });
+                const result = await acceptCandidates({ ids, monitoringMode });
                 const queuedCount = result.queued.length;
                 const skippedCount = result.skipped.length;
                 const details = [
@@ -288,7 +288,7 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
                 setIsBulkAccepting(false);
             }
         },
-        [selectedBuckets, bulkAcceptMutation, toast, selection],
+        [selectedBuckets, acceptCandidates, toast, selection],
     );
 
     const getBucketId = useCallback((bucket: Bucket) => bucket.key, []);
@@ -346,8 +346,15 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
                                     variant="primary"
                                     size="sm"
                                     onClick={() =>
-                                        setAcceptAction(
-                                            () => (mode: LibraryImportMonitoringMode) => handleAccept(bucket, mode),
+                                        setAcceptAction(() =>
+                                            Object.assign(
+                                                (mode: LibraryImportMonitoringMode) => handleAccept(bucket, mode),
+                                                {
+                                                    renameSelection: {
+                                                        ids: bucket.candidates.map((candidate) => candidate.id),
+                                                    },
+                                                },
+                                            ),
                                         )
                                     }
                                     loading={acceptingKeys.has(bucket.key)}
@@ -450,7 +457,9 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
         body = (
             <CandidateLeafTable
                 items={scope}
-                requestAccept={(action) => setAcceptAction(() => action)}
+                requestAccept={(action, renameSelection) =>
+                    setAcceptAction(() => Object.assign(action, { renameSelection }))
+                }
                 emptyState={
                     <EmptyState
                         icon={<FolderSimplePlusIcon weight="duotone" />}
@@ -472,7 +481,17 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
                     <Button
                         variant="primary"
                         size="sm"
-                        onClick={() => setAcceptAction(() => handleBulkAccept)}
+                        onClick={() =>
+                            setAcceptAction(() =>
+                                Object.assign((mode: LibraryImportMonitoringMode) => handleBulkAccept(mode), {
+                                    renameSelection: {
+                                        ids: selectedBuckets.flatMap((bucket) =>
+                                            bucket.candidates.map((candidate) => candidate.id),
+                                        ),
+                                    },
+                                }),
+                            )
+                        }
                         loading={isBulkAccepting}
                         data-action="bulk-accept"
                     >
@@ -547,7 +566,17 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
                     <Button
                         variant="primary"
                         size="sm"
-                        onClick={() => setAcceptAction(() => handleBulkAccept)}
+                        onClick={() =>
+                            setAcceptAction(() =>
+                                Object.assign((mode: LibraryImportMonitoringMode) => handleBulkAccept(mode), {
+                                    renameSelection: {
+                                        ids: selectedBuckets.flatMap((bucket) =>
+                                            bucket.candidates.map((candidate) => candidate.id),
+                                        ),
+                                    },
+                                }),
+                            )
+                        }
                         loading={isBulkAccepting}
                         disabled={!selection.hasSelection}
                         data-action="bulk-accept"

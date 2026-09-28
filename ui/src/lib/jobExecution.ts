@@ -12,6 +12,7 @@ export interface TemplateOption {
     id: string;
     name: string;
     onDemand?: boolean;
+    supportsImmediate?: boolean;
     enabled?: boolean;
     scope?: JobScopeValue;
     supportedTriggerModes?: JobTriggerModeValue[];

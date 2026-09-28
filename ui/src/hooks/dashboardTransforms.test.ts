@@ -52,7 +52,7 @@ function makeHierarchyItem(overrides: Partial<ApiContentHierarchyItem> = {}): Ap
         slug: 'test-item',
         name: 'Test Item',
         monitoring: null,
-        effectiveMonitoring: true,
+        effectiveMonitoring: 'Monitored',
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };
@@ -67,7 +67,7 @@ function makeContentItemWithMetadata(overrides: Partial<ApiContentItemWithMetada
         slug: 'test-item',
         name: 'Test Item',
         monitoring: null,
-        effectiveMonitoring: true,
+        effectiveMonitoring: 'Monitored',
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };
@@ -346,8 +346,8 @@ describe('mapJobStatus', () => {
         expect(mapJobStatus('Failed')).toBe('failed');
     });
 
-    it('maps Cancelled to failed', () => {
-        expect(mapJobStatus('Cancelled')).toBe('failed');
+    it('maps Cancelled to cancelled', () => {
+        expect(mapJobStatus('Cancelled')).toBe('cancelled');
     });
 });
 
@@ -532,16 +532,22 @@ describe('mapUpcomingContent', () => {
     });
 
     it('maps future-dated content items to upcoming items', () => {
+        // Arrange
         const items = [
             withPublishDate('2025-06-15', {
                 id: 'ci-1',
                 parentId: 'season-1',
                 name: 'Upcoming Episode',
                 contentType: 'episodes',
+                monitoring: 'Unmonitored',
+                effectiveMonitoring: 'Unmonitored',
             }),
         ];
 
+        // Act
         const result = mapUpcomingContent(items);
+
+        // Assert
         expect(result).toHaveLength(1);
         expect(result[0].id).toBe('upcoming-ci-1');
         expect(result[0].contentId).toBe('ci-1');
@@ -549,6 +555,8 @@ describe('mapUpcomingContent', () => {
         expect(result[0].title).toBe('Upcoming Episode');
         expect(result[0].contentType).toBe('episodes');
         expect(result[0].fulfillment).toBe('missing');
+        expect(result[0].monitoring).toBe('Unmonitored');
+        expect(result[0].effectiveMonitoring).toBe('Unmonitored');
     });
 
     it('uses metadata title when available', () => {

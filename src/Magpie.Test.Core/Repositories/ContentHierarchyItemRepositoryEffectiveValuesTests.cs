@@ -19,6 +19,7 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -34,18 +35,39 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IContentHierarchyItemRepository _subject = null!;
     private Guid _metadataContainerId;
     private Mock<IEventBus> _eventBus = null!;
     private Mock<IContentTypeRegistry> _contentTypeRegistry = null!;
     private Mock<ILogger<ContentHierarchyItemRepository>> _logger = null!;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.UseSqlite(_template).Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
-        _context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        _context = new MagpieDbContext(options.UseSqlite(connection, contextOwnsConnection: true).Options);
         var metadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
         _context.MetadataContainers.Add(metadataContainer);
         _context.SaveChanges();
@@ -58,7 +80,7 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
             _context, Mock.Of<IAuditRecordRepository>(), transactions,
             Mock.Of<IMetadataContainerRepository>(),
             _contentTypeRegistry.Object, _eventBus.Object,
-            _logger.Object, TimeProvider.System);
+            _logger.Object, TimeProvider.System, Mock.Of<IContentRepository>());
     }
 
     [TearDown]
@@ -106,7 +128,7 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
             Name = "Definition change",
             EffectiveRootFolderId = rootFolder.Id,
             EffectiveQualityTierListId = middleTierList.Id,
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.AddRange(rootTierList, middleTierList);
@@ -180,7 +202,7 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
             Level = "root",
             Slug = "stale-root",
             Name = "Root",
-            EffectiveMonitoring = false,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
             EffectiveRootFolderId = Guid.NewGuid(),
             CreatedAt = DateTime.UtcNow
         };
@@ -193,7 +215,7 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
             Level = "child",
             Slug = "stale-child",
             Name = "Child",
-            EffectiveMonitoring = false,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
             EffectiveRootFolderId = Guid.NewGuid(),
             CreatedAt = DateTime.UtcNow
         };
@@ -222,7 +244,9 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(stored, Has.Count.EqualTo(2));
-            Assert.That(stored, Has.All.Property(nameof(ContentHierarchyItem.EffectiveMonitoring)).True);
+            Assert.That(
+                stored,
+                Has.All.Property(nameof(ContentHierarchyItem.EffectiveMonitoring)).EqualTo(MonitoringMode.Monitored));
             Assert.That(
                 stored,
                 Has.All.Property(nameof(ContentHierarchyItem.EffectiveRootFolderId)).EqualTo(rootFolder.Id));
@@ -240,14 +264,14 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
             Times.Exactly(2));
     }
 
-    [TestCase("false", false, 0)]
-    [TestCase("true", true, 0)]
-    [TestCase("0", false, 0)]
-    [TestCase("1", true, 0)]
-    [TestCase("not-a-boolean", true, 1)]
+    [TestCase("false", MonitoringMode.Unmonitored, 0)]
+    [TestCase("true", MonitoringMode.Monitored, 0)]
+    [TestCase("0", MonitoringMode.Unmonitored, 0)]
+    [TestCase("1", MonitoringMode.Monitored, 0)]
+    [TestCase("not-a-boolean", MonitoringMode.Monitored, 1)]
     public async Task RecomputeAllEffectiveValuesAsync_ResolvesTheSystemDefault_WhenTheGroupHoldsAValue(
         string storedValue,
-        bool expectedMonitoring,
+        MonitoringMode expectedMonitoring,
         int expectedWarnings)
     {
         // Arrange
@@ -283,7 +307,7 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
             Slug = "inherits-global",
             Name = "Inherits",
             Monitoring = null,
-            EffectiveMonitoring = false,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
             EffectiveRootFolderId = Guid.NewGuid(),
             CreatedAt = DateTime.UtcNow
         };

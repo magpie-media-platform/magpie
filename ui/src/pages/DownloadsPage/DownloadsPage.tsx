@@ -26,15 +26,16 @@ import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { DownloadDetailsDialog } from '@/components/downloads/DownloadDetailsDialog';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
-import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
-import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
+import { type MobileListSortOption } from '@/components/ui/MobileListToolbar';
+import { ListFilterToolbar, type ListFilterField } from '@/components/ui/ListFilterToolbar';
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Skeleton } from '@/components/ui/Skeleton';
 import {
+    useDownload,
     useDownloads,
     useDownloadStatusTotal,
     type ApiDownload,
@@ -94,6 +95,7 @@ const historyStateOptions: StateFilterOption[] = [
     { value: 'Importing', label: 'Importing' },
     { value: 'Imported', label: 'Imported' },
     { value: 'Failed', label: 'Failed' },
+    { value: 'Faulted', label: 'Faulted' },
     { value: 'Cancelled', label: 'Cancelled' },
 ];
 
@@ -119,6 +121,7 @@ type HistoryUrlFilters = {
 interface ConfirmTarget {
     allPages: boolean;
     count: number;
+    ids: string[];
     records: ApiDownload[];
     filter: DownloadBulkFilter;
     excludeIds: string[];
@@ -385,11 +388,13 @@ export function DownloadsPage() {
     const [isRemoving, setIsRemoving] = useState(false);
 
     const [detailsDownload, setDetailsDownload] = useState<ApiDownload | null>(null);
+    const detailsQuery = useDownload(detailsDownload?.id);
 
     const singleTarget = useCallback(
         (download: ApiDownload): ConfirmTarget => ({
             allPages: false,
             count: 1,
+            ids: [download.id],
             records: [download],
             filter: {},
             excludeIds: [],
@@ -447,10 +452,7 @@ export function DownloadsPage() {
                 }
                 count = result.count;
             } else {
-                const { succeededIds, failedCount } = await runPerDownloadActions(
-                    forgetTarget.records.map((download) => download.id),
-                    removeDownload,
-                );
+                const { succeededIds, failedCount } = await runPerDownloadActions(forgetTarget.ids, removeDownload);
                 if (failedCount > 0) {
                     succeededIds.forEach((id) => forgetTarget.selection?.toggleRow(id, false));
                     if (forgetTarget.selection) {
@@ -502,7 +504,7 @@ export function DownloadsPage() {
                 count = result.count;
             } else {
                 const { succeededIds, failedCount } = await runPerDownloadActions(
-                    removeTarget.records.map((download) => download.id),
+                    removeTarget.ids,
                     deleteDownloadWithFiles,
                 );
                 if (failedCount > 0) {
@@ -777,20 +779,41 @@ export function DownloadsPage() {
 
     const hasActiveQueueFilters = queueFilters.client !== '' || queueFilters.state !== '';
     const hasActiveHistoryFilters = historyFilters.client !== '' || historyFilters.state !== '';
+    const queueFilterFields: ListFilterField[] = [
+        { id: 'client', label: 'Client', kind: 'facet', value: queueFilters.client, options: clientFacetOptions },
+        { id: 'state', label: 'Status', kind: 'facet', value: queueFilters.state, options: queueStateFacets },
+    ];
+    const historyFilterFields: ListFilterField[] = [
+        { id: 'client', label: 'Client', kind: 'facet', value: historyFilters.client, options: clientFacetOptions },
+        { id: 'state', label: 'Status', kind: 'facet', value: historyFilters.state, options: historyStateFacets },
+    ];
+
+    const knownDownloads = useRef<Record<string, ApiDownload>>({});
+    useEffect(() => {
+        for (const download of [...pagedQueueDownloads, ...pagedHistoryDownloads]) {
+            knownDownloads.current[download.id] = download;
+        }
+    }, [pagedQueueDownloads, pagedHistoryDownloads]);
 
     const queueSelectedRecords = useMemo(
-        () => pagedQueueDownloads.filter((d) => queueSelection.rowSelection[d.id]),
-        [pagedQueueDownloads, queueSelection.rowSelection],
+        () =>
+            queueSelection.selectedIds
+                .map((id) => pagedQueueDownloads.find((download) => download.id === id) ?? knownDownloads.current[id])
+                .filter((download) => download !== undefined),
+        [queueSelection.selectedIds, pagedQueueDownloads],
     );
     const historySelectedRecords = useMemo(
-        () => pagedHistoryDownloads.filter((d) => historySelection.rowSelection[d.id]),
-        [pagedHistoryDownloads, historySelection.rowSelection],
+        () =>
+            historySelection.selectedIds
+                .map((id) => pagedHistoryDownloads.find((download) => download.id === id) ?? knownDownloads.current[id])
+                .filter((download) => download !== undefined),
+        [historySelection.selectedIds, pagedHistoryDownloads],
     );
 
     const queueClear = queueSelection.clear;
     const historyClear = historySelection.clear;
-    useEffect(() => queueClear(), [queueFilters.client, queueFilters.state, queueTable.page, queueClear]);
-    useEffect(() => historyClear(), [historyFilters.client, historyFilters.state, historyTable.page, historyClear]);
+    useEffect(() => queueClear(), [queueFilters.client, queueFilters.state, queueClear]);
+    useEffect(() => historyClear(), [historyFilters.client, historyFilters.state, historyClear]);
 
     const handleRefresh = useCallback(async () => {
         await refetchDownloads();
@@ -872,6 +895,7 @@ export function DownloadsPage() {
                 ? {
                       allPages: true,
                       count: selectedCount,
+                      ids: [],
                       records: [],
                       filter: bulkFilter,
                       excludeIds: resolved.excludeIds,
@@ -879,7 +903,8 @@ export function DownloadsPage() {
                   }
                 : {
                       allPages: false,
-                      count: selectedRecords.length,
+                      count: selectedCount,
+                      ids: resolved.ids,
                       records: selectedRecords,
                       filter: bulkFilter,
                       excludeIds: [],
@@ -962,7 +987,7 @@ export function DownloadsPage() {
                 <MobileSelectionBar
                     data-component={`downloads-mobile-selection-bar-${tab}`}
                     selection={selection}
-                    pageSelectedCount={selectedRecords.length}
+                    pageSelectedCount={selection.pageSelectedCount}
                     totalCount={totalCount}
                     itemNounPlural="downloads"
                 >
@@ -1006,20 +1031,6 @@ export function DownloadsPage() {
             }
         />
     );
-
-    const queueClearFilters = hasActiveQueueFilters ? (
-        <ClearFiltersButton
-            onClick={() => setQueueFilters({ client: '', state: '' })}
-            data-action="clear-filters-queue"
-        />
-    ) : undefined;
-
-    const historyClearFilters = hasActiveHistoryFilters ? (
-        <ClearFiltersButton
-            onClick={() => setHistoryFilters({ client: '', state: '' })}
-            data-action="clear-filters-history"
-        />
-    ) : undefined;
 
     const loadingState = (
         <div className="downloads-page__loading" data-testid="downloads-page__loading">
@@ -1087,6 +1098,24 @@ export function DownloadsPage() {
                             pagedQueueDownloads.length > 0 &&
                             renderBulkBar('queue', queueSelection, queueBulkFilter, queueSelectedRecords, queueTotal)}
 
+                        <ListFilterToolbar
+                            fields={queueFilterFields}
+                            onCommit={(values) =>
+                                setQueueFilters({ client: values.client as string, state: values.state as string })
+                            }
+                            sorting={queueTable.sorting}
+                            sortOptions={QUEUE_SORT_OPTIONS}
+                            onSortingChange={queueTable.setSorting}
+                            selection={
+                                usesCardLayout && canSelectQueueRows
+                                    ? {
+                                          active: queueSelection.selectionMode,
+                                          onToggle: queueSelection.toggleSelectionMode,
+                                      }
+                                    : undefined
+                            }
+                        />
+
                         {!usesCardLayout && (
                             <div className="downloads-page__table">
                                 <DataTable<ApiDownload>
@@ -1106,28 +1135,9 @@ export function DownloadsPage() {
                                     rowCount={queueTotal}
                                     getRowId={getRowId}
                                     emptyState={queuePlaceholder}
-                                    filterActions={queueClearFilters}
                                     keepHeaderWhenEmpty={hasActiveQueueFilters}
                                 />
                             </div>
-                        )}
-
-                        {usesCardLayout && (pagedQueueDownloads.length > 0 || hasActiveQueueFilters) && (
-                            <MobileListToolbar
-                                className="downloads-page__mobile-toolbar"
-                                sorting={queueTable.sorting}
-                                sortOptions={QUEUE_SORT_OPTIONS}
-                                onSortingChange={queueTable.setSorting}
-                                filterActions={queueClearFilters}
-                                selection={
-                                    canSelectQueueRows
-                                        ? {
-                                              active: queueSelection.selectionMode,
-                                              onToggle: queueSelection.toggleSelectionMode,
-                                          }
-                                        : undefined
-                                }
-                            />
                         )}
 
                         {usesCardLayout && (
@@ -1159,6 +1169,7 @@ export function DownloadsPage() {
                                 className="downloads-page__pager"
                                 page={clampedQueuePage}
                                 pageCount={queuePageCount}
+                                totalItems={queueTotal}
                                 onFirst={() => queueTable.setPage(1)}
                                 onPrevious={() => queueTable.setPage(Math.max(1, clampedQueuePage - 1))}
                                 onNext={() => queueTable.setPage(Math.min(queuePageCount, clampedQueuePage + 1))}
@@ -1179,6 +1190,24 @@ export function DownloadsPage() {
                                 historyTotal,
                             )}
 
+                        <ListFilterToolbar
+                            fields={historyFilterFields}
+                            onCommit={(values) =>
+                                setHistoryFilters({ client: values.client as string, state: values.state as string })
+                            }
+                            sorting={historyTable.sorting}
+                            sortOptions={HISTORY_SORT_OPTIONS}
+                            onSortingChange={updateHistorySorting}
+                            selection={
+                                usesCardLayout && canSelectHistoryRows
+                                    ? {
+                                          active: historySelection.selectionMode,
+                                          onToggle: historySelection.toggleSelectionMode,
+                                      }
+                                    : undefined
+                            }
+                        />
+
                         {!usesCardLayout && (
                             <div className="downloads-page__table">
                                 <DataTable<ApiDownload>
@@ -1198,28 +1227,9 @@ export function DownloadsPage() {
                                     rowCount={historyTotal}
                                     getRowId={getRowId}
                                     emptyState={historyPlaceholder}
-                                    filterActions={historyClearFilters}
                                     keepHeaderWhenEmpty={hasActiveHistoryFilters}
                                 />
                             </div>
-                        )}
-
-                        {usesCardLayout && (pagedHistoryDownloads.length > 0 || hasActiveHistoryFilters) && (
-                            <MobileListToolbar
-                                className="downloads-page__mobile-toolbar"
-                                sorting={historyTable.sorting}
-                                sortOptions={HISTORY_SORT_OPTIONS}
-                                onSortingChange={updateHistorySorting}
-                                filterActions={historyClearFilters}
-                                selection={
-                                    canSelectHistoryRows
-                                        ? {
-                                              active: historySelection.selectionMode,
-                                              onToggle: historySelection.toggleSelectionMode,
-                                          }
-                                        : undefined
-                                }
-                            />
                         )}
 
                         {usesCardLayout && (
@@ -1251,6 +1261,7 @@ export function DownloadsPage() {
                                 className="downloads-page__pager"
                                 page={clampedHistoryPage}
                                 pageCount={historyPageCount}
+                                totalItems={historyTotal}
                                 onFirst={() => historyTable.setPage(1)}
                                 onPrevious={() => historyTable.setPage(Math.max(1, clampedHistoryPage - 1))}
                                 onNext={() => historyTable.setPage(Math.min(historyPageCount, clampedHistoryPage + 1))}
@@ -1335,8 +1346,11 @@ export function DownloadsPage() {
             />
 
             <DownloadDetailsDialog
-                download={detailsDownload}
-                clientName={detailsDownload ? getClientName(detailsDownload) : ''}
+                download={detailsQuery.error ? null : detailsQuery.download}
+                selectedDownload={detailsDownload}
+                clientName={detailsQuery.download ? getClientName(detailsQuery.download) : ''}
+                isLoading={detailsQuery.isLoading}
+                error={detailsQuery.error}
                 open={!!detailsDownload}
                 onOpenChange={(open) => {
                     if (!open) {

@@ -364,6 +364,39 @@ describe('ExtensionsPage', () => {
         expect(document.querySelector('[data-page="extensions"]')).toBeInTheDocument();
     });
 
+    it.each([
+        ['Installed', ['Add extension', 'Check for updates']],
+        ['NuGet Feeds', ['Add extension', 'Add feed']],
+    ])('lists the %s tab actions in the Extension Actions sheet', async (tab, expected) => {
+        const user = userEvent.setup();
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await user.click(await screen.findByRole('tab', { name: tab }));
+        await user.click(screen.getByRole('button', { name: 'Extension Actions' }));
+
+        const sheet = await screen.findByRole('dialog', { name: 'Extension Actions' });
+        expect(
+            within(within(sheet).getByRole('group', { name: 'Quick actions' }))
+                .getAllByRole('button')
+                .map((action) => action.textContent),
+        ).toEqual(expected);
+    });
+
+    it('opens the Add Feed form from the Extension Actions sheet on the NuGet Feeds tab', async () => {
+        const user = userEvent.setup();
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await user.click(await screen.findByRole('tab', { name: 'NuGet Feeds' }));
+        await user.click(screen.getByRole('button', { name: 'Extension Actions' }));
+        await user.click(
+            within(await screen.findByRole('dialog', { name: 'Extension Actions' })).getByRole('button', {
+                name: 'Add feed',
+            }),
+        );
+
+        expect(await screen.findByRole('dialog', { name: /add.*feed/i })).toBeInTheDocument();
+    });
+
     it('renders the page title', () => {
         render(<ExtensionsPage />, { wrapper: createWrapper() });
 

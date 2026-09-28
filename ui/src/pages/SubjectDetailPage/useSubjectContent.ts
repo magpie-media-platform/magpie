@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { type OnChangeFn, type PaginationState, type SortingState } from '@tanstack/react-table';
 
 import { type ContentHeaderFilterHandlers, type ContentHeaderFilters } from '@/components/ui/ContentList';
+import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useContentList } from '@/hooks/useContent';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
@@ -17,7 +18,7 @@ import {
     parseContentFilterSelectionValue,
 } from '@/lib/contentFilterOptions';
 import { escapeQueryString } from '@/lib/simpleFilterQuery';
-import { type ApiFulfillmentStatus, type ContentListItem, type ContentQueryParams } from '@/types';
+import { type ContentListItem, type ContentQueryParams } from '@/types';
 
 const SUBJECT_CONTENT_PAGE_SIZE = 25;
 
@@ -47,14 +48,21 @@ export interface SubjectContentController {
 
 export function useSubjectContent(metadataContainerId: string | undefined): SubjectContentController {
     const { contentTypes } = useLibraryTypes();
+    const usesCardLayout = useCardLayout();
 
     const [filterQuery, setFilterQuery] = useState('');
-    const [fulfillment, setFulfillment] = useState<ApiFulfillmentStatus | ''>('');
     const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
     const [pageIndex, setPageIndex] = useState(0);
 
-    const debouncedFilterQuery = useDebouncedValue(filterQuery, 300);
+    // Header filters are the only filter controls, and the card layout has none, so they apply only to the table.
+    const hasActiveFilters = !usesCardLayout && filterQuery.trim().length > 0;
+    const [pagedWithFilters, setPagedWithFilters] = useState(hasActiveFilters);
+    if (pagedWithFilters !== hasActiveFilters) {
+        setPagedWithFilters(hasActiveFilters);
+        setPageIndex(0);
+    }
 
+    const debouncedFilterQuery = useDebouncedValue(filterQuery, 300);
     const setFilterField = useCallback((mutate: (query: string) => string) => {
         setFilterQuery((current) => mutate(current));
         setPageIndex(0);
@@ -88,14 +96,10 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
         const scope = metadataContainerId
             ? `Relationships has (RelatedMetadataContainerId = "${escapeQueryString(metadataContainerId)}")`
             : '';
-        const trimmed = debouncedFilterQuery.trim();
-        const filter = [scope, trimmed].filter(Boolean).join(' and ');
+        const trimmed = usesCardLayout ? '' : debouncedFilterQuery.trim();
+        const filter = [scope, trimmed ? `(${trimmed})` : ''].filter(Boolean).join(' and ');
         if (filter) {
             params.filter = filter;
-        }
-
-        if (fulfillment) {
-            params.fulfillment = fulfillment;
         }
 
         const primarySort = sorting[0];
@@ -106,7 +110,7 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
         }
 
         return params;
-    }, [metadataContainerId, pageIndex, debouncedFilterQuery, fulfillment, sorting]);
+    }, [metadataContainerId, pageIndex, usesCardLayout, debouncedFilterQuery, sorting]);
 
     const { data, isLoading, error } = useContentList(queryParams, { enabled: Boolean(metadataContainerId) });
 
@@ -119,25 +123,25 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
         return {
             contentTypeOptions: buildContentFilterOptions(contentTypes),
             contentType: selection ? contentFilterSelectionValue(selection) : '',
-            monitoring: '',
-            fulfillment,
+            monitoring: readContentFilter(filterQuery, 'monitoring'),
+            fulfillment: readContentFilter(filterQuery, 'fulfillment'),
             title: readContentFilter(filterQuery, 'title'),
-            publishDateFrom: '',
-            publishDateTo: '',
+            publishDateFrom: readContentFilter(filterQuery, 'publishDateFrom'),
+            publishDateTo: readContentFilter(filterQuery, 'publishDateTo'),
         };
-    }, [contentTypes, filterQuery, fulfillment]);
+    }, [contentTypes, filterQuery]);
 
     const headerFilterHandlers: ContentHeaderFilterHandlers = useMemo(
         () => ({
             onContentTypeChange: (value) =>
                 setFilterField((query) => setContentFilterSelection(query, parseContentFilterSelectionValue(value))),
             onTitleChange: (value) => setFilterField((query) => setContentFilter(query, 'title', value)),
-            onFulfillmentChange: (value) => {
-                setFulfillment(value as ApiFulfillmentStatus | '');
-                setPageIndex(0);
-            },
-            onMonitoringChange: () => {},
-            onPublishDateChange: () => {},
+            onFulfillmentChange: (value) => setFilterField((query) => setContentFilter(query, 'fulfillment', value)),
+            onMonitoringChange: (value) => setFilterField((query) => setContentFilter(query, 'monitoring', value)),
+            onPublishDateChange: ({ from, to }) =>
+                setFilterField((query) =>
+                    setContentFilter(setContentFilter(query, 'publishDateFrom', from), 'publishDateTo', to),
+                ),
         }),
         [setFilterField],
     );
@@ -145,8 +149,6 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
     const goToPage = useCallback((page: number) => {
         setPageIndex(Math.max(0, page - 1));
     }, []);
-
-    const hasActiveFilters = debouncedFilterQuery.trim().length > 0 || fulfillment.length > 0;
 
     return {
         contentItems,

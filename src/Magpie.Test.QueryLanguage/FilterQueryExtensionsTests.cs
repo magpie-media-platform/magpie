@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.QueryLanguage;
 
 using NUnit.Framework;
@@ -11,6 +12,96 @@ namespace Magpie.Test.QueryLanguage;
 [TestFixture]
 public class FilterQueryExtensionsTests
 {
+    [TestCase("hasExternalIds = true", "Unknown field: hasExternalIds")]
+    [TestCase("andField = 1", "Unknown field: andField")]
+    [TestCase("orField = 1", "Unknown field: orField")]
+    [TestCase("notField = 1", "Unknown field: notField")]
+    [TestCase("inField = 1", "Unknown field: inField")]
+    [TestCase("nullField = 1", "Unknown field: nullField")]
+    [TestCase("containsField = 1", "Unknown field: containsField")]
+    [TestCase("startswithField = 1", "Unknown field: startswithField")]
+    [TestCase("endswithField=1", "Unknown field: endswithField")]
+    [TestCase("genres has (hasName = \"x\")", "Unknown field hasName in collection Genres")]
+    public void ParseContentFilter_ReadsWholeIdentifier_WhenFieldNameStartsWithKeyword(string query, string expected)
+    {
+        // Arrange
+
+        // Act
+        var result = query.ParseContentFilter();
+
+        // Assert
+        Assert.That(result.Error?.Message, Is.EqualTo(expected));
+    }
+
+    [TestCase("hasSearchableTitle = true", true)]
+    [TestCase("HasSearchableTitle=false", false)]
+    [TestCase("monitoring = Monitored and (hasSearchableTitle != true)", false)]
+    public void ParseContentFilter_SetsSearchableTitle_WhenFieldStartsWithHas(string query, bool expected)
+    {
+        // Arrange
+
+        // Act
+        var result = query.ParseContentFilter();
+
+        // Assert
+        Assert.That(result.Value?.ContentHierarchyItem.And.Single().HasSearchableTitle, Is.EqualTo(expected));
+    }
+
+    [TestCase("monitoring = Shotgun", CriteriaValueOperator.Equals, "Monitoring = Shotgun")]
+    [TestCase("Monitoring != Unmonitored", CriteriaValueOperator.NotEquals, "Monitoring != Unmonitored")]
+    public void FormatContentFilter_RoundTripsMonitoring_WhenMonitoringIsFiltered(
+        string query,
+        CriteriaValueOperator expectedOperator,
+        string expectedFormat)
+    {
+        // Arrange
+        var parsed = query.ParseContentFilter();
+
+        // Act
+        var formatted = parsed.Value!.FormatContentFilter();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                parsed.Value!.ContentHierarchyItem.And.Single().Monitoring.And.Single().Operator,
+                Is.EqualTo(expectedOperator));
+            Assert.That(formatted, Is.EqualTo(expectedFormat));
+        }
+    }
+
+    [TestCase("importPending = true", true)]
+    [TestCase("ImportPending=false", false)]
+    [TestCase("monitoring = Monitored and (importPending != true)", false)]
+    public void ParseContentFilter_SetsImportPending_WhenFieldIsImportPending(string query, bool expected)
+    {
+        // Arrange
+
+        // Act
+        var result = query.ParseContentFilter();
+
+        // Assert
+        Assert.That(result.Value?.ContentHierarchyItem.And.Single().ImportPending, Is.EqualTo(expected));
+    }
+
+    [TestCase("genre has \"Action\"")]
+    [TestCase("genre !has \"Action\"")]
+    [TestCase("name in (\"a\", \"b\")")]
+    [TestCase("name !in (\"a\")")]
+    [TestCase("title contains \"x\" and monitoring = Monitored or title null")]
+    [TestCase("genres has (name = \"a\") or genres has (name = \"b\")")]
+    [TestCase("overview !null and title !contains \"x\"")]
+    public void ParseFilterQuery_Succeeds_WhenKeywordsAreDelimited(string query)
+    {
+        // Arrange
+
+        // Act
+        var result = query.ParseFilterQuery();
+
+        // Assert
+        Assert.That(result.IsSuccess, Is.True);
+    }
+
     [TestCase("RootFolderId in (null)")]
     [TestCase("Monitoring in (null)")]
     [TestCase("Name in (null)")]

@@ -38,7 +38,6 @@ internal sealed class ReleaseAutoGrabItemJob(
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
-        Timeout = TimeSpan.FromMinutes(5),
         OnDemand = true,
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
@@ -71,30 +70,41 @@ internal sealed class ReleaseAutoGrabItemJob(
         var userId = context.ManualTriggerUserId;
         var correlationId = context.CorrelationId;
 
-        var candidate = await ResolveRunnableCandidateAsync(contentItemId, cancellationToken)
-            .ConfigureAwait(false);
-        if (candidate is null)
+        if (await ResolveRunnableCandidateAsync(contentItemId, cancellationToken).ConfigureAwait(false) is not
+            var (candidate, shotgun))
         {
             return;
         }
 
-        var chosen = await releaseService
-            .SelectBestReleaseAsync(contentItemId, userId, correlationId, cancellationToken)
-            .ConfigureAwait(false);
-        if (chosen is null)
+        if (!shotgun)
         {
+            var best = await releaseService
+                .SelectBestReleaseAsync(contentItemId, userId, correlationId, cancellationToken)
+                .ConfigureAwait(false);
+            if (best is not null)
+            {
+                await QueueReleaseAcquisitionAsync(candidate, best, userId, correlationId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             return;
         }
 
-        await QueueReleaseAcquisitionAsync(
-            candidate,
-            chosen,
-            userId,
-            correlationId,
-            cancellationToken).ConfigureAwait(false);
+        var releases = await releaseService
+            .SelectAcceptableReleasesAsync(contentItemId, userId, correlationId, cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var release in releases)
+        {
+            await QueueReleaseAcquisitionAsync(
+                candidate,
+                release,
+                userId,
+                correlationId,
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
-    private async Task<ContentItem?> ResolveRunnableCandidateAsync(
+    private async Task<(ContentItem Candidate, bool Shotgun)?> ResolveRunnableCandidateAsync(
         Guid contentItemId,
         CancellationToken cancellationToken)
     {
@@ -126,7 +136,7 @@ internal sealed class ReleaseAutoGrabItemJob(
             return null;
         }
 
-        if (!item.EffectiveMonitoring)
+        if (item.EffectiveMonitoring == MonitoringMode.Unmonitored)
         {
             logger.LogInformation(
                 "Content item {ContentItemId} is not monitored, so auto-grab skipped the retry",
@@ -134,7 +144,15 @@ internal sealed class ReleaseAutoGrabItemJob(
             return null;
         }
 
-        return candidate;
+        if (item.ImportPending)
+        {
+            logger.LogInformation(
+                "Content item {ContentItemId} has a discovered file that waits to import, so auto-grab skipped it",
+                contentItemId);
+            return null;
+        }
+
+        return (candidate, item.EffectiveMonitoring == MonitoringMode.Shotgun);
     }
 
     private async Task QueueReleaseAcquisitionAsync(

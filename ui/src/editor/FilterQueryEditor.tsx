@@ -1,8 +1,14 @@
 import { useRef, useEffect, useCallback, useState, type ComponentPropsWithoutRef } from 'react';
-import { EditorState } from '@codemirror/state';
+import { EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap, placeholder as placeholderExt } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { autocompletion, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+import {
+    acceptCompletion,
+    autocompletion,
+    closeBrackets,
+    closeBracketsKeymap,
+    completionStatus,
+} from '@codemirror/autocomplete';
 import { HighlightStyle, syntaxHighlighting, bracketMatching } from '@codemirror/language';
 import { forEachDiagnostic } from '@codemirror/lint';
 import { tags as t } from '@lezer/highlight';
@@ -33,15 +39,19 @@ export interface FilterQueryEditorProps extends Omit<ComponentPropsWithoutRef<'d
     context?: 'content' | 'subject';
 
     onErrorChange?: (error: string | null) => void;
+
+    /** Runs the query on Ctrl+Enter (Cmd+Enter on macOS). Enter still inserts a new line. */
+    onSubmit?: () => void;
 }
 
 export function FilterQueryEditor({
     value,
     onChange,
     readOnly = false,
-    placeholder = 'genre has "Action" and monitoring = true',
+    placeholder = 'genre has "Action" and monitoring != Unmonitored',
     context = 'content',
     onErrorChange,
+    onSubmit,
     className,
     'aria-label': ariaLabel = 'Filter query',
     'aria-labelledby': ariaLabelledBy,
@@ -52,6 +62,8 @@ export function FilterQueryEditor({
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
     onChangeRef.current = onChange;
+    const onSubmitRef = useRef(onSubmit);
+    onSubmitRef.current = onSubmit;
     const valueRef = useRef(value);
     valueRef.current = value;
     const ariaRef = useRef({ ariaLabel, ariaLabelledBy, ariaDescribedBy });
@@ -94,6 +106,26 @@ export function FilterQueryEditor({
                 autocompletion({ activateOnTyping: true, icons: false }),
                 placeholderExt(placeholder),
                 EditorView.lineWrapping,
+                Prec.highest(
+                    keymap.of([
+                        {
+                            key: 'Mod-Enter',
+                            run: (view) => {
+                                if (!onSubmitRef.current) {
+                                    return false;
+                                }
+                                // With suggestions open, the key accepts the highlighted one and never runs the query or
+                                // adds a line, also in the moment after the list opens, when CodeMirror ignores acceptance.
+                                if (completionStatus(view.state) !== null) {
+                                    acceptCompletion(view);
+                                    return true;
+                                }
+                                onSubmitRef.current();
+                                return true;
+                            },
+                        },
+                    ]),
+                ),
                 keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap]),
                 EditorView.updateListener.of((update) => {
                     if (update.docChanged) {

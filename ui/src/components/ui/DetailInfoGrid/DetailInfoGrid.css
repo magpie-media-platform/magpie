@@ -61,6 +61,7 @@
         flex-wrap: wrap;
         align-items: center;
         gap: var(--space-xs);
+        min-width: 0;
     }
 
     @media (max-width: 640px) {

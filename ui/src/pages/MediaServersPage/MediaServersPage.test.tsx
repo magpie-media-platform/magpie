@@ -161,6 +161,13 @@ describe('MediaServersPage', () => {
         expect(screen.getByRole('heading', { name: 'Media Servers', level: 1 })).toBeInTheDocument();
     });
 
+    it('keeps the selection toggle on the list toolbar line', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        const toggle = screen.getByRole('button', { name: 'Select', pressed: false });
+        expect(toggle.closest('[data-component="mobile-list-toolbar"]')).toBeInTheDocument();
+    });
+
     it('renders the page icon as decorative', () => {
         render(<MediaServersPage />, { wrapper: createWrapper() });
 

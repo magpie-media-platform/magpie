@@ -18,6 +18,7 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Models.Patch;
 using Magpie.Models.Storage;
+using Magpie.QueryLanguage;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
@@ -44,27 +45,6 @@ internal sealed class ContentService(
     TimeProvider timeProvider,
     ILogger<ContentService> logger) : IContentService
 {
-    private static FulfillmentStatus AggregateFulfillment(IReadOnlyCollection<FulfillmentStatus> childStatuses)
-    {
-        if (childStatuses.Count == 0)
-        {
-            return FulfillmentStatus.Fulfilled;
-        }
-
-        var fullyCovered = childStatuses.Count(status =>
-            status is not FulfillmentStatus.Missing and not FulfillmentStatus.Partial);
-        if (fullyCovered == childStatuses.Count)
-        {
-            return childStatuses.Contains(FulfillmentStatus.Upgradable)
-                ? FulfillmentStatus.Upgradable
-                : FulfillmentStatus.Fulfilled;
-        }
-
-        return childStatuses.Any(status => status != FulfillmentStatus.Missing)
-            ? FulfillmentStatus.Partial
-            : FulfillmentStatus.Missing;
-    }
-
     public async Task<ContentItem> GetOrCreateContentItemAsync(
         Guid contentHierarchyItemId,
         DateTime now,
@@ -265,6 +245,27 @@ internal sealed class ContentService(
     }
 
     /// <inheritdoc />
+    public Task<RenameTokenReference> GetRenameTokenReferenceAsync(
+        RenameTokenRequest request,
+        CancellationToken cancellationToken = default) =>
+        contentFileService.GetRenameTokenReferenceAsync(request, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<FileRenamePreview> PreviewRenameMaskAsync(
+        Guid contentHierarchyItemId,
+        FileRenameSelection selection,
+        CancellationToken cancellationToken = default) =>
+        contentFileService.PreviewRenameMaskAsync(contentHierarchyItemId, selection, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<FileRenamePreview> ExecuteRenameMaskAsync(
+        Guid contentHierarchyItemId,
+        FileRenamePreview preview,
+        Guid? userId,
+        CancellationToken cancellationToken = default) =>
+        contentFileService.ExecuteRenameMaskAsync(contentHierarchyItemId, preview, userId, cancellationToken);
+
+    /// <inheritdoc />
     public Task<ContentFileBrowserLocation?> GetFileBrowserLocationAsync(
         Guid contentHierarchyItemId,
         CancellationToken cancellationToken = default)
@@ -326,6 +327,30 @@ internal sealed class ContentService(
                 return operation.Removed;
             },
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public Task<bool> ReassignFileAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        ReassignContentFileRequest request,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return transactionManager.ExecuteWithTransactionAsync(async ct =>
+        {
+            var reassigned = await contentFileService.ReassignAsync(
+                contentHierarchyItemId, mediaFileId, request, actingUserId, ct).ConfigureAwait(false);
+            if (reassigned)
+            {
+                await MaterializeFulfillmentStatusAsync(
+                    contentHierarchyItemId, actingUserId, cancellationToken: ct).ConfigureAwait(false);
+                await MaterializeFulfillmentStatusAsync(
+                    request.TargetContentHierarchyItemId, actingUserId, cancellationToken: ct).ConfigureAwait(false);
+            }
+
+            return reassigned;
+        }, cancellationToken);
     }
 
     public async Task<BulkResult> BulkPatchAsync(
@@ -507,7 +532,10 @@ internal sealed class ContentService(
         if (hasChildLevels)
         {
             existingRoot = await FindHierarchyItemByExternalIdAsync(
-                contentType, rootLevelSlug, externalIdKey, externalId, cancellationToken).ConfigureAwait(false);
+                contentType,
+                rootLevelSlug,
+                [(externalIdKey, externalId)],
+                cancellationToken).ConfigureAwait(false);
             if (existingRoot is not null &&
                 await HasChildrenAsync(existingRoot.Id, cancellationToken).ConfigureAwait(false))
             {
@@ -547,138 +575,17 @@ internal sealed class ContentService(
         bool includeSelf = false,
         CancellationToken cancellationToken = default)
     {
-        var materialized = await transactionManager.ExecuteWithTransactionAsync(
-            ct => MaterializeFulfillmentCoreAsync(
-                changedContentHierarchyItemId,
-                actingUserId,
-                includeSelf,
-                ct),
-            cancellationToken).ConfigureAwait(false);
-
-        return materialized
-            ? await GetAsync(changedContentHierarchyItemId, cancellationToken).ConfigureAwait(false)
-            : null;
+        await contentRepository.ReconcileMediaStateAsync(
+            changedContentHierarchyItemId, actingUserId, cancellationToken).ConfigureAwait(false);
+        return await GetAsync(changedContentHierarchyItemId, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<bool> MaterializeFulfillmentCoreAsync(
-        Guid changedContentHierarchyItemId,
-        Guid? actingUserId,
-        bool includeSelf,
-        CancellationToken cancellationToken)
+    private static MonitoringMode? ToMonitoringMode(bool? monitoring) => monitoring switch
     {
-        var lineage = await contentHierarchyItemRepository
-            .GetLineageAsync(changedContentHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
-        if (lineage.Count == 0)
-        {
-            return false;
-        }
-
-        await contentHierarchyItemRepository
-            .LockAsync(lineage[^1].Id, cancellationToken)
-            .ConfigureAwait(false);
-
-        var overrides = new Dictionary<Guid, FulfillmentStatus>();
-        var nodesToCompute = includeSelf ? lineage : lineage.Skip(1);
-        var pending = new List<PendingRollup>();
-        foreach (var node in nodesToCompute)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var children = await contentHierarchyItemRepository.QueryAllAsync(
-                new ContentHierarchyItemCriteria
-                {
-                    ParentId = new CriteriaSet<PropertyCriterion<Guid>>
-                    {
-                        And = [EqualsCriterion(node.Id)],
-                    },
-                },
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (children.Count == 0)
-            {
-                continue;
-            }
-
-            var storedChildStatuses = await LoadStoredFulfillmentAsync(
-                [.. children.Select(child => child.Id).Where(id => !overrides.ContainsKey(id))],
-                cancellationToken).ConfigureAwait(false);
-            var childStatuses = new List<FulfillmentStatus>(children.Count);
-            foreach (var child in children)
-            {
-                childStatuses.Add(overrides.TryGetValue(child.Id, out var overridden)
-                    ? overridden
-                    : storedChildStatuses.GetValueOrDefault(child.Id, FulfillmentStatus.Missing));
-            }
-
-            var computed = AggregateFulfillment(childStatuses);
-            var current = await ResolveStoredFulfillmentAsync(node.Id, overrides, cancellationToken)
-                .ConfigureAwait(false);
-            overrides[node.Id] = computed;
-            if (computed != current)
-            {
-                pending.Add(new PendingRollup(node.Id, computed));
-            }
-        }
-
-        if (pending.Count > 0)
-        {
-            await transactionManager.ExecuteWithTransactionAsync(
-                async ct =>
-                {
-                    var now = timeProvider.GetUtcNow().UtcDateTime;
-                    foreach (var rollup in pending)
-                    {
-                        var contentItem = (await contentRepository.QueryAsync(
-                            new ContentItemQuery { ContentHierarchyItemId = rollup.HierarchyItemId },
-                            new() { PageNumber = 1, PageSize = 2 },
-                            null,
-                            ct).ConfigureAwait(false)).Items.SingleOrDefault() ??
-                                await GetOrCreateContentItemAsync(
-                                    rollup.HierarchyItemId,
-                                    now,
-                                    actingUserId,
-                                    cancellationToken: ct).ConfigureAwait(false);
-
-                        contentItem.Fulfillment = rollup.To;
-                        contentItem.ModifiedAt = now;
-
-                        await contentRepository.UpdateAsync(contentItem, actingUserId, ct).ConfigureAwait(false);
-                    }
-                },
-                cancellationToken).ConfigureAwait(false);
-
-            logger.LogInformation(
-                "The content service materialized fulfillment for {Count} content items from hierarchy " +
-                "item {ContentHierarchyItemId}",
-                pending.Count,
-                changedContentHierarchyItemId);
-        }
-
-        return true;
-    }
-
-    private async Task<Dictionary<Guid, FulfillmentStatus>> LoadStoredFulfillmentAsync(
-        IReadOnlyList<Guid> hierarchyItemIds,
-        CancellationToken cancellationToken)
-    {
-        const int batchSize = 500;
-        var stored = new Dictionary<Guid, FulfillmentStatus>(hierarchyItemIds.Count);
-        for (var offset = 0; offset < hierarchyItemIds.Count; offset += batchSize)
-        {
-            var batch = hierarchyItemIds.Skip(offset).Take(batchSize).ToList();
-            var page = await contentRepository.QueryAsync(
-                new ContentItemQuery { ContentHierarchyItemIds = batch },
-                new() { PageNumber = 1, PageSize = batch.Count },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            foreach (var item in page.Items)
-            {
-                stored[item.ContentHierarchyItemId] = item.Fulfillment;
-            }
-        }
-
-        return stored;
-    }
+        true => MonitoringMode.Monitored,
+        false => MonitoringMode.Unmonitored,
+        null => null
+    };
 
     private ContentHierarchyItemCriteria BuildCriteria(ContentQuery query)
     {
@@ -693,6 +600,7 @@ internal sealed class ContentService(
 
         return baseCriteria with
         {
+            ContentItemId = query.ContentItemId ?? baseCriteria.ContentItemId,
             ParentId = Combine(
                 baseCriteria.ParentId,
                 query.ParentId is { } parentId ? EqualsCriterion(parentId) : null),
@@ -706,9 +614,7 @@ internal sealed class ContentService(
             Name = Combine(
                 baseCriteria.Name,
                 string.IsNullOrWhiteSpace(query.Search) ? null : ContainsCriterion(query.Search!)),
-            Monitoring = Combine(
-                baseCriteria.Monitoring,
-                query.Monitoring is { } monitoring ? EqualsCriterion(monitoring) : null),
+            EffectiveMonitoring = query.Monitoring ?? baseCriteria.EffectiveMonitoring,
             Fulfillment = Combine(
                 baseCriteria.Fulfillment,
                 query.Fulfillment is { } fulfillment ? EqualsCriterion(fulfillment) : null),
@@ -726,8 +632,13 @@ internal sealed class ContentService(
             return null;
         }
 
+        if (filter.MediaFiles.And.Any())
+        {
+            throw new ArgumentException(FilterQueryExtensions.LegacyMediaFilesMessage, nameof(filter));
+        }
+
         var criteria = filter.ContentHierarchyItem.And.ToList();
-        if (criteria.Count != 1 || filter.MediaFiles.And.Any())
+        if (criteria.Count != 1)
         {
             throw new ArgumentException(
                 "The content filter does not hold exactly one hierarchy item criteria set.",
@@ -814,6 +725,9 @@ internal sealed class ContentService(
             }
         }
     }
+
+    private bool IsSlugOfSource(string slug, string source) =>
+        slug.StartsWith(BuildSlug(source, string.Empty) + "-", StringComparison.OrdinalIgnoreCase);
 
     private string BuildSlug(string externalIdKey, string externalId)
     {
@@ -940,24 +854,6 @@ internal sealed class ContentService(
         }
     }
 
-    private async Task<FulfillmentStatus> ResolveStoredFulfillmentAsync(
-        Guid hierarchyItemId,
-        IReadOnlyDictionary<Guid, FulfillmentStatus> overrides,
-        CancellationToken cancellationToken)
-    {
-        if (overrides.TryGetValue(hierarchyItemId, out var overridden))
-        {
-            return overridden;
-        }
-
-        var contentItem = (await contentRepository.QueryAsync(
-            new ContentItemQuery { ContentHierarchyItemId = hierarchyItemId },
-            new() { PageNumber = 1, PageSize = 2 },
-            null,
-            cancellationToken).ConfigureAwait(false)).Items.SingleOrDefault();
-        return contentItem?.Fulfillment ?? FulfillmentStatus.Missing;
-    }
-
     private async Task<Guid?> HydrateCoreAsync(
         string providerType,
         string externalIdKey,
@@ -1031,6 +927,7 @@ internal sealed class ContentService(
                     contribution,
                     contentType,
                     rootLevelSlug,
+                    primaryExternalId.Source!,
                     slug,
                     rootFolder?.Id,
                     monitoring,
@@ -1164,10 +1061,21 @@ internal sealed class ContentService(
     private async Task<ContentHierarchyItem?> FindHierarchyItemByExternalIdAsync(
         string contentType,
         string level,
-        string source,
-        string value,
+        IEnumerable<(string Source, string Value)> identities,
         CancellationToken cancellationToken)
     {
+        var criteria = identities
+            .Select(identity => new ExternalIdCriteria
+            {
+                Source = SlugCriterion(identity.Source),
+                Value = SlugCriterion(identity.Value)
+            })
+            .ToList();
+        if (criteria.Count == 0)
+        {
+            return null;
+        }
+
         var page = await contentHierarchyItemRepository.QueryAsync(
             new ContentHierarchyItemCriteria
             {
@@ -1181,16 +1089,7 @@ internal sealed class ContentService(
                         {
                             ExternalIds = new()
                             {
-                                Some =
-                                [
-                                    [
-                                        new ExternalIdCriteria
-                                        {
-                                            Source = SlugCriterion(source),
-                                            Value = SlugCriterion(value)
-                                        }
-                                    ]
-                                ]
+                                Some = [criteria]
                             }
                         }
                     ]
@@ -1213,6 +1112,7 @@ internal sealed class ContentService(
         MetadataContribution contribution,
         string contentType,
         string rootLevelSlug,
+        string slugSource,
         string slug,
         Guid? rootFolderId,
         bool? monitoring,
@@ -1228,10 +1128,10 @@ internal sealed class ContentService(
         var existing = await FindHierarchyItemByExternalIdAsync(
             contentType,
             rootLevelSlug,
-            externalIdKey,
-            externalId,
+            [(externalIdKey, externalId)],
             cancellationToken).ConfigureAwait(false);
-        if (existing is not null && !string.Equals(existing.Slug, slug, StringComparison.Ordinal))
+        if (existing is not null && !string.Equals(existing.Slug, slug, StringComparison.Ordinal) &&
+            IsSlugOfSource(existing.Slug, slugSource))
         {
             var slugOwner = await FindHierarchyItemBySlugAsync(
                 contentType,
@@ -1261,6 +1161,13 @@ internal sealed class ContentService(
             rootLevelSlug,
             slug,
             cancellationToken).ConfigureAwait(false);
+        existing ??= await FindHierarchyItemByExternalIdAsync(
+            contentType,
+            rootLevelSlug,
+            contribution.ExternalIds
+                .Where(id => !string.IsNullOrWhiteSpace(id.Source) && !string.IsNullOrWhiteSpace(id.Value))
+                .Select(id => (id.Source!, id.Value)),
+            cancellationToken).ConfigureAwait(false);
         if (existing is not null)
         {
             return existing.Id;
@@ -1278,7 +1185,7 @@ internal sealed class ContentService(
             Name = slug,
             PendingMetadataRefresh = true,
             RootFolderId = rootFolderId,
-            Monitoring = monitoring,
+            Monitoring = ToMonitoringMode(monitoring),
             QualityTierListId = qualityTierListId,
             CreatedAt = now,
             CreatedByUserId = userId,
@@ -1350,13 +1257,7 @@ internal sealed class ContentService(
             return;
         }
 
-        var source = string.IsNullOrWhiteSpace(item.Name) ? item.Slug : item.Name;
-        var characters = source.Trim().Select(character =>
-            character is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' || char.IsControl(character)
-                ? ' '
-                : character).ToArray();
-        var segment = string.Join(' ', new string(characters)
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)).TrimEnd('.');
+        var segment = (string.IsNullOrWhiteSpace(item.Name) ? item.Slug : item.Name).NormalizeContentPathSegment();
         if (segment.Length == 0)
         {
             segment = item.Slug;
@@ -1417,7 +1318,7 @@ internal sealed class ContentService(
                 Ordinal = definition.Ordinal,
                 AlignmentKey = definition.AlignmentKey,
                 PendingMetadataRefresh = true,
-                Monitoring = monitoring,
+                Monitoring = ToMonitoringMode(monitoring),
                 CreatedAt = now,
                 CreatedByUserId = userId,
             };
@@ -1517,5 +1418,121 @@ internal sealed class ContentService(
         child.MetadataContainer!.Contributions.Add(added);
     }
 
-    private readonly record struct PendingRollup(Guid HierarchyItemId, FulfillmentStatus To);
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ContentHierarchyItem>> PreviewImportHierarchyAsync(
+        PreviewByExternalIdRequest request,
+        Guid rootFolderId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateHydrationRequest(request.ProviderType, request.ExternalIdKey, request.ExternalId, request.ContentType);
+        var level = contentTypeRegistry.GetRootLevelSlug(request.ContentType, request.LevelSlug);
+        var existing = await FindHierarchyItemByExternalIdAsync(
+            request.ContentType,
+            level,
+            [(request.ExternalIdKey, request.ExternalId)],
+            cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            var descendants = await contentHierarchyItemRepository.QueryAllAsync(
+                new ContentHierarchyItemCriteria { AncestorId = existing.Id },
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (descendants.Count > 0 || contentTypeRegistry.GetChildLevels(request.ContentType, level).Count == 0)
+            {
+                var lineage = await contentHierarchyItemRepository.GetLineageAsync(existing.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return [existing, .. descendants.Where(item => item.Id != existing.Id), .. lineage.Skip(1)];
+            }
+        }
+
+        var fetched = await GetInitialMetadataAsync(request.ProviderType, request.ExternalIdKey, request.ExternalId,
+            request.ContentType, level, cancellationToken).ConfigureAwait(false);
+        if (fetched?.Contribution is not { } contribution)
+        {
+            throw new InvalidOperationException("The metadata provider returned no hierarchy for the rename preview.");
+        }
+
+        var primaryId = contribution.ExternalIds.OrderBy(id => id.Ordinal).FirstOrDefault();
+        var slug = BuildSlug(primaryId?.Source ?? request.ExternalIdKey, primaryId?.Value ?? request.ExternalId);
+        var root = existing ?? new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = request.ContentType,
+            Level = level,
+            Name = slug,
+            Slug = slug,
+            RootFolderId = rootFolderId,
+            EffectiveRootFolderId = rootFolderId,
+            PendingMetadataRefresh = true,
+            MetadataContainer = new() { Contributions = { contribution } }
+        };
+        if (existing is null)
+        {
+            InitializeContentPath(root);
+        }
+
+        var nodes = new List<ContentHierarchyItem> { root };
+        AddPreviewChildren(root, fetched.Children, nodes, request.ProviderType);
+        if (existing is not null)
+        {
+            var lineage = await contentHierarchyItemRepository.GetLineageAsync(existing.Id, cancellationToken)
+                .ConfigureAwait(false);
+            nodes.AddRange(lineage.Skip(1));
+        }
+
+        return nodes;
+    }
+
+    private void AddPreviewChildren(
+        ContentHierarchyItem parent,
+        IReadOnlyList<ChildHierarchyDefinition> definitions,
+        List<ContentHierarchyItem> nodes,
+        string providerType)
+    {
+        var levels = contentTypeRegistry.GetChildLevels(parent.ContentType, parent.Level)
+            .Select(level => level.Slug).ToHashSet(StringComparer.Ordinal);
+        foreach (var definition in definitions.Where(definition => levels.Contains(definition.Level) &&
+            !string.IsNullOrWhiteSpace(definition.Name) && !string.IsNullOrWhiteSpace(definition.Slug)))
+        {
+            var child = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ParentId = parent.Id,
+                ContentType = parent.ContentType,
+                Level = definition.Level,
+                Name = definition.Name,
+                Slug = definition.Slug,
+                Ordinal = definition.Ordinal,
+                AlignmentKey = definition.AlignmentKey,
+                EffectiveRootFolderId = parent.EffectiveRootFolderId,
+                PendingMetadataRefresh = true,
+                MetadataContainer = new()
+            };
+            if (definition.InitialContribution is { } supplied)
+            {
+                child.MetadataContainer.Contributions.Add(supplied);
+            }
+
+            var initial = new MetadataContribution { ProviderType = providerType };
+            foreach (var (source, value) in definition.ExternalIds.Where(pair =>
+                !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value)))
+            {
+                if (definition.InitialContribution?.ExternalIds.Any(id => id.Source == source && id.Value == value)
+                    is not true)
+                {
+                    initial.ExternalIds.Add(new ExternalId
+                    {
+                        Source = source,
+                        Value = value,
+                        Ordinal = initial.ExternalIds.Count
+                    });
+                }
+            }
+
+            child.MetadataContainer.Contributions.Add(initial);
+
+            InitializeContentPath(child);
+            nodes.Add(child);
+            AddPreviewChildren(child, definition.Children, nodes, providerType);
+        }
+    }
 }

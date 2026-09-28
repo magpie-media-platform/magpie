@@ -9,6 +9,11 @@ namespace Magpie.Models;
 public sealed record ReleaseSearchRequest
 {
     /// <summary>
+    /// Whether the search serves a caller who is waiting for its results.
+    /// </summary>
+    public bool IsInteractive { get; set; }
+
+    /// <summary>
     /// The primary title to search for.
     /// </summary>
     public string? Title { get; init; }

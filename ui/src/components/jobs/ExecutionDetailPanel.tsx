@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import { LocalContentLink, LocalContentItemReference } from '@/components/content/LocalContentPreview';
 import { ArrowsSplitIcon, CheckCircleIcon, CircleNotchIcon, InfoIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link } from 'react-router-dom';
 
@@ -17,6 +18,7 @@ import {
     type JobExecutionStatusDisplay,
 } from '@/lib/jobExecution';
 import { CORRELATION_ID_PARAM, JOB_PARAM, ROOTS_ONLY_PARAM } from '@/pages/JobsPage/jobsSearchParams';
+import { isGuid } from '@/lib/isGuid';
 
 import './ExecutionDetailPanel.css';
 
@@ -123,7 +125,7 @@ function ExecutionLedger({ execution, displayStatus, active }: ExecutionSectionP
     return (
         <div className="execution-ledger" data-testid="execution-detail__ledger">
             {error && <Alert variant="error">Failed to load the full record: {error.message}</Alert>}
-            <ol className="execution-ledger__list">
+            <ol className="execution-ledger__list" role="list">
                 {entries.map((entry) => (
                     <li key={entry.key} className="execution-ledger__row" data-tone={entry.tone}>
                         <time className="execution-ledger__time" dateTime={entry.at} title={formatDateTime(entry.at)}>
@@ -280,7 +282,18 @@ function ExecutionDetails({ execution, displayStatus, active }: ExecutionSection
     if (execution.nodeId) rows.push({ key: 'node', label: 'Node', value: execution.nodeId });
 
     for (const [key, value] of Object.entries(execution.parameters ?? {})) {
-        rows.push({ key: `param-${key}`, label: humanizeCustomKey(key) || key, value });
+        rows.push({
+            key: `param-${key}`,
+            label: humanizeCustomKey(key) || key,
+            value:
+                key === 'contentHierarchyItemId' && isGuid(value) ? (
+                    <LocalContentLink contentId={value}>{value}</LocalContentLink>
+                ) : key === 'contentItemId' && isGuid(value) ? (
+                    <LocalContentItemReference contentItemId={value}>{value}</LocalContentItemReference>
+                ) : (
+                    value
+                ),
+        });
     }
 
     return (

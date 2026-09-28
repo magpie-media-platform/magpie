@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -20,8 +21,10 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Releases;
+using Magpie.Sdk.Content;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Jobs;
+using Magpie.Sdk.Media;
 using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
 
@@ -55,8 +58,20 @@ internal sealed class DownloadImportItemJob(
     IReleaseEvaluationService releaseEvaluationService,
     TimeProvider timeProvider,
     ILogger<DownloadImportItemJob> logger,
-    IProgressReporter progressReporter) : IJob
+    IProgressReporter progressReporter,
+    IMediaInfoExtractor? mediaInfoExtractor = null) : IJob
 {
+    internal enum SkipReason
+    {
+        NotMonitored,
+        NoContentItem,
+        Acquiring,
+        Fulfilled,
+        NotAnUpgrade,
+        NoSingleItem,
+        Extra
+    }
+
     private enum DownloadIdSource
     {
         Parameter,
@@ -67,29 +82,80 @@ internal sealed class DownloadImportItemJob(
         string Source,
         string Destination,
         FileKind FileKind,
-        bool IsMainContent);
+        bool IsMainContent,
+        Guid ContentHierarchyItemId,
+        MediaInfo? MediaInfo = null);
 
-    private readonly record struct MediaFileProbe(string FilePath, FileKind FileKind, string? MimeType, long FileSize);
+    private readonly record struct MediaFileProbe(
+        string FilePath,
+        FileKind FileKind,
+        string? MimeType,
+        long FileSize,
+        DateTime? LastWriteTimeUtc);
 
     private readonly record struct TransferredOperation(ImportFileOperation Operation, ImportMode ExecutedMode);
 
-    private readonly record struct LeafImportGroup(
+    private readonly record struct ItemImportGroup(
         ContentItem ContentItem,
-        IReadOnlyList<TransferredOperation> Files,
-        bool UnresolvedContainerBinding);
+        IReadOnlyList<TransferredOperation> Files);
 
     private readonly record struct ReplaceSnapshot(MediaFile? ExistingMediaFile, long PriorSize);
 
-    private readonly record struct ReplaceBackup(string OriginalPath, string BackupPath);
+    private readonly record struct ReplaceBackup(string OriginalPath, string BackupPath, long OriginalSize,
+        string? Identity = null, string? Version = null);
+
+    private readonly record struct RecoveryFile(string Source, string Destination, ImportMode Mode, long Size,
+        string? SourceIdentity = null, string? PrivatePath = null, string? Identity = null,
+        string? SourceVersion = null, string? PublishedVersion = null);
+
+    private readonly record struct SupersededFile(
+        Guid MediaFileId,
+        Guid ContentHierarchyItemId,
+        string RootPath,
+        string FilePath,
+        long FileSize,
+        string? Version);
+
+    private sealed record CapacityRecovery
+    {
+        public List<RecoveryFile> Files { get; set; } = [];
+        public List<ReplaceBackup> Backups { get; set; } = [];
+        public List<ImportedContent> Imports { get; set; } = [];
+        public List<SupersededFile> Superseded { get; set; } = [];
+        public string? Reason { get; set; }
+    }
+
+    private sealed record ImportedContent(ContentEventImpact Impact, int FileCount, Guid? UserId,
+        Guid? CorrelationId);
+
+    private sealed class CapacityWaitingException(string message) : IOException(message);
+
+    private sealed class ImportSizeUnavailableException() : IOException("The import file size is unavailable.");
 
     private readonly record struct TransferResult(
         IReadOnlyList<TransferredOperation> Transferred,
-        IReadOnlyList<ReplaceBackup> ReplaceBackups);
+        IReadOnlyList<ReplaceBackup> ReplaceBackups,
+        IReadOnlyList<RecoveryFile> RecoveryFiles);
 
-    private readonly record struct ResolvedLeafImport(
+    private readonly record struct RollbackResult(
+        int TransferCount,
+        int RevertedTransferCount,
+        int ReplaceBackupCount,
+        int RestoredReplaceBackupCount,
+        IReadOnlyList<TransferredOperation> RemainingTransfers,
+        IReadOnlyList<ReplaceBackup> RemainingBackups)
+    {
+        public bool HasWork => TransferCount > 0 || ReplaceBackupCount > 0;
+
+        public bool IsComplete =>
+            RevertedTransferCount == TransferCount && RestoredReplaceBackupCount == ReplaceBackupCount;
+
+        public string Outcome => IsComplete ? "reverted" : "partially-reverted";
+    }
+
+    private readonly record struct ResolvedItemImport(
         ContentItem ContentItem,
         IReadOnlyList<TransferredOperation> Files,
-        bool UnresolvedContainerBinding,
         FulfillmentStatus Prior,
         QualityStatus? QualityStatus);
 
@@ -100,9 +166,14 @@ internal sealed class DownloadImportItemJob(
         public required IReadOnlyList<ImportFileOperation> FilteredOperations { get; init; }
 
         public required IReadOnlyList<string> ReplaceTargets { get; init; }
+
+        public IReadOnlyList<string> SkippedFiles { get; init; } = [];
+
+        public IDisposable? PathLock { get; init; }
     }
 
-    private sealed class DownloadFileSafetyException(string message) : InvalidOperationException(message);
+    private sealed class DownloadFileSafetyException(string message, Exception? innerException = null)
+        : InvalidOperationException(message, innerException);
 
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -131,6 +202,29 @@ internal sealed class DownloadImportItemJob(
         "kan", "mar", "pan", "urd", "per", "fas",
     ];
 
+    private static readonly string[] SubtitleFlags = ["forced", "sdh", "cc"];
+
+    private static readonly HashSet<string> ExtraDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Behind The Scenes",
+        "Bonus Features",
+        "Deleted Scenes",
+        "Extras",
+        "Featurettes",
+        "Interviews",
+        "Other",
+        "Sample",
+        "Samples",
+        "Scenes",
+        "Shorts",
+        "Special Features",
+        "Trailers"
+    };
+
+    private static readonly Regex ExtraFileNamePattern = new(
+        "^trailer$|-(behindthescenes|deleted|featurette|interview|other|scene|short|trailer)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private static readonly Regex LanguageSuffixPattern = new(
         @"^(?<base>.*)\.(?<lang>[A-Za-z]{2}(-[A-Z]{2})?|[A-Za-z]{3})$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -144,10 +238,14 @@ internal sealed class DownloadImportItemJob(
         Scope = JobScope.Content,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromMinutes(30),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
         LockPartitionFields = [MagpieJobs.Parameters.DownloadId],
+        GuidLockPartitionFields = [MagpieJobs.Parameters.DownloadId],
+        LockPartitionEventContextKeys = new Dictionary<string, string>
+        {
+            [MagpieJobs.Parameters.DownloadId] = MagpieEvents.Keys.DownloadId
+        },
         Parameters =
         [
             new(
@@ -155,7 +253,11 @@ internal sealed class DownloadImportItemJob(
                 "The download id to import.",
                 DataType.String,
                 true,
-                null),
+                null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            },
             new(
                 MagpieJobs.Parameters.DryRun,
                 "When true, plan the import without moving files or writing the DB.",
@@ -165,14 +267,22 @@ internal sealed class DownloadImportItemJob(
             new(
                 MagpieJobs.Parameters.CollisionMode,
                 "How to treat destination collisions: 'fail', 'skip', or 'replace'. " +
-                "Defaults to the root folder's configured DefaultImportCollisionMode.",
+                "When omitted, new imports inherit the root-folder policy. " +
+                "Recovery retains the import's explicit policy.",
                 DataType.String,
                 false,
-                "fail")
+                null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) ||
+                    (Enum.TryParse<ImportCollisionMode>(value, ignoreCase: true, out var mode) && Enum.IsDefined(mode))
+                    ? null : "must be fail, skip, or replace."
+            }
         ],
     };
 
     private const string TorrentProtocol = "torrent";
+
+    private const int MaxStatusReasonLength = 1024;
 
     private static IReadOnlyList<ContentHierarchyLevelDefinition> GetLevelsAtOrUnder(
         ContentTypeDefinition? definition,
@@ -232,6 +342,19 @@ internal sealed class DownloadImportItemJob(
         return !string.IsNullOrEmpty(extension) && CommonIgnoredSidecarExtensions.Contains(extension);
     }
 
+    private static bool IsCapacityFailure(Exception exception)
+    {
+        if (exception is not IOException)
+        {
+            return false;
+        }
+
+        return exception.HResult is unchecked((int)0x80070070) or unchecked((int)0x80070027) ||
+            !OperatingSystem.IsWindows() && (exception.HResult == 28 ||
+                OperatingSystem.IsLinux() && exception.HResult == 122 ||
+                OperatingSystem.IsMacOS() && exception.HResult == 69);
+    }
+
     private static bool HasSampleDirectorySegment(string filePath)
     {
         var directory = Path.GetDirectoryName(filePath);
@@ -239,6 +362,13 @@ internal sealed class DownloadImportItemJob(
             .Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
             .Contains("sample", StringComparer.OrdinalIgnoreCase);
     }
+
+    private static bool IsExtra(string releasePath, string filePath) =>
+        (Path.GetDirectoryName(Path.GetRelativePath(releasePath, filePath)) ?? string.Empty)
+            .Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
+            .Any(ExtraDirectoryNames.Contains) ||
+        ReleaseFiles.IsSample(filePath) ||
+        ExtraFileNamePattern.IsMatch(Path.GetFileNameWithoutExtension(filePath));
 
     private static ImportMode ResolveTransferMode(string? protocol)
     {
@@ -252,6 +382,17 @@ internal sealed class DownloadImportItemJob(
         activity?.SetTag("magpie.import.outcome", outcome);
         var outcomeTag = new KeyValuePair<string, object?>("outcome", outcome);
         DownloadTelemetry.ImportFiles.Record(fileCount, outcomeTag);
+    }
+
+    private static void RecordRollbackOutcome(Activity? activity, RollbackResult rollback)
+    {
+        activity?.SetTag("magpie.import.rollback_outcome", rollback.Outcome);
+        activity?.SetTag("magpie.import.rollback_transfer_count", rollback.TransferCount);
+        activity?.SetTag("magpie.import.rollback_reverted_transfer_count", rollback.RevertedTransferCount);
+        activity?.SetTag("magpie.import.rollback_replace_backup_count", rollback.ReplaceBackupCount);
+        activity?.SetTag(
+            "magpie.import.rollback_restored_replace_backup_count",
+            rollback.RestoredReplaceBackupCount);
     }
 
     private static void SetFailureReason(Activity? activity, Activity? importActivity, DownloadFailureReason reason)
@@ -293,7 +434,7 @@ internal sealed class DownloadImportItemJob(
         return $"{target}.magpie-replace-{downloadId:N}.orig";
     }
 
-    private static string? FindPrimary(string sidecarPath, IReadOnlyList<string> primaryPaths)
+    internal static string? FindPrimary(string sidecarPath, IReadOnlyList<string> primaryPaths)
     {
         if (string.IsNullOrWhiteSpace(sidecarPath))
         {
@@ -337,6 +478,13 @@ internal sealed class DownloadImportItemJob(
             return withoutExtension;
         }
 
+        var flagSeparator = withoutExtension.LastIndexOf('.');
+        if (flagSeparator > 0 &&
+            SubtitleFlags.Contains(withoutExtension[(flagSeparator + 1)..], StringComparer.OrdinalIgnoreCase))
+        {
+            withoutExtension = withoutExtension[..flagSeparator];
+        }
+
         var match = LanguageSuffixPattern.Match(withoutExtension);
         if (!match.Success)
         {
@@ -373,6 +521,9 @@ internal sealed class DownloadImportItemJob(
 
         return false;
     }
+
+    private static bool AcceptsPrimaryFiles(ContentTypeDefinition? definition, string level) =>
+        definition?.LevelDefinitions.FirstOrDefault(value => value.Slug == level)?.AcceptedFileTypes.Count > 0;
 
     private static bool ContainsIgnoreCase(IReadOnlyList<string> source, string value)
     {
@@ -441,7 +592,22 @@ internal sealed class DownloadImportItemJob(
 
         if (download.Status == DownloadStatus.Imported)
         {
+            if (!dryRun && download.ImportRecoveryState is { } storedRecovery)
+            {
+                var recovery = JsonSerializer.Deserialize<CapacityRecovery>(storedRecovery) ??
+                    throw new DownloadFileSafetyException("The import recovery state is empty.");
+                using var paths = AcquireImportPaths(recovery.Files, recovery.Backups);
+                await CompleteCommittedImportAsync(download, recovery, userId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             progressReporter.Report(1, "The import completed.");
+            return;
+        }
+
+        if (download.Status == DownloadStatus.Cancelled)
+        {
+            progressReporter.Report(1, "The download was cancelled. No files were imported.");
             return;
         }
 
@@ -451,17 +617,38 @@ internal sealed class DownloadImportItemJob(
                 $"Download {downloadId} is in status {download.Status} and cannot be imported");
         }
 
-        if (!dryRun)
+        if (!dryRun && download.Status == DownloadStatus.Downloaded)
         {
-            await downloadRepository
-                .MarkImportingAsync(downloadId, timeProvider.GetUtcNow().UtcDateTime, userId, cancellationToken)
-                .ConfigureAwait(false);
+            var now = timeProvider.GetUtcNow().UtcDateTime;
+            var started = collisionMode is null
+                ? await downloadRepository.MarkImportingAsync(downloadId, now, userId, cancellationToken)
+                    .ConfigureAwait(false)
+                : await downloadRepository.MarkImportingAsync(downloadId, now, userId, collisionMode, cancellationToken)
+                    .ConfigureAwait(false);
+            if (!started)
+            {
+                progressReporter.Report(1, "The download status changed before import could start.");
+                return;
+            }
+        }
+
+        if (download.Status == DownloadStatus.Importing)
+        {
+            if (!dryRun && collisionMode is { } explicitMode &&
+                !await downloadRepository.SetImportCollisionModeAsync(downloadId, explicitMode, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                progressReporter.Report(1, "The download status changed before import could resume.");
+                return;
+            }
+
+            collisionMode ??= download.ImportCollisionMode;
         }
 
         var dryRunTag = new KeyValuePair<string, object?>("dry_run", dryRun);
         try
         {
-            await ImportCoreAsync(
+            var imported = await ImportCoreAsync(
                 download,
                 userId,
                 correlationId,
@@ -471,20 +658,45 @@ internal sealed class DownloadImportItemJob(
                 activity,
                 cancellationToken)
                 .ConfigureAwait(false);
-            DownloadTelemetry.Imports.Add(1, new("outcome", "success"), dryRunTag);
+            DownloadTelemetry.Imports.Add(1, new("outcome", imported ? "success" : "waiting"), dryRunTag);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (DownloadFileSafetyException)
+        catch (CapacityWaitingException ex)
         {
+            progressReporter.Report(1, ex.Message);
+            DownloadTelemetry.Imports.Add(1, new("outcome", "waiting"), dryRunTag);
+        }
+        catch (DownloadFileSafetyException ex)
+        {
+            var current = await downloadRepository.GetByIdAsync(downloadId, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (current?.Status == DownloadStatus.Importing)
+            {
+                var reason = current.ImportRecoveryState is null ? ex.Message :
+                    ex.Message + " File recovery is incomplete; cleanup is deferred.";
+                await downloadRepository.SetImportCapacityReasonAsync(downloadId, reason,
+                    timeProvider.GetUtcNow().UtcDateTime, userId, CancellationToken.None).ConfigureAwait(false);
+            }
+
             DownloadTelemetry.Imports.Add(1, new("outcome", "failure"), dryRunTag);
             throw;
         }
         catch (Exception ex) when (!dryRun)
         {
+            var current = await downloadRepository.GetByIdAsync(downloadId, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (current is null || current.Status == DownloadStatus.Imported || current.ImportRecoveryState is not null)
+            {
+                throw new DownloadFileSafetyException(
+                    "The import failed after file ownership changed. Its files and current status are retained.", ex);
+            }
+
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             activity?.SetTag("magpie.download.failure_reason", nameof(DownloadFailureReason.ImportFailed));
             DownloadTelemetry.Imports.Add(1, new("outcome", "failure"), dryRunTag);
             await MarkImportFailedAsync(download, userId, correlationId, ex, cancellationToken)
@@ -493,7 +705,7 @@ internal sealed class DownloadImportItemJob(
         }
     }
 
-    private async Task ImportCoreAsync(
+    private async Task<bool> ImportCoreAsync(
         Download download,
         Guid? userId,
         Guid? correlationId,
@@ -506,6 +718,30 @@ internal sealed class DownloadImportItemJob(
         var downloadId = download.Id;
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (!dryRun && download.ImportRecoveryState is { } storedRecovery)
+        {
+            CapacityRecovery recovery;
+            try
+            {
+                recovery = JsonSerializer.Deserialize<CapacityRecovery>(storedRecovery) ??
+                    throw new InvalidOperationException("The import recovery state is empty.");
+            }
+            catch (Exception ex)
+            {
+                throw new DownloadFileSafetyException("The import recovery state could not be read. " + ex.Message);
+            }
+
+            recovery.Reason ??= "The import was interrupted.";
+            using var paths = AcquireImportPaths(recovery.Files, recovery.Backups);
+            await StoreCapacityRecoveryAsync(downloadId, recovery, userId, cancellationToken).ConfigureAwait(false);
+            if (!await RecoverCapacityTransferAsync(downloadId, recovery, userId, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                progress.Report(1, recovery.Reason + " File recovery is incomplete; the original files are retained.");
+                return false;
+            }
+        }
+
         progress.Report(null, "The import will load the content hierarchy.");
 
         ContentItem contentItem;
@@ -542,35 +778,6 @@ internal sealed class DownloadImportItemJob(
 
         var effectiveCollisionMode = collisionMode ?? rootFolder.DefaultImportCollisionMode;
 
-        var operation = await BuildImportOperationAsync(
-            download,
-            hierarchyItem,
-            effectiveCollisionMode,
-            dryRun,
-            userId,
-            correlationId,
-            progress,
-            importActivity,
-            cancellationToken)
-            .ConfigureAwait(false);
-
-        if (dryRun)
-        {
-            await WriteDryRunPlanAsync(
-                download,
-                operation.PlannedOperations,
-                transferMode,
-                userId,
-                correlationId,
-                cancellationToken)
-                .ConfigureAwait(false);
-            progress.Report(
-                1,
-                $"Dry run: {TransferModeName(transferMode)} {operation.PlannedOperations.Count} file(s). " +
-                "The audit history of the download holds the plan.");
-            return;
-        }
-
         var acquisitionScopes = await downloadScopeRepository.QueryAllAsync(
             new DownloadScopeQuery { DownloadId = downloadId },
             cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -581,53 +788,102 @@ internal sealed class DownloadImportItemJob(
             .ToList();
         var acquisitionLeaves = await ResolveScopedLeavesAsync(acquisitionScopeNodeIds, cancellationToken)
             .ConfigureAwait(false);
+
+        var operation = await BuildImportOperationAsync(
+            download,
+            hierarchyItem,
+            effectiveCollisionMode,
+            transferMode,
+            dryRun,
+            userId,
+            correlationId,
+            progress,
+            importActivity,
+            release,
+            acquisitionScopeNodeIds,
+            rootFolder.UpgradeFileHandling,
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        using var operationPaths = operation.PathLock;
+        if (dryRun)
+        {
+            await WriteDryRunPlanAsync(
+                download,
+                operation.PlannedOperations,
+                operation.SkippedFiles,
+                transferMode,
+                userId,
+                correlationId,
+                cancellationToken)
+                .ConfigureAwait(false);
+            progress.Report(
+                1,
+                $"Dry run: {TransferModeName(transferMode)} {operation.PlannedOperations.Count} file(s). " +
+                "The audit history of the download holds the plan.");
+            return true;
+        }
+
+        var capacityReason = CheckDestinationCapacity(operation.FilteredOperations, transferMode);
+        await downloadRepository.SetImportCapacityReasonAsync(downloadId, capacityReason,
+            timeProvider.GetUtcNow().UtcDateTime, userId, cancellationToken).ConfigureAwait(false);
+        if (capacityReason is not null)
+        {
+            progress.Report(1, capacityReason);
+            return false;
+        }
+
         var replaceSnapshots = await CaptureReplaceSnapshotsAsync(operation.ReplaceTargets, cancellationToken)
             .ConfigureAwait(false);
 
-        var transferResult = Transfer(
+        var transferResult = await TransferAsync(
             transferMode,
             operation.FilteredOperations,
             operation.ReplaceTargets,
             downloadId,
+            userId,
             progress,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         var transferred = transferResult.Transferred;
         var grabTargetNode = ancestors[0];
-        var root = ancestors[^1];
         var persisted = false;
+        var committed = new CapacityRecovery
+        {
+            Files = [.. transferResult.RecoveryFiles],
+            Backups = [.. transferResult.ReplaceBackups]
+        };
+        IReadOnlyList<ItemImportGroup> groups = [];
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             progress.Report(null, "The import will save the media files.");
 
-            var leaves = await WidenWithOpportunisticLeavesAsync(
-                release,
-                grabTargetNode,
-                acquisitionLeaves,
-                cancellationToken)
-                .ConfigureAwait(false);
-            var groups = await BuildLeafImportGroupsAsync(
-                release,
-                grabTargetNode,
-                contentItem,
-                leaves,
-                transferred,
-                userId,
-                correlationId,
-                cancellationToken)
+            groups = await GroupByBoundItemAsync(contentItem, transferred, userId, cancellationToken)
                 .ConfigureAwait(false);
 
-            var importedMainContentLeafIds = groups
-                .Where(group => group.Files.Any(file => file.Operation.IsMainContent))
-                .Select(group => group.ContentItem.ContentHierarchyItemId)
-                .ToHashSet();
+            var coveredNodeIds = new HashSet<Guid>();
+            foreach (var group in groups.Where(group => group.Files.Any(file => file.Operation.IsMainContent)))
+            {
+                coveredNodeIds.UnionWith((await contentHierarchyItemRepository
+                    .GetLineageAsync(group.ContentItem.ContentHierarchyItemId, cancellationToken)
+                    .ConfigureAwait(false)).Select(node => node.Id));
+            }
+
             var uncoveredLeafIds = acquisitionLeaves
                 .Select(leaf => leaf.Id)
-                .Where(leafId => !importedMainContentLeafIds.Contains(leafId))
+                .Where(leafId => !coveredNodeIds.Contains(leafId))
                 .ToHashSet();
             var reconciledDownloadScopeNodeIds = acquisitionScopeNodeIds
                 .Where(nodeId => !uncoveredLeafIds.Contains(nodeId))
                 .ToList();
+            if (transferResult.RecoveryFiles.Any(file => file.Identity is null ||
+                    fileSystem.GetFileIdentity(file.Destination) != file.Identity || file.PublishedVersion is null ||
+                    fileSystem.GetFileVersion(file.Destination) != file.PublishedVersion ||
+                    fileSystem.GetFileSize(file.Destination) != file.Size))
+            {
+                throw new DownloadFileSafetyException("The destination changed before import persistence.");
+            }
+
             await PersistAndPublishAsync(
                 download,
                 contentItem,
@@ -635,58 +891,146 @@ internal sealed class DownloadImportItemJob(
                 groups,
                 reconciledDownloadScopeNodeIds,
                 replaceSnapshots,
-                rootFolder.UpgradeFileHandling,
+                rootFolder,
+                operation.SkippedFiles,
+                committed,
                 userId,
                 correlationId,
                 () => persisted = true,
                 cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            if (persisted)
+            if (!persisted)
             {
-                DiscardReplaceBackups(transferResult.ReplaceBackups, downloadId);
-            }
-            else
-            {
-                RevertTransfers(transferred, downloadId);
-                RestoreReplaceTargets(transferResult.ReplaceBackups, downloadId);
+                try
+                {
+                    var current = await downloadRepository.GetByIdAsync(downloadId, CancellationToken.None)
+                        .ConfigureAwait(false);
+                    persisted = current?.Status == DownloadStatus.Imported;
+                    if (current is null)
+                    {
+                        throw new InvalidOperationException("The download could not be found after persistence.");
+                    }
+                }
+                catch (Exception readException)
+                {
+                    throw new DownloadFileSafetyException("The import commit outcome could not be read. " +
+                        "The files and recovery state are retained.", readException);
+                }
             }
 
-            throw;
+            if (!persisted)
+            {
+                var recovery = new CapacityRecovery
+                {
+                    Files = [.. transferResult.RecoveryFiles],
+                    Backups = [.. transferResult.ReplaceBackups],
+                    Reason = "The import could not be committed. File recovery will retry."
+                };
+                await StoreCapacityRecoveryAsync(downloadId, recovery, userId, CancellationToken.None)
+                    .ConfigureAwait(false);
+                var complete = await RecoverCapacityTransferAsync(downloadId, recovery, userId, CancellationToken.None)
+                    .ConfigureAwait(false);
+                var rollback = new RollbackResult(transferred.Count, transferred.Count - recovery.Files.Count,
+                    transferResult.ReplaceBackups.Count, transferResult.ReplaceBackups.Count - recovery.Backups.Count,
+                    [], recovery.Backups);
+                RecordRollbackOutcome(importActivity, rollback);
+                if (complete)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new DownloadFileSafetyException("The import could not be committed. File recovery is " +
+                    "incomplete; the download and recovery state are retained.", ex);
+            }
+
+            logger.LogWarning(ex, "The import of download {DownloadId} committed before an error occurred.",
+                downloadId);
         }
 
-        DiscardReplaceBackups(transferResult.ReplaceBackups, downloadId);
-
-        await eventBus.PublishAsync(
-            ContentEventBuilder.BuildContentImportedEvent(
-                new()
-                {
-                    HierarchyItemId = contentItem.ContentHierarchyItemId,
-                    ItemId = contentItem.Id,
-                    ParentId = grabTargetNode.ParentId,
-                    AncestorIds = [.. ancestors.Skip(1).Select(a => a.Id)],
-                    RootId = root.Id,
-                    ContentType = grabTargetNode.ContentType,
-                    Level = grabTargetNode.Level,
-                    MetadataContainerId = grabTargetNode.MetadataContainerId,
-                    TopLevel = grabTargetNode.ParentId is null,
-                    RootFolderId = grabTargetNode.RootFolderId,
-                    QualityTierListId = grabTargetNode.QualityTierListId,
-                    Monitoring = grabTargetNode.EffectiveMonitoring,
-                    Fulfillment = contentItem.Fulfillment.ToString(),
-                    WishlistId = contentItem.RequestedViaWishlistId
-                },
-                userId,
-                transferred.Count) with
-            {
-                CorrelationId = correlationId
-            },
-            cancellationToken)
-            .ConfigureAwait(false);
-
+        await transactionManager.OnCommittedAsync(
+            token => CompleteCommittedImportAsync(download, committed, userId, token),
+            cancellationToken).ConfigureAwait(false);
         progress.Report(1, "The import completed.");
+        return true;
+    }
+
+    private string? CheckDestinationCapacity(IReadOnlyList<ImportFileOperation> operations, ImportMode mode)
+    {
+        var volumes = new Dictionary<string, (long Required, long Available)>(StringComparer.Ordinal);
+        var totalRequired = 0L;
+        var minimumAvailable = long.MaxValue;
+        var hasUnknownVolume = false;
+        foreach (var operation in operations)
+        {
+            var destination = RootFolderService.ReadDestinationCapacity(fileSystem, operation.Destination);
+            long? required = null;
+            try
+            {
+                if (mode == ImportMode.Move)
+                {
+                    var source = RootFolderService.ReadDestinationCapacity(fileSystem, operation.Source);
+                    if (string.IsNullOrWhiteSpace(source?.VolumeId) ||
+                        string.IsNullOrWhiteSpace(destination?.VolumeId))
+                    {
+                        return RootFolderService.CapacityWaitingReason(null, destination?.AvailableBytes);
+                    }
+
+                    required = source.VolumeId == destination.VolumeId ? 0 : fileSystem.GetFileSize(operation.Source);
+                }
+                else
+                {
+                    required = fileSystem.GetFileSize(operation.Source);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogDebug(ex, "The import could not read the required capacity for {DownloadPath}.",
+                    operation.Source);
+            }
+
+            if (required is null or < 0 || destination is null)
+            {
+                return RootFolderService.CapacityWaitingReason(required, destination?.AvailableBytes);
+            }
+
+            if (required > long.MaxValue - totalRequired)
+            {
+                return RootFolderService.CapacityWaitingReason(null, destination.AvailableBytes);
+            }
+
+            totalRequired += required.Value;
+            minimumAvailable = Math.Min(minimumAvailable, destination.AvailableBytes);
+            if (string.IsNullOrWhiteSpace(destination.VolumeId))
+            {
+                hasUnknownVolume = true;
+                continue;
+            }
+
+            var prior = volumes.GetValueOrDefault(destination.VolumeId,
+                (Required: 0L, Available: destination.AvailableBytes));
+            if (required > long.MaxValue - prior.Required)
+            {
+                return RootFolderService.CapacityWaitingReason(null, destination.AvailableBytes);
+            }
+
+            volumes[destination.VolumeId] = (prior.Required + required.Value,
+                Math.Min(prior.Available, destination.AvailableBytes));
+        }
+
+        // Without identities, use an upper bound for each destination; never assume separate allocation pools.
+        if (hasUnknownVolume)
+        {
+            return RootFolderService.CapacityWaitingReason(totalRequired, minimumAvailable);
+        }
+
+        return volumes.Values.Select(volume =>
+                RootFolderService.CapacityWaitingReason(volume.Required, volume.Available))
+            .FirstOrDefault(reason => reason is not null);
     }
 
     private async Task<(ContentItem ContentItem, IReadOnlyList<ContentHierarchyItem> Ancestors, Release Release)>
@@ -802,84 +1146,255 @@ internal sealed class DownloadImportItemJob(
         return [.. scopedNodes.Where(node => !ancestorIds.Contains(node.Id))];
     }
 
-    private async Task<IReadOnlyList<ContentHierarchyItem>> WidenWithOpportunisticLeavesAsync(
-        Release release,
-        ContentHierarchyItem importTargetNode,
-        IReadOnlyList<ContentHierarchyItem> acquisitionLeaves,
-        CancellationToken cancellationToken)
+    internal static string SummarizeSkippedFiles(
+        string prefix,
+        IReadOnlyList<(string File, string? ItemName, SkipReason Reason)> skipped)
     {
-        var acquisitionLeafIds = acquisitionLeaves.Select(leaf => leaf.Id).ToHashSet();
-        var scope = await releaseEvaluationService
-            .ResolveScopeAsync(release, [], importTargetNode.Id, cancellationToken)
-            .ConfigureAwait(false);
-        var opportunisticLeafIds = scope.ActionableNodeIds
-            .Where(nodeId => !acquisitionLeafIds.Contains(nodeId))
-            .ToList();
-        if (opportunisticLeafIds.Count == 0)
+        var counts = string.Join(
+            ", ",
+            skipped
+                .GroupBy(file => Describe(file.Reason), StringComparer.Ordinal)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => $"{group.Count()} {group.Key}"));
+        var summary = new StringBuilder(prefix)
+            .Append(CultureInfo.InvariantCulture, $"Skipped {skipped.Count} file{(skipped.Count == 1 ? "" : "s")}: ")
+            .Append(counts)
+            .Append('.');
+        for (var index = 0; index < skipped.Count; index++)
         {
-            return acquisitionLeaves;
+            var entry = (index == 0 ? " " : "; ") + FormatSkippedFile(skipped[index]);
+            var laterCount = skipped.Count - index - 1;
+            var laterSuffix = laterCount > 0 ? $" …and {laterCount} more" : string.Empty;
+            if (summary.Length + entry.Length + laterSuffix.Length > MaxStatusReasonLength)
+            {
+                return summary.Append(CultureInfo.InvariantCulture, $" …and {skipped.Count - index} more").ToString();
+            }
+
+            summary.Append(entry);
         }
 
-        var leaves = new List<ContentHierarchyItem>(acquisitionLeaves);
-        foreach (var leafId in opportunisticLeafIds)
-        {
-            var leaf = await contentHierarchyItemRepository.GetByIdAsync(leafId, cancellationToken)
-                .ConfigureAwait(false);
-            if (leaf?.EffectiveMonitoring != true)
-            {
-                continue;
-            }
-
-            var contentItem = leaf.ContentItem ?? (await contentRepository.QueryAsync(
-                new ContentItemQuery { ContentHierarchyItemId = leaf.Id },
-                new() { PageNumber = 1, PageSize = 2 },
-                null,
-                cancellationToken).ConfigureAwait(false)).Items.SingleOrDefault();
-
-            if (contentItem is null || contentItem.ActiveAcquisitionStatus is not null)
-            {
-                continue;
-            }
-
-            if (await ReleaseImprovesLeafAsync(release, leaf, contentItem, cancellationToken).ConfigureAwait(false))
-            {
-                leaves.Add(leaf);
-            }
-        }
-
-        return leaves;
+        return summary.ToString();
     }
 
-    private async Task<bool> ReleaseImprovesLeafAsync(
+    private static string FormatSkippedFile((string File, string? ItemName, SkipReason Reason) skipped) =>
+        skipped.ItemName is null
+            ? $"{skipped.File} ({Describe(skipped.Reason)})"
+            : $"{skipped.File} ({skipped.ItemName}: {Describe(skipped.Reason)})";
+
+    private static string Describe(SkipReason reason) =>
+        reason switch
+        {
+            SkipReason.NotMonitored => "not monitored",
+            SkipReason.NoContentItem => "has no content item",
+            SkipReason.Acquiring => "another download is acquiring it",
+            SkipReason.Fulfilled => "already fulfilled",
+            SkipReason.NotAnUpgrade => "not an upgrade over the current file",
+            SkipReason.NoSingleItem => "matches no single item",
+            SkipReason.Extra => "extra",
+            _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null)
+        };
+
+    private async Task<(
+            Dictionary<string, Guid> Bound,
+            List<(string File, string? ItemName, SkipReason Reason)> Skipped)>
+        BindPrimaryFilesAsync(
+        Release release,
+        ContentHierarchyItem importTargetNode,
+        ContentTypeDefinition? definition,
+        IReadOnlyCollection<Guid> acquisitionScopeNodeIds,
+        string releasePath,
+        IReadOnlyList<string> primaryFiles,
+        CancellationToken cancellationToken)
+    {
+        var bound = new Dictionary<string, Guid>(PathComparer);
+        var skipped = new List<(string File, string? ItemName, SkipReason Reason)>();
+        if (definition?.LevelDefinitions.Any(level => level.ParentSlug == importTargetNode.Level) != true)
+        {
+            foreach (var file in primaryFiles)
+            {
+                if (IsExtra(releasePath, file))
+                {
+                    skipped.Add((Path.GetFileName(file), null, SkipReason.Extra));
+                }
+                else
+                {
+                    bound[file] = importTargetNode.Id;
+                }
+            }
+
+            return (bound, skipped);
+        }
+
+        var subtree = (await contentHierarchyItemRepository.QueryAllAsync(
+                new() { AncestorId = importTargetNode.Id },
+                cancellationToken: cancellationToken).ConfigureAwait(false))
+            .Where(item => item.Id != importTargetNode.Id)
+            .ToList();
+        var parentById = subtree.ToDictionary(item => item.Id, item => item.ParentId);
+        var parentIds = subtree.Where(item => item.ParentId is not null)
+            .Select(item => item.ParentId!.Value)
+            .ToHashSet();
+        var leaves = subtree.Where(item => !parentIds.Contains(item.Id) && AcceptsPrimaryFiles(definition, item.Level))
+            .ToList();
+        var scopeIds = acquisitionScopeNodeIds.ToHashSet();
+        var unbound = new List<string>();
+        if (leaves.Count == 0)
+        {
+            unbound.AddRange(primaryFiles);
+        }
+        else
+        {
+            var assignments = await releaseEvaluationService.AssignFilesToLeavesAsync(
+                release,
+                importTargetNode,
+                leaves,
+                [.. primaryFiles.Select(file => new ReleaseFileRef(file, Path.GetFileName(file)))],
+                cancellationToken).ConfigureAwait(false);
+            var skipReasons = new Dictionary<Guid, SkipReason?>();
+            foreach (var assignment in assignments)
+            {
+                var leaf = leaves.FirstOrDefault(value => value.Id == assignment.LeafContentHierarchyItemId);
+                if (leaf is null)
+                {
+                    unbound.Add(assignment.FileKey);
+                    continue;
+                }
+
+                if (!skipReasons.TryGetValue(leaf.Id, out var reason))
+                {
+                    var scopedAncestor = false;
+                    for (var nodeId = leaf.ParentId; nodeId is { } id && !scopedAncestor;
+                        nodeId = parentById.GetValueOrDefault(id))
+                    {
+                        scopedAncestor = scopeIds.Contains(id);
+                    }
+
+                    if (scopeIds.Contains(leaf.Id))
+                    {
+                        reason = null;
+                    }
+                    else if (scopedAncestor)
+                    {
+                        var contentItem = await FindContentItemAsync(leaf, cancellationToken).ConfigureAwait(false);
+                        reason = contentItem is null ||
+                            contentItem is { ActiveAcquisitionStatus: null, Fulfillment: FulfillmentStatus.Missing }
+                            ? null
+                            : await ResolveSkipReasonAsync(release, leaf, contentItem, cancellationToken)
+                                .ConfigureAwait(false);
+                    }
+                    else if (leaf.EffectiveMonitoring == MonitoringMode.Unmonitored)
+                    {
+                        reason = SkipReason.NotMonitored;
+                    }
+                    else
+                    {
+                        var contentItem = await FindContentItemAsync(leaf, cancellationToken).ConfigureAwait(false);
+                        reason = contentItem is null
+                            ? SkipReason.NoContentItem
+                            : await ResolveSkipReasonAsync(release, leaf, contentItem, cancellationToken)
+                                .ConfigureAwait(false);
+                    }
+
+                    skipReasons[leaf.Id] = reason;
+                }
+
+                if (reason is { } skipReason)
+                {
+                    skipped.Add((Path.GetFileName(assignment.FileKey), leaf.Name, skipReason));
+                }
+                else
+                {
+                    bound[assignment.FileKey] = leaf.Id;
+                }
+            }
+        }
+
+        var targetFileTypes = definition.LevelDefinitions
+            .FirstOrDefault(level => level.Slug == importTargetNode.Level)?.AcceptedFileTypes ?? [];
+        foreach (var file in unbound)
+        {
+            if (targetFileTypes.Count > 0 &&
+                await fileSystem.MatchesAnyFileTypeAsync(file, targetFileTypes, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                bound[file] = importTargetNode.Id;
+            }
+            else
+            {
+                skipped.Add((Path.GetFileName(file), null, SkipReason.NoSingleItem));
+            }
+        }
+
+        return (bound, skipped);
+    }
+
+    private async Task<ContentItem?> FindContentItemAsync(
+        ContentHierarchyItem leaf,
+        CancellationToken cancellationToken) =>
+        leaf.ContentItem ?? (await contentRepository.QueryAsync(
+            new ContentItemQuery { ContentHierarchyItemId = leaf.Id },
+            new() { PageNumber = 1, PageSize = 2 },
+            null,
+            cancellationToken).ConfigureAwait(false)).Items.SingleOrDefault();
+
+    private async Task<SkipReason?> ResolveSkipReasonAsync(
         Release release,
         ContentHierarchyItem leaf,
         ContentItem contentItem,
         CancellationToken cancellationToken)
     {
+        if (contentItem.ActiveAcquisitionStatus is not null)
+        {
+            return SkipReason.Acquiring;
+        }
+
         if (contentItem.Fulfillment is not FulfillmentStatus.Missing and not FulfillmentStatus.Upgradable)
         {
-            return false;
+            return SkipReason.Fulfilled;
         }
 
         var assessment = await releaseEvaluationService.AssessForContentAsync(release, [], leaf.Id, cancellationToken)
             .ConfigureAwait(false);
-        if (assessment.IsAcceptable is not true)
+        return assessment.IsAcceptable is true ? null : SkipReason.NotAnUpgrade;
+    }
+
+    private async Task<bool> IsSameItemUpgradeAsync(
+        Release release,
+        ImportFileOperation operation,
+        CancellationToken cancellationToken)
+    {
+        var existing = await mediaFileRepository.GetByPathAsync(operation.Destination, cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is null)
         {
             return false;
         }
 
-        return true;
+        var owner = (await contentRepository.QueryAsync(
+            new ContentItemQuery { ContentHierarchyItemId = operation.ContentHierarchyItemId },
+            new() { PageNumber = 1, PageSize = 2 },
+            null,
+            cancellationToken).ConfigureAwait(false)).Items.SingleOrDefault();
+        return owner?.Id == existing.ContentItemId &&
+            (await releaseEvaluationService.AssessForContentAsync(
+                release, [], operation.ContentHierarchyItemId, cancellationToken).ConfigureAwait(false))
+            .IsAcceptable is true;
     }
 
     private async Task<ImportOperation> BuildImportOperationAsync(
         Download download,
         ContentHierarchyItem contentHierarchyItem,
         ImportCollisionMode effectiveCollisionMode,
+        ImportMode transferMode,
         bool dryRun,
         Guid? userId,
         Guid? correlationId,
         IProgressReporter progress,
         Activity? importActivity,
+        Release release,
+        IReadOnlyCollection<Guid> acquisitionScopeNodeIds,
+        UpgradeFileHandling upgradeFileHandling,
         CancellationToken cancellationToken)
     {
         var downloadId = download.Id;
@@ -1036,101 +1551,214 @@ internal sealed class DownloadImportItemJob(
                 "The download has been failed with reason NoUsableContent.");
         }
 
+        var (bindings, skipped) = await BindPrimaryFilesAsync(
+            release,
+            contentHierarchyItem,
+            contentTypeDefinition,
+            acquisitionScopeNodeIds,
+            importSourcePath,
+            primaryCandidates,
+            cancellationToken).ConfigureAwait(false);
+        var skippedFiles = skipped.Select(FormatSkippedFile).ToList();
+        if (skippedFiles.Count > 0)
+        {
+            logger.LogWarning(
+                "Download {DownloadId} skips {SkippedCount} of {TotalCount} file(s) before transfer: {SkippedFiles}",
+                downloadId,
+                skippedFiles.Count,
+                primaryCandidates.Count,
+                string.Join("; ", skippedFiles));
+        }
+
+        if (bindings.Count == 0)
+        {
+            SetFailureReason(activity, importActivity, DownloadFailureReason.NoUsableContent);
+            var skippedSummary = SummarizeSkippedFiles("No file matched content that needs it. ", skipped);
+            if (!dryRun)
+            {
+                await MarkDownloadFailedAsync(
+                    download,
+                    DownloadFailureReason.NoUsableContent,
+                    skippedSummary,
+                    userId,
+                    correlationId,
+                    cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            throw new DownloadFileSafetyException(
+                $"Download {downloadId} has no file for content that needs it. {skippedSummary}");
+        }
+
         var acceptedFiles = new List<string>(primaryCandidates.Count + pairedSidecars.Count);
         var filePathComparer = StringComparer.Create(
             CultureInfo.InvariantCulture,
             CompareOptions.IgnoreCase | CompareOptions.NumericOrdering);
 
-        acceptedFiles.AddRange(primaryCandidates.OrderBy(path => path, filePathComparer));
-        acceptedFiles.AddRange(pairedSidecars.OrderBy(path => path, filePathComparer));
+        acceptedFiles.AddRange(primaryCandidates.Where(bindings.ContainsKey).OrderBy(path => path, filePathComparer));
+        acceptedFiles.AddRange(pairedSidecars
+            .Where(sidecar => FindPrimary(sidecar, primaryCandidates) is { } primary && bindings.ContainsKey(primary))
+            .OrderBy(path => path, filePathComparer));
 
         var primaryPaths = primaryCandidates.ToHashSet(PathComparer);
         var plannedOps = new List<ImportFileOperation>(acceptedFiles.Count);
 
+        var probedMediaInfo = new Dictionary<string, MediaInfo?>(PathComparer);
+        foreach (var primary in primaryCandidates)
+        {
+            probedMediaInfo[primary] = await ProbeMediaInfoAsync(primary, cancellationToken).ConfigureAwait(false);
+        }
+
+        var primaryDestinations = new Dictionary<string, string>(PathComparer);
         foreach (var source in acceptedFiles)
         {
-            var preview = await contentFileService
-                .PreviewRenameAsync(contentHierarchyItem.Id, new(source), cancellationToken)
-                .ConfigureAwait(false);
+            var isPrimary = primaryPaths.Contains(source);
+            var primary = isPrimary ? source : FindPrimary(source, primaryCandidates)!;
+            var mediaInfo = probedMediaInfo.GetValueOrDefault(primary);
+            var boundItemId = bindings[primary];
+            string destination;
+            if (isPrimary)
+            {
+                var preview = await contentFileService
+                    .PreviewRenameAsync(boundItemId, new(source), mediaInfo, cancellationToken)
+                    .ConfigureAwait(false);
+                destination = preview.Rename.FullName;
+                primaryDestinations[source] = destination;
+            }
+            else
+            {
+                var primaryDestination = primaryDestinations[primary];
+                var suffix = Path.GetFileName(source)[Path.GetFileNameWithoutExtension(primary).Length..];
+                destination = Path.Combine(
+                    Path.GetDirectoryName(primaryDestination)!,
+                    Path.GetFileNameWithoutExtension(primaryDestination) + suffix);
+            }
 
             plannedOps.Add(new ImportFileOperation(
                 source,
-                preview.Rename.FullName,
+                destination,
                 await ResolveFileKindAsync(source, cancellationToken).ConfigureAwait(false),
-                primaryPaths.Contains(source)));
+                isPrimary,
+                boundItemId,
+                isPrimary ? mediaInfo : null));
         }
 
         plannedOps = RemoveDuplicatePlannedOperations(plannedOps, downloadId);
-
         if (dryRun)
         {
             return new ImportOperation
             {
                 PlannedOperations = plannedOps,
                 FilteredOperations = [],
-                ReplaceTargets = []
+                ReplaceTargets = [],
+                SkippedFiles = skippedFiles
             };
         }
 
-        var replaceTargets = new List<string>();
-        var filteredOps = new List<ImportFileOperation>(plannedOps.Count);
-        foreach (var op in plannedOps)
+        var pathLock = AcquireImportPaths(plannedOps.Select(op =>
+            new RecoveryFile(op.Source, op.Destination, transferMode, 0)).ToList(), []);
+        try
         {
-            if (!fileSystem.FileExists(op.Destination))
+            var replaceTargets = new List<string>();
+            var filteredOps = new List<ImportFileOperation>(plannedOps.Count);
+            foreach (var op in plannedOps)
             {
-                filteredOps.Add(op);
-                continue;
-            }
-
-            switch (effectiveCollisionMode)
-            {
-                case ImportCollisionMode.Fail:
-                    throw new InvalidOperationException(
-                        $"Destination file {op.Destination} already exists. The job cannot import download " +
-                        $"{downloadId}");
-                case ImportCollisionMode.Skip:
-                    logger.LogDebug(
-                        "The job skipped an operation for download {DownloadId} because destination " +
-                        "{DestinationPath} exists and the mode is Skip",
-                        downloadId,
-                        op.Destination);
+                if (!fileSystem.FileExists(op.Destination))
+                {
+                    filteredOps.Add(op);
                     continue;
-                case ImportCollisionMode.Replace:
+                }
+
+                if (upgradeFileHandling == UpgradeFileHandling.Replace &&
+                    await IsSameItemUpgradeAsync(release, op, cancellationToken).ConfigureAwait(false))
+                {
                     replaceTargets.Add(op.Destination);
                     filteredOps.Add(op);
                     continue;
-                default:
-                    throw new InvalidOperationException(
-                        $"Unsupported collision mode {effectiveCollisionMode} for download {downloadId}");
+                }
+
+                switch (effectiveCollisionMode)
+                {
+                    case ImportCollisionMode.Fail:
+                        throw new InvalidOperationException(
+                            $"Destination file {op.Destination} already exists. The job cannot import download " +
+                            $"{downloadId}");
+                    case ImportCollisionMode.Skip:
+                        logger.LogDebug(
+                            "The job skipped an operation for download {DownloadId} because destination " +
+                            "{DestinationPath} exists and the mode is Skip",
+                            downloadId,
+                            op.Destination);
+                        continue;
+                    case ImportCollisionMode.Replace:
+                        replaceTargets.Add(op.Destination);
+                        filteredOps.Add(op);
+                        continue;
+                    default:
+                        throw new InvalidOperationException(
+                            $"Unsupported collision mode {effectiveCollisionMode} for download {downloadId}");
+                }
             }
+
+            if (filteredOps.Count == 0)
+            {
+                logger.LogWarning(
+                    "Download {DownloadId} has no operations after the collision filter, so the job will mark it " +
+                    "Failed/NoUsableContent",
+                    downloadId);
+                SetFailureReason(activity, importActivity, DownloadFailureReason.NoUsableContent);
+                await MarkDownloadFailedAsync(
+                    download,
+                    DownloadFailureReason.NoUsableContent,
+                    "Every planned file exists at its destination. The job imported no files.",
+                    userId,
+                    correlationId,
+                    cancellationToken)
+                    .ConfigureAwait(false);
+                throw new DownloadFileSafetyException(
+                    $"Download {downloadId} imported no files: every planned operation collided under " +
+                    "Skip collision mode. The download has been failed with reason NoUsableContent.");
+            }
+
+            return new ImportOperation
+            {
+                PlannedOperations = plannedOps,
+                FilteredOperations = filteredOps,
+                ReplaceTargets = replaceTargets,
+                SkippedFiles = skippedFiles,
+                PathLock = pathLock
+            };
+        }
+        catch
+        {
+            pathLock?.Dispose();
+            throw;
+        }
+    }
+
+    private async Task<MediaInfo?> ProbeMediaInfoAsync(string path, CancellationToken cancellationToken)
+    {
+        if (mediaInfoExtractor is null)
+        {
+            return null;
         }
 
-        if (filteredOps.Count == 0)
+        try
+        {
+            return await mediaInfoExtractor.ExtractAsync(path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
         {
             logger.LogWarning(
-                "Download {DownloadId} has no operations after the collision filter, so the job will mark it " +
-                "Failed/DownloadStuck",
-                downloadId);
-            SetFailureReason(activity, importActivity, DownloadFailureReason.DownloadStuck);
-            await MarkDownloadFailedAsync(
-                download,
-                DownloadFailureReason.DownloadStuck,
-                "Every planned file exists at its destination. The job imported no files.",
-                userId,
-                correlationId,
-                cancellationToken)
-                .ConfigureAwait(false);
-            throw new DownloadFileSafetyException(
-                $"Download {downloadId} imported no files: every planned operation collided under " +
-                "Skip collision mode. The download has been failed with reason DownloadStuck.");
+                ex,
+                "The job could not get media info for {FilePath} before placement and imports it without media info",
+                path);
+            return null;
         }
-
-        return new ImportOperation
-        {
-            PlannedOperations = plannedOps,
-            FilteredOperations = filteredOps,
-            ReplaceTargets = replaceTargets
-        };
     }
 
     private List<ImportFileOperation> RemoveDuplicatePlannedOperations(
@@ -1205,11 +1833,12 @@ internal sealed class DownloadImportItemJob(
         return snapshots;
     }
 
-    private TransferResult Transfer(
+    private async Task<TransferResult> TransferAsync(
         ImportMode transferMode,
         IReadOnlyList<ImportFileOperation> plannedOps,
         IReadOnlyList<string> replaceTargets,
         Guid downloadId,
+        Guid? userId,
         IProgressReporter progress,
         CancellationToken cancellationToken)
     {
@@ -1217,12 +1846,32 @@ internal sealed class DownloadImportItemJob(
         activity?.SetTag("magpie.import.file_count", plannedOps.Count);
         activity?.SetTag("magpie.import.transfer_mode", TransferModeName(transferMode));
 
-        var backups = StashReplaceTargets(replaceTargets, downloadId);
-
+        var backups = new List<ReplaceBackup>(replaceTargets.Count);
         var transferred = new List<TransferredOperation>(plannedOps.Count);
+        var recoveryFiles = new List<RecoveryFile>(plannedOps.Count);
+        ReplaceBackup? pendingBackup = null;
         var failingOp = default(ImportFileOperation);
         try
         {
+            foreach (var target in replaceTargets)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var backup = new ReplaceBackup(
+                    target,
+                    BuildBackupPath(target, downloadId),
+                    fileSystem.GetFileSize(target),
+                    RequireFileIdentity(target), RequireFileVersion(target));
+                pendingBackup = backup;
+                await StoreCapacityRecoveryAsync(downloadId, new CapacityRecovery
+                {
+                    Backups = [.. backups, backup],
+                    Reason = null
+                }, userId, cancellationToken).ConfigureAwait(false);
+                fileSystem.Move(target, backup.BackupPath);
+                backups.Add(backup);
+                pendingBackup = null;
+            }
+
             for (var i = 0; i < plannedOps.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1245,7 +1894,42 @@ internal sealed class DownloadImportItemJob(
                     fileSystem.CreateDirectory(destDir!);
                 }
 
-                ExecuteTransfer(transferMode, op.Source, op.Destination);
+                var privatePath = Path.Combine(destDir!, ".magpie-import-" + Guid.NewGuid().ToString("N"), "payload");
+                var recoveryFile = new RecoveryFile(op.Source, op.Destination, transferMode,
+                    RequireImportFileSize(op.Source), RequireFileIdentity(op.Source), privatePath,
+                    SourceVersion: RequireFileVersion(op.Source));
+                recoveryFiles.Add(recoveryFile);
+                await StoreCapacityRecoveryAsync(downloadId, new CapacityRecovery
+                {
+                    Files = recoveryFiles,
+                    Backups = backups,
+                    Reason = null
+                }, userId, cancellationToken).ConfigureAwait(false);
+                fileSystem.CreateDirectory(Path.GetDirectoryName(privatePath)!);
+                await fileSystem.TransferToOwnedPathAsync(op.Source, privatePath, transferMode, async identity =>
+                {
+                    recoveryFile = recoveryFile with { Identity = identity };
+                    recoveryFiles[i] = recoveryFile;
+                    await StoreCapacityRecoveryAsync(downloadId, new CapacityRecovery
+                    {
+                        Files = recoveryFiles,
+                        Backups = backups
+                    }, userId, cancellationToken).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
+                if (recoveryFile.Identity is null)
+                {
+                    throw new DownloadFileSafetyException("The transfer did not establish file ownership.");
+                }
+
+                recoveryFile = recoveryFile with { PublishedVersion = RequireFileVersion(privatePath) };
+                recoveryFiles[i] = recoveryFile;
+                await StoreCapacityRecoveryAsync(downloadId, new CapacityRecovery
+                {
+                    Files = recoveryFiles,
+                    Backups = backups
+                }, userId, cancellationToken).ConfigureAwait(false);
+                fileSystem.Move(privatePath, op.Destination);
+                RemoveStagingDirectory(recoveryFile);
                 transferred.Add(new TransferredOperation(op, transferMode));
             }
 
@@ -1253,15 +1937,74 @@ internal sealed class DownloadImportItemJob(
         }
         catch (OperationCanceledException)
         {
-            RevertTransfers(transferred, downloadId);
-            RestoreReplaceTargets(backups, downloadId);
-            RecordTransferOutcome(activity, transferred.Count, "reverted");
+            var rollback = await RollbackTransfersAsync(recoveryFiles, transferred,
+                pendingBackup is { } cancelledBackup ? [.. backups, cancelledBackup] : backups, downloadId, userId,
+                "The import was cancelled.").ConfigureAwait(false);
+            RecordRollbackOutcome(activity, rollback);
+            RecordTransferOutcome(activity, transferred.Count, rollback.Outcome);
+
+            throw;
+        }
+        catch (DownloadFileSafetyException)
+        {
             throw;
         }
         catch (Exception ex)
         {
-            RecordTransferOutcome(activity, transferred.Count, "failed");
+            if (IsCapacityFailure(ex) || ex is FileSystem.StorageCapacityUnavailableException or
+                ImportSizeUnavailableException)
+            {
+                string reason;
+                if (ex is FileSystem.StorageCapacityUnavailableException unavailable)
+                {
+                    reason = RootFolderService.CapacityWaitingReason(
+                        transferMode == ImportMode.Copy && recoveryFiles.Count > 0 ? recoveryFiles[^1].Size : null,
+                        unavailable.AvailableBytes)!;
+                }
+                else if (ex is ImportSizeUnavailableException)
+                {
+                    reason = RootFolderService.CapacityWaitingReason(null,
+                        RootFolderService.ReadDestinationCapacity(fileSystem, failingOp.Destination)?.AvailableBytes)!;
+                }
+                else
+                {
+                    var capacity = string.IsNullOrEmpty(failingOp.Destination) ? null :
+                        RootFolderService.ReadDestinationCapacity(fileSystem, failingOp.Destination);
+                    var required = recoveryFiles.Count == 0 ? (long?)null : recoveryFiles[^1].Size;
+                    if (transferMode == ImportMode.Move && !string.IsNullOrEmpty(failingOp.Source))
+                    {
+                        var sourceCapacity = RootFolderService.ReadDestinationCapacity(fileSystem, failingOp.Source);
+                        required = string.IsNullOrWhiteSpace(sourceCapacity?.VolumeId) ||
+                            string.IsNullOrWhiteSpace(capacity?.VolumeId) ? null :
+                            sourceCapacity.VolumeId == capacity.VolumeId ? 0 : required;
+                    }
+
+                    reason = "Waiting for destination capacity: the destination reported insufficient space " +
+                        "during transfer. Required: " +
+                        (required?.ToString(CultureInfo.InvariantCulture) ?? "unknown") +
+                        (required is null ? "." : " bytes.") + " Available: " +
+                        (capacity?.AvailableBytes.ToString(CultureInfo.InvariantCulture) ?? "unknown") +
+                        (capacity is null ? "." : " bytes.");
+                }
+
+                var recovery = new CapacityRecovery
+                {
+                    Files = recoveryFiles,
+                    Backups = pendingBackup is { } pending ? [.. backups, pending] : backups,
+                    Reason = reason
+                };
+                await StoreCapacityRecoveryAsync(downloadId, recovery, userId, CancellationToken.None)
+                    .ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                var complete = await RecoverCapacityTransferAsync(downloadId, recovery, userId, cancellationToken)
+                    .ConfigureAwait(false);
+                throw new CapacityWaitingException(complete ? reason :
+                    reason + " File recovery is incomplete; the original files are retained.");
+            }
+
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             logger.LogError(
                 ex,
                 "The job failed to {TransferMode} {SourcePath} to {DestinationPath} for download {DownloadId}",
@@ -1270,212 +2013,496 @@ internal sealed class DownloadImportItemJob(
                 failingOp.Destination,
                 downloadId);
 
-            var reverted = RevertTransfers(transferred, downloadId);
-            var restored = RestoreReplaceTargets(backups, downloadId);
+            var rollback = await RollbackTransfersAsync(recoveryFiles, transferred,
+                pendingBackup is { } failedBackup ? [.. backups, failedBackup] : backups, downloadId, userId,
+                "The import transfer failed.").ConfigureAwait(false);
+            RecordRollbackOutcome(activity, rollback);
+            RecordTransferOutcome(activity, transferred.Count, rollback.HasWork ? rollback.Outcome : "failed");
 
             throw new InvalidOperationException(
                 $"Import of download {downloadId} failed after transferring {transferred.Count} file(s). " +
-                $"Reverted {reverted} file(s) and restored {restored} pre-existing file(s). " +
+                $"Rollback outcome: {rollback.Outcome}. " +
+                $"Reverted {rollback.RevertedTransferCount} of {rollback.TransferCount} transferred file(s) and " +
+                $"restored {rollback.RestoredReplaceBackupCount} of {rollback.ReplaceBackupCount} " +
+                "pre-existing file(s). " +
                 $"Failing transfer: {failingOp.Source} -> {failingOp.Destination}. {ex.Message}",
                 ex);
         }
 
         RecordTransferOutcome(activity, transferred.Count, "success");
-        return new TransferResult(transferred, backups);
+        return new TransferResult(transferred, backups, recoveryFiles);
     }
 
-    private List<ReplaceBackup> StashReplaceTargets(IReadOnlyList<string> replaceTargets, Guid downloadId)
+    private async Task StoreCapacityRecoveryAsync(Guid downloadId, CapacityRecovery recovery, Guid? userId,
+        CancellationToken cancellationToken)
     {
-        var backups = new List<ReplaceBackup>(replaceTargets.Count);
-        foreach (var target in replaceTargets)
+        try
         {
-            var backupPath = BuildBackupPath(target, downloadId);
+            var pending = recovery.Files.Count > 0 || recovery.Backups.Count > 0 || recovery.Imports.Count > 0 ||
+                recovery.Superseded.Count > 0;
+            await downloadRepository.SetImportRecoveryStateAsync(downloadId,
+                pending ? JsonSerializer.Serialize(recovery) : null,
+                pending && recovery.Reason is not null ?
+                    recovery.Reason + " File recovery is incomplete; the original files are retained." :
+                    recovery.Reason,
+                timeProvider.GetUtcNow().UtcDateTime, userId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new DownloadFileSafetyException("The import could not store file recovery state. " + ex.Message);
+        }
+    }
+
+    private IDisposable AcquireImportPaths(IReadOnlyList<RecoveryFile> files, IReadOnlyList<ReplaceBackup> backups)
+    {
+        try
+        {
+            return fileSystem.AcquireImportPaths(files.SelectMany(file => file.Mode == ImportMode.Move ?
+                    new[] { file.Source, file.Destination } : [file.Destination])
+                .Concat(backups.Select(backup => backup.OriginalPath)).Distinct(PathComparer).ToList());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            throw new DownloadFileSafetyException(IsCapacityFailure(ex) ?
+                "Waiting for destination capacity: file coordination reported insufficient space." :
+                "Waiting for exclusive access to the import files.", ex);
+        }
+    }
+
+    private string RequireFileIdentity(string path) => fileSystem.GetFileIdentity(path) ??
+        throw new FileSystem.FileOwnershipUnavailableException(
+            "The file identity is unavailable, so the import cannot confirm file ownership.");
+
+    private void RemoveStagingDirectory(RecoveryFile file)
+    {
+        var directory = Path.GetDirectoryName(file.PrivatePath);
+        if (Path.GetFileName(file.PrivatePath) != "payload" ||
+            Path.GetFileName(directory)?.StartsWith(".magpie-import-", StringComparison.Ordinal) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            fileSystem.DeleteEmptyDirectory(directory!);
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            logger.LogDebug(
+                ex,
+                "The import could not remove the staging directory {Directory}.",
+                directory);
+        }
+    }
+
+    private string RequireFileVersion(string path) => fileSystem.GetFileVersion(path) ??
+        throw new DownloadFileSafetyException("File version is unavailable. The import will retry.");
+
+    private long RequireImportFileSize(string path)
+    {
+        try
+        {
+            var size = fileSystem.GetFileSize(path);
+            if (size >= 0)
+            {
+                return size;
+            }
+        }
+        catch (Exception ex) when (ex is not FileNotFoundException and not DirectoryNotFoundException &&
+            ex is IOException or UnauthorizedAccessException or NotSupportedException or
+                System.Security.SecurityException)
+        {
+            logger.LogDebug(ex, "The import could not read the file size for {DownloadPath}.", path);
+        }
+
+        throw new ImportSizeUnavailableException();
+    }
+
+    private long? ReadRecoverySize(string path)
+    {
+        try
+        {
+            return fileSystem.GetFileSize(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<bool> RecoverCapacityTransferAsync(Guid downloadId, CapacityRecovery recovery, Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        for (var i = recovery.Files.Count - 1; i >= 0; i--)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var file = recovery.Files[i];
             try
             {
-                fileSystem.Move(target, backupPath);
-                backups.Add(new ReplaceBackup(target, backupPath));
+                var sourceSize = ReadRecoverySize(file.Source);
+                var sourceSafe = sourceSize == file.Size && file.SourceIdentity is not null &&
+                    fileSystem.GetFileIdentity(file.Source) == file.SourceIdentity && file.SourceVersion is not null &&
+                    fileSystem.GetFileVersion(file.Source) == file.SourceVersion;
+                var destinationSize = ReadRecoverySize(file.Destination);
+                var destinationOwned = destinationSize is not null && file.Identity is not null &&
+                    fileSystem.GetFileIdentity(file.Destination) == file.Identity && file
+                        .PublishedVersion is not null &&
+                    fileSystem.GetFileVersion(file.Destination) == file.PublishedVersion;
+                var privateSize = file.PrivatePath is null ? null : ReadRecoverySize(file.PrivatePath);
+                var privateOwned = privateSize is not null && file.Identity is not null &&
+                    fileSystem.GetFileIdentity(file.PrivatePath!) == file.Identity;
+                var ownedPath = privateOwned ? file.PrivatePath : destinationOwned ? file.Destination : null;
+                var ownedSize = privateOwned ? privateSize : destinationOwned ? destinationSize : null;
+                if (ownedPath is not null)
+                {
+                    if (sourceSafe)
+                    {
+                        fileSystem.DeleteFile(ownedPath);
+                    }
+                    else if (file.Mode == ImportMode.Move && sourceSize is null && ownedSize == file.Size &&
+                        file.SourceVersion is not null && fileSystem.GetFileVersion(ownedPath) == file.SourceVersion &&
+                        fileSystem.GetStorageCapacity(ownedPath)?.VolumeId is { } volume &&
+                        volume == fileSystem.GetStorageCapacity(file.Source)?.VolumeId)
+                    {
+                        fileSystem.Move(ownedPath, file.Source);
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+                else if (!sourceSafe)
+                {
+                    continue;
+                }
+
+                if (destinationSize is not null && (!destinationOwned || ownedPath != file.Destination))
+                {
+                    recovery.Files[i] = file with { PublishedVersion = null };
+                    recovery.Reason = "File recovery is waiting because another file occupies the destination.";
+                    await StoreCapacityRecoveryAsync(downloadId, recovery, userId, cancellationToken)
+                        .ConfigureAwait(false);
+                    continue;
+                }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                RestoreReplaceTargets(backups, downloadId);
-                throw new InvalidOperationException(
-                    $"Replace mode for download {downloadId} failed to stash pre-existing target {target} " +
-                    $"before transfer. {ex.Message}",
-                    ex);
+                logger.LogWarning(ex, "The import could not restore a transfer for download {DownloadId}.", downloadId);
+                continue;
+            }
+
+            RemoveStagingDirectory(file);
+            recovery.Files.RemoveAt(i);
+            await StoreCapacityRecoveryAsync(downloadId, recovery, userId, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Restore replacements only after every payload is safe and every destination is clear.
+        if (recovery.Files.Count == 0)
+        {
+            for (var i = recovery.Backups.Count - 1; i >= 0; i--)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var backup = recovery.Backups[i];
+                try
+                {
+                    var backupSize = ReadRecoverySize(backup.BackupPath);
+                    var originalSize = ReadRecoverySize(backup.OriginalPath);
+                    if (backup.Identity is null)
+                    {
+                        continue;
+                    }
+
+                    if (backupSize is not null)
+                    {
+                        if (fileSystem.GetFileIdentity(backup.BackupPath) != backup.Identity ||
+                            backup.Version is null || fileSystem.GetFileVersion(backup.BackupPath) != backup.Version ||
+                            originalSize is not null)
+                        {
+                            continue;
+                        }
+
+                        fileSystem.Move(backup.BackupPath, backup.OriginalPath);
+                    }
+                    else if (originalSize != backup.OriginalSize ||
+                        fileSystem.GetFileIdentity(backup.OriginalPath) != backup.Identity || backup.Version is null ||
+                        fileSystem.GetFileVersion(backup.OriginalPath) != backup.Version)
+                    {
+                        continue;
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogWarning(ex, "The import could not restore a replacement for download {DownloadId}.",
+                        downloadId);
+                    continue;
+                }
+
+                recovery.Backups.RemoveAt(i);
+                await StoreCapacityRecoveryAsync(downloadId, recovery, userId, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        return backups;
+        return recovery.Files.Count == 0 && recovery.Backups.Count == 0;
     }
 
-    private int RestoreReplaceTargets(IReadOnlyList<ReplaceBackup> backups, Guid downloadId)
+    private async Task<RollbackResult> RollbackTransfersAsync(IReadOnlyList<RecoveryFile> files,
+        IReadOnlyList<TransferredOperation> transferred, IReadOnlyList<ReplaceBackup> backups,
+        Guid downloadId, Guid? userId, string reason)
     {
-        var restored = 0;
-        for (var i = backups.Count - 1; i >= 0; i--)
+        var recovery = new CapacityRecovery { Files = [.. files], Backups = [.. backups], Reason = reason };
+        await StoreCapacityRecoveryAsync(downloadId, recovery, userId, CancellationToken.None).ConfigureAwait(false);
+        await RecoverCapacityTransferAsync(downloadId, recovery, userId, CancellationToken.None).ConfigureAwait(false);
+        var remaining = transferred.Where(entry => recovery.Files.Any(file =>
+            file.Destination == entry.Operation.Destination)).ToList();
+        return new RollbackResult(transferred.Count, transferred.Count - remaining.Count, backups.Count,
+            backups.Count - recovery.Backups.Count, remaining, recovery.Backups);
+    }
+
+    private async Task CompleteCommittedImportAsync(
+        Download download,
+        CapacityRecovery recovery,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var downloadId = download.Id;
+        var imports = recovery.Imports;
+        if (imports.Count > 0)
         {
-            var backup = backups[i];
+            recovery.Imports = [];
             try
             {
-                if (fileSystem.FileExists(backup.OriginalPath))
-                {
-                    fileSystem.DeleteFile(backup.OriginalPath);
-                }
-
-                fileSystem.Move(backup.BackupPath, backup.OriginalPath);
-                restored++;
+                await StoreCapacityRecoveryAsync(downloadId, recovery, userId, CancellationToken.None)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                logger.LogError(
+                recovery.Imports = imports;
+                logger.LogWarning(ex, "The import of download {DownloadId} committed, but the job could not " +
+                    "record its imported content. The follow-up work will retry.", downloadId);
+                return;
+            }
+
+            try
+            {
+                foreach (var imported in imports)
+                {
+                    await eventBus.PublishAsync(
+                        ContentEventBuilder.BuildContentImportedEvent(imported.Impact, imported.UserId,
+                            imported.FileCount) with
+                        {
+                            CorrelationId = imported.CorrelationId
+                        },
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "The import of download {DownloadId} committed, but the job could not " +
+                    "publish its imported content.", downloadId);
+            }
+        }
+
+        try
+        {
+            await FinishCommittedImportAsync(download, recovery, userId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "The import of download {DownloadId} committed, but its file cleanup did not " +
+                "complete. The cleanup will retry.", downloadId);
+        }
+    }
+
+    private async Task FinishCommittedImportAsync(
+        Download download,
+        CapacityRecovery recovery,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var downloadId = download.Id;
+        var files = recovery.Files;
+        var backups = recovery.Backups;
+        foreach (var file in files)
+        {
+            RemoveStagingDirectory(file);
+        }
+
+        var complete = true;
+        foreach (var superseded in recovery.Superseded)
+        {
+            try
+            {
+                using var paths = fileSystem.AcquireImportPaths([superseded.FilePath]);
+                if (fileSystem.FileExists(superseded.FilePath))
+                {
+                    if (fileSystem.GetFileVersion(superseded.FilePath) != superseded.Version)
+                    {
+                        logger.LogWarning(
+                            "The job kept {FilePath} for download {DownloadId} because the file changed after the " +
+                            "import superseded it.",
+                            superseded.FilePath,
+                            downloadId);
+                        continue;
+                    }
+
+                    fileSystem.DeleteFile(superseded.FilePath);
+                }
+                else
+                {
+                    FileSystem.RequireListable(fileSystem, superseded.RootPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                complete = false;
+                logger.LogWarning(
                     ex,
-                    "The rollback failed to restore {OriginalPath} from {BackupPath} for download {DownloadId}",
-                    backup.OriginalPath,
-                    backup.BackupPath,
+                    "The job could not delete superseded file {FilePath} for download {DownloadId}.",
+                    superseded.FilePath,
+                    downloadId);
+                await auditRecordRepository.CreateAsync(
+                    new()
+                    {
+                        Category = AuditCategories.Content,
+                        Operation = "FileDeleteFailed",
+                        EntityType = nameof(MediaFile),
+                        EntityId = superseded.MediaFileId.ToString(),
+                        ParentEntityId = superseded.ContentHierarchyItemId.ToString(),
+                        Detail = $"Could not delete the superseded file {superseded.FilePath}.",
+                        Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                        UserId = userId
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
+                {
+                    if (!await mediaFileRepository.DeleteAsync(superseded.MediaFileId, userId, ct)
+                        .ConfigureAwait(false))
+                    {
+                        return;
+                    }
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Integrations,
+                            Operation = "SupersedeUpgrade",
+                            EntityId = downloadId.ToString(),
+                            EntityType = nameof(Download),
+                            Detail = $"Removed previous file {superseded.FilePath} ({superseded.FileSize}) " +
+                                $"after importing a quality upgrade for {download.Title}.",
+                            Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                            UserId = userId
+                        },
+                        ct).ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            if (files.Any(file => file.Identity is null || ReadRecoverySize(file.Destination) != file.Size ||
+                    fileSystem.GetFileIdentity(file.Destination) != file.Identity || file.PublishedVersion is null ||
+                    fileSystem.GetFileVersion(file.Destination) != file.PublishedVersion))
+            {
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "The job could not confirm imported file ownership for download {DownloadId}.",
+                downloadId);
+            return;
+        }
+
+        foreach (var file in files.Where(file => file.Mode == ImportMode.Move))
+        {
+            try
+            {
+                if (ReadRecoverySize(file.Source) is not null)
+                {
+                    var identity = fileSystem.GetFileIdentity(file.Source);
+                    if (identity is null || file.SourceIdentity is null || identity != file.SourceIdentity ||
+                        file.SourceVersion is null || fileSystem.GetFileVersion(file.Source) != file.SourceVersion)
+                    {
+                        complete = false;
+                    }
+                    else
+                    {
+                        fileSystem.DeleteFile(file.Source);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                complete = false;
+                logger.LogWarning(ex, "The job could not clean the retained source for download {DownloadId}.",
                     downloadId);
             }
         }
 
-        return restored;
-    }
-
-    private void DiscardReplaceBackups(IReadOnlyList<ReplaceBackup> backups, Guid downloadId)
-    {
         foreach (var backup in backups)
         {
             try
             {
-                fileSystem.DeleteFile(backup.BackupPath);
+                if (ReadRecoverySize(backup.BackupPath) is not null)
+                {
+                    if (backup.Identity is null || fileSystem.GetFileIdentity(backup.BackupPath) != backup.Identity ||
+                        backup.Version is null || fileSystem.GetFileVersion(backup.BackupPath) != backup.Version)
+                    {
+                        complete = false;
+                        continue;
+                    }
+
+                    fileSystem.DeleteFile(backup.BackupPath);
+                }
             }
             catch (Exception ex)
             {
-                logger.LogError(
-                    ex,
-                    "The job failed to delete the stale backup {BackupPath} of the already-imported download " +
-                    "{DownloadId}",
-                    backup.BackupPath,
-                    downloadId);
-            }
-        }
-    }
-
-    private void ExecuteTransfer(ImportMode mode, string source, string destination)
-    {
-        switch (mode)
-        {
-            case ImportMode.Copy:
-                fileSystem.Copy(source, destination);
-                break;
-            case ImportMode.Move:
-                fileSystem.Move(source, destination);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(
-                    nameof(mode),
-                    mode,
-                    "The import pipeline only produces Move or Copy transfers.");
-        }
-    }
-
-    private int RevertTransfers(IReadOnlyList<TransferredOperation> transferred, Guid downloadId)
-    {
-        var reverted = 0;
-        for (var i = transferred.Count - 1; i >= 0; i--)
-        {
-            var entry = transferred[i];
-            var op = entry.Operation;
-            try
-            {
-                if (entry.ExecutedMode == ImportMode.Copy)
-                {
-                    fileSystem.DeleteFile(op.Destination);
-                }
-                else
-                {
-                    fileSystem.Move(op.Destination, op.Source);
-                }
-
-                reverted++;
-            }
-            catch (Exception revertEx)
-            {
-                logger.LogError(
-                    revertEx,
-                    "The rollback failed to revert {DestinationPath} ({TransferMode}) for download {DownloadId}",
-                    op.Destination,
-                    entry.ExecutedMode,
+                complete = false;
+                logger.LogWarning(ex, "The job could not clean the owned backup for download {DownloadId}.",
                     downloadId);
             }
         }
 
-        return reverted;
+        if (complete)
+        {
+            await StoreCapacityRecoveryAsync(downloadId, new CapacityRecovery(), userId, cancellationToken)
+                .ConfigureAwait(false);
+        }
     }
 
-    private async Task<IReadOnlyList<LeafImportGroup>> BuildLeafImportGroupsAsync(
-        Release release,
-        ContentHierarchyItem grabTargetNode,
-        ContentItem grabTargetContentItem,
-        IReadOnlyList<ContentHierarchyItem> leaves,
+    private async Task<IReadOnlyList<ItemImportGroup>> GroupByBoundItemAsync(
+        ContentItem importTargetContentItem,
         IReadOnlyList<TransferredOperation> transferred,
         Guid? userId,
-        Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        var grabTargetIsSoleLeaf = leaves.Count == 0 || (leaves.Count == 1 && leaves[0].Id == grabTargetNode.Id);
-        if (grabTargetIsSoleLeaf)
+        var groups = new List<ItemImportGroup>();
+        foreach (var files in transferred.GroupBy(entry => entry.Operation.ContentHierarchyItemId))
         {
-            return [new LeafImportGroup(grabTargetContentItem, transferred, leaves.Count == 0)];
-        }
-
-        var bindingByKey = await BindFilesToLeavesAsync(
-            release,
-            grabTargetNode,
-            leaves,
-            transferred,
-            cancellationToken)
-            .ConfigureAwait(false);
-
-        var filesByLeaf = new Dictionary<Guid, List<TransferredOperation>>();
-        var unbound = new List<TransferredOperation>();
-        foreach (var entry in transferred)
-        {
-            if (bindingByKey.TryGetValue(entry.Operation.Destination, out var leafId))
-            {
-                if (!filesByLeaf.TryGetValue(leafId, out var files))
-                {
-                    files = [];
-                    filesByLeaf[leafId] = files;
-                }
-
-                files.Add(entry);
-            }
-            else
-            {
-                unbound.Add(entry);
-            }
-        }
-
-        var groups = new List<LeafImportGroup>(filesByLeaf.Count + 1);
-        foreach (var (leafId, files) in filesByLeaf)
-        {
-            var leafContentItem = await contentService.GetOrCreateContentItemAsync(
-                leafId,
-                timeProvider.GetUtcNow().UtcDateTime,
-                userId,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-            groups.Add(new LeafImportGroup(leafContentItem, files, false));
-        }
-
-        if (unbound.Count > 0)
-        {
-            logger.LogWarning(
-                "Release {ReleaseId} has {UnboundCount} of {TotalCount} file(s) unbound to a satisfied leaf, so " +
-                "the job will attach them to container {ContentItemId}: {UnboundFiles}",
-                release.Id,
-                unbound.Count,
-                transferred.Count,
-                grabTargetContentItem.Id,
-                string.Join(", ", unbound.Select(u => u.Operation.Destination)));
-            groups.Add(new LeafImportGroup(grabTargetContentItem, unbound, true));
+            var contentItem = files.Key == importTargetContentItem.ContentHierarchyItemId
+                ? importTargetContentItem
+                : await contentService.GetOrCreateContentItemAsync(
+                    files.Key,
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    userId,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            groups.Add(new ItemImportGroup(contentItem, [.. files]));
         }
 
         return groups;
@@ -1485,10 +2512,12 @@ internal sealed class DownloadImportItemJob(
         Download download,
         ContentItem primaryContentItem,
         Release release,
-        IReadOnlyList<LeafImportGroup> groups,
+        IReadOnlyList<ItemImportGroup> groups,
         IReadOnlyCollection<Guid> reconciledDownloadScopeNodeIds,
         IReadOnlyDictionary<string, ReplaceSnapshot> replaceSnapshots,
-        UpgradeFileHandling upgradeFileHandling,
+        RootFolder rootFolder,
+        IReadOnlyList<string> skippedFiles,
+        CapacityRecovery committed,
         Guid? userId,
         Guid? correlationId,
         Action onPersisted,
@@ -1497,17 +2526,16 @@ internal sealed class DownloadImportItemJob(
         var downloadId = download.Id;
         var totalFiles = groups.Sum(g => g.Files.Count);
 
-        var resolvedGroups = new List<ResolvedLeafImport>(groups.Count);
+        var resolvedGroups = new List<ResolvedItemImport>(groups.Count);
         foreach (var group in groups)
         {
             var qualityStatus = group.Files.Any(file => file.Operation.IsMainContent)
                 ? await ResolveImportedQualityStatusAsync(release, group.ContentItem, downloadId, cancellationToken)
                     .ConfigureAwait(false)
                 : group.ContentItem.QualityStatus;
-            resolvedGroups.Add(new ResolvedLeafImport(
+            resolvedGroups.Add(new ResolvedItemImport(
                 group.ContentItem,
                 group.Files,
-                group.UnresolvedContainerBinding,
                 group.ContentItem.Fulfillment,
                 qualityStatus));
         }
@@ -1520,7 +2548,9 @@ internal sealed class DownloadImportItemJob(
                 resolvedGroups,
                 reconciledDownloadScopeNodeIds,
                 replaceSnapshots,
-                upgradeFileHandling,
+                rootFolder,
+                skippedFiles,
+                committed,
                 userId,
                 correlationId,
                 cancellationToken).ConfigureAwait(false);
@@ -1600,41 +2630,15 @@ internal sealed class DownloadImportItemJob(
         return QualityStatus.Met;
     }
 
-    private async Task<IReadOnlyDictionary<string, Guid>> BindFilesToLeavesAsync(
-        Release release,
-        ContentHierarchyItem grabTargetNode,
-        IReadOnlyList<ContentHierarchyItem> leaves,
-        IReadOnlyList<TransferredOperation> transferred,
-        CancellationToken cancellationToken)
-    {
-        var files = transferred
-            .Select(t => new ReleaseFileRef(t.Operation.Destination, Path.GetFileName(t.Operation.Destination)))
-            .ToArray();
-
-        var assignments = await releaseEvaluationService
-            .AssignFilesToLeavesAsync(release, grabTargetNode, leaves, files, cancellationToken)
-            .ConfigureAwait(false);
-        var leafIds = leaves.Select(l => l.Id).ToHashSet();
-
-        var map = new Dictionary<string, Guid>(PathComparer);
-        foreach (var assignment in assignments)
-        {
-            if (assignment.LeafContentHierarchyItemId is { } resolvedLeafId && leafIds.Contains(resolvedLeafId))
-            {
-                map[assignment.FileKey] = resolvedLeafId;
-            }
-        }
-
-        return map;
-    }
-
     private async Task PersistImportAsync(
         Download download,
         Guid primaryContentHierarchyItemId,
-        IReadOnlyList<ResolvedLeafImport> groups,
+        IReadOnlyList<ResolvedItemImport> groups,
         IReadOnlyCollection<Guid> reconciledDownloadScopeNodeIds,
         IReadOnlyDictionary<string, ReplaceSnapshot> replaceSnapshots,
-        UpgradeFileHandling upgradeFileHandling,
+        RootFolder rootFolder,
+        IReadOnlyList<string> skippedFiles,
+        CapacityRecovery committed,
         Guid? userId,
         Guid? correlationId,
         CancellationToken cancellationToken)
@@ -1662,12 +2666,14 @@ internal sealed class DownloadImportItemJob(
                 var now = timeProvider.GetUtcNow().UtcDateTime;
                 var replacedCount = 0;
                 var replaceDetailFragments = new List<string>();
+                var superseded = new List<SupersededFile>();
 
                 foreach (var group in groups)
                 {
                     var contentItem = group.ContentItem;
                     var supersedePriorFiles = group.Prior == FulfillmentStatus.Upgradable &&
-                        upgradeFileHandling == UpgradeFileHandling.Replace;
+                        rootFolder.UpgradeFileHandling == UpgradeFileHandling.Replace &&
+                        group.Files.Any(file => file.Operation.IsMainContent);
                     var priorMediaFiles = new List<MediaFile>();
                     if (supersedePriorFiles)
                     {
@@ -1682,7 +2688,17 @@ internal sealed class DownloadImportItemJob(
                         var hadReplaceSnapshot = replaceSnapshots.TryGetValue(op.Destination, out var snapshot);
                         var probe = probes[op.Destination];
 
-                        if (hadReplaceSnapshot && snapshot.ExistingMediaFile is { } prior)
+                        var prior = hadReplaceSnapshot
+                            ? snapshot.ExistingMediaFile
+                            : await mediaFileRepository.GetByPathAsync(op.Destination, ct).ConfigureAwait(false);
+                        if (!hadReplaceSnapshot && prior is not null && prior.ContentItemId != contentItem.Id)
+                        {
+                            throw new InvalidOperationException(
+                                $"Destination file {op.Destination} belongs to content item {prior.ContentItemId}. " +
+                                $"The job cannot import download {download.Id}");
+                        }
+
+                        if (prior is not null)
                         {
                             await mediaFileRepository
                                 .UpdateAsync(
@@ -1691,18 +2707,26 @@ internal sealed class DownloadImportItemJob(
                                         FileKind = probe.FileKind.ToString(),
                                         MimeType = probe.MimeType,
                                         FileSize = probe.FileSize,
-                                        MediaInfo = null,
+                                        FileModifiedAt = probe.LastWriteTimeUtc,
+                                        ReplacedAt = now,
+                                        DownloadId = download.Id,
+                                        MediaInfo = op.MediaInfo,
                                         ModifiedAt = now
                                     },
                                     userId,
                                     ct)
                                 .ConfigureAwait(false);
-                            replacedCount++;
-                            var priorMediaInfo = prior.MediaInfo is null
-                                ? "null"
-                                : JsonSerializer.Serialize(prior.MediaInfo);
-                            replaceDetailFragments.Add(
-                                $"{op.Destination} (prior size: {snapshot.PriorSize}, prior media: {priorMediaInfo})");
+                            if (hadReplaceSnapshot)
+                            {
+                                replacedCount++;
+                                var priorMediaInfo = prior.MediaInfo is null
+                                    ? "null"
+                                    : JsonSerializer.Serialize(prior.MediaInfo);
+                                replaceDetailFragments.Add(
+                                    $"{op.Destination} (prior size: {snapshot.PriorSize}, " +
+                                    $"prior media: {priorMediaInfo})");
+                            }
+
                             continue;
                         }
 
@@ -1715,7 +2739,9 @@ internal sealed class DownloadImportItemJob(
                                     MimeType = probe.MimeType,
                                     FilePath = probe.FilePath,
                                     FileSize = probe.FileSize,
-                                    MediaInfo = null,
+                                    FileModifiedAt = probe.LastWriteTimeUtc,
+                                    MediaInfo = op.MediaInfo,
+                                    DownloadId = download.Id,
                                     CreatedAt = now,
                                     CreatedByUserId = userId,
                                 },
@@ -1731,58 +2757,15 @@ internal sealed class DownloadImportItemJob(
                         }
                     }
 
-                    if (supersedePriorFiles)
-                    {
-                        var superseded = priorMediaFiles
-                            .Where(m => !importedPaths.Contains(m.FilePath))
-                            .ToList();
-                        foreach (var prior in superseded)
-                        {
-                            await transactionManager.OnCommittedAsync(
-                                _ =>
-                                {
-                                    try
-                                    {
-                                        if (fileSystem.FileExists(prior.FilePath))
-                                        {
-                                            fileSystem.DeleteFile(prior.FilePath);
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        logger.LogWarning(
-                                            ex,
-                                            "The job failed to delete superseded file {FilePath} for " +
-                                            "{ContentItemId} after the database commit",
-                                            prior.FilePath,
-                                            contentItem.Id);
-                                    }
-
-                                    return Task.CompletedTask;
-                                },
-                                ct).ConfigureAwait(false);
-
-                            await mediaFileRepository
-                                .DeleteAsync(prior.Id, userId, ct)
-                                .ConfigureAwait(false);
-
-                            await auditRecordRepository.CreateAsync(
-                                new()
-                                {
-                                    Category = AuditCategories.Integrations,
-                                    Operation = "SupersedeUpgrade",
-                                    EntityId = download.Id.ToString(),
-                                    EntityType = nameof(Download),
-                                    Detail =
-                                            $"Removed previous file {prior.FilePath} ({prior.FileSize}) " +
-                                            $"after importing a quality upgrade for {download.Title}.",
-                                    Timestamp = now,
-                                    UserId = userId,
-                                    CorrelationId = correlationId
-                                },
-                                ct).ConfigureAwait(false);
-                        }
-                    }
+                    superseded.AddRange(priorMediaFiles
+                        .Where(m => !importedPaths.Contains(m.FilePath))
+                        .Select(m => new SupersededFile(
+                            m.Id,
+                            contentItem.ContentHierarchyItemId,
+                            rootFolder.Path,
+                            m.FilePath,
+                            m.FileSize,
+                            fileSystem.GetFileVersion(m.FilePath))));
 
                     contentItem.QualityStatus = group.QualityStatus;
                     contentItem.ModifiedAt = now;
@@ -1793,14 +2776,12 @@ internal sealed class DownloadImportItemJob(
                         .ConfigureAwait(false);
                     if (fulfillmentChanged)
                     {
-                        var reconciledContentItem = (await contentRepository.QueryAsync(
-                            new ContentItemQuery
-                            {
-                                ContentHierarchyItemId = contentItem.ContentHierarchyItemId
-                            },
+                        var page = await contentRepository.QueryAsync(
+                            new ContentItemQuery { ContentHierarchyItemId = contentItem.ContentHierarchyItemId },
                             new() { PageNumber = 1, PageSize = 2 },
                             null,
-                            ct).ConfigureAwait(false)).Items.SingleOrDefault()
+                            ct).ConfigureAwait(false);
+                        var reconciledContentItem = page.Items.SingleOrDefault()
                             ?? throw new InvalidOperationException($"Content item {contentItem.Id} does not exist.");
                         contentItem.Fulfillment = reconciledContentItem.Fulfillment;
                     }
@@ -1836,6 +2817,23 @@ internal sealed class DownloadImportItemJob(
                         ct).ConfigureAwait(false);
                 }
 
+                committed.Superseded = superseded;
+                committed.Imports =
+                [
+                    .. groups.Select(group => new ImportedContent(
+                        new()
+                        {
+                            HierarchyItemId = group.ContentItem.ContentHierarchyItemId,
+                            ItemId = group.ContentItem.Id,
+                            Fulfillment = group.ContentItem.Fulfillment.ToString(),
+                            WishlistId = group.ContentItem.RequestedViaWishlistId
+                        },
+                        group.Files.Count,
+                        userId,
+                        correlationId))
+                ];
+                await StoreCapacityRecoveryAsync(download.Id, committed, userId, ct).ConfigureAwait(false);
+
                 var newDateCompleted = download.DateCompleted ?? now;
                 await downloadRepository
                     .MarkImportedAsync(
@@ -1858,7 +2856,10 @@ internal sealed class DownloadImportItemJob(
                         Operation = "Import",
                         EntityId = download.Id.ToString(),
                         EntityType = nameof(Download),
-                        Detail = $"{transferVerb} {allFiles.Count} files for download {download.Title}",
+                        Detail = $"{transferVerb} {allFiles.Count} files for download {download.Title}" +
+                            (skippedFiles.Count == 0
+                                ? string.Empty
+                                : $"; skipped {skippedFiles.Count} file(s): {string.Join("; ", skippedFiles)}"),
                         Timestamp = now,
                         UserId = userId,
                         CorrelationId = correlationId
@@ -1955,7 +2956,9 @@ internal sealed class DownloadImportItemJob(
         }
 
         var now = timeProvider.GetUtcNow().UtcDateTime;
-        var trimmedReason = statusReason.Length > 1024 ? statusReason[..1024] : statusReason;
+        var trimmedReason = statusReason.Length > MaxStatusReasonLength
+            ? statusReason[..MaxStatusReasonLength]
+            : statusReason;
 
         try
         {
@@ -1985,6 +2988,7 @@ internal sealed class DownloadImportItemJob(
     private async Task WriteDryRunPlanAsync(
         Download download,
         IReadOnlyList<ImportFileOperation> plannedOperations,
+        IReadOnlyList<string> skippedFiles,
         ImportMode transferMode,
         Guid? userId,
         Guid? correlationId,
@@ -2005,6 +3009,23 @@ internal sealed class DownloadImportItemJob(
                             EntityId = download.Id.ToString(),
                             EntityType = nameof(Download),
                             Detail = $"Dry run: {verb} {planned.Source} -> {planned.Destination}",
+                            Timestamp = now,
+                            UserId = userId,
+                            CorrelationId = correlationId
+                        },
+                        ct).ConfigureAwait(false);
+                }
+
+                foreach (var skipped in skippedFiles)
+                {
+                    await auditRecordRepository.CreateAsync(
+                        new AuditRecord
+                        {
+                            Category = AuditCategories.Integrations,
+                            Operation = "ImportDryRun",
+                            EntityId = download.Id.ToString(),
+                            EntityType = nameof(Download),
+                            Detail = $"Dry run: skip {skipped}",
                             Timestamp = now,
                             UserId = userId,
                             CorrelationId = correlationId
@@ -2078,11 +3099,22 @@ internal sealed class DownloadImportItemJob(
         {
             var mimeType = await fileSystem.LookupMimeTypeAsync(filePath, cancellationToken)
                 .ConfigureAwait(false);
+            DateTime? lastWriteTimeUtc = null;
+            try
+            {
+                lastWriteTimeUtc = fileSystem.ReadFileState(filePath)?.LastWriteTimeUtc;
+            }
+            catch (NotSupportedException)
+            {
+                // Older extension file systems do not expose filesystem observations.
+            }
+
             probes[filePath] = new MediaFileProbe(
                 filePath,
                 fileSystem.ResolveFileKind(mimeType),
                 mimeType,
-                ReadFileSize(filePath));
+                ReadFileSize(filePath),
+                lastWriteTimeUtc);
         }
 
         return probes;
@@ -2155,9 +3187,7 @@ internal sealed class DownloadImportItemJob(
             new DownloadQuery
             {
                 ReleaseId = releaseId,
-                Statuses = Enum.GetValues<DownloadStatus>()
-                    .Except([DownloadStatus.Imported, DownloadStatus.Failed, DownloadStatus.Cancelled])
-                    .ToList()
+                Statuses = Enum.GetValues<DownloadStatus>().Except(DownloadStatuses.Finished).ToList()
             },
             new() { PageNumber = 1, PageSize = 1 },
             null,
@@ -2186,8 +3216,8 @@ internal sealed class DownloadImportItemJob(
             new ReleaseScopeQuery { ReleaseId = releaseId },
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        foreach (var releaseScope in releaseScopes.Where(
-            scope => hierarchyItemIds.Contains(scope.ContentHierarchyItemId)))
+        foreach (var releaseScope in releaseScopes.Where(scope => scope.Status == ReleaseScopeStatus.Matched &&
+            hierarchyItemIds.Contains(scope.ContentHierarchyItemId)))
         {
             var otherDownloadScopes = await downloadScopeRepository.QueryAllAsync(
                 new DownloadScopeQuery { ContentHierarchyItemId = releaseScope.ContentHierarchyItemId },

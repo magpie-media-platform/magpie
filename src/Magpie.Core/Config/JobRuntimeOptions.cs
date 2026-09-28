@@ -28,9 +28,9 @@ public sealed class JobRuntimeOptions
     public TimeSpan StaleJobCleanupInterval { get; set; } = TimeSpan.FromHours(1);
 
     /// <summary>
-    /// The interval between passes that reclaim running executions past <c>TimeoutAt</c>.
+    /// The maximum interval between inactive-worker recovery passes on clustered nodes.
     /// </summary>
-    public TimeSpan TimedOutJobReapInterval { get; set; } = TimeSpan.FromSeconds(30);
+    public TimeSpan ClusteredStaleJobCleanupInterval { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// The time the progress reporter waits for its outstanding writes when the job scope closes.

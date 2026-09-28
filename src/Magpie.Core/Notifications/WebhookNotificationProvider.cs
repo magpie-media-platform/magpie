@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Notifications;
 
 using Microsoft.Extensions.Logging;
@@ -21,7 +22,7 @@ namespace Magpie.Core.Notifications;
 internal sealed class WebhookNotificationProvider(
     IHttpClientFactory httpClientFactory,
     MagpieHostEnvironment hostEnvironment,
-    ILogger<WebhookNotificationProvider> logger) : INotificationProvider, IDisposable
+    ILogger<WebhookNotificationProvider> logger) : INotificationProvider, IValidatesIntegrationSettings, IDisposable
 {
     private static readonly string MagpieVersion =
         typeof(WebhookNotificationProvider).Assembly
@@ -46,6 +47,8 @@ internal sealed class WebhookNotificationProvider(
     private readonly SemaphoreSlim _concurrency = new(MaxConcurrency, MaxConcurrency);
 
     public string ProviderType => ProviderTypeName;
+
+    public string DisplayName => "Webhook";
 
     public IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; } =
     [
@@ -133,6 +136,25 @@ internal sealed class WebhookNotificationProvider(
             "POST" => HttpMethod.Post,
             var other => new HttpMethod(other)
         };
+    }
+
+    public Task<IntegrationSettingsValidationResult> ValidateSettingsAsync(
+        IReadOnlyDictionary<string, string> settings,
+        CancellationToken cancellationToken = default)
+    {
+        List<IntegrationSettingsValidationIssue> issues = [];
+        if (settings.TryGetValue(SettingUrl, out var url) &&
+            !string.IsNullOrWhiteSpace(url) &&
+            !(Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"))
+        {
+            issues.Add(new IntegrationSettingsValidationIssue(SettingUrl, "URL must be an absolute http(s) URL."));
+        }
+
+        return Task.FromResult(new IntegrationSettingsValidationResult
+        {
+            IsValid = issues.Count == 0,
+            Issues = issues
+        });
     }
 
     public async Task SendAsync(

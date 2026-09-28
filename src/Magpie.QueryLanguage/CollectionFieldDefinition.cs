@@ -15,6 +15,7 @@ internal sealed class CollectionFieldDefinition(
 {
     public string QueryName { get; } = queryName;
     public Type PrimaryFieldType { get; } = primaryFieldType;
+    public IReadOnlyDictionary<string, ItemFieldInfo> ItemFields { get; } = itemFields;
 
     public ItemFieldInfo? GetItemField(string name)
     {

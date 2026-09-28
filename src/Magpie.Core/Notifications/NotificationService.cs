@@ -4,8 +4,10 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Core.Repositories;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
@@ -20,6 +22,7 @@ namespace Magpie.Core.Notifications;
 internal sealed class NotificationService(
     INotificationRuleRepository rules,
     IEnumerable<INotificationProvider> providers,
+    ISettingsService settingsService,
     ILogger<NotificationService> logger) : INotificationService
 {
     public async Task<IReadOnlyList<NotificationRule>> ListAsync(
@@ -67,6 +70,12 @@ internal sealed class NotificationService(
             Enabled = create.Enabled,
         };
 
+        if (FindProvider(rule.ProviderType) is { } provider &&
+            await ValidateSettingsAsync(provider, rule.Settings, cancellationToken).ConfigureAwait(false) is { } issues)
+        {
+            throw new MagpieException(issues);
+        }
+
         var created = await rules.CreateAsync(rule, actingUserId, cancellationToken).ConfigureAwait(false);
 
         return created;
@@ -83,6 +92,18 @@ internal sealed class NotificationService(
         if (rule is null)
         {
             return false;
+        }
+
+        var settings = new Dictionary<string, string>(rule.Settings);
+        if (patch.Settings is not null)
+        {
+            NotificationRuleRepository.ApplyPatch(settings, patch.Settings);
+        }
+
+        if (FindProvider(rule.ProviderType) is { } provider &&
+            await ValidateSettingsAsync(provider, settings, cancellationToken).ConfigureAwait(false) is { } issues)
+        {
+            throw new MagpieException(issues);
         }
 
         return await rules.PatchAsync(patch with { Id = id }, callerUserId, cancellationToken)
@@ -157,6 +178,16 @@ internal sealed class NotificationService(
             };
         }
 
+        if (await ValidateSettingsAsync(provider, rule.Settings, cancellationToken).ConfigureAwait(false) is { } issues)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "The test was not sent: " + issues,
+                FailureKind = ConfigurationFailureKind.Fatal,
+            };
+        }
+
         var syntheticEvent = NotificationEventBuilder.BuildNotificationTestEvent(rule.Id, rule.Name, test: true);
 
         try
@@ -185,9 +216,21 @@ internal sealed class NotificationService(
         return new ConfigurationTestResult
         {
             Success = true,
-            Message = "Test notification delivered.",
+            Message = "Test notification sent to the provider.",
             FailureKind = ConfigurationFailureKind.None,
         };
+    }
+
+    private async Task<string?> ValidateSettingsAsync(
+        INotificationProvider provider,
+        IReadOnlyDictionary<string, string> settings,
+        CancellationToken cancellationToken)
+    {
+        var validation = await settingsService
+            .ValidateAsync(provider.SettingsSchema, settings, provider, cancellationToken)
+            .ConfigureAwait(false);
+
+        return validation.IsValid ? null : string.Join(" ", validation.Issues.Select(issue => issue.Message));
     }
 
     private INotificationProvider? FindProvider(string providerType)

@@ -67,42 +67,6 @@ public sealed class MagpieSystemTests
         Assert.That(_hostStatus.ShutdownExitCode, Is.EqualTo(9));
     }
 
-    [Test]
-    public async Task RequestShutdownAsync_ReportsCompleteRequest_WhenAnotherRequestIsPublishingMetadata()
-    {
-        // Arrange
-        var readingTime = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseTime = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var timeProvider = new Mock<TimeProvider>();
-        timeProvider.SetupSequence(provider => provider.GetUtcNow())
-            .Returns(() =>
-            {
-                readingTime.SetResult();
-                releaseTime.Task.Wait(TimeSpan.FromSeconds(30));
-                return new DateTimeOffset(2024, 5, 6, 12, 0, 0, TimeSpan.Zero);
-            })
-            .Returns(new DateTimeOffset(2024, 5, 6, 12, 0, 0, TimeSpan.Zero));
-        var subject = new MagpieSystem(
-            _hostStatus,
-            _hostEnvironment,
-            _lifetime.Object,
-            _auditRecordRepository.Object,
-            timeProvider.Object,
-            NullLogger<MagpieSystem>.Instance);
-
-        // Act
-        var first = Task.Run(() => subject.RequestShutdownAsync(null));
-        await readingTime.Task.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
-        var second = Task.Run(
-            () => Assert.ThrowsAsync<MagpieShutdownException>(() => subject.RequestShutdownAsync(null)));
-        releaseTime.SetResult();
-        await first.ConfigureAwait(false);
-        var error = await second.ConfigureAwait(false);
-
-        // Assert
-        Assert.That(error!.RequestedAtUtc, Is.EqualTo(new DateTime(2024, 5, 6, 12, 0, 0, DateTimeKind.Utc)));
-    }
-
     [TestCase(HostMode.Sentinel)]
     [TestCase(HostMode.WindowsService)]
     public async Task RequestRestartAsync_SetsShutdownExitCodeBeforeStoppingTheApplication_WhenModeReadsIt(

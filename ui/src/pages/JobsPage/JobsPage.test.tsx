@@ -542,7 +542,11 @@ describe('JobsPage Executions tab', () => {
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('button', { name: /run a job/i })).toBeInTheDocument();
+        expect(
+            within(document.querySelector('.jobs-page__executions-toolbar') as HTMLElement).getByRole('button', {
+                name: /run a job/i,
+            }),
+        ).toBeInTheDocument();
         expect(screen.queryByTestId('jobs-page__run-caution')).not.toBeInTheDocument();
     });
 
@@ -605,7 +609,11 @@ describe('JobsPage Executions tab', () => {
             </TestWrapper>,
         );
 
-        await user.click(screen.getByRole('button', { name: /run a job/i }));
+        await user.click(
+            within(document.querySelector('.jobs-page__executions-toolbar') as HTMLElement).getByRole('button', {
+                name: /run a job/i,
+            }),
+        );
 
         const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
         const jobSelect = dialog.querySelector('[data-field="jobType"]') as HTMLElement;
@@ -1422,7 +1430,11 @@ describe('JobsPage Schedules tab - Add and Actions', () => {
 
         await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
-        expect(screen.getByRole('button', { name: /add schedule/i })).toBeInTheDocument();
+        expect(
+            within(document.querySelector('.jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add schedule/i,
+            }),
+        ).toBeInTheDocument();
     });
 
     it('shows Add Event Trigger button for Admin role', async () => {
@@ -1436,7 +1448,11 @@ describe('JobsPage Schedules tab - Add and Actions', () => {
 
         await user.click(screen.getByRole('tab', { name: /event triggers/i }));
 
-        expect(screen.getByRole('button', { name: /add event trigger/i })).toBeInTheDocument();
+        expect(
+            within(document.querySelector('.jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add event trigger/i,
+            }),
+        ).toBeInTheDocument();
     });
 
     it('creates an event trigger with wrapped context criteria', async () => {
@@ -1455,7 +1471,11 @@ describe('JobsPage Schedules tab - Add and Actions', () => {
         );
 
         await user.click(screen.getByRole('tab', { name: /event triggers/i }));
-        await user.click(screen.getByRole('button', { name: /add event trigger/i }));
+        await user.click(
+            within(document.querySelector('.jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add event trigger/i,
+            }),
+        );
         await user.type(screen.getByRole('textbox', { name: /^name/i }), 'Kind-X metadata refresh');
         await user.click(screen.getByRole('combobox', { name: /job template/i }));
         await user.click(screen.getByRole('option', { name: 'Content metadata refresh item' }));
@@ -1511,7 +1531,11 @@ describe('JobsPage Schedules tab - Add and Actions', () => {
         );
 
         await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
-        await user.click(screen.getByRole('button', { name: /add schedule/i }));
+        await user.click(
+            within(document.querySelector('.jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add schedule/i,
+            }),
+        );
 
         expect(screen.getByText('Add Schedule Trigger')).toBeInTheDocument();
 
@@ -1539,7 +1563,11 @@ describe('JobsPage Schedules tab - Add and Actions', () => {
         );
 
         await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
-        await user.click(screen.getByRole('button', { name: /add schedule/i }));
+        await user.click(
+            within(document.querySelector('.jobs-page__section-header') as HTMLElement).getByRole('button', {
+                name: /add schedule/i,
+            }),
+        );
 
         const templateTrigger = screen.getByRole('combobox', { name: /job template/i });
         await user.click(templateTrigger);
@@ -2145,4 +2173,64 @@ it.each([
     // Assert
     expect((await screen.findByText(emptyTitle)).closest('[role="list"]')).toBeNull();
     expect(screen.queryByTestId('jobs-page__loading')).not.toBeInTheDocument();
+});
+
+describe('JobsPage phone actions button', () => {
+    it.each([
+        [/scheduled jobs/i, 'Add Schedule'],
+        [/event triggers/i, 'Add Event Trigger'],
+    ])('offers the %s tab action as the floating button', async (tab, label) => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: tab }));
+
+        expect(document.querySelector('.quick-actions-button__fab')).toHaveAttribute('aria-label', label);
+    });
+
+    it('offers Run a job as the floating button on History when a job can run', async () => {
+        const onDemandSpec: ApiJobSpec = {
+            jobType: 'UserManual',
+            displayName: 'User Manual',
+            category: 'Content',
+            scope: 'User' as JobScopeValue,
+            enabled: true,
+            onDemand: true,
+            supportedTriggerModes: ['Manual'],
+            parameters: [],
+        };
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve([onDemandSpec]);
+            if (url === '/jobs/status-counts') return Promise.resolve(countByStatus(mockJobs));
+            if (url === '/jobs' || url.startsWith('/jobs?')) return Promise.resolve(pageJobs(url, mockJobs));
+            if (url === '/schedule-triggers') return Promise.resolve([]);
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) return Promise.resolve([]);
+            return Promise.reject(new Error(`Unmocked URL: ${url}`));
+        });
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() =>
+            expect(document.querySelector('.quick-actions-button__fab')).toHaveAttribute('aria-label', 'Run a job'),
+        );
+    });
+
+    it('shows no floating button on History when no job can run', async () => {
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await screen.findByRole('list', { name: /job history/i });
+        expect(document.querySelector('.quick-actions-button')).toBeNull();
+    });
 });

@@ -18,5 +18,10 @@ public enum LibraryImportCompletionStatus
     /// <summary>
     /// The candidate is not in an importable status, so nothing changed.
     /// </summary>
-    Skipped
+    Skipped,
+
+    /// <summary>
+    /// The target level does not exist yet, so the candidate stays in the importing status for a later attempt.
+    /// </summary>
+    Waiting
 }

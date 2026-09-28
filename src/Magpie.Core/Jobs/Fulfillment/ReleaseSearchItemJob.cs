@@ -24,7 +24,6 @@ internal sealed class ReleaseSearchItemJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Retry,
-        Timeout = TimeSpan.FromMinutes(10),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         RequesterTriggerModes = [JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTarget,
@@ -36,7 +35,11 @@ internal sealed class ReleaseSearchItemJob(
                 "The content hierarchy item id to search releases for.",
                 DataType.String,
                 true,
-                null),
+                null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            },
             new(
                 MagpieJobs.Parameters.Force,
                 "Whether the search ignores the recent-search coalescing window.",
@@ -60,18 +63,13 @@ internal sealed class ReleaseSearchItemJob(
             throw new ArgumentException("The content item ID has an invalid format.");
         }
 
-        var forced = context.ExecutionMode is JobExecutionMode.Immediate ||
-            (context.Parameters.TryGetValue(MagpieJobs.Parameters.Force, out var rawForce) &&
-                bool.TryParse(rawForce, out var force) &&
-                force);
-
         await contentReleaseService.SearchAsync(
             itemId,
             context.ManualTriggerUserId,
             context.CorrelationId,
             context.ExecutionId,
             progressReporter,
-            forced,
+            MagpieJobs.Parameters.IsForced(context.Parameters),
             cancellationToken).ConfigureAwait(false);
     }
 }

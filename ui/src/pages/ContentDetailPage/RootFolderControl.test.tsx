@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { RootFolderControl } from './RootFolderControl';
@@ -37,6 +37,7 @@ function makeRoot(overrides: Partial<ApiRootFolder> = {}): ApiRootFolder {
         defaultMonitoring: true,
         renameTemplate: null,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         createdAt: '2026-01-01T00:00:00Z',
         ...overrides,
         defaults: overrides.defaults ?? {},
@@ -244,5 +245,67 @@ describe('RootFolderControl', () => {
         expect(screen.getByTestId('root-folder-control__label')).toHaveTextContent('Movies-Main');
         expect(screen.queryByTestId('root-folder-control__trigger')).not.toBeInTheDocument();
         expect(screen.queryByTestId('root-folder-control__select')).not.toBeInTheDocument();
+    });
+
+    it('reports a failed lookup with a retry action instead of the empty value', async () => {
+        const user = userEvent.setup();
+        const refetch = vi.fn();
+        mockUseEffectiveRootFolder.mockReturnValue({
+            data: undefined,
+            isLoading: false,
+            error: new Error('Request failed'),
+            isFetching: false,
+            refetch,
+        });
+        mockUseRootFolders.mockReturnValue({ folders: [makeRoot()], isLoading: false });
+
+        render(<RootFolderControl contentHierarchyItemId="c-1" contentType="movie" />, { wrapper: Wrap });
+
+        expect(screen.getByTestId('root-folder-control__label')).toHaveTextContent('Root folder could not be loaded');
+        expect(screen.queryByText('No root folder')).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Retry loading root folder' }));
+        expect(refetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the empty value copy for a successful empty lookup', () => {
+        mockUseEffectiveRootFolder.mockReturnValue({
+            data: { rootFolderId: null, source: 'None', resolvingHierarchyItemId: null, isOverriddenOnItem: false },
+            isLoading: false,
+            error: null,
+        });
+        mockUseRootFolders.mockReturnValue({ folders: [], isLoading: false });
+
+        render(<RootFolderControl contentHierarchyItemId="c-1" contentType="movie" />, { wrapper: Wrap });
+
+        expect(screen.getByTestId('root-folder-control__label')).toHaveTextContent('No root folder');
+        expect(screen.queryByRole('button', { name: 'Retry loading root folder' })).not.toBeInTheDocument();
+    });
+
+    it('keeps a focused busy retry while a real failed lookup refetches, then shows the value', async () => {
+        const user = userEvent.setup();
+        let finishRetry: (value: EffectiveRootFolder) => void = () => {};
+        const lookup = vi
+            .fn<() => Promise<EffectiveRootFolder>>()
+            .mockRejectedValueOnce(new Error('Request failed'))
+            .mockImplementationOnce(() => new Promise((resolve) => (finishRetry = resolve)));
+        mockUseEffectiveRootFolder.mockImplementation(() =>
+            useQuery({ queryKey: ['effective-root-folder', 'c-1'], queryFn: lookup }),
+        );
+        mockUseRootFolders.mockReturnValue({ folders: [makeRoot()], isLoading: false });
+
+        render(<RootFolderControl contentHierarchyItemId="c-1" contentType="movie" />, { wrapper: Wrap });
+        const retry = await screen.findByRole('button', { name: 'Retry loading root folder' });
+        await user.click(retry);
+
+        expect(retry).toBeInTheDocument();
+        expect(retry).toHaveAttribute('aria-disabled', 'true');
+        expect(retry).toHaveAttribute('aria-busy', 'true');
+        expect(retry).toHaveFocus();
+        expect(screen.getByTestId('root-folder-control__label')).toHaveTextContent('Root folder could not be loaded');
+
+        act(() => finishRetry(makeEffective()));
+
+        expect(await screen.findByText('Movies-Main')).toBeInTheDocument();
+        expect(screen.getByTestId('root-folder-control__trigger')).toHaveFocus();
     });
 });

@@ -166,6 +166,21 @@ describe('useContentFilters', () => {
         });
     });
 
+    it('keeps saved filters loading until their MQL is available', async () => {
+        let complete!: (value: { query: string }) => void;
+        mockFormatMagpieQlCriteria.mockReturnValue(
+            new Promise((resolve) => {
+                complete = resolve;
+            }),
+        );
+        const { result } = renderHook(() => useContentFilters(), { wrapper: createWrapper() });
+        await waitFor(() => expect(mockFormatMagpieQlCriteria).toHaveBeenCalled());
+        expect(result.current.isLoading).toBe(true);
+        await act(async () => complete({ query: 'fulfillment = Missing and monitoring = true' }));
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        expect(result.current.filters[0].query).toBe('fulfillment = Missing and monitoring = true');
+    });
+
     it('should format filter queries via backend', async () => {
         mockFormatMagpieQlCriteria.mockResolvedValueOnce({ query: 'genre = Action' });
         mockFormatMagpieQlCriteria.mockResolvedValueOnce({ query: 'genre = Comedy and kind = Series' });
@@ -209,6 +224,8 @@ describe('useContentFilters', () => {
         expect(result.current.filters).toHaveLength(3);
         const filter = result.current.filters.find((f) => f.id === 'shared-1');
         expect(filter?.query).toBe('');
+        expect(filter?.queryError?.message).toBe('Format failed');
+        expect(result.current.listError).toBeNull();
     });
 });
 

@@ -68,7 +68,7 @@ describe('useGrabRelease', () => {
             jobType: 'ReleaseDownloadItem',
             parameters: {
                 releaseId: 'release-1',
-                ignoreFailedTaint: 'true',
+                interactive: 'true',
                 contentHierarchyItemId: 'content-1',
             },
         });

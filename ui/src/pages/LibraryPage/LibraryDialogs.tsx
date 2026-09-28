@@ -44,6 +44,7 @@ interface LibraryDialogsProps {
     isUpdatingFilter: boolean;
     filterQuery: string;
     saveFilterError: string | null;
+    saveFilterQueryError: string | null;
     existingFilterNames: string[];
 
     bulkDeleteConfirmOpen: boolean;
@@ -82,6 +83,7 @@ export function LibraryDialogs({
     isUpdatingFilter,
     filterQuery,
     saveFilterError,
+    saveFilterQueryError,
     existingFilterNames,
     bulkDeleteConfirmOpen,
     onConfirmBulkDelete,
@@ -145,7 +147,8 @@ export function LibraryDialogs({
                 isSaving={isSavingFilter}
                 isUpdating={isUpdatingFilter}
                 filterQuery={filterQuery}
-                error={saveFilterError}
+                nameError={saveFilterError}
+                queryError={saveFilterQueryError}
                 existingNames={existingFilterNames}
             />
 
@@ -169,7 +172,10 @@ export function LibraryDialogs({
                         ) : (
                             selectedItemsLabel
                         )}
-                        ? This cannot be undone.
+                        ? This cannot be undone.{' '}
+                        {bulkDeleteFiles
+                            ? 'Managed files will be deleted from disk.'
+                            : 'Managed files will remain on disk.'}
                     </>
                 }
                 isDeleting={isDeleting}

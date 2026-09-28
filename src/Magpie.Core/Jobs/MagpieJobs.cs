@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Magpie.Core.Jobs;
 
 internal static class MagpieJobs
@@ -25,6 +27,8 @@ internal static class MagpieJobs
 
         internal const string DownloadCleanup = "DownloadCleanup";
 
+        internal const string DownloadFulfilledCancellation = "DownloadFulfilledCancellation";
+
         internal const string DownloadImportItem = "DownloadImportItem";
 
         internal const string DownloadImportScan = "DownloadImportScan";
@@ -42,6 +46,8 @@ internal static class MagpieJobs
         internal const string LibraryImportMatchResolution = "LibraryImportMatchResolution";
 
         internal const string MediaFileRename = "MediaFileRename";
+
+        internal const string MediaFileReconciliation = "MediaFileReconciliation";
 
         internal const string MediaInfoExtractItem = "MediaInfoExtractItem";
 
@@ -82,6 +88,8 @@ internal static class MagpieJobs
 
     internal static class Parameters
     {
+        internal const string Associate = "associate";
+
         internal const string AuditRetentionDays = "auditRetentionDays";
 
         internal const string BackpressureThreshold = "backpressureThreshold";
@@ -95,6 +103,8 @@ internal static class MagpieJobs
         internal const string CandidateId = "candidateId";
 
         internal const string CollisionMode = "collisionMode";
+
+        internal const string RecoveryInactivityMinutes = "recoveryInactivityMinutes";
 
         internal const string ContentHierarchyItemId = "contentHierarchyItemId";
 
@@ -116,7 +126,13 @@ internal static class MagpieJobs
 
         internal const string Force = "force";
 
-        internal const string IgnoreFailedTaint = "ignoreFailedTaint";
+        internal static bool IsForced(IReadOnlyDictionary<string, string>? parameters) =>
+            parameters is not null &&
+            parameters.TryGetValue(Force, out var raw) &&
+            bool.TryParse(raw, out var force) &&
+            force;
+
+        internal const string Interactive = "interactive";
 
         internal const string JobExecutionRetentionDays = "jobExecutionRetentionDays";
 
@@ -157,8 +173,6 @@ internal static class MagpieJobs
         internal const string SubjectId = "subjectId";
 
         internal const string SubjectStalenessDays = "subjectStalenessDays";
-
-        internal const string SuspectLastResort = "suspectLastResort";
 
         internal const string TimeoutSeconds = "timeoutSeconds";
 

@@ -28,6 +28,26 @@ public record RefreshToken
     public string? AccessTokenJti { get; set; }
 
     /// <summary>
+    /// The hash of the token consumed by the renewal that created this token.
+    /// </summary>
+    public string? PreviousTokenHash { get; set; }
+
+    /// <summary>
+    /// The hash of the client proof for the committed renewal.
+    /// </summary>
+    public string? RenewalKeyHash { get; set; }
+
+    /// <summary>
+    /// The encrypted token response for the committed renewal.
+    /// </summary>
+    public string? ProtectedRenewal { get; set; }
+
+    /// <summary>
+    /// The expiry of the consumed credential that permits renewal recovery.
+    /// </summary>
+    public DateTime? RenewalExpiresAt { get; set; }
+
+    /// <summary>
     /// The UTC time after which the token is no longer valid.
     /// </summary>
     public DateTime ExpiresAt { get; set; }

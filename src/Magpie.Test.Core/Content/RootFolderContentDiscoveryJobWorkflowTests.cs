@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs;
 using Magpie.Models;
@@ -47,7 +48,10 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
     private Mock<IRootFolderRepository> _rootFolders = null!;
     private Mock<ILibraryImportCandidateRepository> _candidates = null!;
     private Mock<IMediaFileRepository> _mediaFiles = null!;
+    private Mock<IContentHierarchyItemRepository> _hierarchyItems = null!;
+    private Mock<IContentFileService> _contentFiles = null!;
     private Mock<IJobManager> _jobManager = null!;
+    private Mock<ILibraryImportService> _libraryImport = null!;
     private Mock<IProgressReporter> _progress = null!;
     private IJob _scanJob = null!;
 
@@ -134,7 +138,11 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
             .Callback((LibraryImportCandidate model, Guid? _, CancellationToken _) => _createdCandidates.Add(model))
             .ReturnsAsync((LibraryImportCandidate model, Guid? _, CancellationToken _) => model);
         _candidates
-            .Setup(r => r.DeleteByRootFolderAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Setup(r => r.DeleteByRootFolderAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<IReadOnlyCollection<Guid>?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
         _candidates
             .Setup(r => r.QueryAsync(
@@ -179,20 +187,113 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
         _contentTypeRegistry.Setup(registry => registry.FindProviderFor("type-a"))
             .Returns(definitionProvider.Object);
 
+        _fileSystem.Setup(f => f.IsPathWithin(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns((string root, string path) =>
+                !Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path))
+                    .StartsWith("..", StringComparison.Ordinal));
+
         _progress = new Mock<IProgressReporter>();
+        _libraryImport = new Mock<ILibraryImportService>();
+        _libraryImport
+            .Setup(s => s.RefreshLibraryTargetsAsync(
+                It.IsAny<IReadOnlyCollection<LibraryImportCandidate>>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _hierarchyItems = new Mock<IContentHierarchyItemRepository>();
+        _contentFiles = new Mock<IContentFileService>();
         _scanJob = new RootFolderContentDiscoveryJob(
             _rootFolders.Object,
             _candidates.Object,
             _mediaFiles.Object,
+            _hierarchyItems.Object,
+            _contentFiles.Object,
             _auditRecords.Object,
             _transactions.Object,
             _contentTypeRegistry.Object,
             _jobManager.Object,
+            _libraryImport.Object,
             _fileSystem.Object,
             eventBus.Object,
             _progress.Object,
             TimeProvider.System,
             NullLogger<RootFolderContentDiscoveryJob>.Instance);
+    }
+
+    [TestCase(null, 60, "direct")]
+    [TestCase("15", 15, "direct")]
+    [TestCase(null, 60, "schedule")]
+    [TestCase("180", 180, "schedule")]
+    [TestCase(null, 60, "event")]
+    [TestCase("15", 15, "event")]
+    public async Task ExecuteAsync_PassesConfiguredCutoff_WhenRecoveryRuns(
+        string? configured, int minutes, string trigger)
+    {
+        // Arrange
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/a.mkv",
+            ContentType = "type-a",
+            Status = LibraryImportCandidateStatus.Importing,
+            CreatedAt = DateTime.MinValue
+        };
+        _candidates.Setup(repository => repository.QueryAsync(It.Is<LibraryImportCandidateQuery>(query =>
+                    query.Statuses != null), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<LibraryImportCandidate> { Items = [candidate] });
+        var parameters = new Dictionary<string, string> { ["rootFolderId"] = _rootFolderId.ToString("D") };
+        if (configured is not null)
+        {
+            parameters["recoveryInactivityMinutes"] = configured;
+        }
+
+        MagpieEvent? importEvent = null;
+        if (trigger == "event")
+        {
+            parameters.Remove("rootFolderId");
+            importEvent = new MagpieEvent(Guid.NewGuid(), "library.scan.requested",
+                new Dictionary<string, string> { ["rootFolder.id"] = _rootFolderId.ToString("D") },
+                DateTime.UtcNow, DateTime.UtcNow, null);
+        }
+
+        var context = new JobContext(Guid.NewGuid(), trigger == "schedule" ? Guid.NewGuid() : null,
+            trigger == "event" ? Guid.NewGuid() : null, _userId, JobExecutionMode.Queue, parameters, importEvent);
+        DateTime cutoff = default;
+        _candidates.Setup(repository => repository.TryReclaimInactiveImportAsync(candidate.Id,
+                It.IsAny<DateTime>(), _userId, It.IsAny<CancellationToken>()))
+            .Callback<Guid, DateTime, Guid?, CancellationToken>((_, value, _, _) => cutoff = value).ReturnsAsync(false);
+
+        // Act
+        var before = DateTime.UtcNow;
+        await _scanJob.ExecuteAsync(context).ConfigureAwait(false);
+        var after = DateTime.UtcNow;
+
+        // Assert
+        Assert.That(cutoff, Is.InRange(before.AddMinutes(-minutes), after.AddMinutes(-minutes)));
+    }
+
+    [TestCase("0")]
+    [TestCase("-1")]
+    [TestCase("1.5")]
+    [TestCase("bad")]
+    public void ExecuteAsync_RejectsInvalidRecoveryThreshold_WhenConfigured(string value)
+    {
+        // Arrange
+        var context = new JobContext(Guid.NewGuid(), null, null, _userId, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["rootFolderId"] = _rootFolderId.ToString("D"),
+                ["recoveryInactivityMinutes"] = value
+            }, null);
+
+        // Act
+        var error = Assert.ThrowsAsync<ArgumentException>(() => _scanJob.ExecuteAsync(context));
+
+        // Assert
+        Assert.That(error!.Message, Is.EqualTo("Recovery inactivity minutes must be a positive integer."));
     }
 
     [Test]
@@ -243,7 +344,11 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
         // Assert
         Assert.That(_createdCandidates, Is.Empty);
         _candidates.Verify(
-            r => r.DeleteByRootFolderAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+            r => r.DeleteByRootFolderAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<IReadOnlyCollection<Guid>?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
             Times.Never);
         _progress.Verify(
             value => value.Report(1, "The scan stopped because the content type has no definition provider."),
@@ -642,7 +747,11 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
 
         // Assert
         _candidates.Verify(
-            r => r.DeleteByRootFolderAsync(_rootFolderId, _userId, It.IsAny<CancellationToken>()),
+            r => r.DeleteByRootFolderAsync(
+                _rootFolderId,
+                It.Is<IReadOnlyCollection<Guid>?>(ids => ids != null && ids.Count == 0),
+                _userId,
+                It.IsAny<CancellationToken>()),
             Times.Exactly(2));
         using (Assert.EnterMultipleScope())
         {
@@ -803,9 +912,7 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
         _candidates
             .Setup(r => r.QueryAsync(
                 It.Is<LibraryImportCandidateQuery>(q =>
-                    q.Statuses != null &&
-                    q.Statuses.Contains(LibraryImportCandidateStatus.Queued) &&
-                    q.Statuses.Contains(LibraryImportCandidateStatus.Importing)),
+                    q.RootFolderId == _rootFolderId && q.Status == null && q.Statuses == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -963,10 +1070,13 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
             _rootFolders.Object,
             _candidates.Object,
             _mediaFiles.Object,
+            Mock.Of<IContentHierarchyItemRepository>(),
+            Mock.Of<IContentFileService>(),
             _auditRecords.Object,
             _transactions.Object,
             _contentTypeRegistry.Object,
             _jobManager.Object,
+            _libraryImport.Object,
             _fileSystem.Object,
             eventBus.Object,
             _progress.Object,
@@ -1050,10 +1160,13 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
             _rootFolders.Object,
             _candidates.Object,
             _mediaFiles.Object,
+            Mock.Of<IContentHierarchyItemRepository>(),
+            Mock.Of<IContentFileService>(),
             _auditRecords.Object,
             _transactions.Object,
             _contentTypeRegistry.Object,
             _jobManager.Object,
+            _libraryImport.Object,
             _fileSystem.Object,
             eventBus.Object,
             _progress.Object,
@@ -1113,6 +1226,286 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
             _auditRecords.Verify(repository => repository.CreateAsync(
                 It.Is<AuditRecord>(record => record.Operation == "FileErrored"),
                 It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_QueuesAScanOfEachRootFolder_WhenNoRootFolderIsGiven()
+    {
+        // Arrange
+        var otherRootFolderId = Guid.NewGuid();
+        _rootFolders.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                _rootFolder,
+                new RootFolder { Id = otherRootFolderId, Name = "Shows", Path = "/media/shows", ContentType = "type-a" }
+            ]);
+        var requests = new List<JobEnqueueRequest>();
+        _jobManager
+            .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
+            .Callback((JobEnqueueRequest request, CancellationToken _) => requests.Add(request))
+            .ReturnsAsync(Guid.NewGuid());
+        var context = new JobContext(
+            Guid.NewGuid(), Guid.NewGuid(), null, null, JobExecutionMode.Queue, new Dictionary<string, string>(), null);
+
+        // Act
+        await _scanJob.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                requests.Select(request => request.Parameters!["rootFolderId"]),
+                Is.EqualTo([_rootFolderId.ToString("D"), otherRootFolderId.ToString("D")]));
+            Assert.That(
+                requests.Select(request => (request.JobType, request.Mode)),
+                Is.All.EqualTo(("RootFolderContentDiscovery", JobExecutionMode.Queue)));
+            _fileSystem.Verify(f => f.EnumerateFiles(It.IsAny<string>()), Times.Never);
+            _candidates.Verify(
+                r => r.DeleteByRootFolderAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<IReadOnlyCollection<Guid>?>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ScansAndReplacesOnlyTheTopLevelItemFolder_WhenAnItemIsGiven()
+    {
+        // Arrange
+        var showId = Guid.NewGuid();
+        var episodeId = Guid.NewGuid();
+        _hierarchyItems.Setup(r => r.GetLineageAsync(episodeId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new ContentHierarchyItem
+                {
+                    Id = episodeId,
+                    MetadataContainerId = Guid.NewGuid(),
+                    ContentType = "type-a",
+                    Level = "type-a",
+                    Name = "Episode",
+                    Slug = "episode",
+                    EffectiveRootFolderId = _rootFolderId
+                },
+                new ContentHierarchyItem
+                {
+                    Id = showId,
+                    MetadataContainerId = Guid.NewGuid(),
+                    ContentType = "type-a",
+                    Level = "type-a",
+                    Name = "Show",
+                    Slug = "show",
+                    EffectiveRootFolderId = _rootFolderId
+                }
+            ]);
+        _contentFiles.Setup(s => s.GetEffectivePathAsync(showId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("/media/movies/Show");
+        var inside = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/Show/inside.mkv",
+            ContentType = "type-a",
+            Status = LibraryImportCandidateStatus.Pending
+        };
+        var outside = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/Other/outside.mkv",
+            ContentType = "type-a",
+            Status = LibraryImportCandidateStatus.Pending
+        };
+        _candidates
+            .Setup(r => r.QueryAsync(
+                It.Is<LibraryImportCandidateQuery>(query =>
+                    query.RootFolderId == _rootFolderId && query.Status == null && query.Statuses == null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<LibraryImportCandidate> { Items = [inside, outside], TotalItems = 2 });
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, _userId, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["rootFolderId"] = _rootFolderId.ToString("D"),
+                ["contentHierarchyItemId"] = episodeId.ToString("D")
+            },
+            null);
+
+        // Act
+        await _scanJob.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _fileSystem.Verify(f => f.EnumerateFiles(Path.GetFullPath("/media/movies/Show")), Times.Once);
+            _fileSystem.Verify(f => f.EnumerateFiles("/media/movies"), Times.Never);
+            _candidates.Verify(
+                r => r.DeleteByRootFolderAsync(
+                    _rootFolderId,
+                    It.Is<IReadOnlyCollection<Guid>?>(ids => ids != null && ids.SequenceEqual(new[] { inside.Id })),
+                    _userId,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsARejectionAndDropsAVanishedOne_WhenTheFolderIsRescanned()
+    {
+        // Arrange
+        var rejected = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/rejected.mkv",
+            ContentType = "type-a",
+            Status = LibraryImportCandidateStatus.Rejected
+        };
+        var vanished = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/vanished.mkv",
+            ContentType = "type-a",
+            Status = LibraryImportCandidateStatus.Rejected
+        };
+        _candidates
+            .Setup(r => r.QueryAsync(
+                It.Is<LibraryImportCandidateQuery>(query =>
+                    query.RootFolderId == _rootFolderId && query.Status == null && query.Statuses == null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<LibraryImportCandidate> { Items = [rejected, vanished], TotalItems = 2 });
+        _files = ["/media/movies/rejected.mkv", "/media/movies/new.mkv"];
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, _userId, JobExecutionMode.Queue,
+            new Dictionary<string, string> { ["rootFolderId"] = _rootFolderId.ToString("D") }, null);
+
+        // Act
+        await _scanJob.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                _createdCandidates.Select(candidate => candidate.FilePath),
+                Is.EqualTo(["/media/movies/new.mkv"]));
+            _candidates.Verify(r => r.DeleteAsync(vanished.Id, _userId, It.IsAny<CancellationToken>()), Times.Once);
+            _candidates.Verify(r => r.DeleteAsync(rejected.Id, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public void DefaultSchedule_QueuesADailyScanOfEveryRootFolder_WhenSeeded()
+    {
+        // Act
+        var schedule = DefaultJobTriggerCatalog.ScheduleTriggers.Single(trigger =>
+            trigger.JobType == MagpieJobs.Types.RootFolderContentDiscovery);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(schedule.Schedule, Is.EqualTo("30 4 * * *"));
+            Assert.That(schedule.Enabled, Is.True);
+            Assert.That(schedule.ExecutionMode, Is.EqualTo(JobExecutionMode.Queue));
+            Assert.That(schedule.Scope, Is.EqualTo(JobScope.Content));
+            Assert.That(schedule.Parameters, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsAnUnattachedMatchAndReplacesTheRest_WhenTheFullRootFolderIsRescanned()
+    {
+        // Arrange
+        var matched = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = _rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/matched.mkv",
+            ContentType = "type-a",
+            Status = LibraryImportCandidateStatus.Pending,
+            Matches =
+            [
+                new LibraryImportMatch
+                {
+                    Confidence = 1,
+                    ProviderType = "provider-a",
+                    ExternalIdKey = "provider-a",
+                    ExternalId = "27205",
+                    Title = "Inception"
+                }
+            ]
+        };
+        var unmatched = matched with { Id = Guid.NewGuid(), FilePath = "/media/movies/unmatched.mkv", Matches = [] };
+        var removed = matched with { Id = Guid.NewGuid(), FilePath = "/media/movies/removed.mkv" };
+        var attached = matched with { Id = Guid.NewGuid(), FilePath = "/media/movies/attached.mkv" };
+        _mediaFiles
+            .Setup(r => r.QueryAsync(
+                It.IsAny<MediaFileQuery>(), It.IsAny<PagingParameter>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile>
+            {
+                Items =
+                [
+                    new MediaFile
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentItemId = Guid.NewGuid(),
+                        FileKind = "video",
+                        FilePath = "/media/movies/attached.mkv"
+                    }
+                ],
+                TotalItems = 1
+            });
+        _candidates
+            .Setup(r => r.QueryAsync(
+                It.Is<LibraryImportCandidateQuery>(query =>
+                    query.RootFolderId == _rootFolderId && query.Status == null && query.Statuses == null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<LibraryImportCandidate>
+            {
+                Items = [matched, unmatched, removed, attached],
+                TotalItems = 4
+            });
+        _fileSystem.Setup(f => f.FileExists("/media/movies/matched.mkv")).Returns(true);
+        _fileSystem.Setup(f => f.FileExists("/media/movies/unmatched.mkv")).Returns(true);
+        _fileSystem.Setup(f => f.FileExists("/media/movies/attached.mkv")).Returns(true);
+        _files = ["/media/movies/matched.mkv", "/media/movies/unmatched.mkv"];
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, _userId, JobExecutionMode.Queue,
+            new Dictionary<string, string> { ["rootFolderId"] = _rootFolderId.ToString("D") }, null);
+
+        // Act
+        await _scanJob.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                _createdCandidates.Select(candidate => candidate.FilePath),
+                Is.EqualTo(["/media/movies/unmatched.mkv"]));
+            _candidates.Verify(
+                r => r.DeleteByRootFolderAsync(
+                    _rootFolderId,
+                    It.Is<IReadOnlyCollection<Guid>?>(ids =>
+                        ids != null && ids.Count == 3 && ids.Contains(unmatched.Id) && ids.Contains(removed.Id) &&
+                        ids.Contains(attached.Id)),
+                    _userId,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
         }
     }
 }

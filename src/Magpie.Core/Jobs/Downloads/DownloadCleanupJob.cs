@@ -33,7 +33,6 @@ internal sealed class DownloadCleanupJob(
         Scope = JobScope.Administrative,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromMinutes(10),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters = [],
@@ -43,7 +42,7 @@ internal sealed class DownloadCleanupJob(
         DownloadCleanupCandidate candidate,
         IReadOnlyDictionary<string, string> settings)
     {
-        if (candidate.Status == DownloadStatus.Failed)
+        if (DownloadStatuses.Failures.Contains(candidate.Status))
         {
             return candidate.KeepFailedOnClient ? null : "failed";
         }

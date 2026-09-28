@@ -59,8 +59,7 @@ internal sealed class CardigannDuplicateFeedDiagnostic : IDiagnosticCheck
                 Title = "Multiple Cardigann feeds point at the same source",
                 Detail =
                     $"{feedsInGroup.Count} Cardigann feeds ({names}) all resolve to {group.Key}, so they " +
-                    "sync the same indexer definitions repeatedly. Remove the duplicates so each source " +
-                    "is configured once.",
+                    "sync the same indexer definitions repeatedly.",
                 RepairId = isCommunitySource ? Constants.DuplicateFeedRepairId : null,
             });
         }

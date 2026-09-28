@@ -72,15 +72,11 @@
     }
 
     .children-tab__monitoring--active {
-        color: var(--accent-primary);
+        color: var(--status-healthy);
     }
 
     .children-tab__monitoring--inactive {
         color: var(--text-muted);
-    }
-
-    .children-tab__monitoring--inherited {
-        opacity: 0.6;
     }
 
     .children-tab__caret {
@@ -160,6 +156,7 @@
     .children-tab[data-layout='table'] {
         & .data-table__table {
             table-layout: fixed;
+            min-width: 1000px;
         }
 
         & .data-table__cell[data-column='title'] {
@@ -181,9 +178,24 @@
     .files-tab__header {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: var(--space-xs);
+        min-width: 0;
         font-size: var(--text-sm);
         color: var(--text-secondary);
+
+        & > .button {
+            max-width: 100%;
+            white-space: normal;
+        }
+    }
+
+    .files-tab__summary {
+        display: inline-flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: var(--space-xs);
+        white-space: nowrap;
 
         & svg {
             font-size: var(--text-base);
@@ -192,13 +204,33 @@
     }
 
     .files-tab__import-action {
+        flex-shrink: 0;
         margin-inline-start: auto;
+    }
+
+    .files-tab__empty-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: var(--space-sm);
+    }
+
+    .files-tab__menu-trigger {
+        flex-shrink: 0;
+        margin-inline-start: auto;
+    }
+
+    .files-tab__menu-item--danger {
+        color: var(--status-unhealthy);
     }
 
     .files-tab__name-cell {
         display: flex;
+        flex: 1 1 auto;
         align-items: center;
         gap: var(--space-sm);
+        min-width: 0;
+        max-width: 100%;
     }
 
     .files-tab__file-icon {
@@ -209,12 +241,16 @@
 
     .files-tab__name-info {
         display: flex;
+        flex: 1 1 auto;
         flex-direction: column;
         gap: var(--space-2xs);
         min-width: 0;
+        max-width: 100%;
     }
 
     .files-tab__file-name {
+        display: block;
+        max-width: 100%;
         font-size: var(--text-sm);
         font-weight: var(--weight-medium);
         color: var(--text-primary);
@@ -227,16 +263,21 @@
         display: flex;
         align-items: center;
         gap: var(--space-2xs);
+        min-width: 0;
         font-size: var(--text-xs);
         color: var(--text-muted);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
 
         & svg {
             flex-shrink: 0;
             font-size: var(--text-sm);
         }
+    }
+
+    .files-tab__folder-path {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .files-tab__quality-cell {
@@ -282,6 +323,7 @@
         display: flex;
         align-items: center;
         gap: var(--space-md);
+        min-width: 0;
     }
 
     .files-tab__file-actions {
@@ -315,6 +357,7 @@
 
     .files-tab__media-info--empty {
         display: flex;
+        flex-direction: row;
         align-items: center;
         gap: var(--space-xs);
         padding: var(--space-xs) var(--space-sm);
@@ -369,6 +412,57 @@
 
     .files-tab__track-field {
         color: var(--text-secondary);
+    }
+
+    /* The card layout shows the file actions in menus, so the toolbar and each file header stay on one line. */
+    @media (max-width: 1023px) {
+        .files-tab__header {
+            flex-wrap: nowrap;
+        }
+
+        .files-tab__summary {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+
+        .files-tab__panel-header {
+            align-items: flex-start;
+            gap: var(--space-sm);
+
+            /* The checkbox keeps its touch target but lets it overlap the card padding, so it sits by the name. */
+            & > .checkbox {
+                margin: calc(var(--space-sm) * -1);
+            }
+        }
+
+        .files-tab__name-cell {
+            align-items: flex-start;
+        }
+
+        .files-tab__file-name {
+            overflow: visible;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        /* The icon stays beside the first line of the path, which wraps to at most two lines. */
+        .files-tab__folder {
+            align-items: flex-start;
+
+            & svg {
+                margin-top: 0.1em;
+            }
+        }
+
+        .files-tab__folder-path {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            white-space: normal;
+
+            /* A path has few spaces, so it breaks anywhere rather than leaving a short first line. */
+            word-break: break-all;
+        }
     }
 
     @media (max-width: 767px) {
@@ -438,6 +532,20 @@
         display: flex;
         min-width: 0;
         flex-direction: column;
+    }
+
+    .releases-tab__statuses,
+    .releases-tab__actions {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: var(--space-xs);
+    }
+
+    .releases-tab__waiting-reason {
+        display: block;
+        color: var(--text-muted);
+        font-size: var(--text-xs);
+        white-space: normal;
     }
 
     .releases-tab__sources {

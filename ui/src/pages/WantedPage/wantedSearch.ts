@@ -1,7 +1,10 @@
 import type { ContentListItem } from '@/types';
 
 function isSearchEligibleLeaf(item: ContentListItem): boolean {
-    return item.effectiveMonitoring && (item.fulfillment === 'missing' || item.fulfillment === 'upgradable');
+    return (
+        item.effectiveMonitoring !== 'Unmonitored' &&
+        (item.fulfillment === 'missing' || item.fulfillment === 'upgradable')
+    );
 }
 
 export async function countMissingDescendants(
@@ -22,7 +25,7 @@ export async function countMissingDescendants(
 
         if (isContainer(item)) {
             pending.push(...(await loadChildren(item.id)));
-        } else if (item.effectiveMonitoring && item.fulfillment === 'missing') {
+        } else if (item.effectiveMonitoring !== 'Unmonitored' && item.fulfillment === 'missing') {
             count += 1;
         }
     }

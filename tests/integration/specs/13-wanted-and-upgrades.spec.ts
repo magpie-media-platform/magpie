@@ -20,7 +20,7 @@ interface Paged<T> {
 interface ContentItem {
     id: string;
     name: string;
-    effectiveMonitoring: boolean;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
     contentItem?: {
         id: string;
         fulfillment: string;
@@ -124,7 +124,7 @@ test.describe.serial("Journey 13: chase what's missing and upgrade what's medioc
                 });
                 allContent = (await api.get<Paged<ContentItem>>('/api/content?pageSize=100')).items;
                 expect(allContent).toHaveLength(87);
-                expect(allContent.every((item) => item.effectiveMonitoring)).toBe(true);
+                expect(allContent.every((item) => item.effectiveMonitoring !== 'Unmonitored')).toBe(true);
             });
 
             await test.step('open the wanted list with upgrades included', async () => {

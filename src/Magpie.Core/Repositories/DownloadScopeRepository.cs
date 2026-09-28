@@ -257,9 +257,7 @@ internal sealed class DownloadScopeRepository(
             join ci in context.ContentItems.AsNoTracking()
                 on scope.ContentHierarchyItemId equals ci.ContentHierarchyItemId
             where distinctIds.Contains(ci.Id) &&
-                d.Status != DownloadStatus.Imported &&
-                d.Status != DownloadStatus.Failed &&
-                d.Status != DownloadStatus.Cancelled
+                !DownloadStatuses.Finished.Contains(d.Status)
             select new { ContentItemId = ci.Id, d.Status, Anchor = d.ModifiedAt ?? d.CreatedAt })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);

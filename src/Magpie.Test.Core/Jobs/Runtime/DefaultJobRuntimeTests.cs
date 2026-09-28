@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -15,6 +16,7 @@ using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -58,15 +60,8 @@ public sealed class DefaultJobRuntimeTests
             .Setup(repository => repository.TryStartAsync(_execution.Id, NodeId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         _executions
-            .Setup(repository => repository.TrySetRunningTimeoutAsync(
-                _execution.Id,
-                NodeId,
-                It.IsAny<DateTime>(),
-                It.IsAny<CancellationToken>()))
+            .Setup(repository => repository.TouchHeartbeatAsync(_execution.Id, NodeId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        _executions
-            .Setup(repository => repository.TouchHeartbeatAsync(_execution.Id, It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
         _executions
             .Setup(repository => repository.TryMarkRunningCompletedAsync(_execution.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
@@ -163,6 +158,70 @@ public sealed class DefaultJobRuntimeTests
     }
 
     [Test]
+    public async Task ExecuteAsync_WaitsToComplete_WhenFinalProgressIsPending()
+    {
+        // Arrange
+        var flushEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var flushFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _executions.SetupSequence(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_execution)
+            .ReturnsAsync(_execution with { Status = JobExecutionStatus.Running, NodeId = NodeId });
+        _handler.Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _jobScope.Setup(scope => scope.FlushProgressAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => flushEntered.SetResult())
+            .Returns(flushFinished.Task);
+        _executions.Setup(repository => repository.TryMarkRunningCompletedAsync(_execution.Id,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var execution = _subject.ExecuteAsync(_execution.Id);
+        await flushEntered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        var completedBeforeFlush = execution.IsCompleted;
+        _executions.Verify(repository => repository.TryMarkRunningCompletedAsync(_execution.Id,
+            It.IsAny<CancellationToken>()), Times.Never);
+        flushFinished.SetResult();
+        await execution.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(completedBeforeFlush, Is.False);
+            _executions.Verify(repository => repository.TryMarkRunningCompletedAsync(_execution.Id,
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_DefersWithoutFailureOrCompletion_WhenUpstreamIsThrottled()
+    {
+        // Arrange
+        var retryAt = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        _executions.SetupSequence(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_execution)
+            .ReturnsAsync(_execution with { Status = JobExecutionStatus.Running, NodeId = NodeId });
+        _handler.Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(retryAt));
+        _executions.Setup(repository => repository.TryDeferRunningAsync(_execution.Id, NodeId,
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        await _subject.ExecuteAsync(_execution.Id).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(repository => repository.TryDeferRunningAsync(_execution.Id, NodeId,
+            It.Is<DateTime>(value => value >= new DateTime(2099, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
+                value < new DateTime(2099, 1, 1, 0, 0, 30, DateTimeKind.Utc)),
+            It.IsAny<CancellationToken>()), Times.Once);
+        _executions.Verify(repository => repository.TryMarkRunningFailedAsync(It.IsAny<Guid>(), It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+        _executions.Verify(repository => repository.TryMarkRunningCompletedAsync(It.IsAny<Guid>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
     public async Task TryCancelAsync_DoesNotCancelLocalHandler_WhenTimeoutWonTransitionRace()
     {
         // Arrange
@@ -184,8 +243,8 @@ public sealed class DefaultJobRuntimeTests
             .ReturnsAsync(running)
             .ReturnsAsync(failed);
         _executions
-            .Setup(repository => repository.RequestCancellationAsync(_execution.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((JobCancellationRequestResult?)null);
+            .Setup(repository => repository.CancelAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((JobCancellation?)null);
         _handler
             .Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
             .Returns(async (JobContext _, CancellationToken cancellationToken) =>
@@ -293,8 +352,8 @@ public sealed class DefaultJobRuntimeTests
             .ReturnsAsync(_execution)
             .ReturnsAsync(running);
         _executions
-            .Setup(repository => repository.RequestCancellationAsync(_execution.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new JobCancellationRequestResult(NodeId, CancelledBeforeStart: false));
+            .Setup(repository => repository.CancelAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new JobCancellation(NodeId, CancelledBeforeStart: false));
         _executions
             .Setup(repository => repository.TryMarkRunningFailedAsync(
                 _execution.Id,
@@ -351,8 +410,8 @@ public sealed class DefaultJobRuntimeTests
             .ReturnsAsync(_execution)
             .ReturnsAsync(running);
         _executions
-            .Setup(repository => repository.RequestCancellationAsync(_execution.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new JobCancellationRequestResult(NodeId, CancelledBeforeStart: false));
+            .Setup(repository => repository.CancelAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new JobCancellation(NodeId, CancelledBeforeStart: false));
         _executions
             .Setup(repository => repository.TryMarkCancellationRequestedCancelledAsync(
                 _execution.Id,
@@ -401,8 +460,21 @@ public sealed class DefaultJobRuntimeTests
     public async Task ExecuteAsync_CancelsHandler_WhenCancellationWinsBeforeLocalRegistration()
     {
         // Arrange
-        var timeoutRegistrationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var timeoutRegistrationRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var claimEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var claimRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _executions.Setup(repository => repository.TryStartAsync(_execution.Id, NodeId,
+                It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                claimEntered.TrySetResult();
+                await claimRelease.Task.ConfigureAwait(false);
+                return true;
+            });
+        _executions.Setup(repository => repository.CancelAsync(_execution.Id,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new JobCancellation(NodeId, CancelledBeforeStart: false));
+        _executions.Setup(repository => repository.TryMarkCancellationRequestedCancelledAsync(_execution.Id,
+                It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
         var handlerStartedCancelled = false;
         var cancellationRequestedState = new JobExecution
         {
@@ -414,27 +486,6 @@ public sealed class DefaultJobRuntimeTests
             .SetupSequence(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(_execution)
             .ReturnsAsync(cancellationRequestedState);
-        _executions
-            .Setup(repository => repository.TrySetRunningTimeoutAsync(
-                _execution.Id,
-                NodeId,
-                It.IsAny<DateTime>(),
-                It.IsAny<CancellationToken>()))
-            .Returns(async () =>
-            {
-                timeoutRegistrationEntered.TrySetResult();
-                await timeoutRegistrationRelease.Task.ConfigureAwait(false);
-                return true;
-            });
-        _executions
-            .Setup(repository => repository.RequestCancellationAsync(_execution.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new JobCancellationRequestResult(NodeId, CancelledBeforeStart: false));
-        _executions
-            .Setup(repository => repository.TryMarkCancellationRequestedCancelledAsync(
-                _execution.Id,
-                It.IsAny<string?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
         _handler
             .Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
             .Returns((JobContext _, CancellationToken cancellationToken) =>
@@ -443,11 +494,11 @@ public sealed class DefaultJobRuntimeTests
                 return Task.CompletedTask;
             });
         var run = _subject.ExecuteAsync(_execution.Id);
-        await timeoutRegistrationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await claimEntered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
         // Act
         var cancellationRequested = await _subject.TryCancelAsync(_execution.Id).ConfigureAwait(false);
-        timeoutRegistrationRelease.TrySetResult();
+        claimRelease.TrySetResult();
         await run.ConfigureAwait(false);
 
         // Assert
@@ -456,50 +507,6 @@ public sealed class DefaultJobRuntimeTests
             Assert.That(cancellationRequested, Is.True);
             Assert.That(handlerStartedCancelled, Is.True);
         }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_WritesOneTimeoutAudit_WhenLocalRuntimeWinsTransition()
-    {
-        // Arrange
-        _spec = _spec with { Timeout = TimeSpan.FromMilliseconds(25) };
-        var spec = _spec;
-        _registry
-            .Setup(jobRegistry => jobRegistry.TryGetJobSpec(JobType, out spec))
-            .Returns(true);
-        var handler = _handler.Object;
-        _jobScope
-            .Setup(scope => scope.TryGetHandler(spec, out handler))
-            .Returns(true);
-        var running = _execution with
-        {
-            Status = JobExecutionStatus.Running,
-            NodeId = NodeId
-        };
-        _executions
-            .SetupSequence(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(_execution)
-            .ReturnsAsync(running);
-        _executions
-            .Setup(repository => repository.TryMarkRunningFailedAsync(
-                _execution.Id,
-                It.Is<string>(reason => reason.Contains("Timed out", StringComparison.Ordinal)),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        _handler
-            .Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
-            .Returns(async (JobContext _, CancellationToken cancellationToken) =>
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false));
-
-        // Act
-        await _subject.ExecuteAsync(_execution.Id).ConfigureAwait(false);
-
-        // Assert
-        _audits.Verify(
-            repository => repository.CreateAsync(
-                It.Is<AuditRecord>(record => record.Operation == "JobTimeout"),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
     }
 
     [Test]
@@ -519,11 +526,11 @@ public sealed class DefaultJobRuntimeTests
             .ReturnsAsync(_execution)
             .ReturnsAsync(running);
         _executions
-            .SetupSequence(repository => repository.RequestCancellationAsync(
+            .SetupSequence(repository => repository.CancelAsync(
                 _execution.Id,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new JobCancellationRequestResult(NodeId, CancelledBeforeStart: false))
-            .ReturnsAsync((JobCancellationRequestResult?)null);
+            .ReturnsAsync(new JobCancellation(NodeId, CancelledBeforeStart: false))
+            .ReturnsAsync((JobCancellation?)null);
         _executions
             .Setup(repository => repository.TryMarkRunningFailedAsync(
                 _execution.Id,
@@ -588,145 +595,6 @@ public sealed class DefaultJobRuntimeTests
     }
 
     [Test]
-    public async Task ExecuteAsync_MarksCompletedWithoutCancelling_WhenLongRunningHandlerFinishes()
-    {
-        // Arrange
-        const string jobType = "test-job";
-
-        var executionId = Guid.NewGuid();
-        var execution = new JobExecution
-        {
-            Id = executionId,
-            JobType = jobType,
-            Status = JobExecutionStatus.Queued
-        };
-        var runningExecution = execution with
-        {
-            Status = JobExecutionStatus.Running,
-            NodeId = NodeId
-        };
-
-        var executions = new Mock<IJobExecutionRepository>();
-        executions
-            .SetupSequence(m => m.GetByIdAsync(executionId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(execution)
-            .ReturnsAsync(runningExecution);
-        executions
-            .Setup(m => m.TryStartAsync(executionId, NodeId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        executions
-            .Setup(m => m.TouchHeartbeatAsync(executionId, It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        executions
-            .Setup(m => m.TryMarkRunningCompletedAsync(executionId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-
-        var retryPolicy = new Mock<IJobRetryPolicy>();
-
-        var serviceProvider = new Mock<IServiceProvider>();
-        serviceProvider
-            .Setup(p => p.GetService(typeof(IJobExecutionRepository)))
-            .Returns(executions.Object);
-        serviceProvider
-            .Setup(p => p.GetService(typeof(IJobRetryPolicy)))
-            .Returns(retryPolicy.Object);
-        serviceProvider
-            .Setup(p => p.GetService(typeof(IJobManager)))
-            .Returns(Mock.Of<IJobManager>());
-        serviceProvider
-            .Setup(p => p.GetService(typeof(IAuditRecordRepository)))
-            .Returns(Mock.Of<IAuditRecordRepository>());
-        serviceProvider
-            .Setup(p => p.GetService(typeof(ITransactionManager)))
-            .Returns(Mock.Of<ITransactionManager>());
-        var serviceScope = new Mock<IServiceScope>();
-        serviceScope.Setup(s => s.ServiceProvider).Returns(serviceProvider.Object);
-        var scopeFactory = new Mock<IServiceScopeFactory>();
-        scopeFactory.Setup(f => f.CreateScope()).Returns(serviceScope.Object);
-
-        var handlerEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var handlerRelease = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var wasCancelled = false;
-
-        var job = new Mock<IJob>();
-        job
-            .Setup(j => j.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
-            .Returns(async (JobContext _, CancellationToken ct) =>
-            {
-                handlerEntered.TrySetResult(true);
-                try
-                {
-                    await handlerRelease.Task.WaitAsync(ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    wasCancelled = true;
-                    throw;
-                }
-            });
-
-        var spec = new JobSpec
-        {
-            JobType = jobType,
-            DisplayName = jobType,
-            Category = "Test",
-            Scope = JobScope.System,
-            OnDemand = true,
-            FailurePolicy = JobFailurePolicy.Fail,
-        };
-
-        var registry = new Mock<IJobRegistry>();
-        registry
-            .Setup(r => r.TryGetJobSpec(jobType, out spec))
-            .Returns(true);
-
-        var jobScope = new Mock<IJobExecutionScope>();
-        var handler = job.Object;
-        jobScope
-            .Setup(s => s.TryGetHandler(spec, out handler))
-            .Returns(true);
-        var jobScopes = new Mock<IJobExecutionScopeFactory>();
-        jobScopes.Setup(f => f.CreateScope(executionId)).Returns(jobScope.Object);
-
-        var hostEnvironment = new MagpieHostEnvironment(
-            NodeId,
-            IsClustered: false,
-            IsSupervised: false,
-            SystemRoot: string.Empty,
-            ExtensionsRoot: string.Empty,
-            ConfigRoot: string.Empty,
-            DataRoot: string.Empty,
-            StartedAt: DateTime.UtcNow);
-
-        IJobRuntime subject = new DefaultJobRuntime(
-            jobScopes.Object,
-            scopeFactory.Object,
-            registry.Object,
-            hostEnvironment,
-            Mock.Of<IEventBus>(),
-            _shutdownSignal,
-            TimeProvider.System,
-            NullLogger<DefaultJobRuntime>.Instance,
-            TimeSpan.FromMilliseconds(25));
-
-        // Act
-        var run = subject.ExecuteAsync(executionId);
-
-        var entered = await Task.WhenAny(handlerEntered.Task, Task.Delay(TimeSpan.FromSeconds(5)))
-            .ConfigureAwait(false);
-        Assert.That(entered, Is.SameAs(handlerEntered.Task));
-
-        await Task.Delay(TimeSpan.FromMilliseconds(150)).ConfigureAwait(false);
-
-        handlerRelease.TrySetResult(true);
-        await run.ConfigureAwait(false);
-
-        // Assert
-        Assert.That(wasCancelled, Is.False);
-        executions.Verify(m => m.TryMarkRunningCompletedAsync(executionId, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Test]
     public async Task ExecuteAsync_UsesBoundedRetry_WhenFailurePolicyRequeues()
     {
         // Arrange
@@ -768,15 +636,8 @@ public sealed class DefaultJobRuntimeTests
             .Setup(repository => repository.TryStartAsync(executionId, NodeId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         executions
-            .Setup(repository => repository.TrySetRunningTimeoutAsync(
-                executionId,
-                NodeId,
-                It.IsAny<DateTime>(),
-                It.IsAny<CancellationToken>()))
+            .Setup(repository => repository.TouchHeartbeatAsync(executionId, NodeId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        executions
-            .Setup(repository => repository.TouchHeartbeatAsync(executionId, It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
         executions
             .Setup(repository => repository.TryMarkRunningFailedAsync(
                 executionId,

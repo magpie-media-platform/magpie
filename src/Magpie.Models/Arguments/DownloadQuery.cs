@@ -46,6 +46,11 @@ public sealed record DownloadQuery
     public IReadOnlyCollection<DownloadStatus>? Statuses { get; init; }
 
     /// <summary>
+    /// Whether the download has retained import recovery state.
+    /// </summary>
+    public bool? HasImportRecoveryState { get; init; }
+
+    /// <summary>
     /// The ids of the downloads to exclude from the results.
     /// </summary>
     public IReadOnlyCollection<Guid>? ExcludeIds { get; init; }

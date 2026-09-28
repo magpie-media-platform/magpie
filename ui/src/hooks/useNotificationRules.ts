@@ -6,7 +6,12 @@ import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
 
 import { useProviderSchemaQuery } from './useProviderSchema';
-import { useProviderCatalog } from './useProviderCatalog';
+import { selectProviderChoices, useProviderCatalog, type ProviderDescriptor } from './useProviderCatalog';
+
+function selectNotificationProviders(providers: ProviderDescriptor[]) {
+    return selectProviderChoices(providers, 'notification');
+}
+import type { ConnectionTestResult } from './useTestConnection';
 
 export interface NotificationRule {
     id: string;
@@ -86,8 +91,8 @@ async function deleteRule(id: string): Promise<void> {
     return apiDelete(`/notification-rules/${id}`);
 }
 
-async function testRule(id: string): Promise<void> {
-    return apiPost(`/notification-rules/${id}/test`);
+async function testRule(id: string): Promise<ConnectionTestResult> {
+    return apiPost<ConnectionTestResult>(`/notification-rules/${id}/test`);
 }
 
 export function useNotificationRules() {
@@ -159,12 +164,11 @@ export function useNotificationRules() {
 }
 
 export function useNotificationProviders() {
-    const providersQuery = useProviderCatalog((providers) =>
-        providers.filter((provider) => provider.kind === 'notification').map((provider) => provider.providerType),
-    );
+    const providersQuery = useProviderCatalog(selectNotificationProviders);
 
     return {
-        providers: providersQuery.data ?? [],
+        providers: providersQuery.data?.types ?? [],
+        providerLabels: providersQuery.data?.labels ?? {},
         isLoading: providersQuery.isLoading,
         error: queryErrorOrNull(providersQuery),
         refetch: providersQuery.refetch,

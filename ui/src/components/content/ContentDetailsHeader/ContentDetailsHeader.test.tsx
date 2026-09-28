@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ContentDetailsHeader, type ContentDetailItem, type ParentContentRef } from './ContentDetailsHeader';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 function renderWithRouter(ui: React.ReactElement) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -11,6 +12,7 @@ function renderWithRouter(ui: React.ReactElement) {
         <QueryClientProvider client={queryClient}>
             <MemoryRouter>{ui}</MemoryRouter>
         </QueryClientProvider>,
+        { wrapper: TooltipProvider },
     );
 }
 
@@ -20,8 +22,8 @@ const mockContent: ContentDetailItem = {
     posterUrl: 'https://example.com/poster.jpg',
     contentType: 'movie',
     levelLabel: 'Movie',
-    monitoring: true,
-    effectiveMonitoring: true,
+    monitoring: 'Monitored',
+    effectiveMonitoring: 'Monitored',
     fulfillment: 'fulfilled',
     year: 2024,
     overview: 'A test movie about testing things.',
@@ -113,10 +115,14 @@ describe('ContentDetailsHeader', () => {
         expect(screen.getByText('Movie')).toBeInTheDocument();
     });
 
-    it('does not render monitoring status because the settings block owns it', () => {
+    it('renders monitoring status separately from fulfillment', () => {
+        // Arrange
+        // Act
         renderWithRouter(<ContentDetailsHeader content={mockContent} />);
-        expect(screen.queryByText('Monitored')).not.toBeInTheDocument();
-        expect(screen.queryByText('Not monitored')).not.toBeInTheDocument();
+
+        // Assert
+        expect(screen.getByText('Monitored')).toBeInTheDocument();
+        expect(screen.getByText('Fulfilled')).toBeInTheDocument();
     });
 
     it('does not render the publish date in the primary card', () => {
@@ -140,41 +146,58 @@ describe('ContentDetailsHeader', () => {
     });
 
     it('renders different fulfillment statuses', () => {
+        // Arrange
         const statuses = [
             { status: 'missing', label: 'Missing' },
             { status: 'upgradable', label: 'Upgradable' },
             { status: 'fulfilled', label: 'Fulfilled' },
             { status: 'fulfilledExternally', label: 'External' },
+            { status: 'partial', label: 'Partial' },
         ] as const;
 
+        // Act
         statuses.forEach(({ status, label }) => {
             const content = { ...mockContent, fulfillment: status };
             const { unmount } = renderWithRouter(<ContentDetailsHeader content={content} />);
+
+            // Assert
             expect(screen.getByText(label)).toBeInTheDocument();
             unmount();
         });
     });
 
-    it('renders no fulfillment badge when the item is not monitored', () => {
+    it('renders explicit unmonitored and fulfillment states separately', () => {
+        // Arrange
         const unmonitoredContent = {
             ...mockContent,
-            monitoring: false,
-            effectiveMonitoring: false,
+            monitoring: 'Unmonitored' as const,
+            effectiveMonitoring: 'Unmonitored' as const,
             fulfillment: 'missing' as const,
         };
+
+        // Act
         renderWithRouter(<ContentDetailsHeader content={unmonitoredContent} />);
-        expect(screen.queryByText('Missing')).not.toBeInTheDocument();
+
+        // Assert
+        expect(screen.getByText('Unmonitored')).toBeInTheDocument();
+        expect(screen.getByText('Missing')).toBeInTheDocument();
     });
 
-    it('renders no fulfillment badge when disabled monitoring is inherited', () => {
+    it('renders inherited unmonitored and fulfillment states separately', () => {
+        // Arrange
         const inheritedUnmonitored = {
             ...mockContent,
             monitoring: null,
-            effectiveMonitoring: false,
+            effectiveMonitoring: 'Unmonitored' as const,
             fulfillment: 'missing' as const,
         };
+
+        // Act
         renderWithRouter(<ContentDetailsHeader content={inheritedUnmonitored} />);
-        expect(screen.queryByText('Missing')).not.toBeInTheDocument();
+
+        // Assert
+        expect(screen.getByText('Unmonitored (inherited)')).toBeInTheDocument();
+        expect(screen.getByText('Missing')).toBeInTheDocument();
     });
 
     it('renders the level label from the shared resolver for different types', () => {
@@ -214,23 +237,6 @@ describe('ContentDetailsHeader', () => {
         renderWithRouter(<ContentDetailsHeader content={mockContent} />);
         const actionsContainer = document.querySelector('.content-details-header__actions');
         expect(actionsContainer).not.toBeInTheDocument();
-    });
-
-    it('renders mobile overflow menu when actions are provided', () => {
-        renderWithRouter(<ContentDetailsHeader content={mockContent} actions={<button>Test Action</button>} />);
-        expect(screen.getByTestId('content-details-header__mobile-menu')).toBeInTheDocument();
-    });
-
-    it('does not render mobile overflow menu when actions not provided', () => {
-        renderWithRouter(<ContentDetailsHeader content={mockContent} />);
-        expect(screen.queryByTestId('content-details-header__mobile-menu')).not.toBeInTheDocument();
-    });
-
-    it('does not render mobile overflow menu when hideMobileActions is set', () => {
-        renderWithRouter(
-            <ContentDetailsHeader content={mockContent} actions={<button>Test Action</button>} hideMobileActions />,
-        );
-        expect(screen.queryByTestId('content-details-header__mobile-menu')).not.toBeInTheDocument();
     });
 
     it('applies data attributes for automation', () => {

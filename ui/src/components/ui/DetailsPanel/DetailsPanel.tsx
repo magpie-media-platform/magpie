@@ -63,9 +63,13 @@ export function DetailsPanel({
                     <div key={row.key ?? index} className="details-panel__row">
                         <dt className="details-panel__label">{row.label}</dt>
                         <dd
-                            className={
-                                row.mono ? 'details-panel__value details-panel__value--mono' : 'details-panel__value'
-                            }
+                            className={[
+                                'details-panel__value',
+                                row.mono && 'details-panel__value--mono',
+                                row.multiline && 'details-panel__value--multiline',
+                            ]
+                                .filter(Boolean)
+                                .join(' ')}
                             data-detail={isDialog && typeof row.label === 'string' ? row.label : undefined}
                             title={isDialog && typeof row.value === 'string' ? row.value : undefined}
                         >

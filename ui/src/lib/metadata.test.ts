@@ -6,6 +6,7 @@ import {
     extractImages,
     extractImageUrl,
     extractReferences,
+    referenceDisplayName,
     extractTitle,
     extractOverview,
     extractYear,
@@ -375,8 +376,25 @@ describe('extractExternalIds', () => {
     });
 });
 
+describe('referenceDisplayName', () => {
+    it.each([
+        ['https://tv.apple.com/show/umc.cmc.4luj45vtqpmjsvb6sc2675oeg', undefined, 'tv.apple.com'],
+        ['https://www.site.example:8080/path', null, 'www.site.example:8080'],
+        ['https://site.example/path', '   ', 'site.example'],
+        ['https://site.example/path', ' Official site ', 'Official site'],
+        ['not a url', undefined, 'not a url'],
+    ])('returns %s with displayName %s as %s', (url, displayName, expected) => {
+        // Arrange
+        // Act
+        const result = referenceDisplayName(url, displayName);
+
+        // Assert
+        expect(result).toBe(expected);
+    });
+});
+
 describe('extractReferences', () => {
-    it('returns deduped references with a valid url across contributions, displayName falling back to url', () => {
+    it('returns deduped references with a valid url across contributions, displayName falling back to the url host', () => {
         const container: MetadataContainer = {
             id: 'mc',
             contributions: [
@@ -417,8 +435,8 @@ describe('extractReferences', () => {
             'https://site.example',
         ]);
         expect(result.find((r) => r.url === 'https://studio.example')?.displayName).toBe('Studio home');
-        expect(result.find((r) => r.url === 'https://site.example')?.displayName).toBe('https://site.example');
-        expect(result.find((r) => r.url === 'https://IMDb.com/x')?.displayName).toBe('https://IMDb.com/x');
+        expect(result.find((r) => r.url === 'https://site.example')?.displayName).toBe('site.example');
+        expect(result.find((r) => r.url === 'https://IMDb.com/x')?.displayName).toBe('imdb.com');
     });
 
     it('drops references without a non-empty url and returns empty for no container', () => {

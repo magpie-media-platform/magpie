@@ -16,6 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import { useToast } from '@/components/ui/Toast';
 import type { RunJobRequest, RunJobResult } from '@/hooks/useJobs';
 import type { TemplateOption } from '@/lib/jobExecution';
+import { getErrorMessage } from '@/lib/errors';
+import { focusFirstInvalidField } from '@/lib/focusFirstInvalidField';
 import { JobParameterFieldset } from './JobParameterFieldset';
 import {
     jobParameterErrorKey,
@@ -47,6 +49,7 @@ export function RunJobDialog({ open, onOpenChange, runnableJobs, runJob, onRan }
 
     const selectedJob = useMemo(() => runnableJobs.find((j) => j.id === jobType), [runnableJobs, jobType]);
     const parameterSpec = useMemo(() => selectedJob?.parameters ?? [], [selectedJob]);
+    const queued = selectedJob?.supportsImmediate === false;
 
     useEffect(() => {
         if (open) {
@@ -93,7 +96,9 @@ export function RunJobDialog({ open, onOpenChange, runnableJobs, runJob, onRan }
     const handleSubmit = useCallback(
         async (e: SubmitEvent) => {
             e.preventDefault();
+            const form = e.currentTarget;
             if (!validate()) {
+                focusFirstInvalidField(form);
                 return;
             }
             const payloadParameters = normalizeJobParameterValues(parameters);
@@ -101,27 +106,37 @@ export function RunJobDialog({ open, onOpenChange, runnableJobs, runJob, onRan }
             try {
                 await runJob({
                     jobType,
-                    mode: 'Immediate',
+                    mode: queued ? 'Queue' : 'Immediate',
                     parameters: Object.keys(payloadParameters).length > 0 ? payloadParameters : undefined,
                 });
                 toast({
                     title: selectedJob?.name ?? jobType,
-                    description: 'Job started successfully',
+                    description: queued ? 'Job queued' : 'Job started successfully',
                     variant: 'success',
                 });
                 onOpenChange(false);
                 onRan?.();
-            } catch {
+            } catch (error) {
+                const message = getErrorMessage(error, 'Failed to start job');
+                const parameterName = parameterSpec.find(
+                    (parameter) =>
+                        message.startsWith(`Parameter ${parameter.name} `) ||
+                        message.startsWith(`Required parameter ${parameter.name} `),
+                )?.name;
+                if (parameterName) {
+                    setErrors({ [jobParameterErrorKey(parameterName)]: message });
+                    focusFirstInvalidField(form);
+                }
                 toast({
                     title: selectedJob?.name ?? jobType,
-                    description: 'Failed to start job',
+                    description: message,
                     variant: 'error',
                 });
             } finally {
                 setIsSubmitting(false);
             }
         },
-        [validate, parameters, runJob, jobType, toast, selectedJob, onOpenChange, onRan],
+        [validate, parameters, runJob, jobType, queued, toast, selectedJob, parameterSpec, onOpenChange, onRan],
     );
 
     return (
@@ -138,7 +153,9 @@ export function RunJobDialog({ open, onOpenChange, runnableJobs, runJob, onRan }
                     className="run-job-dialog__caution"
                     data-testid="run-job-dialog__caution"
                 >
-                    The job starts immediately. It can overlap with scheduled work or work that is already in progress.
+                    {queued
+                        ? 'This job runs from the queue when a worker is free, after work already waiting for the same target.'
+                        : 'The job starts immediately. It can overlap with scheduled work or work that is already in progress.'}
                 </Alert>
 
                 <form onSubmit={handleSubmit} className="run-job-dialog__form">

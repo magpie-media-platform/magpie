@@ -237,6 +237,7 @@ public static class MagpieCoreServiceCollectionExtensions
         services.AddScoped<IDiagnosticCheck, ContentDefaultsDiagnostic>();
         services.AddScoped<IDiagnosticCheck, PathResolutionDiagnostic>();
         services.AddScoped<IDiagnosticCheck, DefaultJobScheduleDiagnostic>();
+        services.AddScoped<IDiagnosticCheck, DuplicateRootDiagnostic>();
         services.AddScoped<IDiagnosticRepair, ContentDefaultsRepair>();
         services.AddScoped<IDiagnosticRepair, MissingDefaultJobRepair>();
 
@@ -276,11 +277,13 @@ public static class MagpieCoreServiceCollectionExtensions
         services.RegisterJob<DownloadImportScanJob>(DownloadImportScanJob.Spec);
         services.RegisterJob<DownloadStuckDetectionJob>(DownloadStuckDetectionJob.Spec);
         services.RegisterJob<DownloadCleanupJob>(DownloadCleanupJob.Spec);
+        services.RegisterJob<DownloadFulfilledCancellationJob>(DownloadFulfilledCancellationJob.Spec);
         services.RegisterJob<ContentFulfillmentReconciliationJob>(ContentFulfillmentReconciliationJob.Spec);
         services.RegisterJob<DiagnosticCheckJob>(DiagnosticCheckJob.Spec);
         services.RegisterJob<ContentMetadataRefreshScanJob>(ContentMetadataRefreshScanJob.Spec);
         services.RegisterJob<MediaInfoExtractScanJob>(MediaInfoExtractScanJob.Spec);
         services.RegisterJob<MediaInfoExtractItemJob>(MediaInfoExtractItemJob.Spec);
+        services.RegisterJob<MediaFileReconciliationJob>(MediaFileReconciliationJob.Spec);
         services.RegisterJob<MetadataContainerCleanupJob>(MetadataContainerCleanupJob.Spec);
         services.RegisterJob<PruneOrphanedSubjectsJob>(PruneOrphanedSubjectsJob.Spec);
 

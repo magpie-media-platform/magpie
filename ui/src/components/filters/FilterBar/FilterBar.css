@@ -1,5 +1,24 @@
 @layer components {
+    .filter-bar__sync-hint {
+        grid-column: 1 / -1;
+    }
+
+    .filter-bar .monitoring-toggle__segments {
+        align-items: stretch;
+        min-height: 32px;
+
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
+        }
+    }
+
+    .filter-bar .monitoring-toggle__option {
+        flex: 1;
+        justify-content: center;
+    }
+
     .filter-bar {
+        flex-shrink: 0;
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-lg);
@@ -44,6 +63,10 @@
         &:focus-visible {
             outline: var(--focus-ring-width) solid var(--focus-ring-color);
             outline-offset: var(--focus-ring-offset);
+        }
+
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
         }
     }
 

@@ -31,7 +31,7 @@ internal sealed class TrackerSession
 
     public CookieContainer Cookies { get; set; } = new();
 
-    public SemaphoreSlim ClearanceGate { get; } = new(1, 1);
+    public SolverQueue ClearanceGate { get; } = new() { WaitForBackground = true };
 
     public bool ClearanceIsTlsBound(DateTimeOffset now) => now.UtcTicks < Volatile.Read(ref _tlsBindingExpiry);
 

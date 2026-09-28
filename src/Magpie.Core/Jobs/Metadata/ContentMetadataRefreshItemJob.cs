@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -67,7 +66,6 @@ internal sealed class ContentMetadataRefreshItemJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Retry,
-        Timeout = TimeSpan.FromMinutes(5),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         RequesterTriggerModes = [JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTarget,
@@ -84,6 +82,10 @@ internal sealed class ContentMetadataRefreshItemJob(
                 DataType.String,
                 true,
                 null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            }
         ],
     };
 
@@ -188,16 +190,6 @@ internal sealed class ContentMetadataRefreshItemJob(
             string.Equals(child.Slug, definition.Slug, StringComparison.Ordinal));
     }
 
-    private static string NormalizePathSegment(string source)
-    {
-        var characters = source.Trim().Select(character =>
-            character is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' || char.IsControl(character)
-                ? ' '
-                : character).ToArray();
-        return string.Join(' ', new string(characters).Split(' ', StringSplitOptions.RemoveEmptyEntries))
-            .TrimEnd('.');
-    }
-
     private static void InitializeContentPath(
         ContentHierarchyItem item,
         IContentTypeRegistry registry,
@@ -213,7 +205,7 @@ internal sealed class ContentMetadataRefreshItemJob(
             return;
         }
 
-        var segment = NormalizePathSegment(string.IsNullOrWhiteSpace(item.Name) ? item.Slug : item.Name);
+        var segment = (string.IsNullOrWhiteSpace(item.Name) ? item.Slug : item.Name).NormalizeContentPathSegment();
         if (segment.Length == 0)
         {
             segment = item.Slug;
@@ -263,6 +255,8 @@ internal sealed class ContentMetadataRefreshItemJob(
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             return new ProviderFetchResult(provider, null, ex);
         }
     }
@@ -327,27 +321,30 @@ internal sealed class ContentMetadataRefreshItemJob(
         return true;
     }
 
+    private static IEnumerable<KeyValuePair<string, string>> GetIncomingExternalIds(
+        SubjectRelationshipDefinition definition) =>
+        (definition.SubjectExternalIds ?? new Dictionary<string, string>())
+            .Concat((definition.InitialSubjectContribution?.ExternalIds ?? [])
+                .Where(id => !string.IsNullOrWhiteSpace(id.Source))
+                .Select(id => new KeyValuePair<string, string>(id.Source!, id.Value)))
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+            .Distinct();
+
     private static IReadOnlyList<(string Source, string Value)> GetExternalIds(
         SubjectRelationshipDefinition definition) =>
-        definition.SubjectExternalIds?
-            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+        GetIncomingExternalIds(definition)
             .Select(pair => (
                 pair.Key.NormalizeExternalIdentifierName(),
                 pair.Value.NormalizeExternalIdentifierValue()))
-            .ToArray() ?? [];
+            .Distinct()
+            .ToArray();
 
-    private static bool MatchesResolvedSubjectExternalId(
-        SubjectRelationshipDefinition incoming,
-        IReadOnlyList<(string Source, string Value)> incomingIds,
-        ResolvedSubject existing)
-    {
-        if (!string.Equals(incoming.SubjectKind, existing.Definition.SubjectKind, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return incomingIds.Any(left => existing.ExternalIds.Contains(left));
-    }
+    private static IReadOnlyList<(string Source, string Value)> GetExternalIds(IEnumerable<ExternalId> externalIds) =>
+        externalIds
+            .Where(id => !string.IsNullOrWhiteSpace(id.Source) && !string.IsNullOrWhiteSpace(id.Value))
+            .Select(id => (id.Source!.NormalizeExternalIdentifierName(), id.Value.NormalizeExternalIdentifierValue()))
+            .Distinct()
+            .ToArray();
 
     private static bool HasExternalIdConflict(
         IReadOnlyList<(string Source, string Value)> incomingIds,
@@ -510,6 +507,7 @@ internal sealed class ContentMetadataRefreshItemJob(
 
         var fetchResults = await Task.WhenAll(providerTasks).ConfigureAwait(false);
         var fetchByProvider = fetchResults.ToDictionary(r => r.Provider);
+        var throttles = fetchResults.Select(result => result.Exception).OfType<UpstreamThrottledException>().ToList();
 
         var replacements = new List<ContributionReplacement>();
         var childDefinitions = new List<ProviderChildDefinition>();
@@ -578,9 +576,20 @@ internal sealed class ContentMetadataRefreshItemJob(
 
                         expandActivity?.SetTag("magpie.relationships.found_count", expanded?.Count ?? 0);
                     }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (UpstreamThrottledException ex)
+                    {
+                        throttles.Add(ex);
+                        continue;
+                    }
                     catch (Exception ex)
                     {
                         expandActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        expandActivity?.AddException(ex);
+                        expandActivity?.SetTag("error.type", ex.GetType().FullName);
                         logger.LogError(
                             ex,
                             "Provider {ProviderType} failed to expand the related subjects, so the " +
@@ -602,6 +611,11 @@ internal sealed class ContentMetadataRefreshItemJob(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (throttles.Count > 0 && replacements.Count == 0 && childDefinitions.Count == 0)
+        {
+            throw new UpstreamThrottledException(throttles.Max(throttle => throttle.RetryAt));
+        }
+
         var resolvedTitle = ResolveCanonicalTitle(existingContributions);
         var resolvedYear = existingContributions
             .OrderBy(c => c.Ordinal)
@@ -615,6 +629,11 @@ internal sealed class ContentMetadataRefreshItemJob(
             !childDefinitionsAreComplete;
         if (stillPlaceholder)
         {
+            if (throttles.Count > 0)
+            {
+                throw new UpstreamThrottledException(throttles.Max(throttle => throttle.RetryAt));
+            }
+
             if (providers.Length == 0)
             {
                 logger.LogInformation(
@@ -681,7 +700,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                         TopLevel = item.ParentId is null,
                         RootFolderId = item.RootFolderId,
                         QualityTierListId = item.QualityTierListId,
-                        Monitoring = item.EffectiveMonitoring,
+                        Monitoring = item.EffectiveMonitoring != MonitoringMode.Unmonitored,
                         MetadataSourceContainerId = container.Id,
                         MetadataAddedContainerIds = addedRelationshipContainerIds
                     }) with
@@ -701,6 +720,11 @@ internal sealed class ContentMetadataRefreshItemJob(
                 ex,
                 "The refresh finished but failed to publish metadata.refreshed for item " + "{ContentHierarchyItemId}",
                 item.Id);
+        }
+
+        if (throttles.Count > 0)
+        {
+            throw new UpstreamThrottledException(throttles.Max(throttle => throttle.RetryAt));
         }
 
         progress.Report(1, "The metadata refresh completed.");
@@ -730,6 +754,10 @@ internal sealed class ContentMetadataRefreshItemJob(
             await transactionManager.ExecuteWithTransactionAsync(
                 async ct =>
                 {
+                    var lineage = await contentHierarchyItemRepository.GetLineageAsync(item.Id, ct)
+                        .ConfigureAwait(false);
+                    await contentHierarchyItemRepository.LockAsync(lineage.LastOrDefault()?.Id ?? item.Id, ct)
+                        .ConfigureAwait(false);
                     addedRelationshipContainerIds.Clear();
                     var resolvedSubjects = new List<ResolvedSubject>();
                     foreach (var replacement in replacements)
@@ -836,6 +864,8 @@ internal sealed class ContentMetadataRefreshItemJob(
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             logger.LogError(ex, "The refresh failed to write the metadata for item {ContentHierarchyItemId}", item.Id);
             throw;
         }
@@ -1039,6 +1069,8 @@ internal sealed class ContentMetadataRefreshItemJob(
         var seenSet = seen.ToHashSet();
         var addedContainerIds = new List<Guid>();
         var warnedUnsupportedFallbackKinds = new HashSet<string>(StringComparer.Ordinal);
+        var storedSubjects = await FindExistingSubjectCandidatesAsync(definitions, cancellationToken)
+            .ConfigureAwait(false);
 
         foreach (var definition in definitions)
         {
@@ -1071,40 +1103,50 @@ internal sealed class ContentMetadataRefreshItemJob(
             }
 
             var externalIds = GetExternalIds(definition);
-            var resolvedSubject = resolvedSubjects.FirstOrDefault(subject =>
-                MatchesResolvedSubjectExternalId(definition, externalIds, subject));
-            var subjectContainerId = resolvedSubject?.MetadataContainerId;
-            if (subjectContainerId is null)
+            if (HasExternalIdConflict(externalIds, externalIds))
             {
-                subjectContainerId = await FindExistingSubjectContainerIdAsync(definition, cancellationToken)
-                    .ConfigureAwait(false);
+                logger.LogWarning(
+                    "The metadata refresh found conflicting incoming identifiers for subject {SubjectName} " +
+                    "of kind {SubjectKind}; the association remains unresolved",
+                    definition.SubjectName,
+                    definition.SubjectKind);
+                continue;
             }
 
-            if (subjectContainerId is null)
+            var storedCandidates = storedSubjects.Where(subject =>
+                string.Equals(subject.Definition.SubjectKind, definition.SubjectKind, StringComparison.Ordinal) &&
+                externalIds.Any(subject.ExternalIds.Contains)).ToArray();
+            var candidates = resolvedSubjects.Concat(storedCandidates)
+                .Where(subject => string.Equals(
+                    subject.Definition.SubjectKind, definition.SubjectKind, StringComparison.Ordinal))
+                .GroupBy(subject => subject.MetadataContainerId)
+                .Select(group => new
+                {
+                    ContainerId = group.Key,
+                    ExternalIds = group.SelectMany(subject => subject.ExternalIds).Distinct().ToArray(),
+                    MatchesFallback = group.Any(subject =>
+                        MatchesResolvedSubjectFallbackIdentity(definition, subject, fallbackFields))
+                })
+                .ToArray();
+            var externalMatches = candidates
+                .Where(candidate => externalIds.Any(candidate.ExternalIds.Contains))
+                .ToArray();
+            var compatible = (externalMatches.Length > 0
+                    ? externalMatches
+                    : candidates.Where(candidate => candidate.MatchesFallback))
+                .Where(candidate => !HasExternalIdConflict(externalIds, candidate.ExternalIds))
+                .ToArray();
+            if (compatible.Length > 1 || externalMatches.Length > 0 && compatible.Length == 0)
             {
-                var fallbackCandidates = resolvedSubjects
-                    .Where(subject => MatchesResolvedSubjectFallbackIdentity(definition, subject, fallbackFields))
-                    .Select(subject => subject.MetadataContainerId)
-                    .Distinct()
-                    .Where(containerId => !resolvedSubjects.Any(subject =>
-                        subject.MetadataContainerId == containerId &&
-                        HasExternalIdConflict(externalIds, subject.ExternalIds)))
-                    .Take(2)
-                    .ToArray();
-                if (fallbackCandidates.Length == 1)
-                {
-                    subjectContainerId = fallbackCandidates[0];
-                }
-                else if (fallbackCandidates.Length > 1)
-                {
-                    logger.LogWarning(
-                        "The metadata refresh found ambiguous in-run fallback matches for subject " +
-                        "{SubjectName} of kind {SubjectKind}; a new subject will be created",
-                        definition.SubjectName,
-                        definition.SubjectKind);
-                }
+                logger.LogWarning(
+                    "The metadata refresh found ambiguous or conflicting identity matches for subject " +
+                    "{SubjectName} of kind {SubjectKind}; the association remains unresolved",
+                    definition.SubjectName,
+                    definition.SubjectKind);
+                continue;
             }
 
+            Guid? subjectContainerId = compatible.Length == 1 ? compatible[0].ContainerId : null;
             if (subjectContainerId is null)
             {
                 subjectContainerId = await UpsertSubjectAsync(definition, userId, correlationId, cancellationToken)
@@ -1116,6 +1158,8 @@ internal sealed class ContentMetadataRefreshItemJob(
                 continue;
             }
 
+            resolvedSubjects.AddRange(storedCandidates.Where(subject =>
+                subject.MetadataContainerId == subjectContainerId.Value));
             resolvedSubjects.Add(new(definition, subjectContainerId.Value, externalIds));
 
             var key = new MetadataRelationshipKey(
@@ -1199,41 +1243,46 @@ internal sealed class ContentMetadataRefreshItemJob(
         return subject.MetadataContainerId;
     }
 
-    private async Task<Guid?> FindExistingSubjectContainerIdAsync(
-        SubjectRelationshipDefinition definition,
+    private async Task<IReadOnlyList<ResolvedSubject>> FindExistingSubjectCandidatesAsync(
+        IReadOnlyList<SubjectRelationshipDefinition> definitions,
         CancellationToken cancellationToken)
     {
-        if (definition.SubjectExternalIds is { Count: > 0 })
+        var candidates = new List<ResolvedSubject>();
+        foreach (var group in definitions.Where(definition => definition is not null &&
+            !string.IsNullOrWhiteSpace(definition.SubjectKind))
+            .GroupBy(definition => definition.SubjectKind, StringComparer.Ordinal))
         {
-            foreach (var (source, value) in definition.SubjectExternalIds)
+            var externalIds = group.SelectMany(GetIncomingExternalIds).Distinct()
+                .Select(pair => new ExternalId { Source = pair.Key, Value = pair.Value }).ToArray();
+            if (externalIds.Length == 0)
             {
-                if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(value))
+                continue;
+            }
+
+            var subjectIds = await subjectRepository.ListIdsByExternalIdentityAsync(
+                group.Key, externalIds, cancellationToken).ConfigureAwait(false);
+            var subjects = await subjectRepository.ListIdentityDetailsAsync(subjectIds, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var subject in subjects)
+            {
+                if (subject.MetadataContainer is null ||
+                    !string.Equals(subject.Kind, group.Key, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                var matches = await subjectRepository.QueryAsync(
-                    new SubjectQuery
-                    {
-                        Kind = definition.SubjectKind,
-                        ExternalId = new()
-                        {
-                            Source = new() { And = [new() { Value = source }] },
-                            Value = new() { And = [new() { Value = value }] }
-                        }
-                    },
-                    new() { PageNumber = 1, PageSize = 1 },
-                    null,
-                    cancellationToken).ConfigureAwait(false);
-                var match = matches.Items.FirstOrDefault()?.MetadataContainerId;
-                if (match is not null)
+                var storedIds = GetExternalIds(subject.MetadataContainer.Contributions.SelectMany(c => c.ExternalIds));
+                foreach (var contribution in subject.MetadataContainer.Contributions)
                 {
-                    return match;
+                    candidates.Add(new(
+                        group.First() with { InitialSubjectContribution = contribution },
+                        subject.MetadataContainerId,
+                        storedIds));
                 }
             }
         }
 
-        return null;
+        return candidates;
     }
 
     private async Task EnqueueChildRefreshesAsync(
@@ -1288,7 +1337,7 @@ internal sealed class ContentMetadataRefreshItemJob(
             string.Equals(origin, GeneratedPathOrigin, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(
                 current.Path,
-                NormalizePathSegment(current.Slug),
+                current.Slug.NormalizeContentPathSegment(),
                 StringComparison.Ordinal) &&
             !isAbsolute &&
             current.ContentItem is not { MediaFiles.Count: > 0 };
@@ -1300,10 +1349,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 .FirstOrDefault(definition => definition.Slug == current.Level);
             if (level?.Subfolder is not null)
             {
-                var segment = NormalizePathSegment(name ?? current.Name);
-                path = resolvedYear is null
-                    ? segment
-                    : $"{segment} ({resolvedYear.Value.ToString(CultureInfo.InvariantCulture)})";
+                path = (name ?? current.Name).ToGeneratedContentPath(resolvedYear);
             }
         }
 

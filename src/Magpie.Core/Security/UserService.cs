@@ -86,37 +86,33 @@ internal sealed class UserService(
         Guid callerUserId,
         CancellationToken cancellationToken = default)
     {
-        var user = await users.GetByIdAsync(userId, cancellationToken).ConfigureAwait(false);
-        if (user is null || IsSystemAccount(user))
-        {
-            return false;
-        }
-
-        var changesSecurityFields = patch.Role is not null || patch.Enabled is not null;
-        if (changesSecurityFields)
-        {
-            var resultingRole = patch.Role?.Value ?? user.Role;
-            var resultingEnabled = patch.Enabled?.Value ?? user.Enabled;
-
-            var wouldRemoveLastAdmin = await WouldRemoveLastEnabledAdminAsync(
-                user,
-                resultingRole,
-                resultingEnabled,
-                cancellationToken)
-                .ConfigureAwait(false);
-            if (wouldRemoveLastAdmin)
-            {
-                return false;
-            }
-        }
-
         return await transactionManager.ExecuteWithTransactionAsync(
             async token =>
             {
+                await users.LockAuthorizationAsync(userId, token).ConfigureAwait(false);
+                var user = await users.GetByIdAsync(userId, token).ConfigureAwait(false);
+                if (user is null || IsSystemAccount(user))
+                {
+                    return false;
+                }
+
+                var resultingRole = patch.Role?.Value ?? user.Role;
+                var resultingEnabled = patch.Enabled?.Value ?? user.Enabled;
+                var authorizationChanged = resultingRole != user.Role || resultingEnabled != user.Enabled;
+                if (authorizationChanged && await WouldRemoveLastEnabledAdminAsync(
+                    user,
+                    resultingRole,
+                    resultingEnabled,
+                    token)
+                    .ConfigureAwait(false))
+                {
+                    return false;
+                }
+
                 var patched = await users
                     .PatchAsync(patch with { Id = userId }, callerUserId, token)
                     .ConfigureAwait(false);
-                if (patched && changesSecurityFields)
+                if (patched && authorizationChanged)
                 {
                     await refreshTokens.DeleteByUserAsync(userId, token).ConfigureAwait(false);
                 }
@@ -128,24 +124,22 @@ internal sealed class UserService(
 
     public async Task<bool> DeleteAsync(Guid userId, Guid callerUserId, CancellationToken cancellationToken = default)
     {
-        var user = await users.GetByIdAsync(userId, cancellationToken).ConfigureAwait(false);
-        if (user is null || IsSystemAccount(user))
+        return await transactionManager.ExecuteWithTransactionAsync(async token =>
         {
-            return false;
-        }
+            await users.LockAuthorizationAsync(userId, token).ConfigureAwait(false);
+            var user = await users.GetByIdAsync(userId, token).ConfigureAwait(false);
+            if (user is null || IsSystemAccount(user))
+            {
+                return false;
+            }
 
-        var wouldRemoveLastAdmin = await WouldRemoveLastEnabledAdminAsync(
-            user,
-            user.Role,
-            enabled: false,
-            cancellationToken)
-            .ConfigureAwait(false);
-        if (wouldRemoveLastAdmin)
-        {
-            return false;
-        }
+            if (await WouldRemoveLastEnabledAdminAsync(user, user.Role, enabled: false, token).ConfigureAwait(false))
+            {
+                return false;
+            }
 
-        return await users.DeleteAsync(userId, callerUserId, cancellationToken).ConfigureAwait(false);
+            return await users.DeleteAsync(userId, callerUserId, token).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> UnlockAsync(

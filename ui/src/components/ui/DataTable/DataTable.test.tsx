@@ -253,6 +253,17 @@ describe('DataTable', () => {
     });
 
     describe('pagination', () => {
+        it('Pagination_HidesSinglePageControls_WhenExplicitPaginationIsEnabled', () => {
+            // Arrange
+            render(<DataTable columns={testColumns} data={testData.slice(0, 2)} enablePagination pageSize={5} />);
+
+            // Act
+            const pager = screen.queryByRole('navigation', { name: 'Pagination' });
+
+            // Assert
+            expect(pager).not.toBeInTheDocument();
+        });
+
         it('hides pagination by default', () => {
             render(<DataTable columns={testColumns} data={testData} />);
             expect(screen.queryByText(/of/i)).not.toBeInTheDocument();
@@ -602,6 +613,36 @@ describe('DataTable', () => {
 
             rerender(<DataTable columns={testColumns} data={testData} mobileSelectionActive={true} />);
             expect(container.querySelector('.data-table')).toHaveAttribute('data-mobile-selection-active', 'true');
+        });
+
+        it('keeps cell positions equal across rows when only some rows are selectable', () => {
+            render(
+                <DataTable
+                    columns={testColumns}
+                    data={testData}
+                    mobileSelectionActive
+                    mobileSelectionOverlay={{
+                        isSelected: () => false,
+                        onToggle: vi.fn(),
+                        canSelect: (row) => row.status === 'active',
+                        rowLabel: (row) => row.name,
+                    }}
+                />,
+            );
+
+            const cellLayouts = screen
+                .getAllByRole('row')
+                .slice(1)
+                .map((row) =>
+                    within(row)
+                        .getAllByRole('gridcell')
+                        .map((cell) => cell.getAttribute('data-column') ?? cell.className)
+                        .join('|'),
+                );
+
+            expect(cellLayouts).toEqual(Array(5).fill('data-table__mobile-select-cell|id|name|status'));
+            expect(screen.getAllByRole('button', { name: /^Select / })).toHaveLength(3);
+            expect(screen.queryByRole('button', { name: 'Select Item Two' })).not.toBeInTheDocument();
         });
     });
 });

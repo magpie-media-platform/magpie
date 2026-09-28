@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Integrations;
 using Magpie.Models.Paging;
 
@@ -37,11 +38,39 @@ public interface IDownloadService
     Task<DownloadQueueEntry?> GetAsync(Guid id, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Cancels a download.
+    /// Stops a client transfer and keeps the cancelled attempt in history without deleting its files.
     /// </summary>
     /// <param name="id">The id of the download to cancel</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<bool> CancelAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cancels a download only when all its current scopes are fulfilled after a successful import.
+    /// </summary>
+    /// <param name="id">The id of the download to cancel</param>
+    /// <param name="importedDownloadId">The id of the imported download to keep</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<DownloadCancellationOutcome> CancelFulfilledAsync(
+        Guid id,
+        Guid importedDownloadId,
+        CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("This download service does not support fulfillment cancellation.");
+    }
+
+    /// <summary>
+    /// Cancels a client transfer and reports why the request succeeded or failed.
+    /// </summary>
+    /// <param name="id">The id of the download to cancel</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    async Task<DownloadCancellationOutcome> CancelWithOutcomeAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        return await CancelAsync(id, cancellationToken).ConfigureAwait(false)
+            ? DownloadCancellationOutcome.Cancelled
+            : DownloadCancellationOutcome.NotCancellable;
+    }
 
     /// <summary>
     /// Retries a download.
@@ -149,14 +178,14 @@ public interface IDownloadService
     /// <param name="source">The download client that receives the release</param>
     /// <param name="settings">The resolved settings of the download client</param>
     /// <param name="contentType">The slug of the content type for the download, or <see langword="null"/></param>
-    /// <param name="ignoreFailedTaint">Whether the grab proceeds despite recent failed grabs</param>
+    /// <param name="interactive">Whether the grab is interactive, which prior Failed downloads do not suppress</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<GrabResult> GrabAsync(
         Release release,
         DownloadClient source,
         IReadOnlyDictionary<string, string> settings,
         string? contentType = null,
-        bool ignoreFailedTaint = false,
+        bool interactive = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -212,7 +241,7 @@ public interface IDownloadService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Marks a stuck candidate Failed/DownloadStuck and reports whether the state changed.
+    /// Marks a stuck candidate Faulted/DownloadStuck and reports whether the state changed.
     /// </summary>
     /// <param name="candidate">The stuck-download candidate to mark</param>
     /// <param name="threshold">The time a download must sit without progress before it counts as stuck</param>

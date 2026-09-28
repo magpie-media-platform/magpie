@@ -11,6 +11,7 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -25,18 +26,37 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ReleaseScopeRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IReleaseScopeRepository _subject = null!;
     private Guid _releaseId;
     private Guid _hierarchyItemId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
         var hierarchyItem = new ContentHierarchyItem

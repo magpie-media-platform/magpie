@@ -4,12 +4,13 @@ import { DatabaseIcon, FlaskIcon, MagnifyingGlassIcon, PlusIcon, TrashIcon } fro
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { Badge } from '@/components/ui/Badge';
-import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
+import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
 import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
+import { ListFilterToolbar, type ListFilterField } from '@/components/ui/ListFilterToolbar';
 import { Pager } from '@/components/ui/Pager';
 import { MultiSelectColumnFilter, encodeMultiValue, decodeMultiValue } from '@/components/ui/MultiSelectColumnFilter';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
@@ -33,7 +34,10 @@ import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { mapStatusParam } from '@/lib/urlParams';
 
-import { ConfigureInstanceDialog, type ConfigureConnectionTarget } from './ConfigureInstanceDialog';
+import {
+    ConfigureInstanceDialog,
+    type ConfigureConnectionTarget,
+} from '@/components/configuration/ConfigureInstanceDialog';
 
 import '@/styles/bulk-actions-toolbar.css';
 
@@ -46,6 +50,12 @@ const PAGE_SIZE = 25;
 const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
 
 const SORT_KEYS = ['name', 'indexer', 'status', 'lastChecked'] as const;
+const SORT_OPTIONS = [
+    { id: 'name', label: 'Name' },
+    { id: 'indexer', label: 'Indexer' },
+    { id: 'status', label: 'Status' },
+    { id: 'lastChecked', label: 'Last checked' },
+];
 
 const DEFAULT_FILTERS = { provider: '', status: '', enabled: '' };
 
@@ -395,6 +405,17 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
 
     const isLoading = isLoadingIndexers || isLoadingConnections;
     const hasActiveFilters = provider.length > 0 || status.length > 0 || enabled !== '';
+    const filterFields: ListFilterField[] = [
+        {
+            id: 'provider',
+            label: 'Provider',
+            kind: 'multi',
+            value: provider,
+            options: providerOptions.map((value) => ({ value, label: value })),
+        },
+        { id: 'status', label: 'Status', kind: 'multi', value: status, options: statusOptions },
+        { id: 'enabled', label: 'Enabled', kind: 'facet', value: enabled, options: enabledOptions },
+    ];
 
     const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
     const currentPage = Math.min(page, pageCount);
@@ -469,7 +490,20 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
                 </Button>
             </BulkActionsToolbar>
 
-            <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+            <ListFilterToolbar
+                fields={filterFields}
+                onCommit={(values) =>
+                    setFilters({
+                        provider: encodeMultiValue(values.provider as string[]),
+                        status: encodeMultiValue(values.status as string[]),
+                        enabled: values.enabled as string,
+                    })
+                }
+                sorting={sorting}
+                sortOptions={SORT_OPTIONS}
+                onSortingChange={setSorting}
+                selection={{ active: selection.selectionMode, onToggle: selection.toggleSelectionMode }}
+            />
 
             <div className="indexers-table" data-area="configured">
                 <DataTable<ConfiguredConnectionRow>
@@ -502,6 +536,7 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
                         className="indexers-table__pager"
                         page={currentPage}
                         pageCount={pageCount}
+                        totalItems={filteredRows.length}
                         onFirst={() => setPage(1)}
                         onPrevious={() => setPage(Math.max(1, currentPage - 1))}
                         onNext={() => setPage(Math.min(pageCount, currentPage + 1))}

@@ -11,7 +11,7 @@ function makeItem(overrides: Partial<ApiContentItemWithMetadata> = {}): ApiConte
         slug: 'test-item',
         name: 'Test Item',
         monitoring: null,
-        effectiveMonitoring: true,
+        effectiveMonitoring: 'Monitored',
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };

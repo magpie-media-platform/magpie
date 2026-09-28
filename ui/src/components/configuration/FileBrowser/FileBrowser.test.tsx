@@ -34,6 +34,7 @@ const mockFileSystem: Record<string, FileSystemEntry[]> = {
         { name: 'TV', path: '/media/storage/TV', type: 'folder' },
     ],
     '/opt': [],
+    '/srv': [{ name: 'movie.mp4', path: '/srv/movie.mp4', type: 'file', size: 18768 }],
 };
 
 function createWrapper() {
@@ -551,6 +552,16 @@ describe('FileBrowser', () => {
         await waitFor(() => {
             expect(screen.getByText('This folder is empty')).toBeInTheDocument();
         });
+    });
+
+    it('shows no subfolders instead of empty for a folder with only files in folder mode', async () => {
+        render(<FileBrowser {...defaultProps} mode="folder" initialPath="/srv" />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getByText('No subfolders')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('This folder is empty')).not.toBeInTheDocument();
+        expect(screen.queryByText('movie.mp4')).not.toBeInTheDocument();
     });
 
     it('displays selected path in folder mode', async () => {

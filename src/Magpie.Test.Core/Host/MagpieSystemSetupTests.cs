@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
+using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -27,6 +28,7 @@ public sealed class MagpieSystemSetupTests
 {
     private Mock<ISettingsService> _settingsService = null!;
     private Mock<IUserService> _userService = null!;
+    private Mock<IUserRepository> _users = null!;
     private Mock<IDatabaseManagementProvider> _databaseManagement = null!;
     private Mock<IFileSystem> _fileSystem = null!;
     private ISetupService _subject = null!;
@@ -36,6 +38,13 @@ public sealed class MagpieSystemSetupTests
     {
         _settingsService = new Mock<ISettingsService>();
         _userService = new Mock<IUserService>();
+        _users = new Mock<IUserRepository>();
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<User>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<User>> operation, CancellationToken token) => operation(token));
         _databaseManagement = new Mock<IDatabaseManagementProvider>();
         _databaseManagement.SetupGet(provider => provider.Provider).Returns("sqlite");
         _fileSystem = new Mock<IFileSystem>();
@@ -63,6 +72,8 @@ public sealed class MagpieSystemSetupTests
                 StartedAt: DateTime.UtcNow),
             _settingsService.Object,
             _userService.Object,
+            _users.Object,
+            transactionManager.Object,
             _databaseManagement.Object,
             _fileSystem.Object,
             NullLogger<SetupService>.Instance);
@@ -205,6 +216,83 @@ public sealed class MagpieSystemSetupTests
                     Guid.Parse("11111111-1111-1111-1111-111111111111"),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task CreateSetupAdminAsync_LocksSystemUser_BeforeCheckingAndCreating()
+    {
+        // Arrange
+        var calls = new List<string>();
+        _users
+            .Setup(repository => repository.LockAuthorizationAsync(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => calls.Add("lock"))
+            .Returns(Task.CompletedTask);
+        _userService
+            .Setup(service => service.QueryAsync(
+                It.IsAny<UserQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => calls.Add("check"))
+            .ReturnsAsync(new PagedList<User> { Items = [], TotalItems = 0 });
+        _userService
+            .Setup(service => service.CreateAsync(
+                It.IsAny<LocalUserCreate>(),
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => calls.Add("create"))
+            .ReturnsAsync(new User
+            {
+                Id = Guid.NewGuid(),
+                Username = "admin",
+                ProviderType = "local",
+                Enabled = true,
+                Role = Role.Admin
+            });
+
+        // Act
+        await _subject.CreateAdministratorAsync("admin", "password123").ConfigureAwait(false);
+
+        // Assert
+        Assert.That(calls, Is.EqualTo(["lock", "check", "create"]));
+    }
+
+    [Test]
+    public void CreateSetupAdminAsync_Throws_WhenConcurrentClaimWinsBeforeLock()
+    {
+        // Arrange
+        var locked = false;
+        _users
+            .Setup(repository => repository.LockAuthorizationAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => locked = true)
+            .Returns(Task.CompletedTask);
+        _userService
+            .Setup(service => service.QueryAsync(
+                It.IsAny<UserQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new PagedList<User> { Items = [], TotalItems = locked ? 1 : 0 });
+
+        // Act
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                async () => await _subject.CreateAdministratorAsync("admin", "password123").ConfigureAwait(false),
+                Throws.TypeOf<MagpieException>()
+                    .With.Message.EqualTo("The administrator account is already claimed."));
+            _userService.Verify(
+                service => service.CreateAsync(
+                    It.IsAny<LocalUserCreate>(),
+                    It.IsAny<Guid>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
         }
     }
 

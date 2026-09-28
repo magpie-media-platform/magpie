@@ -25,6 +25,7 @@ interface BaseProps {
     label: ReactNode;
     active: boolean;
     hideLabel?: boolean;
+    advanced?: boolean;
 }
 
 interface FacetFilterProps extends BaseProps {
@@ -68,16 +69,19 @@ export type ColumnHeaderFilterProps =
 const FACET_ANY = '__any__';
 
 export function ColumnHeaderFilter(props: ColumnHeaderFilterProps) {
-    const { label, active, hideLabel } = props;
+    const { label, hideLabel } = props;
+    const active = props.active || Boolean(props.advanced);
     const [open, setOpen] = useState(false);
 
-    const disabled = props.type === 'facet' && Boolean(props.disabled);
+    const disabled = props.advanced || (props.type === 'facet' && Boolean(props.disabled));
     const columnName = typeof label === 'string' ? label : 'column';
-    const triggerLabel = disabled
-        ? `${columnName} filter locked`
-        : active
-          ? `${columnName} filtered, edit filter`
-          : `Filter by ${columnName}`;
+    const triggerLabel = props.advanced
+        ? `${columnName} uses advanced MQL; edit the query`
+        : disabled
+          ? `${columnName} filter locked`
+          : active
+            ? `${columnName} filtered, edit filter`
+            : `Filter by ${columnName}`;
 
     const trigger = (
         <DropdownMenuTrigger asChild>
@@ -204,7 +208,13 @@ function DateRangeBody({ from, to, onChange, label, onClose }: DateRangeFilterPr
     }, [draftFrom, draftTo, onChange, onClose]);
 
     return (
-        <div className="column-header-filter__form">
+        <form
+            className="column-header-filter__form"
+            onSubmit={(event) => {
+                event.preventDefault();
+                apply();
+            }}
+        >
             <Label htmlFor={`${inputId}-from`}>{label} from</Label>
             <Input
                 id={`${inputId}-from`}
@@ -235,11 +245,11 @@ function DateRangeBody({ from, to, onChange, label, onClose }: DateRangeFilterPr
                     <XIcon weight="bold" aria-hidden="true" />
                     Clear
                 </Button>
-                <Button variant="primary" size="sm" onClick={apply}>
+                <Button type="submit" variant="primary" size="sm">
                     Apply
                 </Button>
             </div>
-        </div>
+        </form>
     );
 }
 
@@ -261,7 +271,13 @@ function NumberRangeBody({
     }, [draftMax, draftMin, onChange, onClose]);
 
     return (
-        <div className="column-header-filter__form">
+        <form
+            className="column-header-filter__form"
+            onSubmit={(event) => {
+                event.preventDefault();
+                apply();
+            }}
+        >
             <Label htmlFor={`${inputId}-min`}>
                 {label} minimum{unit ? ` (${unit})` : ''}
             </Label>
@@ -269,6 +285,7 @@ function NumberRangeBody({
                 id={`${inputId}-min`}
                 size="sm"
                 type="number"
+                step="any"
                 min="0"
                 value={draftMin}
                 onChange={(e) => setDraftMin(e.target.value)}
@@ -280,6 +297,7 @@ function NumberRangeBody({
                 id={`${inputId}-max`}
                 size="sm"
                 type="number"
+                step="any"
                 min="0"
                 value={draftMax}
                 onChange={(e) => setDraftMax(e.target.value)}
@@ -298,11 +316,11 @@ function NumberRangeBody({
                     <XIcon weight="bold" aria-hidden="true" />
                     Clear
                 </Button>
-                <Button variant="primary" size="sm" onClick={apply}>
+                <Button type="submit" variant="primary" size="sm">
                     Apply
                 </Button>
             </div>
-        </div>
+        </form>
     );
 }
 

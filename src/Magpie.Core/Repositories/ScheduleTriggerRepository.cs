@@ -399,6 +399,28 @@ internal sealed class ScheduleTriggerRepository(
         }
     }
 
+    /// <inheritdoc />
+    public async Task LockAsync(Guid triggerId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (context.Database.CurrentTransaction is null)
+            {
+                throw new InvalidOperationException("A schedule trigger lock requires a transaction.");
+            }
+
+            await context.ScheduleTriggers.Where(trigger => trigger.Id == triggerId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(trigger => trigger.ModifiedAt,
+                    trigger => trigger.ModifiedAt), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The schedule trigger repository failed to lock schedule trigger {TriggerId}.",
+                triggerId);
+            throw;
+        }
+    }
+
     public async Task<bool> PatchAsync(
         ScheduleTriggerPatch patch,
         Guid? modifiedByUserId,
@@ -409,7 +431,8 @@ internal sealed class ScheduleTriggerRepository(
             var patched = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
-                    var model = await context.ScheduleTriggers
+                    await LockAsync(patch.Id, cancellationToken).ConfigureAwait(false);
+                    var model = await context.ScheduleTriggers.AsNoTracking()
                         .FirstOrDefaultAsync(t => t.Id == patch.Id, cancellationToken)
                         .ConfigureAwait(false);
 
@@ -442,8 +465,6 @@ internal sealed class ScheduleTriggerRepository(
                     if (patch.Parameters is not null)
                     {
                         ApplyPatch(model.Parameters, patch.Parameters);
-
-                        context.Entry(model).Property(t => t.Parameters).IsModified = true;
                     }
 
                     if (patch.NextRunAt is not null)
@@ -454,7 +475,18 @@ internal sealed class ScheduleTriggerRepository(
                     model.ModifiedAt = now;
                     model.ModifiedByUserId = modifiedByUserId;
 
-                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    var updated = await context.ScheduleTriggers.Where(trigger => trigger.Id == patch.Id)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(trigger => trigger.Name, model.Name)
+                            .SetProperty(trigger => trigger.Schedule, model.Schedule)
+                            .SetProperty(trigger => trigger.ExecutionMode, model.ExecutionMode)
+                            .SetProperty(trigger => trigger.Enabled, model.Enabled)
+                            .SetProperty(trigger => trigger.Parameters, model.Parameters)
+                            .SetProperty(trigger => trigger.NextRunAt, model.NextRunAt)
+                            .SetProperty(trigger => trigger.ModifiedAt, model.ModifiedAt)
+                            .SetProperty(trigger => trigger.ModifiedByUserId, model.ModifiedByUserId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     if (updated > 0)
                     {
                         await auditRecordRepository.CreateAsync(

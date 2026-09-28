@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 
 using Magpie.Extensions.Tv.Parsing;
 using Magpie.Models;
@@ -20,12 +18,9 @@ namespace Magpie.Extensions.Tv;
 internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefinitionProvider> logger)
     :
         IPathResolutionContentTypeDefinitionProvider,
+        IFileRoutingContentTypeDefinitionProvider,
         IReleaseMatchContentTypeDefinitionProvider
 {
-    private static readonly Regex SamplePattern = new(
-        @"(?:^|[._-])sample(?:$|[._-])|\[sample\]",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
     private static readonly ContentTypeDefinition TvDefinition = new()
     {
         Slug = Constants.ContentTypeSlug,
@@ -103,6 +98,7 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
         MetadataField.References |
         MetadataField.Relationships |
         MetadataField.Images |
+        MetadataField.Previews |
         MetadataField.AlternateTexts |
         MetadataField.ContentRatings |
         MetadataField.Awards |
@@ -133,6 +129,28 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
     private const string EpisodeSignal = "episode";
 
     public ContentTypeDefinition Definition => TvDefinition;
+
+    /// <inheritdoc />
+    public Guid? ResolveFileChild(
+        ContentHierarchyItem parent,
+        IReadOnlyList<ContentHierarchyItem> children,
+        IReadOnlyDictionary<string, List<string>> signals)
+    {
+        var (signal, childLevel) = parent.Level switch
+        {
+            Constants.ShowLevelSlug => (SeasonSignal, Constants.SeasonLevelSlug),
+            Constants.SeasonLevelSlug => (EpisodeSignal, Constants.EpisodeLevelSlug),
+            _ => (string.Empty, string.Empty)
+        };
+        if (!signals.TryGetValue(signal, out var values) || values.Count != 1 ||
+            !int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal))
+        {
+            return null;
+        }
+
+        var matches = children.Where(child => child.Level == childLevel && child.Ordinal == ordinal).ToArray();
+        return matches.Length == 1 ? matches[0].Id : null;
+    }
 
     public ReleaseMatchResult IsMatch(
         ContentTarget target,
@@ -255,7 +273,9 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
 
         if (isSeriesPack)
         {
-            return ReleaseMatchResult.Confident;
+            return target.Item.Level != Constants.EpisodeLevelSlug || IsPublishedBy(target, season, release)
+                ? ReleaseMatchResult.Confident
+                : ReleaseMatchResult.NoMatch;
         }
 
         if (parsed.Seasons.Count == 0)
@@ -331,7 +351,9 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             return ReleaseMatchResult.Indeterminate;
         }
 
-        if (parsed.Episodes.Count > 0 && !parsed.Episodes.Contains(episodeOrdinal))
+        if (parsed.Episodes.Count > 0
+            ? !parsed.Episodes.Contains(episodeOrdinal)
+            : !IsPublishedBy(target, season, release))
         {
             return ReleaseMatchResult.NoMatch;
         }
@@ -341,6 +363,19 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             : ReleaseMatchResult.Confident;
     }
 
+    private static bool IsPublishedBy(ContentTarget target, ContentHierarchyItem season, Release release)
+    {
+        if (release.PublishDate == default)
+        {
+            return true;
+        }
+
+        return target.Metadata.GetValueOrDefault(target.Item.Id)?.PublishDate is { } published
+            ? published.Date <= release.PublishDate.Date.AddDays(1)
+            : target.Metadata.GetValueOrDefault(season.Id)?.PublishDate is not { } seasonPublished ||
+                seasonPublished.Date.AddDays(365) < release.PublishDate.Date;
+    }
+
     private static bool IsIgnorableInterveningToken(string token) =>
         token is "complete" or "the" ||
         string.Equals(TvParsingPatterns.Year.Match(token).Value, token, StringComparison.Ordinal);
@@ -348,7 +383,7 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? Parse(string filePath, out string? levelSlug)
     {
         levelSlug = null;
-        if (SamplePattern.IsMatch(Path.GetFileNameWithoutExtension(filePath)))
+        if (ReleaseFiles.IsSample(filePath))
         {
             return null;
         }

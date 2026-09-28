@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { useEventTriggerCrud } from './useEventTriggerCrud';
 import type { ApiEventTrigger } from '@/hooks/useEventTriggers';
+import { ApiError } from '@/lib/api';
 
 const mockToast = vi.fn();
 const mockCreateTrigger = vi.fn();
@@ -384,5 +385,30 @@ describe('useEventTriggerCrud', () => {
         });
 
         expect(result.current.formInitialValues?.eventNamePatterns).toEqual(['content.added']);
+    });
+
+    it.each([
+        [400, 'A user trigger must target a specific item.', 'A user trigger must target a specific item.'],
+        [500, 'Request failed with status 500', 'The server request failed. Try again later.'],
+    ])('shows the actionable reason when a save fails with status %i', async (status, message, description) => {
+        const error = new ApiError(status, message);
+        mockCreateTrigger.mockRejectedValue(error);
+        const { result } = renderHook(() => useEventTriggerCrud());
+
+        await act(async () => {
+            await expect(
+                result.current.handleSubmit({
+                    name: 'My Trigger',
+                    templateId: 'ContentMetadataRefreshItem',
+                    eventNamePatterns: ['content.added'],
+                    filters: [],
+                    enabled: false,
+                    delaySeconds: 0,
+                    parameters: {},
+                }),
+            ).rejects.toBe(error);
+        });
+
+        expect(mockToast).toHaveBeenCalledWith({ title: 'Error', description, variant: 'error' });
     });
 });

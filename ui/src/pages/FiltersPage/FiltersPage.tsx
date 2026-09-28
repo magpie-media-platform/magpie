@@ -84,8 +84,9 @@ export function FiltersPage() {
     const [isDeleting, setIsDeleting] = useState(false);
     const { toast } = useToast();
     const navigate = useNavigate();
-    const { hasRole, user } = useAuth();
-    const canManage = hasRole(Role.Manager);
+    const { hasPermission, hasRole, user } = useAuth();
+    const isAdmin = hasRole(Role.Admin);
+    const canWriteFilters = hasPermission('filters.own');
 
     const { filters: contentFilters, isLoading, error, refetch } = useContentFilters();
     const { wishlists, refetch: refetchWishlists } = useWishlists();
@@ -403,18 +404,13 @@ export function FiltersPage() {
 
     const canEditFilter = useCallback(
         (filter: EnrichedFilterItem): boolean =>
-            !filter.wishlistName && canEditOwned(filter, user?.id, canManage, hasRole, Role.Requester),
-        [canManage, hasRole, user?.id],
+            !filter.wishlistName && canEditOwned(filter, user?.id, isAdmin, canWriteFilters),
+        [canWriteFilters, isAdmin, user?.id],
     );
 
     const canEditIfUnbound = useCallback(
-        (filter: ContentFilterItem): boolean => canEditOwned(filter, user?.id, canManage, hasRole, Role.Requester),
-        [canManage, hasRole, user?.id],
-    );
-
-    const canDeleteFilter = useCallback(
-        (filter: EnrichedFilterItem): boolean => canManage && canEditFilter(filter),
-        [canEditFilter, canManage],
+        (filter: ContentFilterItem): boolean => canEditOwned(filter, user?.id, isAdmin, canWriteFilters),
+        [canWriteFilters, isAdmin, user?.id],
     );
 
     const handleRefresh = useCallback(async () => {
@@ -483,7 +479,7 @@ export function FiltersPage() {
                                 isOwner={filter.ownerId === user?.id}
                                 canEdit={canEditFilter(filter)}
                                 canEditIfUnbound={canEditIfUnbound(filter)}
-                                canDelete={canDeleteFilter(filter)}
+                                canDelete={canEditFilter(filter)}
                                 onEdit={handleEditFilter}
                                 onDuplicate={handleDuplicateFilter}
                                 onDelete={handleDeleteFilter}
@@ -493,6 +489,7 @@ export function FiltersPage() {
                                 onConvertToWishlist={handleConvertToWishlist}
                                 canCreateWishlist={hasRole(Role.Requester)}
                                 canDuplicate={hasRole(Role.Requester)}
+                                canSearchProviders={hasPermission('content.add')}
                             />
                         ))
                     )}
@@ -543,6 +540,7 @@ interface FilterRowProps {
     onConvertToWishlist: (id: string) => void;
     canCreateWishlist: boolean;
     canDuplicate: boolean;
+    canSearchProviders: boolean;
 }
 
 function FilterRow({
@@ -561,6 +559,7 @@ function FilterRow({
     onConvertToWishlist,
     canCreateWishlist,
     canDuplicate,
+    canSearchProviders,
 }: FilterRowProps) {
     const isShared = filter.ownerId === null;
 
@@ -709,7 +708,7 @@ function FilterRow({
                                     Duplicate
                                 </DropdownMenuItem>
                             )}
-                            {filter.query && (
+                            {filter.query && canSearchProviders && (
                                 <DropdownMenuItem
                                     onSelect={() => onSearchProviders(filter.id)}
                                     data-action="search-providers"

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -55,12 +56,45 @@ internal sealed class ContentMetadataSearcher(
         return [.. result.Hits.Select(hit => hit.ToMetadataSearchCandidate(kind, levelDefinition.Slug))];
     }
 
-    public async Task<MetadataSearchPage> AdvancedSearchAsync(
+    public Task<MetadataSearchPage> AdvancedSearchAsync(
         string contentType,
         ContentHierarchyItemCriteria query,
         int maxResults,
         string defaultLanguagePreference,
         CancellationToken cancellationToken = default)
+        => SearchPageAsync(contentType, query, maxResults, defaultLanguagePreference, null, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<MetadataSearchBatch> ContinueSearchAsync(
+        string contentType,
+        ContentHierarchyItemCriteria query,
+        int maxResults,
+        string defaultLanguagePreference,
+        object? continuation,
+        CancellationToken cancellationToken = default)
+    {
+        var fingerprint = JsonSerializer.Serialize(new { contentType, query, defaultLanguagePreference });
+        if (continuation is not null &&
+            (continuation is not SearchCheckpoint previous || previous.Fingerprint != fingerprint))
+        {
+            throw new MetadataSearchContinuationException("The Wikidata checkpoint does not match this search.");
+        }
+
+        var progress = (continuation as SearchCheckpoint)?.Progress.Copy() ?? new QueryProgress();
+        progress.ValidateOnly = maxResults == 0;
+        var page = await SearchPageAsync(contentType, query, maxResults, defaultLanguagePreference,
+            progress, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return new MetadataSearchBatch { Page = page, Continuation = new SearchCheckpoint(fingerprint, progress) };
+    }
+
+    private async Task<MetadataSearchPage> SearchPageAsync(
+        string contentType,
+        ContentHierarchyItemCriteria query,
+        int maxResults,
+        string defaultLanguagePreference,
+        QueryProgress? progress,
+        CancellationToken cancellationToken)
     {
         var level = contentType == Constants.MovieContentType
             ? Constants.MovieLevel
@@ -93,6 +127,18 @@ internal sealed class ContentMetadataSearcher(
 
         var context = await settingsResolver.ResolveAsync(defaultLanguagePreference, cancellationToken)
             .ConfigureAwait(false);
+        if (progress is not null)
+        {
+            var configuration = JsonSerializer.Serialize(context);
+            if (progress.Configuration is not null && progress.Configuration != configuration)
+            {
+                throw new MetadataSearchContinuationException("Wikidata configuration changed. Start a new search.");
+            }
+
+            progress.Configuration = configuration;
+            context = context with { Progress = progress };
+        }
+
         var result = await queryEngine.SearchAsync(
             new QueryRequest
             {
@@ -222,4 +268,6 @@ internal sealed class ContentMetadataSearcher(
 
         return result;
     }
+
+    private sealed record SearchCheckpoint(string Fingerprint, QueryProgress Progress);
 }

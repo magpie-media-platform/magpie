@@ -21,6 +21,31 @@ public interface IDownloadRepository :
     IBulkPatchRepository<Guid, Download, DownloadQuery, DownloadPatch>
 {
     /// <summary>
+    /// Locks a download against writes until the current transaction ends.
+    /// </summary>
+    /// <param name="id">The id of the download</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task LockAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists attempts that refer to the same client transfer as a download, ordered by id.
+    /// </summary>
+    /// <param name="id">The id of the download whose client transfer to match</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<IReadOnlyList<Download>> ListTransferAttemptsAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the ids of cancellable downloads whose scopes overlap an imported download and are all fulfilled.
+    /// </summary>
+    /// <param name="importedDownloadId">The id of the successfully imported download</param>
+    /// <param name="downloadId">The id of one download to check, or null to check all downloads</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<IReadOnlyList<Guid>> ListFulfilledIdsAsync(
+        Guid importedDownloadId,
+        Guid? downloadId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Queries one page of download queue entries that match a query.
     /// </summary>
     /// <param name="query">The criteria that an entry must match</param>
@@ -63,25 +88,12 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lists the failed downloads for a set of release identities.
+    /// Lists the downloads of a release.
     /// </summary>
-    /// <param name="releaseIdentityKeys">The release identity keys to look up</param>
-    /// <param name="downloadClientId">The id of one download client, or null for every client</param>
+    /// <param name="releaseIdentityKeys">The identity keys of the release</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<IReadOnlyList<Download>> ListFailedByReleaseIdentitiesAsync(
+    Task<IReadOnlyList<Download>> ListByReleaseAsync(
         IReadOnlyCollection<ReleaseIdentityKey> releaseIdentityKeys,
-        Guid? downloadClientId,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Lists the recent imported downloads for a content hierarchy item.
-    /// </summary>
-    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
-    /// <param name="completedAfter">The earliest completion time to consider</param>
-    /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<IReadOnlyList<Download>> ListImportedByContentHierarchyItemAsync(
-        Guid contentHierarchyItemId,
-        DateTime completedAfter,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -176,6 +188,55 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Starts an import and stores its explicit collision policy for recovery.
+    /// </summary>
+    /// <param name="downloadId">The id of the download</param>
+    /// <param name="now">The UTC time to record</param>
+    /// <param name="userId">The id of the user that starts the operation</param>
+    /// <param name="collisionMode">The collision policy, or null to inherit the root-folder policy</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> MarkImportingAsync(
+        Guid downloadId,
+        DateTime now,
+        Guid? userId,
+        ImportCollisionMode? collisionMode,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Stores an explicit collision policy while the download is importing.
+    /// </summary>
+    /// <param name="downloadId">The id of the download</param>
+    /// <param name="collisionMode">The explicit collision policy</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> SetImportCollisionModeAsync(
+        Guid downloadId,
+        ImportCollisionMode collisionMode,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Stores or clears the reason an import waits for destination capacity.
+    /// </summary>
+    /// <param name="downloadId">The id of the download</param>
+    /// <param name="reason">The waiting reason, or null when capacity is sufficient</param>
+    /// <param name="now">The UTC time of the check</param>
+    /// <param name="userId">The user that starts the check</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task SetImportCapacityReasonAsync(Guid downloadId, string? reason, DateTime now, Guid? userId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Stores the file recovery state and reason of an import.
+    /// </summary>
+    /// <param name="downloadId">The id of the download</param>
+    /// <param name="state">The serialized recovery state, or null when recovery is complete</param>
+    /// <param name="reason">The current recovery reason, or null when transfer completes</param>
+    /// <param name="now">The UTC time of the update</param>
+    /// <param name="userId">The user that starts the import</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task SetImportRecoveryStateAsync(Guid downloadId, string? state, string? reason, DateTime now, Guid? userId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Marks a download as imported.
     /// </summary>
     /// <param name="downloadId">The id of the download</param>
@@ -227,7 +288,7 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Moves a download to the failed state, unless it is cancelled or imported.
+    /// Marks a download as failed or faulted.
     /// </summary>
     /// <param name="downloadId">The id of the download</param>
     /// <param name="reason">The reason for the failure</param>

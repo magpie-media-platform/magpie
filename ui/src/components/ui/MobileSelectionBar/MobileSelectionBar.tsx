@@ -1,10 +1,12 @@
-import { type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import { CheckSquareIcon, SquareIcon, XIcon } from '@phosphor-icons/react';
 
 import type { BulkSelectionState } from '@/types/bulkSelection';
 import { SelectAllBanner } from '../SelectAllBanner';
 
 import './MobileSelectionBar.css';
+
+const mountedBars = new WeakMap<HTMLElement, Set<HTMLElement>>();
 
 export type MobileSelectionState = BulkSelectionState;
 
@@ -31,12 +33,55 @@ export function MobileSelectionBar({
     className,
     ...props
 }: MobileSelectionBarProps) {
+    const barRef = useRef<HTMLDivElement>(null);
     const allPageChecked = selection.headerChecked === true;
     const classes = ['mobile-selection-bar', className].filter(Boolean).join(' ');
     const actionClasses = ['mobile-selection-bar__actions', actionsClassName].filter(Boolean).join(' ');
 
+    useLayoutEffect(() => {
+        const bar = barRef.current;
+        const main = bar?.closest<HTMLElement>('[data-scroll-container]');
+        if (!bar || !main) return;
+
+        const bars = mountedBars.get(main) ?? new Set<HTMLElement>();
+        bars.add(bar);
+        mountedBars.set(main, bars);
+
+        const updateClearance = () => {
+            const currentBars = mountedBars.get(main);
+            if (!currentBars) {
+                main.style.removeProperty('--mobile-selection-bar-clearance');
+                return;
+            }
+
+            const mainBottom = main.getBoundingClientRect().bottom;
+            let clearance = 0;
+            for (const currentBar of currentBars) {
+                const barRect = currentBar.getBoundingClientRect();
+                if (barRect.height > 0) clearance = Math.max(clearance, Math.ceil(mainBottom - barRect.top));
+            }
+            main.style.setProperty('--mobile-selection-bar-clearance', `${clearance}px`);
+        };
+
+        updateClearance();
+        const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateClearance);
+        observer?.observe(bar);
+        observer?.observe(main);
+        window.addEventListener('resize', updateClearance);
+        window.visualViewport?.addEventListener('resize', updateClearance);
+
+        return () => {
+            observer?.disconnect();
+            window.removeEventListener('resize', updateClearance);
+            window.visualViewport?.removeEventListener('resize', updateClearance);
+            bars.delete(bar);
+            if (bars.size === 0) mountedBars.delete(main);
+            updateClearance();
+        };
+    }, []);
+
     return (
-        <div className={classes} role="region" aria-label="Selection actions" {...props}>
+        <div ref={barRef} className={classes} role="region" aria-label="Selection actions" {...props}>
             {(selection.showAcrossPagesPrompt || selection.allPages) && (
                 <SelectAllBanner
                     allPages={selection.allPages}

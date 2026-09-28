@@ -474,7 +474,7 @@ internal sealed class IndexerService(
             .Distinct()
             .ToHashSet();
         var phases = await releaseSearchQueryExecutor.ExecuteAsync(
-            [new ReleaseSearchPhase { Request = request.Query, ReleaseFacts = [] }],
+            [new ReleaseSearchPhase { Request = request.Query with { IsInteractive = true }, ReleaseFacts = [] }],
             [],
             indexerIds,
             cancellationToken: cancellationToken,
@@ -970,13 +970,20 @@ internal sealed class IndexerService(
         Guid? actingUserId,
         CancellationToken cancellationToken)
     {
-        var existing = await releaseScopeRepository.QueryAsync(
+        var existing = (await releaseScopeRepository.QueryAsync(
             new ReleaseScopeQuery { ReleaseId = releaseId, ContentHierarchyItemId = contentHierarchyItemId },
             new() { PageNumber = 1, PageSize = 1 },
             null,
-            cancellationToken).ConfigureAwait(false);
-        if (existing.Items.Any())
+            cancellationToken).ConfigureAwait(false)).Items.FirstOrDefault();
+        if (existing is not null)
         {
+            if (existing.Status == ReleaseScopeStatus.Unmatched)
+            {
+                await releaseScopeRepository
+                    .UpdateAsync(existing with { Status = ReleaseScopeStatus.Matched }, actingUserId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             return;
         }
 

@@ -11,6 +11,34 @@ namespace Magpie.Data.SQLite.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql("""
+                CREATE TEMP TABLE magpie_monitoring_guard (
+                    Monitoring INTEGER CONSTRAINT valid_legacy_Monitoring CHECK (Monitoring IN (0, 1, 2)));
+                INSERT INTO magpie_monitoring_guard SELECT Monitoring FROM content_hierarchyItem;
+                DROP TABLE magpie_monitoring_guard;
+                """);
+
+            // SQLite defers the table rebuild, so map into a nullable column before that rebuild.
+            migrationBuilder.RenameColumn(
+                name: "Monitoring",
+                table: "content_hierarchyItem",
+                newName: "LegacyMonitoring");
+
+            migrationBuilder.AddColumn<bool>(
+                name: "Monitoring",
+                table: "content_hierarchyItem",
+                type: "INTEGER",
+                nullable: true);
+
+            migrationBuilder.Sql("""
+                UPDATE content_hierarchyItem
+                SET Monitoring = CASE LegacyMonitoring WHEN 1 THEN 1 WHEN 2 THEN 0 ELSE NULL END;
+                """);
+
+            migrationBuilder.DropColumn(
+                name: "LegacyMonitoring",
+                table: "content_hierarchyItem");
+
             migrationBuilder.DropForeignKey(
                 name: "FK_indexer_release_content_item_ContentItemId",
                 table: "indexer_release");
@@ -396,14 +424,6 @@ namespace Magpie.Data.SQLite.Migrations
                 table: "content_item",
                 type: "INTEGER",
                 nullable: true);
-
-            migrationBuilder.AlterColumn<bool>(
-                name: "Monitoring",
-                table: "content_hierarchyItem",
-                type: "INTEGER",
-                nullable: true,
-                oldClrType: typeof(int),
-                oldType: "INTEGER");
 
             migrationBuilder.AddColumn<string>(
                 name: "AlignmentKey",
@@ -1065,6 +1085,27 @@ namespace Magpie.Data.SQLite.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.RenameColumn(
+                name: "Monitoring",
+                table: "content_hierarchyItem",
+                newName: "CurrentMonitoring");
+
+            migrationBuilder.AddColumn<int>(
+                name: "Monitoring",
+                table: "content_hierarchyItem",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 0);
+
+            migrationBuilder.Sql("""
+                UPDATE content_hierarchyItem
+                SET Monitoring = CASE CurrentMonitoring WHEN 1 THEN 1 WHEN 0 THEN 2 ELSE 0 END;
+                """);
+
+            migrationBuilder.DropColumn(
+                name: "CurrentMonitoring",
+                table: "content_hierarchyItem");
+
             migrationBuilder.DropForeignKey(
                 name: "FK_download_download_indexer_releaseSource_ReleaseSourceId",
                 table: "download_download");
@@ -1477,16 +1518,6 @@ namespace Magpie.Data.SQLite.Migrations
                 table: "indexer_release",
                 type: "TEXT",
                 nullable: true);
-
-            migrationBuilder.AlterColumn<int>(
-                name: "Monitoring",
-                table: "content_hierarchyItem",
-                type: "INTEGER",
-                nullable: false,
-                defaultValue: 0,
-                oldClrType: typeof(bool),
-                oldType: "INTEGER",
-                oldNullable: true);
 
             migrationBuilder.InsertData(
                 table: "auth_user",

@@ -26,6 +26,7 @@ import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 import { isSimpleQuery } from '@/lib/simpleFilterQuery';
 
 import './FilterBar.css';
+import { LocalContentFilters } from './LocalContentFilters';
 
 export type FilterMode = 'simple' | 'advanced';
 
@@ -41,6 +42,8 @@ export interface FilterBarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'o
     value: string;
 
     onChange: (value: string) => void;
+
+    onImmediateChange?: (value: string) => void;
 
     onSubmit?: () => void;
 
@@ -81,6 +84,8 @@ export interface FilterBarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'o
     defaultSubjectKind?: string;
 
     lockSubjectKind?: boolean;
+    localContentPage?: boolean;
+    includeAllContentLevels?: boolean;
 }
 
 export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
@@ -88,6 +93,7 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
         {
             value,
             onChange,
+            onImmediateChange,
             onSubmit,
             context = 'content',
             loading = false,
@@ -108,6 +114,8 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
             lockContentLevel,
             defaultSubjectKind,
             lockSubjectKind,
+            localContentPage = false,
+            includeAllContentLevels = false,
             className,
             onKeyDownCapture,
             ...props
@@ -143,8 +151,8 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
         }, [isExpanded, isControlled, onExpandedChange]);
 
         const handleClear = useCallback(() => {
-            onChange('');
-        }, [onChange]);
+            (onImmediateChange ?? onChange)('');
+        }, [onChange, onImmediateChange]);
 
         const handleSavedFilterChange = useCallback(
             (value: string) => {
@@ -153,7 +161,7 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
                 }
                 const filter = savedFilters?.find((f) => f.id === value);
                 if (filter?.query) {
-                    onChange(filter.query);
+                    (onImmediateChange ?? onChange)(filter.query);
                     onApplySavedFilter?.(filter);
                     hasExplicitExpansion.current = true;
 
@@ -163,7 +171,7 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
                     onExpandedChange?.(true);
                 }
             },
-            [savedFilters, onChange, onApplySavedFilter, isControlled, onExpandedChange],
+            [savedFilters, onChange, onImmediateChange, onApplySavedFilter, isControlled, onExpandedChange],
         );
 
         const hasSavedFilters = (savedFilters?.length ?? 0) > 0;
@@ -177,6 +185,17 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
             },
             [canUseSimpleMode],
         );
+
+        const submit = useCallback(() => {
+            if (loading || readOnly) {
+                return;
+            }
+            if (onSubmit) {
+                onSubmit();
+            } else {
+                (onImmediateChange ?? onChange)(value);
+            }
+        }, [loading, onChange, onImmediateChange, onSubmit, readOnly, value]);
 
         const handleKeyDownCapture = useCallback(
             (event: KeyboardEvent<HTMLDivElement>) => {
@@ -199,13 +218,9 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
                 }
 
                 event.preventDefault();
-                if (onSubmit) {
-                    onSubmit();
-                } else {
-                    onChange(value);
-                }
+                submit();
             },
-            [loading, onChange, onKeyDownCapture, onSubmit, readOnly, value],
+            [loading, onKeyDownCapture, readOnly, submit],
         );
 
         const classes = [
@@ -359,19 +374,29 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
                                     defaultContentType={defaultContentType}
                                     restrictContentType={restrictContentType}
                                     lockContentLevel={lockContentLevel}
+                                    includeAllContentLevels={includeAllContentLevels}
                                     defaultSubjectKind={defaultSubjectKind}
                                     lockSubjectKind={lockSubjectKind}
-                                />
+                                >
+                                    {localContentPage && context === 'content' && (
+                                        <LocalContentFilters
+                                            value={value}
+                                            onChange={onImmediateChange ?? onChange}
+                                            disabled={readOnly || loading}
+                                        />
+                                    )}
+                                </SimpleFilterBuilder>
                             ) : (
                                 <div className="filter-bar__editor-wrap">
                                     <FilterQueryEditor
                                         value={value}
                                         onChange={onChange}
+                                        onSubmit={submit}
                                         context={context}
                                         readOnly={readOnly}
                                         placeholder={
                                             context === 'content'
-                                                ? 'genre has "Action" and monitoring = true'
+                                                ? 'genre has "Action" and monitoring != Unmonitored'
                                                 : 'kind = "<kind>" and name contains "Smith"'
                                         }
                                     />

@@ -6,6 +6,7 @@ import { InlineEditRow } from '@/components/ui/InlineEditRow';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { useApplyContentPath, useEffectiveRootFolder } from '@/hooks/useContent';
+import { useLookupError } from '@/hooks/useLookupError';
 
 interface PathControlProps {
     contentHierarchyItemId: string;
@@ -107,8 +108,17 @@ function PathEditor({
 }
 
 export function PathControl({ contentHierarchyItemId, rawPath, canEdit = true }: PathControlProps) {
-    const { data: effectiveRootFolder, isLoading } = useEffectiveRootFolder(contentHierarchyItemId);
-    const value = rawPath ?? (isLoading ? 'Resolving path...' : (effectiveRootFolder?.rootFolderPath ?? 'No path'));
+    const effectiveQuery = useEffectiveRootFolder(contentHierarchyItemId);
+    const { data: effectiveRootFolder, isLoading, isFetching, refetch } = effectiveQuery;
+    const queryError = useLookupError(effectiveQuery);
+    const lookupError = rawPath ? null : queryError;
+    const value =
+        rawPath ??
+        (lookupError
+            ? 'Path could not be loaded'
+            : isLoading
+              ? 'Resolving path...'
+              : (effectiveRootFolder?.rootFolderPath ?? 'No path'));
 
     return (
         <InlineEditRow
@@ -117,6 +127,10 @@ export function PathControl({ contentHierarchyItemId, rawPath, canEdit = true }:
             canEdit={canEdit}
             editAriaLabel="Edit content path"
             triggerTestId="path-control__trigger"
+            error={lookupError}
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+            retryAriaLabel="Retry loading path"
             readValue={
                 <span data-testid="path-control__value" title={value}>
                     {value}

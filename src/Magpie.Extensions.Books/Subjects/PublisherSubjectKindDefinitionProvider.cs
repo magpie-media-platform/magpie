@@ -27,7 +27,17 @@ internal sealed class PublisherSubjectKindDefinitionProvider : ISubjectKindDefin
             PluralDisplayName = "Publishers",
             IconName = "books",
             SupportedMetadataFields = PublisherMetadataFields,
-            CustomMetadataFields = []
+            CustomMetadataFields = [],
+            RelationshipRoles =
+            [
+                new()
+                {
+                    Slug = "publisher",
+                    DisplayName = "Publisher",
+                    Description = "The publishers, separated by spaces.",
+                    Examples = ["Example Press", "Other Press"]
+                }
+            ]
         };
     }
 }

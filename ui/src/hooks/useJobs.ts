@@ -71,6 +71,8 @@ export interface ApiJobSpec {
 
     onDemand: boolean;
 
+    supportsImmediate?: boolean;
+
     supportedTriggerModes: JobTriggerModeValue[];
 
     requesterTriggerModes?: JobTriggerModeValue[];
@@ -110,8 +112,6 @@ export interface ApiJobExecution {
     nodeId?: string | null;
 
     lastHeartbeat?: string | null;
-
-    timeoutAt?: string | null;
 
     notBeforeAt?: string | null;
 

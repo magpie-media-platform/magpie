@@ -23,6 +23,7 @@ import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -41,6 +42,14 @@ export function FileTypesPage() {
 
     const denyList = useDenyList();
     const mimeRegistry = useMimeMappings();
+    const [activeTab, setActiveTab] = useState('deny-list');
+    const [denyAddOpen, , openDenyAdd, closeDenyAdd] = useToggle();
+    const [mimeAddOpen, , openMimeAdd, closeMimeAdd] = useToggle();
+    const tabActions: QuickAction[] = [
+        activeTab === 'deny-list'
+            ? { id: 'add-deny-list-entry', label: 'Add Entry', icon: <PlusIcon weight="bold" />, onClick: openDenyAdd }
+            : { id: 'add-mime-mapping', label: 'Add Mapping', icon: <PlusIcon weight="bold" />, onClick: openMimeAdd },
+    ];
 
     const handleRefresh = useCallback(async () => {
         await Promise.all([denyList.refetch(), mimeRegistry.refetch()]);
@@ -55,7 +64,7 @@ export function FileTypesPage() {
                     icon={<ShieldWarningIcon weight="duotone" aria-hidden="true" data-testid="file-types-page__icon" />}
                 />
 
-                <Tabs defaultValue="deny-list" className="file-types-page__tabs">
+                <Tabs value={activeTab} onValueChange={setActiveTab} className="file-types-page__tabs">
                     <TabsList aria-label="File-type sections">
                         <TabsTrigger value="deny-list" data-tab="deny-list">
                             Deny list
@@ -72,28 +81,45 @@ export function FileTypesPage() {
                     </TabsList>
 
                     <TabsContent value="deny-list" forceMount className="file-types-page__tab-content">
-                        <DenyListSection denyList={denyList} />
+                        <DenyListSection
+                            denyList={denyList}
+                            addOpen={denyAddOpen}
+                            openAdd={openDenyAdd}
+                            closeAdd={closeDenyAdd}
+                        />
                     </TabsContent>
 
                     <TabsContent value="mime-registry" forceMount className="file-types-page__tab-content">
-                        <MimeRegistrySection registry={mimeRegistry} />
+                        <MimeRegistrySection
+                            registry={mimeRegistry}
+                            addOpen={mimeAddOpen}
+                            openAdd={openMimeAdd}
+                            closeAdd={closeMimeAdd}
+                        />
                     </TabsContent>
                 </Tabs>
             </PullToRefresh>
+
+            <QuickActionsButton actions={tabActions} title="File Type Actions" />
         </div>
     );
 }
 
 FileTypesPage.displayName = 'FileTypesPage';
 
-interface DenyListSectionProps {
+interface AddDialogState {
+    addOpen: boolean;
+    openAdd: () => void;
+    closeAdd: () => void;
+}
+
+interface DenyListSectionProps extends AddDialogState {
     denyList: ReturnType<typeof useDenyList>;
 }
 
-function DenyListSection({ denyList }: DenyListSectionProps) {
+function DenyListSection({ denyList, addOpen, openAdd, closeAdd }: DenyListSectionProps) {
     const { toast } = useToast();
     const runBulk = useBulkRun();
-    const [addOpen, , openAdd, closeAdd] = useToggle();
     const [deletingEntry, setDeletingEntry] = useState<BlockedFileType | null>(null);
     const [pageRowIds, setPageRowIds] = useState<string[]>([]);
     const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
@@ -174,6 +200,7 @@ function DenyListSection({ denyList }: DenyListSectionProps) {
                 id: 'actions',
                 header: '',
                 enableSorting: false,
+                meta: { mobileRole: 'header' },
                 cell: ({ row }) => (
                     <div className="file-types-page__row-actions">
                         <Tooltip content="Delete">
@@ -377,7 +404,7 @@ function DenyListAddDialog({ open, onClose, onAdd, isCreating }: DenyListAddDial
     );
 }
 
-interface MimeRegistrySectionProps {
+interface MimeRegistrySectionProps extends AddDialogState {
     registry: ReturnType<typeof useMimeMappings>;
 }
 
@@ -386,9 +413,8 @@ const MIME_PAGE_SIZE = 50;
 const MIME_SORT_KEYS = ['extension', 'mimeType'] as const;
 const MIME_DEFAULT_SORTING: SortingState = [{ id: 'extension', desc: false }];
 
-function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
+function MimeRegistrySection({ registry, addOpen, openAdd, closeAdd }: MimeRegistrySectionProps) {
     const { toast } = useToast();
-    const [addOpen, , openAdd, closeAdd] = useToggle();
     const [editingMapping, setEditingMapping] = useState<MimeMapping | null>(null);
     const [deletingMapping, setDeletingMapping] = useState<MimeMapping | null>(null);
     const [pageRowIds, setPageRowIds] = useState<string[]>([]);
@@ -508,6 +534,7 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
                 id: 'actions',
                 header: '',
                 enableSorting: false,
+                meta: { mobileRole: 'header' },
                 cell: ({ row }) => {
                     const mapping = row.original;
                     return (
@@ -624,6 +651,7 @@ function MimeRegistrySection({ registry }: MimeRegistrySectionProps) {
                             data-component="mime-pagination"
                             page={currentPage}
                             pageCount={pageCount}
+                            totalItems={registry.mappings.length}
                             onFirst={() => setPage(1)}
                             onPrevious={() => setPage(Math.max(1, currentPage - 1))}
                             onNext={() => setPage(Math.min(pageCount, currentPage + 1))}

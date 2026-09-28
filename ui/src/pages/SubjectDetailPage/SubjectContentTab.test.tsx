@@ -7,6 +7,7 @@ import type { ContentListItem } from '@/types';
 
 import { SubjectContentTab } from './SubjectContentTab';
 import type { SubjectContentController } from './useSubjectContent';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 function createMatchMedia(width: number) {
     return vi.fn((query: string) => {
@@ -34,8 +35,8 @@ const SAMPLE_ITEMS: ContentListItem[] = [
         level: 'tv-show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         publishDate: '2008-01-20T00:00:00Z',
         posterUrl: 'https://example.com/p1.jpg',
@@ -48,9 +49,9 @@ const SAMPLE_ITEMS: ContentListItem[] = [
         level: 'tv-show',
         levelLabel: 'Show',
         contentType: 'tv',
-        monitoring: true,
-        effectiveMonitoring: true,
-        fulfillment: 'missing',
+        monitoring: null,
+        effectiveMonitoring: 'Unmonitored',
+        fulfillment: 'fulfilledExternally',
         publishDate: '2015-02-08T00:00:00Z',
         posterUrl: 'https://example.com/p2.jpg',
         year: 2015,
@@ -99,6 +100,7 @@ function renderTab(overrides: Partial<SubjectContentController> = {}) {
                 <SubjectContentTab {...baseController} {...overrides} />
             </MemoryRouter>
         </QueryClientProvider>,
+        { wrapper: TooltipProvider },
     );
 }
 
@@ -111,15 +113,18 @@ describe('SubjectContentTab desktop', () => {
         vi.stubGlobal('matchMedia', createMatchMedia(1440));
     });
 
-    it('renders only the Poster, Title, Type, Status, and Published columns', () => {
+    it('renders monitoring and fulfillment as separate columns', () => {
+        // Arrange
+        // Act
         renderTab();
 
+        // Assert
         expect(document.querySelector('.data-table__header-cell[data-column="title"]')).toBeInTheDocument();
         expect(document.querySelector('.data-table__header-cell[data-column="contentType"]')).toBeInTheDocument();
         expect(document.querySelector('.data-table__header-cell[data-column="fulfillment"]')).toBeInTheDocument();
         expect(document.querySelector('.data-table__header-cell[data-column="publishDate"]')).toBeInTheDocument();
 
-        expect(document.querySelector('.data-table__header-cell[data-column="monitoring"]')).not.toBeInTheDocument();
+        expect(document.querySelector('.data-table__header-cell[data-column="monitoring"]')).toBeInTheDocument();
         expect(document.querySelector('.data-table__header-cell[data-column="dateAdded"]')).not.toBeInTheDocument();
         expect(screen.queryByText('Added')).not.toBeInTheDocument();
     });
@@ -134,6 +139,16 @@ describe('SubjectContentTab desktop', () => {
 
         const row = title.closest('tr');
         expect(row).toHaveAttribute('data-clickable', 'true');
+    });
+
+    it('renders no filter panel', () => {
+        // Arrange
+        // Act
+        renderTab({ hasActiveFilters: true });
+
+        // Assert
+        expect(document.querySelector('[data-component="filter-bar"]')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Advanced filter' })).not.toBeInTheDocument();
     });
 
     it('renders header filters only for Title, Type, and Status', () => {
@@ -183,11 +198,25 @@ describe('SubjectContentTab mobile', () => {
         expect(document.querySelector('[data-content-id="c1"]')).toBeInTheDocument();
     });
 
+    it('renders no filter panel', () => {
+        // Arrange
+        // Act
+        renderTab({ hasActiveFilters: true });
+
+        // Assert
+        expect(document.querySelector('[data-component="filter-bar"]')).not.toBeInTheDocument();
+    });
+
     it('renders the status badge inside the card meta row', () => {
+        // Arrange
+        // Act
         renderTab();
 
+        // Assert
         const badge = screen.getByText('Fulfilled');
         expect(badge.closest('.mobile-media-card__meta')).not.toBeNull();
+        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
+        expect(screen.getByText('External')).toBeInTheDocument();
     });
 });
 

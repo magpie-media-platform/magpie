@@ -33,10 +33,10 @@ export function useContentDetailParams(defaultTab: string): ContentDetailParams 
                     }
                     return next;
                 },
-                { replace: true },
+                { replace: true, state: location.state },
             );
         },
-        [setSearchParams, defaultTab],
+        [setSearchParams, defaultTab, location.state],
     );
 
     const childrenBasePath = useMemo(() => {

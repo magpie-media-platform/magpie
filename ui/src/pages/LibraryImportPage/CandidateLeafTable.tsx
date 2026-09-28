@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { CheckIcon, EyeIcon, LinkSimpleIcon } from '@phosphor-icons/react';
+import { ArrowCounterClockwiseIcon, CheckIcon, EyeIcon, LinkSimpleIcon, ProhibitIcon } from '@phosphor-icons/react';
 import { type ColumnDef } from '@tanstack/react-table';
 
 import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
@@ -18,11 +18,15 @@ import {
     PARSED_FILE_SIGNAL_YEAR,
     type LibraryImportCandidate,
 } from '@/hooks/useLibraryImportCandidates';
+import {
+    useRejectLibraryImportCandidates,
+    useRestoreLibraryImportCandidates,
+} from '@/hooks/usePendingFileAssociations';
 
 import { fileName } from './importDisplay';
-import { MatchCell } from './MatchCell';
+import { MatchCell } from '@/components/content/MatchCell';
 import { ManualMatchDialog, type ManualMatchTarget } from './ManualMatchDialog';
-import type { ImportAcceptAction } from './AcceptImportDialog';
+import type { ImportAcceptAction, ImportRenameSelection } from './AcceptImportDialog';
 
 import '@/styles/bulk-actions-toolbar.css';
 import './CandidateLeafTable.css';
@@ -45,6 +49,14 @@ function isMatchingPending(candidate: LibraryImportCandidate): boolean {
     return candidate.status === 'MatchingPending';
 }
 
+function isRejected(candidate: LibraryImportCandidate): boolean {
+    return candidate.status === 'Rejected';
+}
+
+function canReject(candidate: LibraryImportCandidate): boolean {
+    return candidate.status === 'Pending' || candidate.status === 'Failed' || candidate.status === 'MatchingPending';
+}
+
 function isSubmittable(candidate: LibraryImportCandidate): boolean {
     return isMatched(candidate) && isClaimable(candidate);
 }
@@ -54,7 +66,7 @@ interface CandidateLeafTableProps {
 
     emptyState: ReactNode;
 
-    requestAccept: (action: ImportAcceptAction) => void;
+    requestAccept: (action: ImportAcceptAction, renameSelection?: ImportRenameSelection) => void;
 }
 
 export function CandidateLeafTable({ items, emptyState, requestAccept }: CandidateLeafTableProps) {
@@ -79,7 +91,50 @@ export function CandidateLeafTable({ items, emptyState, requestAccept }: Candida
     );
     const hasSelection = selectedIds.length > 0;
 
-    const bulkAcceptMutation = useBulkAcceptLibraryImportCandidates();
+    const { mutateAsync: acceptCandidates } = useBulkAcceptLibraryImportCandidates();
+    const { mutateAsync: restoreCandidates } = useRestoreLibraryImportCandidates();
+    const { mutateAsync: rejectCandidates } = useRejectLibraryImportCandidates();
+
+    const handleTransition = useCallback(
+        async (candidate: LibraryImportCandidate, reject: boolean) => {
+            setActingIds((prev) => new Set(prev).add(candidate.id));
+            try {
+                const result = await (reject ? rejectCandidates : restoreCandidates)({ ids: [candidate.id] });
+                toast(
+                    result.count === 0
+                        ? {
+                              title: reject ? 'Match not rejected' : 'File not restored',
+                              description: 'The file changed state. Refresh the list and try again.',
+                              variant: 'warning',
+                          }
+                        : reject
+                          ? {
+                                title: 'Match rejected',
+                                description: 'Rescans keep this file unmatched until you restore it.',
+                                variant: 'success',
+                            }
+                          : {
+                                title: 'File restored',
+                                description: 'Magpie will match the file again.',
+                                variant: 'success',
+                            },
+                );
+            } catch {
+                toast({
+                    title: reject ? 'Reject failed' : 'Restore failed',
+                    description: `Failed to ${reject ? 'reject' : 'restore'} the file. Please try again.`,
+                    variant: 'error',
+                });
+            } finally {
+                setActingIds((prev) => {
+                    const next = new Set(prev);
+                    next.delete(candidate.id);
+                    return next;
+                });
+            }
+        },
+        [rejectCandidates, restoreCandidates, toast],
+    );
 
     const handlePreview = useCallback((candidate: LibraryImportCandidate) => {
         const match = candidate.matches[0];
@@ -100,71 +155,77 @@ export function CandidateLeafTable({ items, emptyState, requestAccept }: Candida
 
     const handleImport = useCallback(
         (candidate: LibraryImportCandidate) =>
-            requestAccept(async (monitoringMode) => {
-                setActingIds((prev) => new Set(prev).add(candidate.id));
-                try {
-                    const result = await bulkAcceptMutation.mutateAsync({ ids: [candidate.id], monitoringMode });
-                    const skipped = result.skipped[0];
-                    toast(
-                        result.queued.length > 0
-                            ? {
-                                  title: 'Import queued',
-                                  description: 'Magpie queued the file for import.',
-                                  variant: 'success',
-                              }
-                            : {
-                                  title: 'Import skipped',
-                                  description: skipped?.reason ?? 'Magpie did not queue the file for import.',
-                                  variant: 'warning',
-                              },
-                    );
-                } catch {
-                    toast({
-                        title: 'Import failed',
-                        description: 'Failed to queue the file for import. Please try again.',
-                        variant: 'error',
-                    });
-                } finally {
-                    setActingIds((prev) => {
-                        const next = new Set(prev);
-                        next.delete(candidate.id);
-                        return next;
-                    });
-                }
-            }),
-        [bulkAcceptMutation, requestAccept, toast],
+            requestAccept(
+                async (monitoringMode) => {
+                    setActingIds((prev) => new Set(prev).add(candidate.id));
+                    try {
+                        const result = await acceptCandidates({ ids: [candidate.id], monitoringMode });
+                        const skipped = result.skipped[0];
+                        toast(
+                            result.queued.length > 0
+                                ? {
+                                      title: 'Import queued',
+                                      description: 'Magpie queued the file for import.',
+                                      variant: 'success',
+                                  }
+                                : {
+                                      title: 'Import skipped',
+                                      description: skipped?.reason ?? 'Magpie did not queue the file for import.',
+                                      variant: 'warning',
+                                  },
+                        );
+                    } catch {
+                        toast({
+                            title: 'Import failed',
+                            description: 'Failed to queue the file for import. Please try again.',
+                            variant: 'error',
+                        });
+                    } finally {
+                        setActingIds((prev) => {
+                            const next = new Set(prev);
+                            next.delete(candidate.id);
+                            return next;
+                        });
+                    }
+                },
+                { ids: [candidate.id] },
+            ),
+        [acceptCandidates, requestAccept, toast],
     );
 
     const handleBulkAccept = useCallback(() => {
         if (selectedIds.length === 0) {
             return;
         }
-        requestAccept(async (monitoringMode) => {
-            setIsBulkActing(true);
-            try {
-                const result = await bulkAcceptMutation.mutateAsync({ ids: selectedIds, monitoringMode });
-                const queuedCount = result.queued.length;
-                const skippedCount = result.skipped.length;
-                toast({
-                    title: 'Import queued',
-                    description:
-                        `${queuedCount} file${queuedCount === 1 ? '' : 's'} queued for import` +
-                        (skippedCount > 0 ? `, ${skippedCount} skipped` : '') +
-                        '.',
-                    variant: skippedCount > 0 ? 'warning' : 'success',
-                });
-                selection.clear();
-            } catch {
-                toast({
-                    title: 'Import failed',
-                    description: 'Failed to queue the selected files for import. Please try again.',
-                    variant: 'error',
-                });
-            } finally {
-                setIsBulkActing(false);
-            }
-        });
-    }, [selectedIds, selection, bulkAcceptMutation, requestAccept, toast]);
+        requestAccept(
+            async (monitoringMode) => {
+                setIsBulkActing(true);
+                try {
+                    const result = await acceptCandidates({ ids: selectedIds, monitoringMode });
+                    const queuedCount = result.queued.length;
+                    const skippedCount = result.skipped.length;
+                    toast({
+                        title: 'Import queued',
+                        description:
+                            `${queuedCount} file${queuedCount === 1 ? '' : 's'} queued for import` +
+                            (skippedCount > 0 ? `, ${skippedCount} skipped` : '') +
+                            '.',
+                        variant: skippedCount > 0 ? 'warning' : 'success',
+                    });
+                    selection.clear();
+                } catch {
+                    toast({
+                        title: 'Import failed',
+                        description: 'Failed to queue the selected files for import. Please try again.',
+                        variant: 'error',
+                    });
+                } finally {
+                    setIsBulkActing(false);
+                }
+            },
+            { ids: selectedIds },
+        );
+    }, [selectedIds, selection, acceptCandidates, requestAccept, toast]);
 
     const getRowId = useCallback((candidate: LibraryImportCandidate) => candidate.id, []);
 
@@ -187,7 +248,14 @@ export function CandidateLeafTable({ items, emptyState, requestAccept }: Candida
                     const parsedTitle = getParsedSignalValue(candidate.parsedSignals, PARSED_FILE_SIGNAL_TITLE);
                     const parsedYear = getParsedSignalNumber(candidate.parsedSignals, PARSED_FILE_SIGNAL_YEAR);
                     return (
-                        <div className="candidate-leaf-table__file-cell" data-candidate-id={candidate.id}>
+                        <div
+                            className={
+                                isRejected(candidate)
+                                    ? 'candidate-leaf-table__file-cell candidate-leaf-table__file-cell--silenced'
+                                    : 'candidate-leaf-table__file-cell'
+                            }
+                            data-candidate-id={candidate.id}
+                        >
                             {parsedTitle && (
                                 <span className="candidate-leaf-table__parsed-title">
                                     {parsedTitle}
@@ -210,11 +278,22 @@ export function CandidateLeafTable({ items, emptyState, requestAccept }: Candida
                 cell: ({ row }) => {
                     const candidate = row.original;
                     const match = candidate.matches[0];
+                    if (isRejected(candidate)) {
+                        return (
+                            <MatchCell
+                                match={null}
+                                emptyLabel="Silenced"
+                                emptyDetail="Rejected. Rescans keep this file unmatched until you restore it."
+                                testId="candidate-leaf-silenced"
+                            />
+                        );
+                    }
                     if (!match) {
                         return isMatchingPending(candidate) ? (
                             <MatchCell
                                 match={null}
                                 emptyLabel="Matching pending"
+                                emptyDetail={candidate.notes}
                                 testId="candidate-leaf-matching-pending"
                             />
                         ) : (
@@ -240,11 +319,33 @@ export function CandidateLeafTable({ items, emptyState, requestAccept }: Candida
                 enableSorting: false,
                 cell: ({ row }) => {
                     const candidate = row.original;
-                    if (isMatchingPending(candidate)) {
+                    const rejectButton = (
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => void handleTransition(candidate, true)}
+                            disabled={actingIds.has(candidate.id)}
+                            data-action="reject"
+                            data-candidate-id={candidate.id}
+                        >
+                            <ProhibitIcon weight="bold" aria-hidden="true" />
+                            Reject
+                        </Button>
+                    );
+                    if (isRejected(candidate)) {
                         return (
                             <div className="candidate-leaf-table__row-actions">
-                                <Button variant="secondary" size="sm" disabled data-action="matching-pending">
-                                    Matching pending
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => void handleTransition(candidate, false)}
+                                    loading={actingIds.has(candidate.id)}
+                                    disabled={actingIds.has(candidate.id)}
+                                    data-action="restore"
+                                    data-candidate-id={candidate.id}
+                                >
+                                    <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
+                                    Restore
                                 </Button>
                             </div>
                         );
@@ -262,6 +363,7 @@ export function CandidateLeafTable({ items, emptyState, requestAccept }: Candida
                                     <LinkSimpleIcon weight="bold" aria-hidden="true" />
                                     Match
                                 </Button>
+                                {canReject(candidate) && rejectButton}
                             </div>
                         );
                     }
@@ -296,12 +398,13 @@ export function CandidateLeafTable({ items, emptyState, requestAccept }: Candida
                                     {isInFlight(candidate) ? 'Import queued' : candidate.status}
                                 </Button>
                             )}
+                            {canReject(candidate) && rejectButton}
                         </div>
                     );
                 },
             },
         ],
-        [actingIds, handleImport, handlePreview, selection],
+        [actingIds, handleImport, handlePreview, handleTransition, selection],
     );
 
     return (

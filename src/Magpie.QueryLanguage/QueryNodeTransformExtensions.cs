@@ -161,7 +161,10 @@ internal static class QueryNodeTransformExtensions
         {
             if (MediaFileFieldNames.Contains(node.Field))
             {
-                return new ParseError($"Media file field {node.Field} is not supported yet", node.Position, []);
+                return new ParseError(
+                    $"{node.Field} is a media file field. Use mediaFiles has ({node.Field} ...)",
+                    node.Position,
+                    []);
             }
 
             return new ParseError($"Unknown field: {node.Field}", node.Position, []);
@@ -339,12 +342,22 @@ internal static class QueryNodeTransformExtensions
                 []));
         }
 
-        if (itemField.UnsupportedOperators.Contains(op.Value))
+        if (!itemField.SupportedOperators.Contains(op.Value))
         {
             return ParseResult<object>.Failure(new ParseError(
                 $"Operator {node.Operator} is not supported for field {node.Field}",
                 node.Position,
                 []));
+        }
+
+        if (op.Value is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
+        {
+            return ParseResult<object>.Success(field.CreateFieldCriteria(itemField.PropertyName, op.Value, null));
+        }
+
+        if (node.Value == null)
+        {
+            return ParseResult<object>.Failure(new ParseError("Expected value", node.Position, []));
         }
 
         var value = ParseValue(node.Value, itemField.ValueType);
@@ -356,7 +369,7 @@ internal static class QueryNodeTransformExtensions
                 []));
         }
 
-        var uriError = ValidateAbsoluteUri(itemField, op.Value, value, node);
+        var uriError = ValidateAbsoluteUri(itemField, op.Value, value, node.Field, node.Value.Position);
         if (uriError != null)
         {
             return ParseResult<object>.Failure(uriError.Value);
@@ -441,7 +454,8 @@ internal static class QueryNodeTransformExtensions
         ItemFieldInfo itemField,
         CriteriaValueOperator op,
         object? value,
-        ItemFieldNode node)
+        string fieldName,
+        int position)
     {
         if (!itemField.RequireAbsoluteUri ||
             op == CriteriaValueOperator.IsNull ||
@@ -452,7 +466,7 @@ internal static class QueryNodeTransformExtensions
 
         if (value is string text && !Uri.TryCreate(text, UriKind.Absolute, out _))
         {
-            return new ParseError($"Value for field {node.Field} must be an absolute url", node.Value.Position, []);
+            return new ParseError($"Value for field {fieldName} must be an absolute url", position, []);
         }
 
         return null;

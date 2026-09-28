@@ -17,8 +17,13 @@ import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import { useNotificationProviderSchema } from '@/hooks/useNotificationRules';
 import { deepEqual, foldDefaultsIntoBaseline, stripBlankRows, useFormDirty } from '@/hooks/useFormDirty';
 import { omitUnchangedSecretSettings, secretsConfiguredForEdit } from '@/hooks/useProviderSchema';
-import { extractValidationResultFromError, type IntegrationSettingsValidationIssue } from '@/hooks/useValidateSettings';
+import {
+    extractValidationResultFromError,
+    validateIntegrationSettings,
+    type IntegrationSettingsValidationIssue,
+} from '@/hooks/useValidateSettings';
 import type { EditableEventContextCriterion } from '@/lib/eventContextCriteria';
+import { focusFirstInvalidField } from '@/lib/focusFirstInvalidField';
 
 import './NotificationRuleForm.css';
 
@@ -39,6 +44,7 @@ interface NotificationRuleFormProps {
     onOpenChange: (open: boolean) => void;
     initialValues?: NotificationRuleFormValues | null;
     providers: string[];
+    providerLabels: Record<string, string>;
     isProvidersLoading?: boolean;
     providersError?: Error | null;
     onRetryProviders?: () => void;
@@ -87,6 +93,7 @@ export function NotificationRuleForm({
     onOpenChange,
     initialValues,
     providers,
+    providerLabels,
     isProvidersLoading = false,
     providersError = null,
     onRetryProviders,
@@ -301,9 +308,11 @@ export function NotificationRuleForm({
                 }
             }
         });
+        const settingsValidation = validateIntegrationSettings(schema, values.settings, isEditing);
         setErrors(next);
-        return Object.keys(next).length === 0;
-    }, [values]);
+        setServerIssues(settingsValidation.issues);
+        return Object.keys(next).length === 0 && settingsValidation.isValid;
+    }, [isEditing, schema, values]);
 
     const save = useCallback(async () => {
         conflict.beginOwnSave();
@@ -326,6 +335,7 @@ export function NotificationRuleForm({
         (e: React.SubmitEvent) => {
             e.preventDefault();
             if (!validate()) {
+                focusFirstInvalidField(e.currentTarget);
                 return;
             }
             if (conflict.state === 'stale') {
@@ -394,7 +404,7 @@ export function NotificationRuleForm({
                             {isEditing ? (
                                 <Input
                                     id="notif-rule-provider"
-                                    value={values.providerType}
+                                    value={providerLabels[values.providerType] ?? values.providerType}
                                     readOnly
                                     disabled
                                     data-field="providerType"
@@ -424,7 +434,7 @@ export function NotificationRuleForm({
                                     <SelectContent>
                                         {providers.map((p) => (
                                             <SelectItem key={p} value={p}>
-                                                {p}
+                                                {providerLabels[p]}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>

@@ -4,6 +4,8 @@ namespace Magpie.Extensions.OpenLibrary.QueryEngine;
 
 internal sealed record QueryRequest
 {
+    internal QueryProgress? Progress { get; init; }
+
     public required QueryIntent Intent { get; init; }
 
     public required BookHierarchy Hierarchy { get; init; }

@@ -209,7 +209,6 @@ internal sealed class JobRuntimeBackgroundService(
             DueTriggerLoopAsync(stoppingToken),
             SchedulerHealLoopAsync(stoppingToken),
             StaleCleanupLoopAsync(stoppingToken),
-            TimedOutJobReapLoopAsync(stoppingToken),
             CancellationSubscriptionAsync(stoppingToken)).ConfigureAwait(false);
 
         await WaitForImmediateOutstandingAsync().ConfigureAwait(false);
@@ -650,32 +649,11 @@ internal sealed class JobRuntimeBackgroundService(
                 logger.LogError(ex, "The stale job execution cleanup failed");
             }
 
-            await SleepAsync(jobRuntimeOptions.StaleJobCleanupInterval, stoppingToken)
-                .ConfigureAwait(false);
-        }
-    }
-
-    private async Task TimedOutJobReapLoopAsync(CancellationToken stoppingToken)
-    {
-        logger.LogDebug("The timed-out job reaping started");
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                await RunTimedOutJobReapOnceAsync(stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "The timed-out job execution reaping failed");
-            }
-
-            await SleepAsync(jobRuntimeOptions.TimedOutJobReapInterval, stoppingToken)
-                .ConfigureAwait(false);
+            var interval = hostEnvironment.IsClustered &&
+                jobRuntimeOptions.ClusteredStaleJobCleanupInterval < jobRuntimeOptions.StaleJobCleanupInterval
+                ? jobRuntimeOptions.ClusteredStaleJobCleanupInterval
+                : jobRuntimeOptions.StaleJobCleanupInterval;
+            await SleepAsync(interval, stoppingToken).ConfigureAwait(false);
         }
     }
 
@@ -686,7 +664,6 @@ internal sealed class JobRuntimeBackgroundService(
         var scope = scopeFactory.CreateAsyncScope();
         await using var scopeHandle = scope.ConfigureAwait(false);
         var jobExecutionRepository = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
-        var auditRecords = scope.ServiceProvider.GetRequiredService<IAuditRecordRepository>();
         var transactionManager = scope.ServiceProvider.GetRequiredService<ITransactionManager>();
         var jobManager = scope.ServiceProvider.GetRequiredService<IJobManager>();
         var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
@@ -709,7 +686,6 @@ internal sealed class JobRuntimeBackgroundService(
                 {
                     await TransitionStaleJobAsync(
                         jobExecutionRepository,
-                        auditRecords,
                         transactionManager,
                         jobManager,
                         retryPolicy,
@@ -728,80 +704,8 @@ internal sealed class JobRuntimeBackgroundService(
         }
     }
 
-    internal async Task RunTimedOutJobReapOnceAsync(CancellationToken cancellationToken)
-    {
-        var scope = scopeFactory.CreateAsyncScope();
-        await using var scopeHandle = scope.ConfigureAwait(false);
-        var jobExecutionRepository = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
-        var auditRecords = scope.ServiceProvider.GetRequiredService<IAuditRecordRepository>();
-        var transactionManager = scope.ServiceProvider.GetRequiredService<ITransactionManager>();
-        var jobManager = scope.ServiceProvider.GetRequiredService<IJobManager>();
-        var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
-
-        await ReapTimedOutRunningJobsAsync(
-            jobExecutionRepository,
-            auditRecords,
-            transactionManager,
-            jobManager,
-            retryPolicy,
-            cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async Task ReapTimedOutRunningJobsAsync(
-        IJobExecutionRepository repository,
-        IAuditRecordRepository auditRecords,
-        ITransactionManager transactionManager,
-        IJobManager jobManager,
-        IJobRetryPolicy retryPolicy,
-        CancellationToken cancellationToken)
-    {
-        var reapCutoff = timeProvider.GetUtcNow().UtcDateTime - jobRuntimeOptions.RunningStaleCutoff;
-        var timedOut = await repository.QueryAllAsync(
-            query: new()
-            {
-                Status = JobExecutionStatus.Running,
-                TimeoutAt = new(Min: null, Max: reapCutoff)
-            },
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        foreach (var job in timedOut)
-        {
-            try
-            {
-                var reason = $"Exceeded maximum run time (timed out at {job.TimeoutAt:O})";
-                logger.LogWarning(
-                    "The job runtime worker will reap timed-out job execution {JobExecutionId} ({JobType}) with" +
-                    " timeout deadline {TimeoutAt:O} and last heartbeat {LastHeartbeat:O}",
-                    job.Id,
-                    job.JobType,
-                    job.TimeoutAt,
-                    job.LastHeartbeat);
-                await ReclaimAsync(
-                    repository,
-                    auditRecords,
-                    transactionManager,
-                    jobManager,
-                    retryPolicy,
-                    job,
-                    reason,
-                    timeoutAudit: true,
-                    reclaimKind: "timeout")
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(
-                    ex,
-                    "The job runtime worker failed to reap timed-out job execution {JobExecutionId}",
-                    job.Id);
-            }
-        }
-    }
-
     private async Task TransitionStaleJobAsync(
         IJobExecutionRepository repository,
-        IAuditRecordRepository auditRecords,
         ITransactionManager transactionManager,
         IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
@@ -813,13 +717,11 @@ internal sealed class JobRuntimeBackgroundService(
             var reason = $"Node crash detected: last heartbeat at {job.LastHeartbeat:O}";
             await ReclaimAsync(
                 repository,
-                auditRecords,
                 transactionManager,
                 jobManager,
                 retryPolicy,
                 job,
                 reason,
-                timeoutAudit: false,
                 reclaimKind: "stale_heartbeat")
                 .ConfigureAwait(false);
             return;
@@ -833,8 +735,8 @@ internal sealed class JobRuntimeBackgroundService(
                 job.Id,
                 job.LastHeartbeat);
             await repository
-                .TryMarkCancellationRequestedCancelledAsync(
-                    job.Id,
+                .TryRecoverInactiveAsync(
+                    job,
                     "Cancellation not acknowledged before node crash",
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -902,7 +804,6 @@ internal sealed class JobRuntimeBackgroundService(
             var scope = scopeFactory.CreateAsyncScope();
             await using var scopeHandle = scope.ConfigureAwait(false);
             var executions = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
-            var auditRecords = scope.ServiceProvider.GetRequiredService<IAuditRecordRepository>();
             var transactionManager = scope.ServiceProvider.GetRequiredService<ITransactionManager>();
             var jobManager = scope.ServiceProvider.GetRequiredService<IJobManager>();
             var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
@@ -932,8 +833,8 @@ internal sealed class JobRuntimeBackgroundService(
                 {
                     if (orphan.Status is JobExecutionStatus.CancellationRequested)
                     {
-                        await executions.TryMarkCancellationRequestedCancelledAsync(
-                            orphan.Id,
+                        await executions.TryRecoverInactiveAsync(
+                            orphan,
                             $"Node {hostEnvironment.NodeId} restarted while this execution awaited cancellation",
                             cancellationToken).ConfigureAwait(false);
                         continue;
@@ -942,13 +843,11 @@ internal sealed class JobRuntimeBackgroundService(
                     var reason = $"Node {hostEnvironment.NodeId} restarted while this execution was Running";
                     await ReclaimAsync(
                         executions,
-                        auditRecords,
                         transactionManager,
                         jobManager,
                         retryPolicy,
                         orphan,
                         reason,
-                        timeoutAudit: false,
                         reclaimKind: "startup_orphan")
                         .ConfigureAwait(false);
                 }
@@ -973,42 +872,24 @@ internal sealed class JobRuntimeBackgroundService(
 
     private static async Task<JobFailureTransitionResult> TransitionRunningToFailureAsync(
         IJobExecutionRepository executions,
-        IAuditRecordRepository auditRecords,
         ITransactionManager transactionManager,
         IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution failed,
         JobSpec? spec,
         JobFailurePolicy policy,
-        string reason,
-        bool timeoutAudit)
+        string reason)
     {
         var result = new JobFailureTransitionResult(false, false, null);
         await transactionManager.ExecuteWithTransactionAsync(
             async transactionToken =>
             {
                 var transitioned = await executions
-                    .TryMarkRunningFailedAsync(failed.Id, reason, transactionToken)
+                    .TryRecoverInactiveAsync(failed, reason, transactionToken)
                     .ConfigureAwait(false);
                 if (!transitioned)
                 {
                     return;
-                }
-
-                if (timeoutAudit)
-                {
-                    await auditRecords.CreateAsync(
-                        new()
-                        {
-                            Category = AuditCategories.Jobs,
-                            Operation = "JobTimeout",
-                            EntityId = failed.Id.ToString(),
-                            EntityType = nameof(JobExecution),
-                            Detail = $"Job execution {failed.Id} ({failed.JobType}) timed out. {reason}",
-                            UserId = failed.CreatedByUserId,
-                            CorrelationId = failed.CorrelationId
-                        },
-                        transactionToken).ConfigureAwait(false);
                 }
 
                 if (policy is JobFailurePolicy.Fail ||
@@ -1037,13 +918,11 @@ internal sealed class JobRuntimeBackgroundService(
 
     private async Task ReclaimAsync(
         IJobExecutionRepository executions,
-        IAuditRecordRepository auditRecords,
         ITransactionManager transactionManager,
         IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution orphan,
         string reason,
-        bool timeoutAudit,
         string reclaimKind)
     {
         var spec = string.IsNullOrWhiteSpace(orphan.JobType)
@@ -1053,15 +932,13 @@ internal sealed class JobRuntimeBackgroundService(
         var policy = spec?.FailurePolicy ?? JobFailurePolicy.Fail;
         var result = await TransitionRunningToFailureAsync(
             executions,
-            auditRecords,
             transactionManager,
             jobManager,
             retryPolicy,
             orphan,
             spec,
             policy,
-            reason,
-            timeoutAudit).ConfigureAwait(false);
+            reason).ConfigureAwait(false);
         if (!result.Transitioned)
         {
             logger.LogDebug(

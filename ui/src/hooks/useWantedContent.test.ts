@@ -34,8 +34,8 @@ const missingItem: ApiContentHierarchyItem = {
     level: 'movie',
     slug: 'missing-movie',
     name: 'Missing Movie',
-    monitoring: true,
-    effectiveMonitoring: true,
+    monitoring: 'Monitored',
+    effectiveMonitoring: 'Monitored',
     createdAt: '2024-01-01T00:00:00Z',
     contentItem: {
         id: 'ci-1',
@@ -72,6 +72,24 @@ function createWrapper() {
 }
 
 describe('useWantedContent', () => {
+    it('keeps user MQL inside the wanted hierarchy and monitoring scope on both requests', async () => {
+        const { Wrapper } = createWrapper();
+        const { result } = renderHook(() => useWantedContent('show-1', 'title contains "a" or monitoring = false'), {
+            wrapper: Wrapper,
+        });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        const params = vi
+            .mocked(apiGet)
+            .mock.calls.map(([url]) => new URL(String(url), 'http://magpie.local').searchParams);
+        expect(params[0].get('filter')).toBe(
+            'Fulfillment in (Missing, Partial) and (title contains "a" or monitoring = false)',
+        );
+        expect(params[0].get('parentId')).toBe('show-1');
+        expect(params[0].get('monitoring')).toBe('true');
+        expect(params[1].get('filter')).toBe('title contains "a" or monitoring = false');
+        expect(params[1].get('fulfillment')).toBe('Upgradable');
+        expect(params[1].get('monitoring')).toBe('true');
+    });
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(apiGet).mockImplementation(async (url: string) => {

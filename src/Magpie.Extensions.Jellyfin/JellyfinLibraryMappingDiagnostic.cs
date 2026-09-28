@@ -61,8 +61,7 @@ internal sealed class JellyfinLibraryMappingDiagnostic(
                     Title = $"Jellyfin server {server.Name} maps a library to an unknown root folder",
                     Detail =
                         $"The Jellyfin library mapping points to {mappedPath}, which is not a configured " +
-                        "Magpie root folder. Library refreshes and links will apply to the entire server. " +
-                        "Update the mapping or restore the matching root folder.",
+                        "Magpie root folder. Library refreshes and links will apply to the entire server.",
                     AffectedEntity = $"MediaServer:{server.Id}",
                 });
             }

@@ -16,6 +16,7 @@ using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -31,19 +32,81 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ScheduleTriggerRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IScheduleTriggerRepository _subject = null!;
     private List<MagpieEvent> _publishedEvents = null!;
     private Guid _userId;
 
+    [Test]
+    public async Task PatchAsync_PreservesCommittedParameters_WhenTrackedTriggerIsStale()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new ScheduleTrigger
+        {
+            JobType = "TestJob",
+            Scope = JobScope.Administrative,
+            Name = "Original",
+            Schedule = "0 0 1 1 *",
+            Parameters = new() { ["first"] = "old" }
+        }, _userId).ConfigureAwait(false);
+        var parameters = new Dictionary<string, string> { ["first"] = "new" };
+        await _context.ScheduleTriggers.Where(trigger => trigger.Id == created.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(trigger => trigger.Parameters, parameters))
+            .ConfigureAwait(false);
+
+        // Act
+        var changed = await _subject.PatchAsync(new ScheduleTriggerPatch
+        {
+            Id = created.Id,
+            Parameters = new() { Add = new() { ["second"] = "added" } }
+        }, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(changed, Is.True);
+            Assert.That(stored!.Parameters["first"], Is.EqualTo("new"));
+            Assert.That(stored.Parameters["second"], Is.EqualTo("added"));
+        }
+    }
+
+    [Test]
+    public void LockAsync_RejectsRequest_WhenNoTransactionIsOpen()
+    {
+        // Act
+        var error = Assert.ThrowsAsync<InvalidOperationException>(() => _subject.LockAsync(Guid.Empty));
+
+        // Assert
+        Assert.That(error!.Message, Is.EqualTo("A schedule trigger lock requires a transaction."));
+    }
+
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var user = new User
         {

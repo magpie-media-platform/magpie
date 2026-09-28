@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
     ArrowLeftIcon,
@@ -13,20 +13,24 @@ import {
     WarningCircleIcon,
 } from '@phosphor-icons/react';
 
+import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
 import { Button } from '@/components/ui/Button';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useToast } from '@/components/ui/Toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import type { ApiJobExecution } from '@/hooks/useJobs';
+import { JobExecutionEndedError } from '@/lib/jobActions';
 import { useToggle } from '@/hooks/useToggle';
 import { useWishlist, useWishlists, useWishlistRefresh, type ApiWishlist } from '@/hooks/useWishlists';
 import { useTags } from '@/hooks/useTags';
 import { useFormattedCriteria, isCriteriaEmpty, type ContentFilterCriteria } from '@/hooks/useFilters';
 import { useFormOptions } from '@/hooks/useFormOptions';
-import { useAuth, Role } from '@/auth';
+import { useAuth, Role, DisabledTooltip } from '@/auth';
 import { formatDateTime } from '@/lib/dateFormatting';
 import { canEditOwned } from '@/lib/ownership';
 import { getErrorMessage, isNotFoundError } from '@/lib/errors';
@@ -74,15 +78,34 @@ function mapApiWishlistToDisplayItem(apiWishlist: ApiWishlist): WishlistDisplayI
 export function WishlistDetailPage() {
     useDocumentTitle('Wishlist');
     const { wishlistId } = useParams<{ wishlistId: string }>();
-    const { hasRole, user } = useAuth();
-    const canManage = hasRole(Role.Manager);
+    const { hasPermission, hasRole, user } = useAuth();
+    const isAdmin = hasRole(Role.Admin);
+    const canWriteWishlists = hasPermission('wishlists.own');
     const { toast } = useToast();
 
     const [formOpen, , openForm, closeForm] = useToggle();
 
     const { data: apiWishlist, isLoading, isError, error, refetch } = useWishlist(wishlistId);
     const { updateWishlist, isUpdating } = useWishlists();
-    const { mutateAsync: refreshWishlist, isPending: isRefreshing } = useWishlistRefresh();
+    const [unfinishedRefresh, setUnfinishedRefresh] = useState<string | null>(null);
+    const handleRefreshSettled = useCallback(
+        (execution: ApiJobExecution) => {
+            if (execution.status === 'Completed') {
+                setUnfinishedRefresh(null);
+                toast({
+                    title: 'Refresh Completed',
+                    description: execution.statusMessage ?? 'The wishlist refresh completed.',
+                    variant: 'success',
+                });
+                return;
+            }
+            setUnfinishedRefresh(execution.statusMessage ?? 'The wishlist refresh did not complete.');
+        },
+        [toast],
+    );
+    const { mutateAsync: refreshWishlist, isPending: isRefreshing } = useWishlistRefresh({
+        onJobExecutionSettled: handleRefreshSettled,
+    });
 
     const { rootFolderOptions, tagOptions } = useFormOptions();
     const { tags: entityTags } = useTags(wishlistId ? { entityId: wishlistId } : undefined);
@@ -96,8 +119,8 @@ export function WishlistDetailPage() {
     const isOwner = wishlist?.ownerId === user?.id;
 
     const canEdit = useMemo(
-        () => (wishlist ? canEditOwned(wishlist, user?.id, canManage, hasRole, Role.Requester) : false),
-        [wishlist, user?.id, canManage, hasRole],
+        () => (wishlist ? canEditOwned(wishlist, user?.id, isAdmin, canWriteWishlists) : false),
+        [wishlist, user?.id, isAdmin, canWriteWishlists],
     );
 
     const breadcrumbs: BreadcrumbItem[] = useMemo(() => {
@@ -127,13 +150,18 @@ export function WishlistDetailPage() {
             return;
         }
         try {
+            setUnfinishedRefresh(null);
             await refreshWishlist(wishlist.id);
             toast({
                 title: 'Refresh Queued',
-                description: 'Searching for matches.',
+                description: 'The refresh is queued.',
                 variant: 'success',
             });
-        } catch {
+        } catch (err) {
+            if (err instanceof JobExecutionEndedError) {
+                setUnfinishedRefresh(err.message);
+                return;
+            }
             toast({
                 title: 'Refresh Failed',
                 description: 'Failed to queue a refresh for this wishlist.',
@@ -257,6 +285,24 @@ export function WishlistDetailPage() {
         );
     }
 
+    const wishlistActions: QuickAction[] = [
+        ...(isOwner
+            ? [
+                  {
+                      id: 'refresh',
+                      label: 'Refresh',
+                      icon: <ArrowsClockwiseIcon weight="bold" />,
+                      onClick: () => void handleRefresh(),
+                      disabled: isRefreshing || !wishlist.enabled,
+                      description: wishlist.enabled ? undefined : 'Enable the wishlist to refresh it.',
+                  },
+              ]
+            : []),
+        ...(canEdit
+            ? [{ id: 'edit', label: 'Edit', icon: <PencilSimpleIcon weight="bold" />, onClick: handleEdit }]
+            : []),
+    ];
+
     return (
         <div className="wishlist-detail-page" data-page="wishlist-detail">
             <PullToRefresh onRefresh={handlePageRefresh} className="wishlist-detail-page__pull-to-refresh">
@@ -311,31 +357,40 @@ export function WishlistDetailPage() {
                                     ? 'Inherit'
                                     : wishlist.monitoring
                                       ? 'Monitored'
-                                      : 'Not monitored'}
+                                      : 'Unmonitored'}
                             </Badge>
                         </div>
                     </div>
                     <div className="wishlist-detail-page__header-actions">
                         {isOwner && (
+                            <DisabledTooltip disabled={!wishlist.enabled} message="Enable the wishlist to refresh it.">
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={handleRefresh}
+                                    disabled={isRefreshing || !wishlist.enabled}
+                                    aria-label="Refresh"
+                                    data-action="refresh"
+                                >
+                                    <ArrowsClockwiseIcon
+                                        weight="bold"
+                                        aria-hidden="true"
+                                        className={
+                                            isRefreshing ? 'wishlist-detail-page__refresh-icon--spinning' : undefined
+                                        }
+                                    />
+                                    <span className="wishlist-detail-page__action-label">Refresh</span>
+                                </Button>
+                            </DisabledTooltip>
+                        )}
+                        {canEdit && (
                             <Button
                                 variant="secondary"
                                 size="sm"
-                                onClick={handleRefresh}
-                                disabled={isRefreshing}
-                                data-action="refresh"
+                                onClick={handleEdit}
+                                aria-label="Edit"
+                                data-action="edit"
                             >
-                                <ArrowsClockwiseIcon
-                                    weight="bold"
-                                    aria-hidden="true"
-                                    className={
-                                        isRefreshing ? 'wishlist-detail-page__refresh-icon--spinning' : undefined
-                                    }
-                                />
-                                <span className="wishlist-detail-page__action-label">Refresh</span>
-                            </Button>
-                        )}
-                        {canEdit && (
-                            <Button variant="secondary" size="sm" onClick={handleEdit} data-action="edit">
                                 <PencilSimpleIcon weight="bold" aria-hidden="true" />
                                 <span className="wishlist-detail-page__action-label">Edit</span>
                             </Button>
@@ -399,8 +454,20 @@ export function WishlistDetailPage() {
                     )}
                 </div>
 
+                {unfinishedRefresh && (
+                    <Alert
+                        variant="warning"
+                        title="The last refresh did not complete"
+                        data-testid="wishlist-detail-page__refresh-outcome"
+                    >
+                        {unfinishedRefresh}
+                    </Alert>
+                )}
+
                 <WishlistDiscoveredList wishlistId={wishlist.id} onOpenFilter={handleEdit} canEditFilter={canEdit} />
             </PullToRefresh>
+
+            <QuickActionsButton actions={wishlistActions} title="Wishlist Actions" />
 
             <WishlistForm
                 open={formOpen}

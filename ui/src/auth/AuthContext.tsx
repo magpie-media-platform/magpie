@@ -16,12 +16,13 @@ import {
     logout as apiLogout,
     refreshAccessToken,
     getCurrentUserFromToken,
+    getStoredSessionCacheUserId,
     hasStoredSession,
     isTokenExpired,
     fetchEffectivePermissions,
 } from '@/lib/authApi';
-import { AUTH_FAILURE_EVENT, isApiError } from '@/lib/api';
-import { clearAuthStorage, tokenExpirationStorage } from '@/lib/tokenStorage';
+import { AUTH_FAILURE_EVENT, AUTH_RENEWED_EVENT, isApiError } from '@/lib/api';
+import { authScope, clearAuthStorage, sessionGeneration, tokenExpirationStorage } from '@/lib/tokenStorage';
 import { ToastContext } from '@/components/ui/Toast';
 import { useEventStream } from '@/hooks/useEventStream';
 
@@ -67,8 +68,10 @@ export interface AuthProviderProps {
 }
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
+const TOKEN_REFRESH_RETRY_MS = 5_000;
 
-const permissionsQueryKey = (userId: string | undefined) => ['auth', 'permissions', userId] as const;
+const permissionsQueryKey = (userId: string | undefined, cacheRevision: number) =>
+    ['auth', 'permissions', userId, cacheRevision] as const;
 
 function isAuthenticationFailure(error: unknown): boolean {
     return isApiError(error) && (error.status === 401 || error.status === 403);
@@ -84,10 +87,33 @@ export function AuthProvider({
     const defaultLoading = initialLoading ?? (!skipSessionInit && hasStoredSession());
     const [isLoading, setIsLoading] = useState(defaultLoading);
     const [user, setUser] = useState<User | null>(initialUser);
+    const [cacheRevision, setCacheRevision] = useState(0);
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isRefreshingRef = useRef(false);
     const sessionGenerationRef = useRef(0);
+    const cacheSessionRef = useRef({
+        generation: sessionGeneration(),
+        userId: initialUser?.id ?? getStoredSessionCacheUserId(),
+    });
     const queryClient = useQueryClient();
+    const clearSessionCache = useCallback(() => {
+        queryClient.clear();
+        // Removed queries cannot update their existing observers; bind a fresh session subtree.
+        setCacheRevision((revision) => revision + 1);
+    }, [queryClient]);
+
+    const restartAnonymousQueries = useCallback(() => {
+        queryClient.getMutationCache().clear();
+        for (const query of queryClient.getQueryCache().getAll()) {
+            if (query.getObserversCount() === 0) {
+                queryClient.removeQueries({ queryKey: query.queryKey, exact: true });
+            } else {
+                query.reset();
+                query.setState({ data: undefined, dataUpdatedAt: 0, error: null, status: 'pending' });
+            }
+        }
+        void queryClient.refetchQueries({ type: 'active' });
+    }, [queryClient]);
 
     const rawToastCtx = useContext(ToastContext);
     const toastFnRef = useRef(rawToastCtx?.toast);
@@ -96,7 +122,7 @@ export function AuthProvider({
     const isAuthenticated = user !== null;
 
     const permissionsQuery = useQuery({
-        queryKey: permissionsQueryKey(user?.id),
+        queryKey: permissionsQueryKey(user?.id, cacheRevision),
         queryFn: fetchEffectivePermissions,
         enabled: isAuthenticated && initialPermissions === undefined,
         initialData: initialPermissions,
@@ -132,12 +158,15 @@ export function AuthProvider({
         [permissionsQuery.data],
     );
 
-    const performRefresh = useCallback(async () => {
+    const performRefresh = useCallback(async function refresh() {
+        if (!hasStoredSession()) return;
         if (isRefreshingRef.current) {
             return;
         }
 
         isRefreshingRef.current = true;
+        const generation = sessionGenerationRef.current;
+        const storedGeneration = sessionGeneration();
         try {
             if (!isTokenExpired(TOKEN_REFRESH_BUFFER_MS / 1000)) {
                 const existing = getCurrentUserFromToken();
@@ -147,24 +176,34 @@ export function AuthProvider({
                         username: existing.username,
                         role: existing.role,
                     });
+                    setIsLoading(false);
                     return;
                 }
             }
 
             const jwtUser = await refreshAccessToken();
+            if (generation !== sessionGenerationRef.current || storedGeneration !== sessionGeneration()) return;
             setUser({
                 id: jwtUser.id,
                 username: jwtUser.username,
                 role: jwtUser.role,
             });
-        } catch {
-            toastFnRef.current?.({
-                title: 'Session expired',
-                description: 'The session expired. Sign in again.',
-                variant: 'error',
-            });
-            sessionGenerationRef.current += 1;
-            setUser(null);
+            setIsLoading(false);
+        } catch (error) {
+            if (generation !== sessionGenerationRef.current || storedGeneration !== sessionGeneration()) return;
+            if (isAuthenticationFailure(error)) {
+                clearAuthStorage();
+                sessionGenerationRef.current += 1;
+                setUser(null);
+                setIsLoading(false);
+                toastFnRef.current?.({
+                    title: 'Session expired',
+                    description: 'The session expired. Sign in again.',
+                    variant: 'error',
+                });
+            } else if (hasStoredSession()) {
+                refreshTimerRef.current = setTimeout(refresh, TOKEN_REFRESH_RETRY_MS);
+            }
         } finally {
             isRefreshingRef.current = false;
         }
@@ -203,6 +242,11 @@ export function AuthProvider({
             return;
         }
 
+        if (hasStoredSession() && isTokenExpired()) {
+            void performRefresh();
+            return;
+        }
+
         async function initSession() {
             try {
                 if (!hasStoredSession()) {
@@ -211,32 +255,18 @@ export function AuthProvider({
                 }
 
                 const sessionGeneration = sessionGenerationRef.current;
-                if (isTokenExpired()) {
-                    try {
-                        const jwtUser = await refreshAccessToken();
-                        if (sessionGeneration !== sessionGenerationRef.current || !hasStoredSession()) {
-                            return;
-                        }
-                        setUser({
-                            id: jwtUser.id,
-                            username: jwtUser.username,
-                            role: jwtUser.role,
-                        });
-                    } catch {
-                        clearAuthStorage();
-                    }
-                } else {
+                {
                     const jwtUser = getCurrentUserFromToken();
                     if (jwtUser) {
                         try {
                             await queryClient.fetchQuery({
-                                queryKey: permissionsQueryKey(jwtUser.id),
+                                queryKey: permissionsQueryKey(jwtUser.id, cacheRevision),
                                 queryFn: fetchEffectivePermissions,
                                 retry: false,
                                 staleTime: Infinity,
                             });
                         } catch (error) {
-                            if (isAuthenticationFailure(error)) {
+                            if (isAuthenticationFailure(error) && sessionGeneration === sessionGenerationRef.current) {
                                 clearAuthStorage();
                                 return;
                             }
@@ -258,7 +288,7 @@ export function AuthProvider({
         }
 
         void initSession();
-    }, [skipSessionInit, initialUser, initialLoading, queryClient]);
+    }, [skipSessionInit, initialUser, initialLoading, queryClient, performRefresh, cacheRevision]);
 
     useEffect(() => {
         if (user && !skipSessionInit) {
@@ -282,16 +312,33 @@ export function AuthProvider({
             sessionGenerationRef.current += 1;
             if (!e.newValue) {
                 setUser(null);
+                setIsLoading(false);
+                clearSessionCache();
                 return;
             }
 
             const updated = getCurrentUserFromToken();
             if (updated) {
+                const generation = sessionGeneration();
+                if (
+                    generation !== cacheSessionRef.current.generation ||
+                    updated.id !== cacheSessionRef.current.userId
+                ) {
+                    clearSessionCache();
+                }
+                cacheSessionRef.current = { generation, userId: updated.id };
                 setUser({
                     id: updated.id,
                     username: updated.username,
                     role: updated.role,
                 });
+                setIsLoading(false);
+            } else if (
+                hasStoredSession() &&
+                isTokenExpired(0) &&
+                sessionGeneration() === cacheSessionRef.current.generation
+            ) {
+                void performRefresh();
             } else {
                 setUser(null);
             }
@@ -300,15 +347,38 @@ export function AuthProvider({
         function handleAuthFailure() {
             sessionGenerationRef.current += 1;
             setUser(null);
+            setIsLoading(false);
+            clearSessionCache();
+        }
+
+        function handleRenewed(event: Event) {
+            if ((event as CustomEvent<{ scope: string }>).detail.scope !== authScope()) return;
+            const updated = getCurrentUserFromToken();
+            if (updated) {
+                setUser(updated);
+                setIsLoading(false);
+            }
+        }
+
+        function handleResume() {
+            if (!skipSessionInit && document.visibilityState === 'visible' && hasStoredSession()) {
+                void performRefresh();
+            }
         }
 
         window.addEventListener('storage', handleStorageChange);
         window.addEventListener(AUTH_FAILURE_EVENT, handleAuthFailure);
+        window.addEventListener(AUTH_RENEWED_EVENT, handleRenewed);
+        window.addEventListener('online', handleResume);
+        document.addEventListener('visibilitychange', handleResume);
         return () => {
             window.removeEventListener('storage', handleStorageChange);
             window.removeEventListener(AUTH_FAILURE_EVENT, handleAuthFailure);
+            window.removeEventListener(AUTH_RENEWED_EVENT, handleRenewed);
+            window.removeEventListener('online', handleResume);
+            document.removeEventListener('visibilitychange', handleResume);
         };
-    }, []);
+    }, [performRefresh, clearSessionCache, skipSessionInit, user?.id]);
 
     const checkPermission = useCallback(
         (permission: Permission): boolean => {
@@ -335,11 +405,12 @@ export function AuthProvider({
     const signIn = useCallback(
         (newUser: User) => {
             sessionGenerationRef.current += 1;
-            queryClient.clear();
+            cacheSessionRef.current = { generation: sessionGeneration(), userId: newUser.id };
+            clearSessionCache();
             setUser(newUser);
             setIsLoading(false);
         },
-        [queryClient],
+        [clearSessionCache],
     );
 
     const signOut = useCallback(async () => {
@@ -349,16 +420,22 @@ export function AuthProvider({
             refreshTimerRef.current = null;
         }
 
-        await apiLogout();
-        queryClient.clear();
+        clearSessionCache();
         setUser(null);
-    }, [queryClient]);
+        setIsLoading(false);
+        await apiLogout();
+    }, [clearSessionCache]);
 
     const login = useCallback(
         async (username: string, password: string) => {
             sessionGenerationRef.current += 1;
+            const generation = sessionGenerationRef.current;
             const jwtUser = await apiLogin(username, password);
-            queryClient.clear();
+            if (generation !== sessionGenerationRef.current) return;
+            const replacesSession = user !== null || cacheSessionRef.current.userId !== undefined;
+            cacheSessionRef.current = { generation: sessionGeneration(), userId: jwtUser.id };
+            if (replacesSession) clearSessionCache();
+            else restartAnonymousQueries();
             setUser({
                 id: jwtUser.id,
                 username: jwtUser.username,
@@ -366,7 +443,7 @@ export function AuthProvider({
             });
             setIsLoading(false);
         },
-        [queryClient],
+        [clearSessionCache, restartAnonymousQueries, user],
     );
 
     const contextValue = useMemo<AuthContextValue>(
@@ -394,5 +471,9 @@ export function AuthProvider({
         ],
     );
 
-    return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;
+    return (
+        <AuthContext.Provider key={cacheRevision} value={contextValue}>
+            {children}
+        </AuthContext.Provider>
+    );
 }

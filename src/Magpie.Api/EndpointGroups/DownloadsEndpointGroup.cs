@@ -184,9 +184,22 @@ internal sealed class DownloadsEndpointGroup : IApiEndpointGroup
         Guid id,
         CancellationToken cancellationToken)
     {
-        var cancelled = await downloadService.CancelAsync(id, cancellationToken).ConfigureAwait(false);
+        var outcome = await downloadService.CancelWithOutcomeAsync(id, cancellationToken).ConfigureAwait(false);
 
-        return cancelled ? Results.NoContent() : Results.NotFound();
+        return outcome switch
+        {
+            DownloadCancellationOutcome.Cancelled or DownloadCancellationOutcome.AlreadyCancelled =>
+                Results.NoContent(),
+            DownloadCancellationOutcome.NotFound => Results.NotFound(),
+            DownloadCancellationOutcome.NotCancellable => Results.Problem(
+                "The download status does not permit cancellation.", statusCode: StatusCodes.Status409Conflict),
+            DownloadCancellationOutcome.ClientUnavailable => Results.Problem(
+                "The download client or transfer identifier is unavailable. Cancellation can be retried.",
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            _ => Results.Problem(
+                "The download client could not cancel the transfer. Cancellation can be retried.",
+                statusCode: StatusCodes.Status502BadGateway)
+        };
     }
 
     internal async Task<IResult> ForceStartDownloadAsync(

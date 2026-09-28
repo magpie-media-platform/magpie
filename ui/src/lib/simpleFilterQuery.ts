@@ -6,6 +6,7 @@ export interface FieldState {
     contentType: string;
     level: string;
     monitoring: string;
+    fulfillment: string;
     genre: string;
     tag: string;
     title: string;
@@ -22,6 +23,7 @@ export const EMPTY_FIELDS: FieldState = {
     contentType: '',
     level: '',
     monitoring: '',
+    fulfillment: '',
     genre: '',
     tag: '',
     title: '',
@@ -38,6 +40,18 @@ export function escapeQueryString(value: string): string {
 
 export function unescapeQueryString(value: string): string {
     return value.replace(/\\(.)/g, '$1');
+}
+
+export function monitoringClause(value: string): string {
+    if (value === 'shotgun') return 'monitoring = Shotgun';
+    return value === 'true' ? 'monitoring != Unmonitored' : 'monitoring = Unmonitored';
+}
+
+export function parseMonitoringClause(clause: string): string | null {
+    const match = clause.match(/^monitoring\s*(!?=)\s*(Unmonitored|Shotgun)$/i);
+    if (!match) return null;
+    if (match[2].toLowerCase() === 'shotgun') return match[1] === '=' ? 'shotgun' : null;
+    return match[1] === '=' ? 'false' : 'true';
 }
 
 /** The MagpieQL relationship clause for a subject kind and name, in the shape the simple filter bar parses back. */
@@ -57,6 +71,7 @@ const RELATIONSHIP_CLAUSE_PATTERN =
 
 function parseRelationshipClause(clause: string): Pick<FieldState, 'relationshipKind' | 'relationshipName'> | null {
     const state = { relationshipKind: '', relationshipName: '' };
+    const fields = new Set<string>();
     const parts = clause
         .trim()
         .split(/\s+and\s+/i)
@@ -68,11 +83,15 @@ function parseRelationshipClause(clause: string): Pick<FieldState, 'relationship
     for (const part of parts) {
         const nameMatch = part.match(/^(?:Name|Subject)\s+contains\s+"((?:\\.|[^"\\])*)"$/i);
         if (nameMatch) {
+            if (fields.has('name') || !nameMatch[1]) return null;
+            fields.add('name');
             state.relationshipName = unescapeQueryString(nameMatch[1]);
             continue;
         }
         const typeMatch = part.match(/^Type\s*=\s*"((?:\\.|[^"\\])*)"$/i);
         if (typeMatch) {
+            if (fields.has('type') || !typeMatch[1]) return null;
+            fields.add('type');
             state.relationshipKind = unescapeQueryString(typeMatch[1]);
             continue;
         }
@@ -201,7 +220,10 @@ export function buildQuery(fields: FieldState, context: 'content' | 'subject'): 
             clauses.push(`level = "${escapeQueryString(fields.level)}"`);
         }
         if (fields.monitoring) {
-            clauses.push(`monitoring = ${fields.monitoring}`);
+            clauses.push(monitoringClause(fields.monitoring));
+        }
+        if (fields.fulfillment) {
+            clauses.push(`fulfillment = ${fields.fulfillment}`);
         }
     } else {
         if (fields.kind) {
@@ -285,43 +307,59 @@ export function parseQuery(query: string, context: 'content' | 'subject'): Field
         const trimmed = part.trim();
 
         const contentTypeMatch = trimmed.match(/^contentType\s*=\s*"((?:\\.|[^"\\])*)"$/i);
-        if (contentTypeMatch) {
+        if (contentTypeMatch && context === 'content') {
+            if (state.contentType || !contentTypeMatch[1]) return null;
             state.contentType = unescapeQueryString(contentTypeMatch[1]);
             continue;
         }
 
         const levelMatch = trimmed.match(/^level\s*=\s*"((?:\\.|[^"\\])*)"$/i);
-        if (levelMatch) {
+        if (levelMatch && context === 'content') {
+            if (state.level || !levelMatch[1]) return null;
             state.level = unescapeQueryString(levelMatch[1]);
             continue;
         }
 
-        const monitoringMatch = trimmed.match(/^monitoring\s*=\s*(true|false)$/i);
-        if (monitoringMatch) {
-            state.monitoring = monitoringMatch[1].toLowerCase();
+        const monitoring = parseMonitoringClause(trimmed);
+        if (monitoring && context === 'content') {
+            if (state.monitoring) return null;
+            state.monitoring = monitoring;
+            continue;
+        }
+
+        const fulfillmentMatch = trimmed.match(
+            /^fulfillment\s*=\s*(?:"(Missing|Partial|Upgradable|Fulfilled|FulfilledExternally)"|(Missing|Partial|Upgradable|Fulfilled|FulfilledExternally))$/i,
+        );
+        if (fulfillmentMatch && context === 'content') {
+            if (state.fulfillment) return null;
+            state.fulfillment = fulfillmentMatch[1] ?? fulfillmentMatch[2];
             continue;
         }
 
         const kindMatch = trimmed.match(/^kind\s*=\s*"((?:\\.|[^"\\])*)"$/i);
-        if (kindMatch) {
+        if (kindMatch && context === 'subject') {
+            if (state.kind || !kindMatch[1]) return null;
             state.kind = unescapeQueryString(kindMatch[1]);
             continue;
         }
 
         const titleMatch = trimmed.match(/^title\s+contains\s+"((?:\\.|[^"\\])*)"$/i);
         if (titleMatch) {
+            if (state.title || !titleMatch[1]) return null;
             state.title = unescapeQueryString(titleMatch[1]);
             continue;
         }
 
         const genreMatch = trimmed.match(/^genre\s+has\s+"((?:\\.|[^"\\])*)"$/i);
         if (genreMatch && context === 'content') {
+            if (state.genre || !genreMatch[1]) return null;
             state.genre = unescapeQueryString(genreMatch[1]);
             continue;
         }
 
         const tagMatch = trimmed.match(/^tag\s+has\s+"((?:\\.|[^"\\])*)"$/i);
         if (tagMatch) {
+            if (state.tag || !tagMatch[1]) return null;
             state.tag = unescapeQueryString(tagMatch[1]);
             continue;
         }

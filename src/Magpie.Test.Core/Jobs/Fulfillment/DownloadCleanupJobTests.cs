@@ -162,8 +162,9 @@ public sealed class DownloadCleanupJobTests
         }
     }
 
-    [Test]
-    public async Task ExecuteAsync_RemovesFailedRow_WhenDefaultFileDeletionApplies()
+    [TestCase(DownloadStatus.Failed)]
+    [TestCase(DownloadStatus.Faulted)]
+    public async Task ExecuteAsync_RemovesFailedRow_WhenDefaultFileDeletionApplies(DownloadStatus status)
     {
         // Arrange
         var candidate = new DownloadCleanupCandidate
@@ -171,7 +172,7 @@ public sealed class DownloadCleanupJobTests
             DownloadId = Guid.NewGuid(),
             ExternalId = Guid.NewGuid().ToString("N"),
             Title = $"download-{Guid.NewGuid():N}",
-            Status = DownloadStatus.Failed,
+            Status = status,
             HeldByPolicy = false,
             ProviderType = "torrent-client",
             ClientName = $"client-{Guid.NewGuid():N}",
@@ -261,8 +262,9 @@ public sealed class DownloadCleanupJobTests
         }
     }
 
-    [Test]
-    public async Task ExecuteAsync_LeavesFailedRow_WhenKeepFailedEscapeHatchOn()
+    [TestCase(DownloadStatus.Failed)]
+    [TestCase(DownloadStatus.Faulted)]
+    public async Task ExecuteAsync_LeavesFailedRow_WhenKeepFailedEscapeHatchOn(DownloadStatus status)
     {
         // Arrange
         var candidate = new DownloadCleanupCandidate
@@ -270,7 +272,7 @@ public sealed class DownloadCleanupJobTests
             DownloadId = Guid.NewGuid(),
             ExternalId = Guid.NewGuid().ToString("N"),
             Title = $"download-{Guid.NewGuid():N}",
-            Status = DownloadStatus.Failed,
+            Status = status,
             HeldByPolicy = false,
             ProviderType = "torrent-client",
             ClientName = $"client-{Guid.NewGuid():N}",

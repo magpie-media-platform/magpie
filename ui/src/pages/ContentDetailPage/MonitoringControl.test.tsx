@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import type { MonitoringMode } from '@/types';
 
 import { MonitoringControl } from './MonitoringControl';
 
@@ -19,7 +20,7 @@ vi.mock('@/components/ui/Toast', async () => {
     return { ...actual, useToast: () => ({ toast: mockToast }) };
 });
 
-function renderControl(monitoring: boolean | null, effectiveMonitoring: boolean) {
+function renderControl(monitoring: MonitoringMode | null, effectiveMonitoring: MonitoringMode) {
     return render(
         <TooltipProvider>
             <MonitoringControl contentId="c-1" monitoring={monitoring} effectiveMonitoring={effectiveMonitoring} />
@@ -35,7 +36,7 @@ describe('MonitoringControl', () => {
     });
 
     it('renders the effective value and toggle within the aligned policy row', () => {
-        renderControl(null, true);
+        renderControl(null, 'Monitored');
 
         const row = screen.getByTestId('monitoring-control');
         expect(within(row).getByText('Monitoring')).toBeInTheDocument();
@@ -46,18 +47,18 @@ describe('MonitoringControl', () => {
         );
     });
 
-    it('renders three icon segments with labels in persistence order', () => {
-        renderControl(null, true);
+    it('renders four icon segments with labels in choice order', () => {
+        renderControl(null, 'Monitored');
 
         const options = screen.getAllByRole('radio');
-        expect(options.map((option) => option.textContent)).toEqual(['Monitor', 'Do not monitor', 'Inherit']);
+        expect(options.map((option) => option.textContent)).toEqual(['Inherit', 'Unmonitored', 'Monitored', 'Shotgun']);
         for (const option of options) {
             expect(option.querySelector('svg')).toBeInTheDocument();
         }
     });
 
     it('marks the inherited override active and keeps the effective value clean', () => {
-        renderControl(null, true);
+        renderControl(null, 'Monitored');
 
         expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent(/^Monitored$/);
         expect(screen.queryByText('Inherited')).not.toBeInTheDocument();
@@ -66,16 +67,16 @@ describe('MonitoringControl', () => {
     });
 
     it('marks the explicit disabled override active', () => {
-        renderControl(false, false);
+        renderControl('Unmonitored', 'Unmonitored');
 
-        expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent('Not monitored');
+        expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent('Unmonitored');
         expect(screen.getByTestId('monitoring-control__option-false')).toHaveAttribute('aria-checked', 'true');
     });
 
     it('hides the toggle while preserving the effective value for read-only users', () => {
         render(
             <TooltipProvider>
-                <MonitoringControl contentId="c-1" monitoring={null} effectiveMonitoring canEdit={false} />
+                <MonitoringControl contentId="c-1" monitoring={null} effectiveMonitoring="Monitored" canEdit={false} />
             </TooltipProvider>,
         );
 
@@ -85,7 +86,7 @@ describe('MonitoringControl', () => {
 
     it('disables every segment while a mutation is pending', () => {
         mockIsPending = true;
-        renderControl(true, true);
+        renderControl('Monitored', 'Monitored');
 
         for (const option of screen.getAllByRole('radio')) {
             expect(option).toBeDisabled();
@@ -93,12 +94,12 @@ describe('MonitoringControl', () => {
     });
 
     it.each([
-        ['monitoring-control__option-true', true],
-        ['monitoring-control__option-false', false],
+        ['monitoring-control__option-true', 'Monitored'],
+        ['monitoring-control__option-false', 'Unmonitored'],
         ['monitoring-control__option-inherit', null],
     ] as const)('patches monitoring via %s', async (testId, monitoring) => {
         const user = userEvent.setup();
-        renderControl(monitoring === true ? false : true, true);
+        renderControl(monitoring === 'Monitored' ? 'Unmonitored' : 'Monitored', 'Monitored');
 
         await user.click(screen.getByTestId(testId));
 
@@ -107,9 +108,9 @@ describe('MonitoringControl', () => {
         });
     });
 
-    it('uses not monitored wording in the disabled success toast', async () => {
+    it('uses unmonitored wording in the disabled success toast', async () => {
         const user = userEvent.setup();
-        renderControl(true, true);
+        renderControl('Monitored', 'Monitored');
         await user.click(screen.getByTestId('monitoring-control__option-false'));
 
         await waitFor(() => expect(mockMutate).toHaveBeenCalled());
@@ -117,7 +118,66 @@ describe('MonitoringControl', () => {
         mutationOptions.onSuccess();
 
         expect(mockToast).toHaveBeenCalledWith(
-            expect.objectContaining({ description: 'Monitoring set to not monitored.' }),
+            expect.objectContaining({ description: 'Monitoring set to unmonitored.' }),
         );
+    });
+
+    it('asks for confirmation with the Shotgun copy and patches nothing when cancelled', async () => {
+        const user = userEvent.setup();
+        renderControl('Monitored', 'Monitored');
+
+        await user.click(screen.getByTestId('monitoring-control__option-shotgun'));
+
+        const dialog = await screen.findByRole('dialog');
+        expect(within(dialog).getByText('Enable Shotgun mode?')).toBeInTheDocument();
+        expect(dialog).toHaveTextContent(
+            'Shotgun mode grabs every acceptable release at the same time. This uses more bandwidth and download slots.',
+        );
+        expect(dialog).toHaveTextContent(
+            "Magpie keeps the first successful import and cancels the rest, unless they're a higher quality.",
+        );
+        expect(dialog).toHaveTextContent('Inheriting items will also use Shotgun mode.');
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        expect(mockMutate).not.toHaveBeenCalled();
+    });
+
+    it('patches Shotgun monitoring when Shotgun is confirmed', async () => {
+        const user = userEvent.setup();
+        renderControl(null, 'Unmonitored');
+
+        await user.click(screen.getByTestId('monitoring-control__option-shotgun'));
+        await user.click(await screen.findByRole('button', { name: /Enable Shotgun/ }));
+
+        expect(mockMutate).toHaveBeenCalledWith({ id: 'c-1', monitoring: 'Shotgun' }, expect.anything());
+    });
+
+    it('patches plain monitoring without confirmation when Shotgun changes to Monitored', async () => {
+        const user = userEvent.setup();
+        render(
+            <TooltipProvider>
+                <MonitoringControl contentId="c-1" monitoring="Shotgun" effectiveMonitoring="Shotgun" />
+            </TooltipProvider>,
+        );
+
+        await user.click(screen.getByTestId('monitoring-control__option-true'));
+
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(mockMutate).toHaveBeenCalledWith({ id: 'c-1', monitoring: 'Monitored' }, expect.anything());
+    });
+
+    it.each([
+        ['Shotgun', 'monitoring-control__option-shotgun'],
+        [null, 'monitoring-control__option-inherit'],
+    ] as const)('shows the effective Shotgun mode when monitoring is %s', (monitoring, activeTestId) => {
+        render(
+            <TooltipProvider>
+                <MonitoringControl contentId="c-1" monitoring={monitoring} effectiveMonitoring="Shotgun" />
+            </TooltipProvider>,
+        );
+
+        expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent(/^Shotgun$/);
+        expect(screen.getByTestId(activeTestId)).toHaveAttribute('aria-checked', 'true');
     });
 });

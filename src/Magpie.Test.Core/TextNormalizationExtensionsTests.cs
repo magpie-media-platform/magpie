@@ -93,4 +93,34 @@ public sealed class TextNormalizationExtensionsTests
         // Assert
         Assert.That(result, Is.EqualTo(expected));
     }
+
+    [TestCase("Mr. Robot", "Mr. Robot")]
+    [TestCase("  Title: Name?  ", "Title Name")]
+    [TestCase("a  \t b", "a b")]
+    [TestCase("\u0001Name", "Name")]
+    [TestCase("<>:\"/\\|?*", "")]
+    [TestCase("Name...", "Name")]
+    [TestCase("Name .", "Name ")]
+    [TestCase("...", "")]
+    [TestCase(" Name B ", "Name B")]
+    [TestCase("", "")]
+    public void NormalizeContentPathSegment_ReturnsWindowsSafeSegment_WhenInputVaries(string source, string expected)
+    {
+        // Act
+        var result = source.NormalizeContentPathSegment();
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [TestCase("Firefly", 2002, "Firefly (2002)")]
+    [TestCase("What?", null, "What")]
+    public void ToGeneratedContentPath_AppendsTheYear_WhenOneIsKnown(string title, int? year, string expected)
+    {
+        // Act
+        var result = title.ToGeneratedContentPath(year);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
 }

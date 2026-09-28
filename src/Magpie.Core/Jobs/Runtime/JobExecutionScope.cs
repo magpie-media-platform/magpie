@@ -103,6 +103,13 @@ internal sealed class JobExecutionScope : IJobExecutionScope, IJobExecutionScope
         return true;
     }
 
+    /// <inheritdoc />
+    public Task FlushProgressAsync(CancellationToken cancellationToken = default)
+    {
+        return _scope?.ServiceProvider.GetService<IProgressReporter>()?.FlushAsync(cancellationToken)
+            ?? Task.CompletedTask;
+    }
+
     public ValueTask DisposeAsync()
     {
         if (_hasParentContext)

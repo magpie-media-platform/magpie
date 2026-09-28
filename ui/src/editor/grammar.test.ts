@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import contentFieldCatalog from './content-field-catalog.txt?raw';
 import { parser } from './filter-query-parser.gen';
+import itemOperatorCases from './item-operator-cases.json';
 
 function parseQuery(query: string): { success: boolean; errorNodes: string[] } {
     const tree = parser.parse(query);
@@ -29,6 +31,33 @@ function expectFailsToParse(query: string): void {
 }
 
 describe('Filter Query Grammar', () => {
+    it.each(
+        contentFieldCatalog
+            .trim()
+            .split(/\r?\n/)
+            .map((line) => line.split(' '))
+            .flatMap(([kind, name, ...rest]) =>
+                kind === 'scalar'
+                    ? [rest[0] === 'boolean' ? `${name} = true` : `${name} null`]
+                    : rest.map((item) => `${name} has (${item.split(':')[0]} = "x")`),
+            ),
+    )('parses a predicate for catalog field: %s', (query) => {
+        expectParses(query);
+    });
+
+    it.each(['hasSearchableTitle = true', 'originalTitle = "x"', 'inField = 1', 'andField = 1', 'notField = 1'])(
+        'reads a field that starts with a keyword as one name: %s',
+        (query) => {
+            expectParses(query);
+        },
+    );
+
+    describe('Collection Item Operators', () => {
+        it.each(itemOperatorCases)('parses the $type item operator $operator', ({ query }) => {
+            expectParses(query);
+        });
+    });
+
     describe('Scalar Expressions', () => {
         describe('Comparison Operators', () => {
             it('parses equals with string', () => {

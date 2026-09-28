@@ -152,6 +152,52 @@ public class TokenServiceTests
     }
 
     [Test]
+    public async Task GenerateAccessTokenAsync_UsesOneClockForAllDates_WhenInjectedClockIsInThePast()
+    {
+        // Arrange
+        var time = new Mock<TimeProvider>();
+        time.Setup(provider => provider.GetUtcNow())
+            .Returns(new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        ITokenService subject = new TokenService(_options, _refreshTokenRepository.Object, _keyStore.Object,
+            new KeyStoreHmacCryptoProviderFactory(), time.Object);
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            ProviderType = "local",
+            Username = "testuser",
+            Enabled = true,
+            Role = Role.Viewer,
+            CreatedAt = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+
+        // Act
+        var issued = await subject.GenerateAccessTokenAsync(user).ConfigureAwait(false);
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(issued.Token);
+        var validation = await new JwtSecurityTokenHandler().ValidateTokenAsync(issued.Token, new()
+        {
+            ValidateIssuer = true,
+            ValidIssuer = "magpie-test",
+            ValidateAudience = true,
+            ValidAudience = "magpie-test-audience",
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(_jwtHmacKey),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(jwt.IssuedAt, Is.EqualTo(new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(jwt.ValidFrom, Is.EqualTo(new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(jwt.ValidTo, Is.EqualTo(new DateTime(2000, 1, 1, 0, 15, 0, DateTimeKind.Utc)));
+            Assert.That(issued.ExpiresAt, Is.EqualTo(new DateTime(2000, 1, 1, 0, 15, 0, DateTimeKind.Utc)));
+            Assert.That(validation.IsValid, Is.False);
+            Assert.That(validation.Exception, Is.TypeOf<SecurityTokenExpiredException>());
+        }
+    }
+
+    [Test]
     public async Task GenerateAccessTokenAsync_CreatesHmacKey_WhenMissing()
     {
         // Arrange

@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 export interface SetFilterOptions {
     replace?: boolean;
     resetParams?: readonly string[];
+    state?: unknown;
 }
 
 export function useUrlFilterState<T extends Record<string, string>>(
@@ -44,7 +45,7 @@ export function useUrlFilterState<T extends Record<string, string>>(
                     }
                     return next;
                 },
-                { replace: options?.replace ?? false },
+                { replace: options?.replace ?? false, state: options?.state },
             );
         },
         [setSearchParams],

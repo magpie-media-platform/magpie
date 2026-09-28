@@ -15,9 +15,11 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
+using Magpie.QueryLanguage;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -57,6 +59,7 @@ public sealed class SubjectRepositoryTests
     ];
 
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private Mock<IEventBus> _eventBus = null!;
     private ISubjectRepository _subject = null!;
     private IMetadataContainerRepository _metadataContainerRepository = null!;
@@ -64,15 +67,32 @@ public sealed class SubjectRepositoryTests
     private Guid _userId;
     private Guid _metadataContainerId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
         _eventBus = new Mock<IEventBus>();
         _eventBus
             .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
@@ -146,6 +166,79 @@ public sealed class SubjectRepositoryTests
     {
         _context.Database.CloseConnection();
         _context.Dispose();
+    }
+
+    [Test]
+    public async Task ListIdentityDetailsAsync_ReturnsIdentityFieldsOnce_WhenIdsCrossTheBatchBoundary()
+    {
+        // Arrange
+        var subjects = Enumerable.Range(0, 1001).Select(_ => new Subject
+        {
+            Kind = "person",
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first", Title = "Jane", BirthDate = new DateTime(1970, 1, 1),
+                        ExternalIds = { new ExternalId { Source = "Person-ID", Value = "001" } },
+                        Images = { new Image { Type = "portrait", Url = new Uri("https://example.test/portrait") } }
+                    },
+                    new MetadataContribution
+                    {
+                        ProviderType = "second", OriginalTitle = "Jane Doe", DeathDate = new DateTime(2020, 1, 1),
+                        ExternalIds = { new ExternalId { Source = "other", Value = "conflict" } }
+                    }
+                }
+            }
+        }).ToArray();
+        _context.Subjects.AddRange(subjects);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var ids = subjects.Select(subject => subject.Id).Append(subjects[0].Id).Append(Guid.NewGuid()).ToArray();
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.ListIdentityDetailsAsync(ids).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(1001));
+            Assert.That(result.Select(subject => subject.Id).Distinct().Count(), Is.EqualTo(1001));
+            Assert.That(result.Select(subject => subject.Kind), Is.All.EqualTo("person"));
+            Assert.That(result.SelectMany(subject => subject.MetadataContainer!.Contributions).Count(),
+                Is.EqualTo(2002));
+            Assert.That(result.SelectMany(subject => subject.MetadataContainer!.Contributions)
+                .Where(contribution => contribution.ProviderType == "first").Select(contribution => contribution.Title),
+                Is.All.EqualTo("Jane"));
+            Assert.That(result.SelectMany(subject => subject.MetadataContainer!.Contributions)
+                .Where(contribution => contribution.ProviderType == "first")
+                .Select(contribution => contribution.BirthDate), Is.All.EqualTo(new DateTime(1970, 1, 1)));
+            Assert.That(result.SelectMany(subject => subject.MetadataContainer!.Contributions)
+                .Where(contribution => contribution.ProviderType == "second")
+                .Select(contribution => contribution.DeathDate), Is.All.EqualTo(new DateTime(2020, 1, 1)));
+            Assert.That(result.SelectMany(subject => subject.MetadataContainer!.Contributions)
+                .SelectMany(contribution => contribution.ExternalIds).Count(), Is.EqualTo(2002));
+            Assert.That(result.SelectMany(subject => subject.MetadataContainer!.Contributions)
+                .SelectMany(contribution => contribution.ExternalIds).Select(id => id.Value), Does.Contain("conflict"));
+            Assert.That(result.SelectMany(subject => subject.MetadataContainer!.Contributions)
+                .SelectMany(contribution => contribution.Images), Is.Empty);
+            Assert.That(_context.ChangeTracker.Entries(), Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task ListIdentityDetailsAsync_ReturnsEmpty_WhenNoIdsAreSupplied()
+    {
+        // Arrange
+        Guid[] ids = [];
+
+        // Act
+        var result = await _subject.ListIdentityDetailsAsync(ids).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.Empty);
     }
 
     [Test]
@@ -305,7 +398,7 @@ public sealed class SubjectRepositoryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -366,7 +459,7 @@ public sealed class SubjectRepositoryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -611,7 +704,7 @@ public sealed class SubjectRepositoryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1685,6 +1778,173 @@ public sealed class SubjectRepositoryTests
     }
 
     [Test]
+    public async Task QueryAsync_ReturnsOnlyMatchingSubjects_WhenParsedAwardCategoryIsNotNull()
+    {
+        // Arrange
+        var matchingContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var matchingContribution = new MetadataContribution
+        {
+            MetadataContainer = matchingContainer,
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Categorized"
+        };
+        matchingContribution.Awards.Add(new Award
+        {
+            Ordinal = 0,
+            Body = "Academy",
+            Name = "Award",
+            Category = "Drama"
+        });
+        var matchingSubject = new Subject
+        {
+            MetadataContainer = matchingContainer,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var otherContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var otherContribution = new MetadataContribution
+        {
+            MetadataContainer = otherContainer,
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Uncategorized"
+        };
+        otherContribution.Awards.Add(new Award
+        {
+            Ordinal = 0,
+            Body = "Academy",
+            Name = "Award"
+        });
+        var otherSubject = new Subject
+        {
+            MetadataContainer = otherContainer,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Subjects.AddRange(matchingSubject, otherSubject);
+        _context.MetadataContributions.AddRange(matchingContribution, otherContribution);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var parsed = "Awards has (Category !null)".ParseSubjectFilter();
+
+        // Act
+        var result = await _subject.QueryAsync(
+            new() { Criteria = parsed.Value },
+            new() { PageNumber = 1, PageSize = 100 },
+            null,
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(parsed.IsSuccess, Is.True);
+            Assert.That(result.Items.Select(subject => subject.Id), Is.EqualTo([matchingSubject.Id]));
+        }
+    }
+
+    [TestCase("Images has (Url null)", new string[] { })]
+    [TestCase(
+        "Image !has (Url null)",
+        new[] { "URL Fixture A", "URL Fixture B", "URL Fixture Without Image" })]
+    [TestCase("Image has (Url !null)", new[] { "URL Fixture A", "URL Fixture B" })]
+    [TestCase("Images !has (Url !null)", new[] { "URL Fixture Without Image" })]
+    [TestCase(
+        "Kind = \"person\" and Image has (Type = \"portrait\" and Url = \"https://images.test/a.jpg\")",
+        new[] { "URL Fixture A" })]
+    [TestCase(
+        "Images !has (Url = \"https://images.test/a.jpg\")",
+        new[] { "URL Fixture B", "URL Fixture Without Image" })]
+    [TestCase(
+        "Images has (Type = \"portrait\" and Url != \"https://images.test/a.jpg\")",
+        new[] { "URL Fixture B" })]
+    [TestCase(
+        "Image !has (Url != \"https://images.test/a.jpg\") and Kind = \"person\"",
+        new[] { "URL Fixture A", "URL Fixture Without Image" })]
+    public async Task QueryAsync_ReturnsExpectedSubjects_WhenParsedImageUrlCriterionIsSet(
+        string query,
+        string[] expectedTitles)
+    {
+        // Arrange
+        var firstContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var firstContribution = new MetadataContribution
+        {
+            MetadataContainer = firstContainer,
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "URL Fixture A"
+        };
+        firstContribution.Images.Add(new Image
+        {
+            Ordinal = 0,
+            Type = "portrait",
+            Url = new Uri("https://images.test/a.jpg")
+        });
+        var firstSubject = new Subject
+        {
+            MetadataContainer = firstContainer,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var secondContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var secondContribution = new MetadataContribution
+        {
+            MetadataContainer = secondContainer,
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "URL Fixture B"
+        };
+        secondContribution.Images.Add(new Image
+        {
+            Ordinal = 0,
+            Type = "portrait",
+            Url = new Uri("https://images.test/b.jpg")
+        });
+        var secondSubject = new Subject
+        {
+            MetadataContainer = secondContainer,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var noImageContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var noImageContribution = new MetadataContribution
+        {
+            MetadataContainer = noImageContainer,
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "URL Fixture Without Image"
+        };
+        var noImageSubject = new Subject
+        {
+            MetadataContainer = noImageContainer,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Subjects.AddRange(firstSubject, secondSubject, noImageSubject);
+        _context.MetadataContributions.AddRange(firstContribution, secondContribution, noImageContribution);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var parsed = query.ParseSubjectFilter();
+
+        // Act
+        var result = await _subject.QueryAsync(
+            new() { Criteria = parsed.Value },
+            new() { PageNumber = 1, PageSize = 100 },
+            null,
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(parsed.IsSuccess, Is.True);
+            Assert.That(
+                result.Items.Select(subject => subject.MetadataContainer!.Contributions.Single().Title),
+                Is.EquivalentTo(expectedTitles));
+        }
+    }
+
+    [Test]
     public async Task QueryAsync_ReturnsDistinctRelatedSubjects_WhenScopedToRelatedContentHierarchyItemId()
     {
         // Arrange
@@ -1741,7 +2001,7 @@ public sealed class SubjectRepositoryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(content);
@@ -1799,7 +2059,7 @@ public sealed class SubjectRepositoryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1861,7 +2121,7 @@ public sealed class SubjectRepositoryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(content);

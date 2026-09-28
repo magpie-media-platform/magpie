@@ -17,8 +17,8 @@ interface ContentItem {
     name: string;
     level: string;
     parentId?: string | null;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
     metadataContainer?: {
         contributions?: Array<{ sequenceNumber?: number | null; publishDate?: string | null }>;
     } | null;
@@ -134,8 +134,8 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
             await page.locator('[data-action="enter-select-mode"]').click();
             await mobile.getByRole('button', { name: 'Select Journey Feature card' }).click();
             await page.locator('.library-page__mobile-selection-actions [data-action="bulk-unmonitor"]').click();
-            await expect.poll(async () => (await api.get<ContentItem>(`/api/content/${ids.movie}`)).monitoring).toBe(false);
-            await api.patch(`/api/content/${ids.movie}`, { monitoring: { value: true } });
+            await expect.poll(async () => (await api.get<ContentItem>(`/api/content/${ids.movie}`)).monitoring).toBe('Unmonitored');
+            await api.patch(`/api/content/${ids.movie}`, { monitoring: { value: 'Monitored' } });
 
             await page.goto('/library/content/tv');
             await expect(

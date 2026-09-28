@@ -656,7 +656,7 @@ describe('WishlistsPage list items', () => {
             expect(screen.getByText('My Movies')).toBeInTheDocument();
         });
         expect(screen.getAllByText('Inherit').length).toBeGreaterThan(0);
-        expect(screen.getByText('Not monitored')).toBeInTheDocument();
+        expect(screen.getByText('Unmonitored')).toBeInTheDocument();
     });
 });
 
@@ -1086,23 +1086,25 @@ describe('WishlistsPage Edit and Delete actions', () => {
         vi.restoreAllMocks();
     });
 
-    it('Manager can delete unlocked wishlists and own locked ones, but not other users locked ones', async () => {
+    it.each([Role.Requester, Role.Manager])('%s can delete only their own wishlists', async (role) => {
         render(
-            <TestWrapper role={Role.Manager} userId="user-1">
+            <TestWrapper role={role} userId="user-1">
                 <WishlistsPage />
             </TestWrapper>,
         );
 
         await waitFor(() => {
-            const deleteButtons = document.querySelectorAll('[data-action="delete"]');
-            expect(deleteButtons.length).toBe(3);
+            expect(screen.getByText('My Movies')).toBeInTheDocument();
         });
 
-        const lockedRow = document.querySelector('[data-wishlist-id="wl-3"]');
-        expect(lockedRow?.querySelector('[data-action="delete"]')).toBeNull();
+        expect(
+            [...document.querySelectorAll('[data-action="delete"]')].map((button) =>
+                button.closest('[data-wishlist-id]')?.getAttribute('data-wishlist-id'),
+            ),
+        ).toEqual(['wl-1', 'wl-2']);
     });
 
-    it('Admin can delete every wishlist including locked ones owned by other users', async () => {
+    it('Admin can delete every wishlist except locked ones owned by other users', async () => {
         render(
             <TestWrapper role={Role.Admin} userId="user-1">
                 <WishlistsPage />
@@ -1111,23 +1113,8 @@ describe('WishlistsPage Edit and Delete actions', () => {
 
         await waitFor(() => {
             const deleteButtons = document.querySelectorAll('[data-action="delete"]');
-            expect(deleteButtons.length).toBe(4);
+            expect(deleteButtons.length).toBe(3);
         });
-    });
-
-    it('Requester cannot delete wishlists', async () => {
-        render(
-            <TestWrapper role={Role.Requester} userId="user-1">
-                <WishlistsPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByRole('heading', { name: 'Wishlists' })).toBeInTheDocument();
-        });
-
-        const deleteButtons = document.querySelectorAll('[data-action="delete"]');
-        expect(deleteButtons.length).toBe(0);
     });
 
     it('Viewer cannot edit or delete wishlists', async () => {
@@ -1683,18 +1670,22 @@ describe('WishlistsPage edit permissions with ownerLock', () => {
         });
     });
 
-    it('Manager can edit unlocked wishlists owned by others', async () => {
+    it.each([
+        [Role.Manager, false],
+        [Role.Admin, true],
+    ])('role %s sees Edit on an unlocked wishlist owned by another user: %s', async (role, shown) => {
         render(
-            <TestWrapper role={Role.Manager} userId="user-1">
+            <TestWrapper role={role} userId="user-1">
                 <WishlistsPage />
             </TestWrapper>,
         );
 
         await waitFor(() => {
-            const wl4 = document.querySelector('[data-wishlist-id="wl-4"]');
-            const editButton = wl4?.querySelector('[data-action="edit"]');
-            expect(editButton).toBeInTheDocument();
+            expect(screen.getByText('My Movies')).toBeInTheDocument();
         });
+
+        const wl4 = document.querySelector('[data-wishlist-id="wl-4"]');
+        expect(wl4?.querySelector('[data-action="edit"]') != null).toBe(shown);
     });
 
     it('Owner can edit their own locked wishlists', async () => {

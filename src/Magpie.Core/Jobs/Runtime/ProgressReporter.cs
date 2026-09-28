@@ -48,6 +48,15 @@ internal sealed class ProgressReporter(
         }
     }
 
+    /// <inheritdoc />
+    public Task FlushAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return _writes.WaitAsync(cancellationToken);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         Task writes;
@@ -96,12 +105,18 @@ internal sealed class ProgressReporter(
             var scope = scopeFactory.CreateAsyncScope();
             await using var scopeHandle = scope.ConfigureAwait(false);
 
-            await scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>()
+            var applied = await scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>()
                 .UpdateProgressAsync(
                     executionId,
                     percentage.HasValue ? percentage.Value * 100 : null,
                     message)
                 .ConfigureAwait(false);
+            if (!applied)
+            {
+                logger.LogWarning(
+                    "The reporter dropped a progress report because execution {ExecutionId} is not running",
+                    executionId);
+            }
         }
         catch (Exception ex)
         {

@@ -559,29 +559,32 @@ public class QbittorrentDownloadClientIntegrationTests
     }
 
     [Test]
-    public async Task DownloadReleaseAsync_NameLookupHash_WhenTorrentCannotBeParsed()
+    public async Task DownloadReleaseAsync_NameLookupHash_WhenAValidTorrentHasNoV1Hash()
     {
         // Arrange
         var fallbackHash = "1111111111111111111111111111111111111111";
-        _torrentHandler.Expect(HttpMethod.Get, "https://tracker.example/bogus.torrent")
-            .Respond(HttpStatusCode.OK, _ => new ByteArrayContent([0x00, 0x01, 0x02, 0x03]));
+        var v2Only = Encoding.ASCII.GetBytes(
+            "d4:infod9:file treed8:test.bind0:d6:lengthi100e11:pieces root32:01234567890123456789012345678901" +
+            "eee12:meta versioni2e4:name8:test.bin12:piece lengthi65536eee");
+        _torrentHandler.Expect(HttpMethod.Get, "https://tracker.example/v2.torrent")
+            .Respond(HttpStatusCode.OK, _ => new ByteArrayContent(v2Only));
         _client.Setup(client => client.AddTorrentFileAsync(
                 It.IsAny<QbittorrentSettings>(),
-                It.IsAny<byte[]>(),
-                "bogus.torrent",
+                v2Only,
+                "v2.torrent",
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         _client.Setup(client => client.FindTorrentByNameAsync(
                 It.IsAny<QbittorrentSettings>(),
-                "Bogus Release",
+                "V2 Release",
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new TorrentInfo { Hash = fallbackHash, Name = "Bogus Release" });
+            .ReturnsAsync(new TorrentInfo { Hash = fallbackHash, Name = "V2 Release" });
         var release = new Release
         {
-            Title = "Bogus Release",
+            Title = "V2 Release",
             Protocol = "torrent",
-            InfoUrl = new Uri("https://tracker.example/bogus.torrent")
+            InfoUrl = new Uri("https://tracker.example/v2.torrent")
         };
 
         // Act
@@ -592,43 +595,60 @@ public class QbittorrentDownloadClientIntegrationTests
         Assert.That(result.ExternalId, Is.EqualTo(fallbackHash));
     }
 
-    [Test]
-    public void DownloadReleaseAsync_Throws_WhenUnparseableTorrentIsNotFound()
+    [TestCase(200, "text/html", "<!DOCTYPE html><html><body>Please log in</body></html>",
+        "The indexer returned an HTML page instead of a .torrent file (HTTP 200, text/html).", true)]
+    [TestCase(200, "application/x-bittorrent", "",
+        "The indexer returned an empty response instead of a .torrent file (HTTP 200, application/x-bittorrent).",
+        false)]
+    [TestCase(200, "application/x-bittorrent", "d8:announce31:http://tracker.example/announce4:infod6:length",
+        "The indexer returned a damaged or incomplete .torrent file (HTTP 200, application/x-bittorrent).", false)]
+    [TestCase(200, "text/plain", "Invalid passkey",
+        "The indexer returned text instead of a .torrent file (HTTP 200, text/plain).", false)]
+    [TestCase(403, "text/html", "<html>Forbidden</html>",
+        "The indexer returned HTTP 403 instead of a .torrent file (text/html).", true)]
+    [TestCase(401, "text/html", "<html>Log in</html>",
+        "The indexer returned HTTP 401 instead of a .torrent file (text/html).", true)]
+    [TestCase(403, "text/plain", "Forbidden",
+        "The indexer returned HTTP 403 instead of a .torrent file (text/plain).", false)]
+    [TestCase(429, "text/plain", "Too many requests",
+        "The indexer returned HTTP 429 instead of a .torrent file (text/plain).", true)]
+    [TestCase(503, "text/html", "<html>Unavailable</html>",
+        "The indexer returned HTTP 503 instead of a .torrent file (text/html).", true)]
+    public void DownloadReleaseAsync_RejectsBeforeDispatch_WhenTheTorrentUrlReturnsNoTorrent(
+        int status, string contentType, string body, string expectedReason, bool expectedTransient)
     {
         // Arrange
-        _torrentHandler.Expect(HttpMethod.Get, "https://tracker.example/bogus.torrent")
-            .Respond(HttpStatusCode.OK, _ => new ByteArrayContent([0x00, 0x01, 0x02, 0x03]));
-        _client.Setup(client => client.AddTorrentFileAsync(
-                It.IsAny<QbittorrentSettings>(),
-                It.IsAny<byte[]>(),
-                "bogus.torrent",
-                It.IsAny<string?>(),
-                It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        _client.Setup(client => client.FindTorrentByNameAsync(
-                It.IsAny<QbittorrentSettings>(),
-                "Bogus Release",
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((TorrentInfo?)null);
+        _torrentHandler.Expect(HttpMethod.Get, "https://tracker.example/download.php?id=7&passkey=SECRET-PASSKEY")
+            .Respond((HttpStatusCode)status, _ => new StringContent(body, Encoding.UTF8, contentType));
         var release = new Release
         {
-            Title = "Bogus Release",
+            Title = "Login Page Release",
             Protocol = "torrent",
-            InfoUrl = new Uri("https://tracker.example/bogus.torrent")
+            InfoUrl = new Uri("https://tracker.example/download.php?id=7&passkey=SECRET-PASSKEY")
         };
 
         // Act
-        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = Assert.CatchAsync<ReleasePayloadRejectedException>(
             async () => await _integration.DownloadReleaseAsync(release, AnonymousSettings, default)
                 .ConfigureAwait(false));
 
         // Assert
-        Assert.That(exception!.Message, Does.Contain("Failed to determine"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo(expectedReason));
+            Assert.That(exception.Transient, Is.EqualTo(expectedTransient));
+            _client.Verify(client => client.AddTorrentFileAsync(
+                It.IsAny<QbittorrentSettings>(),
+                It.IsAny<byte[]>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [TestCase(null)]
     [TestCase("ftp://tracker.example/file.torrent")]
-    public void DownloadReleaseAsync_Throws_WhenInfoUrlIsUnsupported(string? infoUrl)
+    public void DownloadReleaseAsync_RejectsBeforeDispatch_WhenInfoUrlIsUnsupported(string? infoUrl)
     {
         // Arrange
         var release = new Release
@@ -639,12 +659,16 @@ public class QbittorrentDownloadClientIntegrationTests
         };
 
         // Act
-        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = Assert.ThrowsAsync<ReleasePayloadRejectedException>(
             async () => await _integration.DownloadReleaseAsync(release, AnonymousSettings, default)
                 .ConfigureAwait(false));
 
         // Assert
-        Assert.That(exception!.Message, Does.Contain(infoUrl is null ? "no InfoUrl" : "ftp"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Does.Contain(infoUrl is null ? "no InfoUrl" : "ftp"));
+            Assert.That(exception.Transient, Is.False);
+        }
     }
 
     [Test]

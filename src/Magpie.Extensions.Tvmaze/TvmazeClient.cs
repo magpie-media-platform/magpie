@@ -254,6 +254,8 @@ internal sealed class TvmazeClient(
         catch (Exception exception)
         {
             activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+            activity?.AddException(exception);
+            activity?.SetTag("error.type", exception.GetType().FullName);
             throw;
         }
     }

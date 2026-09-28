@@ -6,6 +6,9 @@ import { stripBlankRows, useFormDirty } from '@/hooks/useFormDirty';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import type { EditableEventContextCriterion } from '@/lib/eventContextCriteria';
 import type { JobParameterDefinition } from '@/hooks/useJobs';
+import { requiredRoleForJobScope } from '@/lib/jobExecution';
+import { meetsRoleRequirement, type Role } from '@/auth/types';
+import type { JobScopeValue } from '@/types/jobs';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
@@ -41,6 +44,7 @@ export interface JobTemplateOption {
     onDemand?: boolean;
     enabled?: boolean;
     supportedTriggerModes?: string[];
+    scope?: JobScopeValue;
     parameters?: JobParameterDefinition[];
 }
 
@@ -71,6 +75,9 @@ interface EventTriggerFormProps {
     onSubmit: (values: EventTriggerFormValues) => void | Promise<void>;
 
     isSubmitting?: boolean;
+
+    /** The role of the trigger owner, when a user trigger may be limited to literal targets. */
+    ownerRole?: Role;
 }
 
 const emptyValues: EventTriggerFormValues = {
@@ -110,6 +117,12 @@ function isTemplateUnavailableForEventTrigger(template: JobTemplateOption | unde
     );
 }
 
+function canBindEvents(template: JobTemplateOption | undefined, ownerRole: Role | undefined): boolean {
+    return (
+        ownerRole === undefined || !template || meetsRoleRequirement(ownerRole, requiredRoleForJobScope(template.scope))
+    );
+}
+
 function getEventBoundParameters(parameters: Record<string, string> | undefined): Set<string> {
     return new Set(
         Object.entries(parameters ?? {})
@@ -126,6 +139,7 @@ export function EventTriggerForm({
     currentTemplateId = null,
     onSubmit,
     isSubmitting = false,
+    ownerRole,
 }: EventTriggerFormProps): ReactNode {
     const isEditing = !!initialValues?.id;
 
@@ -408,11 +422,19 @@ export function EventTriggerForm({
         });
 
         const selectedTemplate = templates.find((template) => template.id === values.templateId);
-        Object.assign(newErrors, validateJobParameters(selectedTemplate?.parameters, values.parameters, true));
+        const canBind = canBindEvents(selectedTemplate, ownerRole);
+        Object.assign(newErrors, validateJobParameters(selectedTemplate?.parameters, values.parameters, canBind));
+        if (!canBind) {
+            for (const [name, value] of Object.entries(values.parameters)) {
+                if (value.includes('${')) {
+                    newErrors[jobParameterErrorKey(name)] = 'A user trigger must target a specific item.';
+                }
+            }
+        }
 
         setErrors(newErrors);
         return Object.keys(newErrors).length === 0;
-    }, [currentTemplateId, templates, values, patternKeys, filterKeys]);
+    }, [currentTemplateId, templates, values, patternKeys, filterKeys, ownerRole]);
 
     const save = useCallback(async () => {
         conflict.beginOwnSave();
@@ -709,15 +731,31 @@ export function EventTriggerForm({
                                         help: 'event-trigger-form__help',
                                     }}
                                     dataField="parameters"
-                                    eventBindingKeys={eventBindingKeys}
+                                    eventBindingKeys={
+                                        canBindEvents(selectedTemplate, ownerRole) ? eventBindingKeys : undefined
+                                    }
                                     eventBoundParameters={eventBoundParameters}
-                                    onEventBindingChange={handleParameterBindingChange}
+                                    onEventBindingChange={
+                                        canBindEvents(selectedTemplate, ownerRole)
+                                            ? handleParameterBindingChange
+                                            : undefined
+                                    }
                                     onChange={handleParameterChange}
                                 />
-                                <p className="event-trigger-form__help">
-                                    Use {'${event.key}'} to bind event context. Use {'$${'} for a literal {'${'}. You
-                                    can enter keys that are not in the suggestions.
-                                </p>
+                                {canBindEvents(selectedTemplate, ownerRole) ? (
+                                    <p className="event-trigger-form__help">
+                                        Use {'${event.key}'} to bind event context. Use {'$${'} for a literal {'${'}.
+                                        You can enter keys that are not in the suggestions.
+                                    </p>
+                                ) : (
+                                    <p
+                                        className="event-trigger-form__help"
+                                        data-testid="event-trigger-form__literal-target"
+                                    >
+                                        A user trigger must target a specific item, so its parameters cannot be bound to
+                                        the event.
+                                    </p>
+                                )}
                             </div>
                         )}
 

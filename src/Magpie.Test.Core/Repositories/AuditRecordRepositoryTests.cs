@@ -17,6 +17,7 @@ using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -32,21 +33,39 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class AuditRecordRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private List<MagpieEvent> _publishedEvents = null!;
     private ITransactionManager _transactionManager = null!;
     private IAuditRecordRepository _subject = null!;
     private Guid _userId;
     private FakeTimeProvider _time = null!;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var user = new User
         {
@@ -1016,7 +1035,7 @@ public sealed class AuditRecordRepositoryTests
     public void CreateAsync_DoesNotPublish_WhenPersistenceFails()
     {
         // Arrange
-        _context.Database.CloseConnection();
+        _context.Database.GetDbConnection().Close();
         var record = new AuditRecord { Category = "System", Operation = "Startup" };
 
         // Act
@@ -1046,6 +1065,54 @@ public sealed class AuditRecordRepositoryTests
     }
 
     [Test]
+    public async Task CreateAsync_PreservesOtherChanges_WhenRejectedAuditIsRemoved()
+    {
+        // Arrange
+        var committed = new AuditRecord { Category = "System", Operation = "Committed" };
+        _context.AuditRecords.Add(committed);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var user = _context.Users.Local.Single();
+        user.Username = "Pending update";
+        var pendingUser = new User { Username = "Pending user", ProviderType = "local" };
+        _context.Users.Add(pendingUser);
+        var rejected = new AuditRecord { Category = "Integrations", Operation = "Import" };
+        await _context.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER reject_import_audit BEFORE INSERT ON system_audit
+            WHEN NEW.Operation = 'Import'
+            BEGIN SELECT RAISE(ABORT, 'Import audit rejected'); END;
+            """).ConfigureAwait(false);
+
+        // Act
+        var failure = Assert.ThrowsAsync<DbUpdateException>(async () =>
+            await _subject.CreateAsync(rejected).ConfigureAwait(false));
+        var rejectedState = _context.Entry(rejected).State;
+        var pendingUserState = _context.Entry(pendingUser).State;
+        var userState = _context.Entry(user).State;
+        await _context.Database.ExecuteSqlRawAsync("DROP TRIGGER reject_import_audit").ConfigureAwait(false);
+        await _subject.CreateAsync(new() { Category = "Integrations", Operation = "ImportFailed" })
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(failure!.InnerException!.Message, Does.Contain("Import audit rejected"));
+            Assert.That(rejectedState, Is.EqualTo(EntityState.Detached));
+            Assert.That(pendingUserState, Is.EqualTo(EntityState.Added));
+            Assert.That(userState, Is.EqualTo(EntityState.Modified));
+            Assert.That(await _context.AuditRecords.AsNoTracking().AnyAsync(item => item.Id == rejected.Id)
+                .ConfigureAwait(false), Is.False);
+            Assert.That(await _context.AuditRecords.AsNoTracking().AnyAsync(item => item.Id == committed.Id)
+                .ConfigureAwait(false), Is.True);
+            Assert.That(await _context.AuditRecords.CountAsync().ConfigureAwait(false), Is.EqualTo(2));
+            Assert.That(await _context.Users.AsNoTracking().AnyAsync(item => item.Username == "Pending user")
+                .ConfigureAwait(false), Is.True);
+            Assert.That(await _context.Users.AsNoTracking().AnyAsync(item => item.Username == "Pending update")
+                .ConfigureAwait(false), Is.True);
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+        }
+    }
+
+    [Test]
     public async Task CreateAsync_PreservesTimestamp_WhenProvided()
     {
         // Arrange
@@ -1062,6 +1129,102 @@ public sealed class AuditRecordRepositoryTests
 
         // Assert
         Assert.That(result, Has.Property(nameof(result.Timestamp)).EqualTo(specificTimestamp));
+    }
+
+    [Test]
+    public async Task CreateAsync_DetachesPendingAudit_WhenSaveIsCancelled()
+    {
+        // Arrange
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync().ConfigureAwait(false);
+        var rejected = new AuditRecord { Category = "Integrations", Operation = "Import" };
+
+        // Act
+        var failure = Assert.CatchAsync<OperationCanceledException>(async () =>
+            await _subject.CreateAsync(rejected, cancellation.Token).ConfigureAwait(false));
+        var rejectedState = _context.Entry(rejected).State;
+        await _subject.CreateAsync(new() { Category = "Integrations", Operation = "Recovery" })
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(failure!.CancellationToken, Is.EqualTo(cancellation.Token));
+            Assert.That(rejectedState, Is.EqualTo(EntityState.Detached));
+            Assert.That(await _context.AuditRecords.AsNoTracking().AnyAsync(item => item.Id == rejected.Id)
+                .ConfigureAwait(false), Is.False);
+            Assert.That(await _context.AuditRecords.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_PreservesCommittedAudit_WhenPublicationFails()
+    {
+        // Arrange
+        var publicationError = new InvalidOperationException("Publication failed");
+        var eventBus = new Mock<IEventBus>();
+        eventBus.Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Throws(publicationError);
+        IAuditRecordRepository subject = new AuditRecordRepository(
+            _context, eventBus.Object, NullLogger<AuditRecordRepository>.Instance, _transactionManager,
+            Mock.Of<IJobExecutionScopeFactory>(), _time);
+        var committed = new AuditRecord { Category = "Integrations", Operation = "Import" };
+
+        // Act
+        var failure = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await subject.CreateAsync(committed).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(failure, Is.SameAs(publicationError));
+            Assert.That(_context.Entry(committed).State, Is.EqualTo(EntityState.Unchanged));
+            Assert.That(await _context.AuditRecords.AsNoTracking().AnyAsync(item => item.Id == committed.Id)
+                .ConfigureAwait(false), Is.True);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_RollsBackWritesAndEvents_WhenAuditIsRejectedInTransaction()
+    {
+        // Arrange
+        await _context.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER reject_import_audit BEFORE INSERT ON system_audit
+            WHEN NEW.Operation = 'Import'
+            BEGIN SELECT RAISE(ABORT, 'Import audit rejected'); END;
+            """).ConfigureAwait(false);
+
+        // Act
+        var failure = Assert.ThrowsAsync<DbUpdateException>(async () =>
+            await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+            {
+                await _context.Users.Where(user => user.Id == _userId)
+                    .ExecuteUpdateAsync(update => update.SetProperty(user => user.Username, "Aborted"), ct)
+                    .ConfigureAwait(false);
+                await _subject.CreateAsync(new() { Category = "Integrations", Operation = "BeforeImport" }, ct)
+                    .ConfigureAwait(false);
+                await _subject.CreateAsync(new() { Category = "Integrations", Operation = "Import" }, ct)
+                    .ConfigureAwait(false);
+            }).ConfigureAwait(false));
+        var eventsAfterRollback = _publishedEvents.Count;
+        var auditsAfterRollback = await _context.AuditRecords.CountAsync().ConfigureAwait(false);
+        await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+            await _subject.CreateAsync(new() { Category = "Integrations", Operation = "ImportFailed" }, ct)
+                .ConfigureAwait(false)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(failure!.InnerException!.Message, Does.Contain("Import audit rejected"));
+            Assert.That(eventsAfterRollback, Is.Zero);
+            Assert.That(auditsAfterRollback, Is.Zero);
+            Assert.That(await _context.Users.AsNoTracking().Where(user => user.Id == _userId)
+                .Select(user => user.Username).SingleAsync().ConfigureAwait(false), Is.EqualTo("TestUser"));
+            Assert.That(await _context.AuditRecords.AsNoTracking().Select(record => record.Operation)
+                .ToListAsync().ConfigureAwait(false), Is.EqualTo(["ImportFailed"]));
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+        }
     }
 
     [Test]

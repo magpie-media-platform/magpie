@@ -1,29 +1,26 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
-using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Data.SQLite;
-using Magpie.Models;
 using Magpie.Models.Arguments;
+using Magpie.Models.Bulk;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
+using Magpie.QueryLanguage;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -35,17 +32,38 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ContentHierarchyItemRepositoryFilterTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IContentHierarchyItemRepository _subject = null!;
     private Guid _metadataContainerId;
     private ITransactionManager _transactionManager = null!;
     private Mock<IEventBus> _eventBus = null!;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.UseSqlite(_template).Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
-        _context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        _context = new MagpieDbContext(options.UseSqlite(connection, contextOwnsConnection: true).Options);
         var metadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
         _context.MetadataContainers.Add(metadataContainer);
         _context.SaveChanges();
@@ -56,7 +74,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             _context, Mock.Of<IAuditRecordRepository>(), _transactionManager,
             Mock.Of<IMetadataContainerRepository>(),
             Mock.Of<IContentTypeRegistry>(), _eventBus.Object,
-            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System);
+            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System, Mock.Of<IContentRepository>());
     }
 
     [TearDown]
@@ -81,7 +99,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-1",
             Name = "Movie 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var item2 = new ContentHierarchyItem
@@ -91,7 +109,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-b",
             Slug = "series-1",
             Name = "Series 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(item1, item2);
@@ -135,7 +153,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-b",
             Slug = "root-series",
             Name = "Root Series",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(series);
@@ -149,7 +167,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-c",
             Slug = "child-season",
             Name = "Child Season",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var movie = new ContentHierarchyItem
@@ -159,7 +177,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "root-movie",
             Name = "Root Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(season, movie);
@@ -349,6 +367,66 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
         Assert.That(result.Items.Select(item => item.Id), Is.EquivalentTo([titled.Id, refreshed.Id]));
     }
 
+    [TestCase("hasSearchableTitle = true", new[] { "metadata-title", "refreshed-title" })]
+    [TestCase("hasSearchableTitle = false", new[] { "pending-title" })]
+    public async Task QueryAsync_FiltersBySearchableTitle_WhenQueryTextIsParsed(string query, string[] expectedSlugs)
+    {
+        // Arrange
+        var pendingContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var titledContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var refreshedContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.AddRange(pendingContainer, titledContainer, refreshedContainer);
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainer = titledContainer,
+            Ordinal = 0,
+            ProviderType = "test",
+            Title = "Searchable"
+        });
+        _context.ContentHierarchyItems.AddRange(
+            new ContentHierarchyItem
+            {
+                MetadataContainer = pendingContainer,
+                ContentType = "type-a",
+                Level = "root",
+                Slug = "pending-title",
+                Name = "Pending",
+                PendingMetadataRefresh = true,
+                CreatedAt = DateTime.UtcNow
+            },
+            new ContentHierarchyItem
+            {
+                MetadataContainer = titledContainer,
+                ContentType = "type-a",
+                Level = "root",
+                Slug = "metadata-title",
+                Name = "Pending",
+                PendingMetadataRefresh = true,
+                CreatedAt = DateTime.UtcNow
+            },
+            new ContentHierarchyItem
+            {
+                MetadataContainer = refreshedContainer,
+                ContentType = "type-a",
+                Level = "root",
+                Slug = "refreshed-title",
+                Name = "Refreshed",
+                PendingMetadataRefresh = false,
+                CreatedAt = DateTime.UtcNow
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var criteria = query.ParseContentFilter().Value!.ContentHierarchyItem.And.Single();
+
+        // Act
+        var result = await _subject.QueryAsync(
+            criteria,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items.Select(item => item.Slug), Is.EquivalentTo(expectedSlugs));
+    }
+
     [Test]
     public async Task QueryAsync_FiltersByMetadataTitle_WhenNameIsPlaceholder()
     {
@@ -370,7 +448,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-jump",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -393,7 +471,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-fast",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item2);
@@ -451,7 +529,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-cure",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -474,7 +552,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-jump",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item2);
@@ -532,7 +610,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-marriage",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -555,7 +633,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-jump",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item2);
@@ -617,7 +695,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-before",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(before);
@@ -641,7 +719,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-mid",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(inWindow1);
@@ -665,7 +743,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-late",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(inWindow2);
@@ -689,7 +767,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-after",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(after);
@@ -763,7 +841,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "item-early",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(early);
@@ -787,7 +865,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "item-mid",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(mid);
@@ -811,7 +889,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "item-late",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(late);
@@ -892,7 +970,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "late-2019",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item1);
@@ -916,7 +994,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "jan-2020",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item2);
@@ -940,7 +1018,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "may-2020",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item3);
@@ -964,7 +1042,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "dec-2020",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item4);
@@ -988,7 +1066,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "jan-2021",
             Name = "Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item5);
@@ -1072,7 +1150,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-action",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1111,7 +1189,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-comedy",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1184,7 +1262,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-favorite",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -1210,7 +1288,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-archive",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(nonMatch);
@@ -1278,7 +1356,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-oscar",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1311,7 +1389,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-razzie",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1385,7 +1463,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "provider-a-type-a",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1418,7 +1496,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "provider-c-type-a",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1520,7 +1598,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-pg13",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1553,7 +1631,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-r",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1627,7 +1705,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-poster",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1660,7 +1738,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-backdrop",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1713,6 +1791,77 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
     }
 
     [Test]
+    public async Task QueryAsync_ReturnsOnlyMatchingItems_WhenParsedImageWidthIsNull()
+    {
+        // Arrange
+        var matchingContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var matchingContribution = new MetadataContribution
+        {
+            MetadataContainer = matchingContainer,
+            Ordinal = 0,
+            ProviderType = "test",
+            Title = "No width"
+        };
+        var matchingItem = new ContentHierarchyItem
+        {
+            MetadataContainer = matchingContainer,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "no-width",
+            Name = "No width",
+            CreatedAt = DateTime.UtcNow
+        };
+        matchingContribution.Images.Add(new Image
+        {
+            Ordinal = 0,
+            Type = "poster",
+            Url = new Uri("https://images.test/no-width.jpg")
+        });
+
+        var otherContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var otherContribution = new MetadataContribution
+        {
+            MetadataContainer = otherContainer,
+            Ordinal = 0,
+            ProviderType = "test",
+            Title = "Has width"
+        };
+        var otherItem = new ContentHierarchyItem
+        {
+            MetadataContainer = otherContainer,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "has-width",
+            Name = "Has width",
+            CreatedAt = DateTime.UtcNow
+        };
+        otherContribution.Images.Add(new Image
+        {
+            Ordinal = 0,
+            Type = "poster",
+            Url = new Uri("https://images.test/has-width.jpg"),
+            Width = 1920
+        });
+        _context.ContentHierarchyItems.AddRange(matchingItem, otherItem);
+        _context.MetadataContributions.AddRange(matchingContribution, otherContribution);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var parsed = "Images has (Width null)".ParseContentFilter();
+
+        // Act
+        var result = await _subject.QueryAsync(
+            parsed.Value!.ContentHierarchyItem.And.Single(),
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(parsed.IsSuccess, Is.True);
+            Assert.That(result.Items.Select(item => item.Id), Is.EqualTo([matchingItem.Id]));
+        }
+    }
+
+    [Test]
     public async Task QueryAsync_ReturnsOnlyMatchingItems_WhenImageUrlEqualsCriterionIsSet()
     {
         // Arrange
@@ -1734,7 +1883,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1767,7 +1916,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1845,7 +1994,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1878,7 +2027,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1956,7 +2105,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1989,7 +2138,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -2074,7 +2223,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-horror",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -2107,7 +2256,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "movie-drama",
             Name = "Pending refresh",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -2174,7 +2323,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-b",
             Slug = "series-1",
             Name = "Series 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var item2 = new ContentHierarchyItem
@@ -2184,7 +2333,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-c",
             Slug = "season-1",
             Name = "Season 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(item1, item2);
@@ -2226,7 +2375,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var movie = new ContentHierarchyItem
@@ -2236,7 +2385,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-b",
             Slug = "movie",
             Name = "Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(levelAItem, movie);
@@ -2281,8 +2430,8 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "active-movie",
             Name = "Active Movie",
-            Monitoring = true,
-            EffectiveMonitoring = true,
+            Monitoring = MonitoringMode.Monitored,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var item2 = new ContentHierarchyItem
@@ -2292,8 +2441,8 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "excluded-movie",
             Name = "Excluded Movie",
-            Monitoring = false,
-            EffectiveMonitoring = false,
+            Monitoring = MonitoringMode.Unmonitored,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(item1, item2);
@@ -2311,7 +2460,9 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(items, Has.Exactly(1).Items);
-            Assert.That(items, Has.All.Matches<ContentHierarchyItem>(i => i.EffectiveMonitoring));
+            Assert.That(
+                items,
+                Has.All.Matches<ContentHierarchyItem>(i => i.EffectiveMonitoring == MonitoringMode.Monitored));
         }
     }
 
@@ -2331,7 +2482,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "missing-without-content-item",
             Name = "Missing Without Content Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var missingWithContentItem = new ContentHierarchyItem
@@ -2341,7 +2492,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "missing-with-content-item",
             Name = "Missing With Content Item",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var fulfilled = new ContentHierarchyItem
@@ -2351,7 +2502,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "fulfilled",
             Name = "Fulfilled",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(missingWithoutContentItem, missingWithContentItem, fulfilled);
@@ -2417,7 +2568,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "tagged-a",
             Name = "Tagged A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var taggedB = new ContentHierarchyItem
@@ -2427,7 +2578,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "tagged-b",
             Name = "Tagged B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var untagged = new ContentHierarchyItem
@@ -2437,7 +2588,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "untagged",
             Name = "Untagged",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(taggedA, taggedB, untagged);
@@ -2497,7 +2648,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
                 Level = "level-a",
                 Slug = slug,
                 Name = name,
-                Monitoring = true,
+                Monitoring = MonitoringMode.Monitored,
                 CreatedAt = DateTime.UtcNow
             });
         }
@@ -2545,7 +2696,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "action-movie",
             Name = "Action Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var item2 = new ContentHierarchyItem
@@ -2555,7 +2706,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "comedy-movie",
             Name = "Comedy Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(item1, item2);
@@ -2598,7 +2749,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "specific-slug",
             Name = "Specific Slug Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var item2 = new ContentHierarchyItem
@@ -2608,7 +2759,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "other-slug",
             Name = "Other Slug Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(item1, item2);
@@ -2651,7 +2802,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "path-movie-1",
             Name = "Path Movie 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             Path = "/movies/action/test",
             CreatedAt = DateTime.UtcNow
         };
@@ -2662,7 +2813,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "level-a",
             Slug = "path-movie-2",
             Name = "Path Movie 2",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             Path = "/movies/comedy/test",
             CreatedAt = DateTime.UtcNow
         };
@@ -2706,7 +2857,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "show",
             Slug = "show",
             Name = "Show",
-            EffectiveMonitoring = true,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(show);
@@ -2719,7 +2870,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "season",
             Slug = "s1",
             Name = "Season 1",
-            EffectiveMonitoring = true,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(season);
@@ -2752,7 +2903,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "show",
             Slug = "show",
             Name = "Show",
-            EffectiveMonitoring = false,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(unmonitoredShow);
@@ -2765,7 +2916,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "season",
             Slug = "s1",
             Name = "Season 1",
-            EffectiveMonitoring = true,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(monitoredSeason);
@@ -2798,7 +2949,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "show",
             Slug = "show",
             Name = "Show",
-            EffectiveMonitoring = true,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(show);
@@ -2811,7 +2962,7 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
             Level = "season",
             Slug = "s1",
             Name = "Season 1",
-            EffectiveMonitoring = true,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(season);
@@ -2979,93 +3130,6 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByGenreName_WhenTheCaseDiffersOutsideAscii()
-    {
-        // Arrange
-        using var context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        await context.Database.OpenConnectionAsync().ConfigureAwait(false);
-        await context.Database.MigrateAsync().ConfigureAwait(false);
-        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        context.MetadataContainers.Add(container);
-        await context.SaveChangesAsync().ConfigureAwait(false);
-        var contribution = new MetadataContribution
-        {
-            MetadataContainerId = container.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Été"
-        };
-        context.MetadataContributions.Add(contribution);
-        var item = new ContentHierarchyItem
-        {
-            MetadataContainerId = container.Id,
-            ContentType = "type-a",
-            Level = "level-a",
-            Slug = "ete",
-            Name = "Été",
-            CreatedAt = DateTime.UtcNow
-        };
-        context.ContentHierarchyItems.Add(item);
-        await context.SaveChangesAsync().ConfigureAwait(false);
-        context.Genres.Add(new Genre { MetadataContributionId = contribution.Id, Ordinal = 0, Name = "Été" });
-        var otherContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        context.MetadataContainers.Add(otherContainer);
-        await context.SaveChangesAsync().ConfigureAwait(false);
-        var otherContribution = new MetadataContribution
-        {
-            MetadataContainerId = otherContainer.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Etage"
-        };
-        context.MetadataContributions.Add(otherContribution);
-        context.ContentHierarchyItems.Add(new ContentHierarchyItem
-        {
-            MetadataContainerId = otherContainer.Id,
-            ContentType = "type-a",
-            Level = "level-a",
-            Slug = "etage",
-            Name = "Etage",
-            CreatedAt = DateTime.UtcNow
-        });
-        await context.SaveChangesAsync().ConfigureAwait(false);
-        context.Genres.Add(new Genre { MetadataContributionId = otherContribution.Id, Ordinal = 0, Name = "Etage" });
-        await context.SaveChangesAsync().ConfigureAwait(false);
-        var subject = new ContentHierarchyItemRepository(
-            context,
-            Mock.Of<IAuditRecordRepository>(),
-            _transactionManager,
-            Mock.Of<IMetadataContainerRepository>(),
-            Mock.Of<IContentTypeRegistry>(),
-            _eventBus.Object,
-            NullLoggerFactory.Instance.CreateLogger<ContentHierarchyItemRepository>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
-        var criteria = new ContentHierarchyItemCriteria
-        {
-            Metadata = new()
-            {
-                And =
-                [
-                    new MetadataCriteria
-                    {
-                        Genres = new()
-                        {
-                            Some = [[new GenreCriteria { Name = new() { And = [new() { Value = "été" }] } }]]
-                        }
-                    }
-                ]
-            }
-        };
-
-        // Act
-        var result = await subject.QueryAsync(criteria, new() { PageNumber = 1, PageSize = 10 }, null)
-            .ConfigureAwait(false);
-
-        // Assert
-        Assert.That(result.Items.Select(found => found.Id), Is.EqualTo([item.Id]));
-    }
-
-    [Test]
     public async Task QueryAsync_FiltersByContentType_WhenTheCaseDiffers()
     {
         // Arrange
@@ -3171,5 +3235,165 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
         // Assert
         var slugs = result.Items.Select(item => item.Slug).ToList();
         Assert.That(slugs, Is.EqualTo([expectedSlug]));
+    }
+
+    [TestCase("mediaFiles has (fileKind = Video and fileSize > 1000)", new[] { "large-video", "single-video" })]
+    [TestCase(
+        "mediaFiles has (fileKind = Video) and mediaFiles has (fileSize > 1000)",
+        new[] { "large-video", "single-video", "split" })]
+    [TestCase(
+        "mediaFiles !has (fileKind = Subtitle)",
+        new[] { "large-video", "no-content-item", "no-files", "single-video" })]
+    [TestCase(
+        "mediaFiles has (fileSize >= 10000) or mediaFiles has (fileKind = Subtitle)",
+        new[] { "large-video", "split" })]
+    [TestCase("mediaFiles has (filePath endswith \".SRT\" and mimeType startswith \"text/\")", new[] { "split" })]
+    [TestCase("mediaFiles has (fileSize < 1000)", new[] { "split" })]
+    [TestCase("mediaFile has \"video\"", new[] { "large-video", "single-video", "split" })]
+    public async Task QueryAsync_MatchesConditionsOnTheSameFile_WhenFilteringByMediaFiles(
+        string query,
+        string[] expectedSlugs)
+    {
+        // Arrange
+        (string Slug, (string Kind, string MimeType, string Path, long Size)[] Files)[] seeds =
+        [
+            ("single-video", [("Video", "video/x-matroska", "/lib/a.mkv", 2000L)]),
+            ("split",
+            [
+                ("Video", "video/x-matroska", "/lib/b.mkv", 500L),
+                ("Subtitle", "text/x-subrip", "/lib/b.srt", 2000L)
+            ]),
+            ("large-video", [("Video", "video/mp4", "/lib/c.mp4", 10000L)]),
+            ("no-files", [])
+        ];
+        foreach (var seed in seeds)
+        {
+            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+            _context.MetadataContainers.Add(container);
+            var contentItem = new ContentItem { CreatedAt = DateTime.UtcNow };
+            foreach (var (kind, mimeType, path, size) in seed.Files)
+            {
+                contentItem.MediaFiles.Add(new MediaFile
+                {
+                    FileKind = kind,
+                    MimeType = mimeType,
+                    FilePath = path,
+                    PathKey = path,
+                    FileSize = size,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+
+            _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+            {
+                MetadataContainer = container,
+                ContentType = "type-a",
+                Level = "level-a",
+                Slug = seed.Slug,
+                Name = seed.Slug,
+                CreatedAt = DateTime.UtcNow,
+                ContentItem = contentItem
+            });
+        }
+
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            MetadataContainerId = _metadataContainerId,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "no-content-item",
+            Name = "no-content-item",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var criteria = query.ParseContentFilter().Value!.ContentHierarchyItem.And.Single();
+
+        // Act
+        var result = await _subject.QueryAsync(
+            criteria,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items.Select(item => item.Slug), Is.EquivalentTo(expectedSlugs));
+    }
+
+    [Test]
+    public async Task BulkPatchAsync_PatchesOnlyMatchingItems_WhenFilterUsesMediaFiles()
+    {
+        // Arrange
+        var subtitled = new ContentHierarchyItem
+        {
+            MetadataContainerId = _metadataContainerId,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "subtitled",
+            Name = "Subtitled",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new ContentItem
+            {
+                CreatedAt = DateTime.UtcNow,
+                MediaFiles =
+                {
+                    new MediaFile
+                    {
+                        FileKind = "Subtitle",
+                        FilePath = "/lib/s.srt",
+                        PathKey = "/lib/s.srt",
+                        FileSize = 10,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                }
+            }
+        };
+        var plain = new ContentHierarchyItem
+        {
+            MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "plain",
+            Name = "Plain",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new ContentItem
+            {
+                CreatedAt = DateTime.UtcNow,
+                MediaFiles =
+                {
+                    new MediaFile
+                    {
+                        FileKind = "Video",
+                        FilePath = "/lib/p.mkv",
+                        PathKey = "/lib/p.mkv",
+                        FileSize = 10,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                }
+            }
+        };
+        _context.ContentHierarchyItems.AddRange(subtitled, plain);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var patch = new BulkPatch<ContentHierarchyItemCriteria, ContentHierarchyItemPatch>
+        {
+            Filter = "mediaFiles has (fileKind = Subtitle)".ParseContentFilter().Value!
+                .ContentHierarchyItem.And.Single(),
+            Patch = new ContentHierarchyItemPatch { Monitoring = new() { Value = MonitoringMode.Unmonitored } }
+        };
+
+        // Act
+        await _subject.BulkPatchAsync(patch, null).ConfigureAwait(false);
+
+        // Assert
+        var monitoring = await _context.ContentHierarchyItems.AsNoTracking()
+            .ToDictionaryAsync(item => item.Slug, item => item.Monitoring)
+            .ConfigureAwait(false);
+        Assert.That(
+            monitoring,
+            Is.EquivalentTo(new Dictionary<string, MonitoringMode?>
+            {
+                ["subtitled"] = MonitoringMode.Unmonitored,
+                ["plain"] = MonitoringMode.Monitored
+            }));
     }
 }

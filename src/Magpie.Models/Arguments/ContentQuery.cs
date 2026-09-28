@@ -11,6 +11,11 @@ namespace Magpie.Models.Arguments;
 public sealed record ContentQuery
 {
     /// <summary>
+    /// The id of the content item to find, or <see langword="null"/> for no filter.
+    /// </summary>
+    public Guid? ContentItemId { get; set; }
+
+    /// <summary>
     /// The parsed filter expression, or <see langword="null"/> for no expression filter.
     /// </summary>
     public ContentFilterCriteria? Criteria { get; set; }

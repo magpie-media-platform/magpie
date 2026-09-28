@@ -284,6 +284,7 @@ internal sealed class MetadataContainerRepository(
                     .OrderBy(c => c.Ordinal)
                     .Take(1)
                 where related.Title != null && related.Title != ""
+                orderby contribution.Ordinal, relationship.Ordinal
                 select new { ItemId = item.Id, relationship.Kind, related.Title })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);

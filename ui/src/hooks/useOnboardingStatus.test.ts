@@ -123,7 +123,7 @@ describe('useOnboardingStatus', () => {
         vi.clearAllMocks();
         mockApiGet.mockImplementation((url: string) => {
             if (url === '/indexers') {
-                return Promise.resolve([{ id: 'indexer-1' }]);
+                return Promise.resolve([{ id: 'indexer-1', connectionCount: 1 }]);
             }
             if (url === '/download-clients') {
                 return Promise.resolve([{ id: 'client-1' }]);
@@ -165,7 +165,7 @@ describe('useOnboardingStatus', () => {
             if (url.startsWith('/content')) {
                 return Promise.resolve({ items: [], pageNumber: 1, pageSize: 1, totalItems: 0 });
             }
-            return Promise.resolve([{ id: 'configured-1' }]);
+            return Promise.resolve([{ id: 'configured-1', connectionCount: 1 }]);
         });
         const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         const wrapper = ({ children }: { children: React.ReactNode }) =>
@@ -190,7 +190,7 @@ describe('useOnboardingStatus', () => {
         const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         const wrapper = ({ children }: { children: React.ReactNode }) =>
             createElement(QueryClientProvider, { client: queryClient }, children);
-        queryClient.setQueryData(indexerQueryKeys.list(), [{ id: 'indexer-1' }]);
+        queryClient.setQueryData(indexerQueryKeys.list(), [{ id: 'indexer-1', connectionCount: 1 }]);
         queryClient.setQueryData([...downloadClientQueryKeys.list(), '/download-clients'], [{ id: 'client-1' }]);
         queryClient.setQueryData(rootFolderQueryKeys.list(), [{ id: 'folder-1' }]);
 
@@ -206,6 +206,32 @@ describe('useOnboardingStatus', () => {
         });
         await waitFor(() => expect(result.current.status.hasRootFolder).toBe(false));
         expect(result.current.isComplete).toBe(false);
+    });
+
+    it('keeps the indexer step open when only catalog definitions exist', async () => {
+        // Arrange
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/indexers') {
+                return Promise.resolve([
+                    { id: 'definition-1', connectionCount: 0 },
+                    { id: 'definition-2', connectionCount: 0 },
+                ]);
+            }
+            if (url.startsWith('/content')) {
+                return Promise.resolve({ items: [{ id: 'content-1' }], pageNumber: 1, pageSize: 1, totalItems: 1 });
+            }
+            return Promise.resolve([{ id: 'configured-1' }]);
+        });
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const wrapper = ({ children }: { children: React.ReactNode }) =>
+            createElement(QueryClientProvider, { client: queryClient }, children);
+
+        // Act
+        const { result } = renderHook(() => useOnboardingStatus(), { wrapper });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+        // Assert
+        expect(result.current.status).toEqual({ ...allDone, hasIndexer: false, isComplete: false });
     });
 
     it('marks only the failed step and keeps the checklist showable when one probe fails', async () => {

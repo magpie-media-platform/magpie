@@ -8,6 +8,7 @@ vi.mock('@/hooks/useLibraryTypes', () => ({
 }));
 
 import { ListView } from './ListView';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 function makeEvent(id: string, title: string): CalendarEvent {
     return {
@@ -18,20 +19,20 @@ function makeEvent(id: string, title: string): CalendarEvent {
         contentType: 'tv',
         level: 'episode',
         fulfillment: 'missing',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
     };
 }
 
 describe('ListView', () => {
     it('renders empty state when no events', () => {
-        render(<ListView viewEvents={[]} onEventClick={vi.fn()} />);
+        render(<ListView viewEvents={[]} onEventClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(screen.getByText('No upcoming events')).toBeInTheDocument();
     });
 
     it('renders event cards with showDate when events are provided', () => {
         const events = [makeEvent('1', 'Shogun'), makeEvent('2', 'Fallout')];
-        render(<ListView viewEvents={events} onEventClick={vi.fn()} />);
+        render(<ListView viewEvents={events} onEventClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(screen.getByText('Shogun')).toBeInTheDocument();
         expect(screen.getByText('Fallout')).toBeInTheDocument();
         expect(screen.getByTestId('calendar-page__list-items')).toBeInTheDocument();
@@ -39,12 +40,12 @@ describe('ListView', () => {
 
     it('shows dates on event cards', () => {
         const events = [makeEvent('1', 'Shogun')];
-        render(<ListView viewEvents={events} onEventClick={vi.fn()} />);
+        render(<ListView viewEvents={events} onEventClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(screen.getByTestId('calendar-page__event-date')).toBeInTheDocument();
     });
 
     it('has the correct data-component attribute', () => {
-        const { container } = render(<ListView viewEvents={[]} onEventClick={vi.fn()} />);
+        const { container } = render(<ListView viewEvents={[]} onEventClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(container.querySelector('[data-component="list-view"]')).toBeInTheDocument();
     });
 });

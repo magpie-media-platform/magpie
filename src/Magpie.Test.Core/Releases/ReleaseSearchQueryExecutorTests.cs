@@ -141,6 +141,34 @@ public sealed class ReleaseSearchQueryExecutorTests
             searchOptions: new SearchOptions());
     }
 
+    [TestCase(true, true, false)]
+    [TestCase(false, false, true)]
+    public async Task ExecutePlanAsync_SetsAdmissionIntent_WhenResolvingTheCallerMode(
+        bool automatic, bool suppliedInteractive, bool expectedInteractive)
+    {
+        // Arrange
+        var phases = new[]
+        {
+            new ReleaseSearchPhase
+            {
+                Request = new ReleaseSearchRequest { Title = "Dune", IsInteractive = suppliedInteractive },
+                ReleaseFacts = []
+            }
+        };
+        var context = new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() };
+
+        // Act
+        await _subject.ExecutePlanAsync(phases, [], new HashSet<Guid> { _indexerId }, context,
+            automatic, maximumResults: 20, useCache: false).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_issuedRequests, Has.Count.EqualTo(1));
+            Assert.That(_issuedRequests[0].IsInteractive, Is.EqualTo(expectedInteractive));
+        }
+    }
+
     [Test]
     public async Task ExecuteAsync_ReturnsProducingPhaseFacts_WhenReleasesAreReturned()
     {
@@ -201,6 +229,123 @@ public sealed class ReleaseSearchQueryExecutorTests
             Assert.That(result[0].ReleaseFacts, Is.SameAs(phaseOneFacts));
             Assert.That(result[1].Releases.Single().ExternalId, Is.EqualTo("id-release"));
             Assert.That(result[1].ReleaseFacts, Is.SameAs(phaseTwoFacts));
+        }
+    }
+
+    [TestCase(false, 0)]
+    [TestCase(true, 1)]
+    public async Task ExecutePlanAsync_ReturnsIncompleteCooldown_WhenEveryConnectionIsThrottled(bool sent,
+        int expectedAttempts)
+    {
+        // Arrange
+        _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero), sent));
+
+        // Act
+        var result = await _subject.ExecutePlanAsync(
+            [new ReleaseSearchPhase { Request = new ReleaseSearchRequest { Title = "Dune" }, ReleaseFacts = [] }],
+            [], new HashSet<Guid> { _indexerId },
+            new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() },
+            automatic: true, maximumResults: 20, useCache: false).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Results, Is.Empty);
+            Assert.That(result.Partial, Is.True);
+            Assert.That(result.ConnectionsAttempted, Is.EqualTo(expectedAttempts));
+            Assert.That(result.ConnectionsSucceeded, Is.EqualTo(0));
+            Assert.That(result.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+            Assert.That(result.Warning, Does.Contain("throttled"));
+        }
+
+        _indexerConnections.Verify(repository => repository.PatchAsync(It.IsAny<IndexerConnectionPatch>(),
+            It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public async Task ExecutePlanAsync_RetainsHealthyResults_WhenAnotherConnectionIsThrottled()
+    {
+        // Arrange
+        _indexerConnections.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new IndexerConnection
+                {
+                    Id = _connectionId, IndexerId = _indexerId, Name = "Throttled", Enabled = true,
+                    Settings = new() { ["throttled"] = "true" }
+                },
+                new IndexerConnection
+                {
+                    Id = Guid.NewGuid(), IndexerId = _indexerId, Name = "Healthy", Enabled = true
+                }
+            ]);
+        _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
+                It.Is<IReadOnlyDictionary<string, string>>(settings => settings.ContainsKey("throttled")),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
+                It.Is<IReadOnlyDictionary<string, string>>(settings => !settings.ContainsKey("throttled")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Title = "Dune healthy", Protocol = "torrent", ExternalId = "healthy" }]);
+
+        // Act
+        var result = await _subject.ExecutePlanAsync(
+            [new ReleaseSearchPhase { Request = new ReleaseSearchRequest { Title = "Dune" }, ReleaseFacts = [] }],
+            [], new HashSet<Guid> { _indexerId },
+            new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() },
+            automatic: true, maximumResults: 20, useCache: false).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Results.Select(value => value.Release.ExternalId), Is.EqualTo(["healthy"]));
+            Assert.That(result.Partial, Is.True);
+            Assert.That(result.ConnectionsSucceeded, Is.EqualTo(1));
+            Assert.That(result.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        }
+    }
+
+    [Test]
+    public async Task ExecutePlanAsync_PreservesCooldownForBothCallers_WhenTheyShareAnInFlightRoute()
+    {
+        // Arrange
+        using var store = new MemoryCacheStore(TimeProvider.System);
+        using var cache = new MemoryCacheFactory(store);
+        var subject = new ReleaseSearchQueryExecutor(_indexers.Object, _indexerConnections.Object,
+            _eventBus.Object, [_indexerIntegration.Object], [], TimeProvider.System,
+            NullLogger<ReleaseSearchQueryExecutor>.Instance, _releaseEvaluation.Object,
+            cache, [], new SearchOptions());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var response = new TaskCompletionSource<IEnumerable<Release>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+            .Callback(() => entered.TrySetResult())
+            .Returns(response.Task);
+        var phases = new[]
+        {
+            new ReleaseSearchPhase { Request = new ReleaseSearchRequest { Title = "Dune" }, ReleaseFacts = [] }
+        };
+        var context = new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() };
+
+        // Act
+        var first = subject.ExecutePlanAsync(phases, [], new HashSet<Guid> { _indexerId }, context,
+            automatic: true, maximumResults: 20);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        var follower = subject.ExecutePlanAsync(phases, [], new HashSet<Guid> { _indexerId }, context,
+            automatic: true, maximumResults: 20);
+        response.SetException(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        var results = await Task.WhenAll(first, follower).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(results.Select(result => result.Partial), Is.EqualTo([true, true]));
+            Assert.That(results.Select(result => result.RetryAt), Has.All.EqualTo(
+                new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+            _indexerIntegration.Verify(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 
@@ -2795,7 +2940,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public void ExecutePlanAsync_ExportsOnlyClassifiedFailure_WhenProviderMessageContainsSecret()
+    public void ExecutePlanAsync_ExportsProviderMessage_WhenProviderSearchFails()
     {
         // Arrange
         var activities = new List<Activity>();
@@ -2853,8 +2998,8 @@ public sealed class ReleaseSearchQueryExecutorTests
             .Select(argument => argument?.ToString()));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(traceText, Does.Not.Contain("secret-value").And.Not.Contain("tracker.example"));
-            Assert.That(logText, Does.Not.Contain("secret-value").And.Not.Contain("tracker.example"));
+            Assert.That(traceText, Does.Contain("https://tracker.example/query?passkey=secret-value"));
+            Assert.That(logText, Does.Contain("https://tracker.example/query?passkey=secret-value"));
             _indexerConnections.Verify(repository => repository.PatchAsync(
                 It.Is<IndexerConnectionPatch>(patch =>
                     patch.Id == _connectionId &&
@@ -3051,6 +3196,7 @@ public sealed class ReleaseSearchQueryExecutorTests
                 Is.EqualTo("query-not-supported"));
             Assert.That(plan.RootElement.GetProperty("root").GetProperty("children").GetArrayLength(),
                 Is.EqualTo(2));
+            Assert.That(root.GetTagItem("magpie.query.connection_count"), Is.EqualTo(0));
         }
     }
 
@@ -3199,6 +3345,7 @@ public sealed class ReleaseSearchQueryExecutorTests
                 Is.EqualTo("keyword"));
             Assert.That(planJson, Does.Not.Contain("\"evaluation\"").And.Not.Contain("secret-value"));
             Assert.That(root.GetTagItem("magpie.query.plan_json"), Is.EqualTo(planJson));
+            Assert.That(root.GetTagItem("magpie.query.connection_count"), Is.EqualTo(1));
             Assert.That(coalesce.ParentId, Is.EqualTo(root.Id));
             Assert.That(keywordUnion.ParentId, Is.EqualTo(coalesce.Id));
             Assert.That(routeNodes, Has.Length.EqualTo(2));

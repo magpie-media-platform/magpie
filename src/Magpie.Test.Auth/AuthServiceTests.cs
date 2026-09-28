@@ -2,7 +2,10 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Auth;
+using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Auth;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -79,7 +82,8 @@ public class AuthServiceTests
     {
         // Arrange
         var subject = new AuthService([], _tokenService.Object, _userService.Object, _eventBus.Object,
-            new AccountLockoutOptions(), TimeProvider.System, NullLogger<AuthService>.Instance);
+            new AccountLockoutOptions(), TimeProvider.System, NullLogger<AuthService>.Instance,
+            Mock.Of<ITransactionManager>(), Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
 
         // Act
         var viewer = subject.GetEffectivePermissions(Role.Viewer).Permissions[permission];
@@ -106,7 +110,8 @@ public class AuthServiceTests
     {
         // Arrange
         var subject = new AuthService([], _tokenService.Object, _userService.Object, _eventBus.Object,
-            new AccountLockoutOptions(), TimeProvider.System, NullLogger<AuthService>.Instance);
+            new AccountLockoutOptions(), TimeProvider.System, NullLogger<AuthService>.Instance,
+            Mock.Of<ITransactionManager>(), Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
 
         // Act
         var permissions = subject.GetEffectivePermissions(Role.Admin).Permissions.Keys;
@@ -191,7 +196,8 @@ public class AuthServiceTests
             _eventBus.Object,
             new AccountLockoutOptions(),
             TimeProvider.System,
-            NullLogger<AuthService>.Instance);
+            NullLogger<AuthService>.Instance, Mock.Of<ITransactionManager>(),
+            Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
 
         // Act
         var result = await subject.VerifyCredentialsAsync("jdoe", "secret").ConfigureAwait(false);
@@ -240,7 +246,8 @@ public class AuthServiceTests
             _eventBus.Object,
             new AccountLockoutOptions(),
             TimeProvider.System,
-            NullLogger<AuthService>.Instance);
+            NullLogger<AuthService>.Instance, Mock.Of<ITransactionManager>(),
+            Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
 
         // Act
         var result = await subject.VerifyCredentialsAsync("admin", "secret").ConfigureAwait(false);
@@ -277,7 +284,8 @@ public class AuthServiceTests
             _eventBus.Object,
             new AccountLockoutOptions(),
             TimeProvider.System,
-            NullLogger<AuthService>.Instance);
+            NullLogger<AuthService>.Instance, Mock.Of<ITransactionManager>(),
+            Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
 
         // Act
         var result = await subject.VerifyCredentialsAsync("nobody", "secret").ConfigureAwait(false);

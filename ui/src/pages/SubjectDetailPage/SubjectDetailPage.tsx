@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
-import { useParams, Link, useLocation, useSearchParams } from 'react-router-dom';
+import { useParams, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     ArrowLeftIcon,
     ArrowClockwiseIcon,
@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
 import { DetailsPanel, type DetailRow } from '@/components/ui/DetailsPanel';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { AwardsPanel } from '@/components/ui/AwardsPanel';
 import { DetailInfoGrid, DetailInfoRow } from '@/components/ui/DetailInfoGrid';
 import { CollapsibleChipList } from '@/components/ui/CollapsibleChipList';
@@ -42,7 +43,7 @@ import { useSubjectMetadataInspector } from '@/hooks/useSubjectMetadataInspector
 import { resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from '@/types/subjects';
 import { getErrorMessage, isNotFoundError } from '@/lib/errors';
 import { relationshipClause } from '@/lib/simpleFilterQuery';
-import { extractTitle, isInternalSource, type ContentReference } from '@/lib/metadata';
+import { extractTitle, isInternalSource, referenceDisplayName, type ContentReference } from '@/lib/metadata';
 import { extractExternalIds, useSubject, useRefreshSubject, useSetPrimaryImage } from '@/hooks/useSubjects';
 import {
     buildAwardGroups,
@@ -113,6 +114,7 @@ interface TabDef {
 export function SubjectDetailPage() {
     const { subjectId } = useParams<{ subjectId: string }>();
     const location = useLocation();
+    const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     const rawTab = searchParams.get('tab');
     const activeTab = rawTab || DEFAULT_TAB;
@@ -274,7 +276,7 @@ export function SubjectDetailPage() {
                     ? [
                           {
                               url,
-                              displayName: nonEmptyMetadataText(reference.displayName) ?? url,
+                              displayName: referenceDisplayName(url, reference.displayName),
                               source: reference.source,
                               kind: reference.kind,
                           },
@@ -488,6 +490,40 @@ export function SubjectDetailPage() {
         entityType: subjectSlotEntityType,
     };
 
+    const subjectActions: QuickAction[] = [
+        ...(canViewLibrary
+            ? [
+                  {
+                      id: 'search-library',
+                      label: 'Search library',
+                      icon: <FunnelIcon weight="bold" />,
+                      onClick: () => void navigate(`/library/all?${librarySearch}`),
+                  },
+              ]
+            : []),
+        ...(canAddContent
+            ? [
+                  {
+                      id: 'add-content',
+                      label: 'Add content',
+                      icon: <BinocularsIcon weight="bold" />,
+                      onClick: () => void navigate('/library/add', { state: addContentState }),
+                  },
+              ]
+            : []),
+        ...(canEditSubject
+            ? [
+                  {
+                      id: 'refresh',
+                      label: 'Refresh',
+                      icon: <ArrowClockwiseIcon weight="bold" />,
+                      onClick: handleRefresh,
+                      disabled: refreshMutation.isPending,
+                  },
+              ]
+            : []),
+    ];
+
     return (
         <div className="subject-detail-page" data-page="subject-detail">
             <Breadcrumb items={breadcrumbs} className="subject-detail-page__breadcrumb" />
@@ -655,7 +691,25 @@ export function SubjectDetailPage() {
                 <TabsContent value="details">
                     <div className="subject-detail-page__facts details-panel-group" data-component="subject-facts">
                         <DetailsPanel
-                            rows={subject.detailRows ?? []}
+                            rows={[
+                                ...(subject.detailRows ?? []),
+                                ...(subject.description
+                                    ? [
+                                          {
+                                              key: 'biography',
+                                              label: kind === 'person' ? 'Biography' : 'Description',
+                                              value: (
+                                                  <span
+                                                      className="subject-detail-page__biography"
+                                                      data-component="subject-biography"
+                                                  >
+                                                      {subject.description}
+                                                  </span>
+                                              ),
+                                          },
+                                      ]
+                                    : []),
+                            ]}
                             variant="facts"
                             aria-label="Details"
                             data-component="subject-details-panel"
@@ -768,6 +822,8 @@ export function SubjectDetailPage() {
                     entityType={subjectSlotEntityType}
                 />
             </Tabs>
+
+            <QuickActionsButton actions={subjectActions} title="Subject Actions" />
         </div>
     );
 }

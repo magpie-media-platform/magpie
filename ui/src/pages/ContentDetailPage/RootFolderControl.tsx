@@ -4,6 +4,7 @@ import { InlineEditRow } from '@/components/ui/InlineEditRow';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { useEffectiveRootFolder, useSetContentRootFolder } from '@/hooks/useContent';
+import { useLookupError } from '@/hooks/useLookupError';
 import { useRootFolders } from '@/hooks/useRootFolders';
 
 interface RootFolderControlProps {
@@ -16,7 +17,9 @@ const INHERIT_VALUE = '__inherit__';
 
 export function RootFolderControl({ contentHierarchyItemId, contentType, canEdit = true }: RootFolderControlProps) {
     const { toast } = useToast();
-    const { data: effective, isLoading } = useEffectiveRootFolder(contentHierarchyItemId);
+    const effectiveQuery = useEffectiveRootFolder(contentHierarchyItemId);
+    const { data: effective, isLoading, isFetching, refetch } = effectiveQuery;
+    const lookupError = useLookupError(effectiveQuery);
     const { folders: rootFolders, isLoading: foldersLoading } = useRootFolders();
     const setMutation = useSetContentRootFolder();
 
@@ -57,11 +60,13 @@ export function RootFolderControl({ contentHierarchyItemId, contentType, canEdit
         }
     };
 
-    const label = isLoading
-        ? 'Resolving root folder...'
-        : effective?.rootFolderName
-          ? effective.rootFolderName
-          : 'No root folder';
+    const label = lookupError
+        ? 'Root folder could not be loaded'
+        : isLoading
+          ? 'Resolving root folder...'
+          : effective?.rootFolderName
+            ? effective.rootFolderName
+            : 'No root folder';
 
     return (
         <InlineEditRow
@@ -70,6 +75,10 @@ export function RootFolderControl({ contentHierarchyItemId, contentType, canEdit
             canEdit={canEdit}
             editAriaLabel="Edit root folder"
             triggerTestId="root-folder-control__trigger"
+            error={lookupError}
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+            retryAriaLabel="Retry loading root folder"
             readValue={
                 <span className="root-folder-control__value" data-testid="root-folder-control__label">
                     {label}

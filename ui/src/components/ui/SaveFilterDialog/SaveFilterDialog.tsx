@@ -2,6 +2,7 @@ import { useState, useId, useCallback, useEffect, type SubmitEvent } from 'react
 import { FloppyDiskIcon } from '@phosphor-icons/react';
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../Dialog';
+import { Alert } from '../Alert';
 import { Input } from '../Input';
 import { Button } from '../Button';
 import { Label } from '../Label';
@@ -25,7 +26,9 @@ export interface SaveFilterDialogProps {
 
     filterQuery?: string;
 
-    error?: string | null;
+    nameError?: string | null;
+
+    queryError?: string | null;
 
     existingNames?: string[];
 }
@@ -41,7 +44,8 @@ export function SaveFilterDialog({
     isSaving = false,
     isUpdating = false,
     filterQuery,
-    error,
+    nameError,
+    queryError,
     existingNames = EMPTY_EXISTING_NAMES,
 }: SaveFilterDialogProps) {
     const inputId = useId();
@@ -59,8 +63,8 @@ export function SaveFilterDialog({
     }, [open]);
 
     useEffect(() => {
-        setLocalError(error ?? null);
-    }, [error]);
+        setLocalError(nameError ?? null);
+    }, [nameError]);
 
     const handleSubmit = useCallback(
         async (e: SubmitEvent) => {
@@ -132,6 +136,12 @@ export function SaveFilterDialog({
                             <span className="save-filter-dialog__query-label">Query:</span>
                             <code className="save-filter-dialog__query-text">{filterQuery}</code>
                         </div>
+                    )}
+
+                    {queryError && (
+                        <Alert variant="error" title="The filter query is not valid">
+                            {queryError}
+                        </Alert>
                     )}
 
                     <DialogFooter className="save-filter-dialog__footer">

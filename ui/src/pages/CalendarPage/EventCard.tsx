@@ -1,11 +1,10 @@
 import { useState } from 'react';
-import { EyeSlashIcon, ImageBrokenIcon } from '@phosphor-icons/react';
+import { ImageBrokenIcon } from '@phosphor-icons/react';
 
+import { ContentFulfillmentBadge, ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
-import { Badge } from '@/components/ui/Badge';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { useTypeIconName } from '@/hooks/useLibraryTypes';
-import { getFulfillmentBadge } from '@/types/content';
 import type { CalendarEvent } from '@/types/calendar';
 
 import { getFulfillmentClass, formatTime, parseCalendarDate, parseCalendarDateParts } from './calendarUtils';
@@ -20,7 +19,6 @@ interface EventCardProps {
 export function EventCard({ event, onClick, compact = false, showDate = false }: EventCardProps) {
     const typeIconName = useTypeIconName();
     const [imageError, setImageError] = useState(false);
-    const fulfillmentSuppressed = !event.effectiveMonitoring;
     const eventDate = parseCalendarDate(event.date);
     const hasTimeOfDay = parseCalendarDateParts(event.date) === null;
 
@@ -73,21 +71,15 @@ export function EventCard({ event, onClick, compact = false, showDate = false }:
                         {hasTimeOfDay && <span className="calendar-page__event-time">{formatTime(event.date)}</span>}
                     </span>
                 )}
-                {!compact &&
-                    (fulfillmentSuppressed ? (
-                        <Badge variant="default" size="sm" className="calendar-page__event-badge">
-                            <EyeSlashIcon weight="regular" aria-hidden="true" />
-                            Not monitored
-                        </Badge>
-                    ) : (
-                        <Badge
-                            variant={getFulfillmentBadge(event.fulfillment).variant}
-                            size="sm"
-                            className="calendar-page__event-badge"
-                        >
-                            {getFulfillmentBadge(event.fulfillment).label}
-                        </Badge>
-                    ))}
+                <span className="calendar-page__event-statuses">
+                    <ContentMonitoringIndicator
+                        monitoring={event.monitoring}
+                        effectiveMonitoring={event.effectiveMonitoring}
+                        className="calendar-page__event-monitoring"
+                        activeClassName="calendar-page__event-monitoring--active"
+                    />
+                    <ContentFulfillmentBadge fulfillment={event.fulfillment} className="calendar-page__event-badge" />
+                </span>
             </div>
         </button>
     );

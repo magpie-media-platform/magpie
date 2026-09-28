@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Releases;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -50,7 +51,6 @@ internal sealed class ContentFulfillmentReconciliationJob(
         Scope = JobScope.Administrative,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromMinutes(30),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters = [],
@@ -214,7 +214,7 @@ internal sealed class ContentFulfillmentReconciliationJob(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (leaf.ContentItem is not { } contentItem)
+            if (leaf.ContentItem is not { } contentItem || contentItem.MediaReconciledAt is not null)
             {
                 continue;
             }
@@ -260,17 +260,9 @@ internal sealed class ContentFulfillmentReconciliationJob(
         IDictionary<Guid, QualityTierList?> tierLists,
         CancellationToken cancellationToken)
     {
-        if (download.ReleaseId is not { } releaseId)
-        {
-            return null;
-        }
-
-        var release = await releaseRepository.GetByIdAsync(releaseId, cancellationToken).ConfigureAwait(false);
-        if (release is null)
-        {
-            return null;
-        }
-
+        var release = await ReleaseEvaluationService
+            .ResolveDownloadReleaseAsync(releaseRepository, download, cancellationToken)
+            .ConfigureAwait(false);
         var score = await releaseEvaluationService
             .ScoreForContentAsync(release, leaf.Id, currentQualityOrdinal: null, cancellationToken)
             .ConfigureAwait(false);

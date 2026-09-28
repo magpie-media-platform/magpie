@@ -338,7 +338,7 @@ describe('DiagnosticsSection', () => {
                     severity: 'Warning',
                     title: 'A content item is stuck in a grab-and-fail loop',
                     detail: 'Every candidate release keeps failing.',
-                    affectedEntity: `ContentItem:${contentGuid}`,
+                    affectedEntity: `ContentHierarchyItem:${contentGuid}`,
                     repairId: null,
                     detectedAt: '2026-05-01T00:00:00Z',
                 },
@@ -388,7 +388,7 @@ describe('DiagnosticsSection', () => {
         const contentLink = screen.getByRole('link', { name: 'Hierarchy item' });
         expect(contentLink).toHaveAttribute('href', `/library/${contentGuid}`);
         expect(screen.getByText('a1fc4c2b')).toBeInTheDocument();
-        expect(screen.queryByText(`ContentItem:${contentGuid}`)).not.toBeInTheDocument();
+        expect(screen.queryByText(`ContentHierarchyItem:${contentGuid}`)).not.toBeInTheDocument();
 
         expect(screen.getByRole('link', { name: 'Indexer' })).toHaveAttribute('href', '/admin/indexers');
         expect(screen.getByRole('link', { name: 'Download client' })).toHaveAttribute(
@@ -414,7 +414,7 @@ describe('DiagnosticsSection', () => {
                     severity: 'Warning',
                     title: 'A content item is stuck in a grab-and-fail loop',
                     detail: 'Every candidate release keeps failing.',
-                    affectedEntity: `ContentItem:${contentGuid}`,
+                    affectedEntity: `ContentHierarchyItem:${contentGuid}`,
                     repairId: 'reset-content',
                     detectedAt: '2026-05-01T00:00:00Z',
                 },
@@ -430,7 +430,7 @@ describe('DiagnosticsSection', () => {
         await waitFor(() => {
             expect(screen.getByRole('link', { name: 'Hierarchy item' })).toBeInTheDocument();
         });
-        expect(screen.queryByText(`ContentItem:${contentGuid}`)).not.toBeInTheDocument();
+        expect(screen.queryByText(`ContentHierarchyItem:${contentGuid}`)).not.toBeInTheDocument();
 
         const fixButton = document.querySelector(
             '[data-action="repair-finding"][data-target="f-repair"]',

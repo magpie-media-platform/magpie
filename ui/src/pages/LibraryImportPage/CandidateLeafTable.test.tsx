@@ -11,10 +11,17 @@ import type { ManualMatchTarget } from './ManualMatchDialog';
 import type { ImportAcceptAction } from './AcceptImportDialog';
 
 const bulkAcceptMutateAsync = vi.fn();
+const restoreMutateAsync = vi.fn();
+const rejectMutateAsync = vi.fn();
 let manualMatchProp: ManualMatchTarget | null = null;
 
 vi.mock('@/hooks/useBulkAcceptLibraryImportCandidates', () => ({
     useBulkAcceptLibraryImportCandidates: () => ({ mutateAsync: bulkAcceptMutateAsync, isPending: false }),
+}));
+
+vi.mock('@/hooks/usePendingFileAssociations', () => ({
+    useRestoreLibraryImportCandidates: () => ({ mutateAsync: restoreMutateAsync, isPending: false }),
+    useRejectLibraryImportCandidates: () => ({ mutateAsync: rejectMutateAsync, isPending: false }),
 }));
 
 vi.mock('./ManualMatchDialog', () => ({
@@ -162,10 +169,16 @@ describe('CandidateLeafTable', () => {
         expect(checkbox).toBeDisabled();
     });
 
-    it('renders a matching-pending row honestly, with no Match action and a disabled checkbox', () => {
+    it('renders a matching-pending row with its retry reason, a Match action and a disabled checkbox', () => {
         render(
             <CandidateLeafTable
-                items={[buildUnmatched({ id: 'pending-1', status: 'MatchingPending' })]}
+                items={[
+                    buildUnmatched({
+                        id: 'pending-1',
+                        status: 'MatchingPending',
+                        notes: 'Matching will retry because the metadata search did not complete: provider-a timed out.',
+                    }),
+                ]}
                 emptyState={<div />}
                 requestAccept={(action) => void action('Inherit')}
             />,
@@ -175,9 +188,10 @@ describe('CandidateLeafTable', () => {
         );
 
         const row = rowFor('pending-1');
-        expect(within(row).getByTestId('candidate-leaf-matching-pending')).toHaveTextContent('Matching pending');
-        expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
-        expect(within(row).getByRole('button', { name: /^Matching pending$/ })).toBeDisabled();
+        const cell = within(row).getByTestId('candidate-leaf-matching-pending');
+        expect(cell).toHaveTextContent('Matching pending');
+        expect(cell).toHaveTextContent('provider-a timed out.');
+        expect(within(row).getByRole('button', { name: /^Match$/ })).toBeEnabled();
         const checkbox = within(row).getByRole('checkbox', { name: /select s01e02/i });
         expect(checkbox).toBeDisabled();
     });
@@ -397,6 +411,26 @@ describe('CandidateLeafTable', () => {
         expect(within(rowFor('match-1')).getByRole('checkbox', { name: /select s01e01/i })).not.toBeChecked();
     });
 
+    it('keeps the Detail button mounted while its preview is open', async () => {
+        const user = userEvent.setup();
+        render(
+            <CandidateLeafTable
+                items={[buildMatched()]}
+                emptyState={<div />}
+                requestAccept={(action) => void action('Inherit')}
+            />,
+            {
+                wrapper: createTestWrapper(),
+            },
+        );
+
+        const detail = within(rowFor('match-1')).getByRole('button', { name: /^Detail$/ });
+        await user.click(detail);
+
+        expect(await screen.findByTestId('preview-drawer-open')).toBeInTheDocument();
+        expect(detail).toBeInTheDocument();
+    });
+
     it('opens the manual-match dialog targeting the candidate for an unmatched row', async () => {
         const user = userEvent.setup();
         render(
@@ -501,9 +535,83 @@ describe('CandidateLeafTable (mobile card collapse)', () => {
         await user.click(screen.getByRole('checkbox', { name: /select s01e01/i }));
         expect(screen.getByRole('checkbox', { name: /select s01e01/i })).toBeChecked();
 
-        await user.click(screen.getByRole('button', { name: 'Stop selecting' }));
+        await user.click(screen.getByRole('button', { name: 'Select', pressed: true }));
         await user.click(screen.getByRole('button', { name: 'Select' }));
 
         expect(screen.getByRole('checkbox', { name: /select s01e01/i })).not.toBeChecked();
+    });
+
+    it('renders a rejected row as silenced with only a Restore action that restores the file', async () => {
+        const user = userEvent.setup();
+        restoreMutateAsync.mockResolvedValue({ count: 1 });
+        render(
+            <CandidateLeafTable
+                items={[buildUnmatched({ id: 'rejected-1', status: 'Rejected' })]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+
+        const row = rowFor('rejected-1');
+        expect(within(row).getByTestId('candidate-leaf-silenced')).toHaveTextContent('Silenced');
+        expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
+        expect(within(row).queryByRole('button', { name: /^Import$/ })).toBeNull();
+        expect(within(row).getByRole('checkbox', { name: /select s01e02/i })).toBeDisabled();
+
+        await user.click(within(row).getByRole('button', { name: /^Restore$/ }));
+
+        expect(restoreMutateAsync).toHaveBeenCalledWith({ ids: ['rejected-1'] });
+    });
+
+    it('rejects a pending file from its row', async () => {
+        const user = userEvent.setup();
+        rejectMutateAsync.mockResolvedValue({ count: 1, error: null });
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Reject$/ }));
+
+        expect(rejectMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'] });
+    });
+
+    it('offers no Reject action on a file that an import owns', () => {
+        render(
+            <CandidateLeafTable
+                items={[buildMatched({ status: 'Queued' })]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+
+        expect(within(rowFor('match-1')).queryByRole('button', { name: /^Reject$/ })).toBeNull();
+    });
+
+    it('offers no Reject action on an invalidated file', () => {
+        render(
+            <CandidateLeafTable
+                items={[buildUnmatched({ status: 'Invalidated' })]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+
+        expect(within(rowFor('empty-1')).queryByRole('button', { name: /^Reject$/ })).toBeNull();
+    });
+
+    it('warns instead of confirming when the server rejects no file', async () => {
+        const user = userEvent.setup();
+        rejectMutateAsync.mockResolvedValue({ count: 0, error: null });
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Reject$/ }));
+
+        expect(await screen.findByText('Match not rejected')).toBeInTheDocument();
+        expect(screen.queryByText('Match rejected')).toBeNull();
     });
 });

@@ -3,7 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { RouteLoadingState } from '@/router/RouteLoadingState';
 
 import { useAuth } from './useAuth';
-import { Role, RoleName } from './types';
+import { Role, RoleName, type Permission } from './types';
 
 export interface RequireAuthProps {
     children: React.ReactNode;
@@ -28,19 +28,19 @@ export function RequireAuth({ children, loginPath = '/login' }: RequireAuthProps
 
 RequireAuth.displayName = 'RequireAuth';
 
-export interface RoleGuardProps {
+export type RoleGuardProps = {
     children: React.ReactNode;
 
-    minRole: Role;
-
     forbiddenPath?: string;
-}
+} & ({ minRole: Role } | { permission: Permission });
 
-export function RoleGuard({ children, minRole, forbiddenPath = '/forbidden' }: RoleGuardProps) {
-    const { hasRole, isLoading } = useAuth();
+export function RoleGuard(props: RoleGuardProps) {
+    const { children, forbiddenPath = '/forbidden' } = props;
+    const { hasRole, getRequiredRole, isLoading } = useAuth();
     const location = useLocation();
+    const minRole = 'permission' in props ? getRequiredRole(props.permission) : props.minRole;
 
-    if (isLoading) {
+    if (isLoading || minRole === undefined) {
         return <RouteLoadingState />;
     }
 

@@ -116,7 +116,7 @@ export function CompletionStep({ onAdvance, skippedSteps = EMPTY_SKIPPED_STEPS }
                 Review the settings below. Then finish setup to start Magpie. The Admin pages contain these settings.
             </p>
 
-            <ul className="setup-page__summary-list" data-component="setup-summary">
+            <ul className="setup-page__summary-list" data-component="setup-summary" role="list">
                 {rows.map((row) => (
                     <li key={row.label} className="setup-page__summary-row">
                         <span>{row.label}</span>

@@ -155,7 +155,8 @@ internal sealed class ReleaseScopeRepository(
                         .ExecuteUpdateAsync(
                             setters => setters
                                 .SetProperty(scope => scope.ReleaseId, model.ReleaseId)
-                                .SetProperty(scope => scope.ContentHierarchyItemId, model.ContentHierarchyItemId),
+                                .SetProperty(scope => scope.ContentHierarchyItemId, model.ContentHierarchyItemId)
+                                .SetProperty(scope => scope.Status, model.Status),
                             cancellationToken)
                         .ConfigureAwait(false);
                     if (updated > 0)

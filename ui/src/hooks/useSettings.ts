@@ -32,7 +32,7 @@ interface ApiSecretSettingState {
 }
 
 export interface ApiSettingsGroup {
-    id: string;
+    id?: string;
 
     name: string;
 

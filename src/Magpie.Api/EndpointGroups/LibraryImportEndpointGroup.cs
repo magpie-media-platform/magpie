@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
+using Magpie.Models.Bulk;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Import;
@@ -25,8 +26,19 @@ internal sealed class LibraryImportEndpointGroup : IApiEndpointGroup
 {
     public string Name => "import";
 
+    internal async Task<IResult> PreviewImportRenamesAsync(
+        [FromServices] ILibraryImportService service,
+        [FromBody] LibraryImportRenameSelection selection,
+        CancellationToken cancellationToken) =>
+        Results.Ok(await service.PreviewRenamesAsync(selection, cancellationToken).ConfigureAwait(false));
+
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
+        builder.MapPost("rename-preview", PreviewImportRenamesAsync)
+            .WithName(nameof(PreviewImportRenamesAsync))
+            .Produces<FileRenamePreview>()
+            .RequireManager();
+
         builder.MapGet("candidates", QueryLibraryImportCandidatesAsync)
             .WithName(nameof(QueryLibraryImportCandidatesAsync))
             .Produces<PagedList<LibraryImportCandidate>>()
@@ -71,6 +83,98 @@ internal sealed class LibraryImportEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
+
+        builder.MapPost("candidates/reject", RejectLibraryImportCandidatesAsync)
+            .WithName(nameof(RejectLibraryImportCandidatesAsync))
+            .Produces<BulkResult>()
+            .RequireManager();
+
+        builder.MapPost("candidates/restore", RestoreLibraryImportCandidatesAsync)
+            .WithName(nameof(RestoreLibraryImportCandidatesAsync))
+            .Produces<BulkResult>()
+            .RequireManager();
+
+        builder.MapGet("content/{id:guid}/candidates", QueryContentLibraryImportCandidatesAsync)
+            .WithName(nameof(QueryContentLibraryImportCandidatesAsync))
+            .Produces<IReadOnlyList<LibraryImportCandidate>>()
+            .RequireViewer();
+
+        builder.MapPost("content/{id:guid}/associate", AssociateContentLibraryImportCandidatesAsync)
+            .WithName(nameof(AssociateContentLibraryImportCandidatesAsync))
+            .Produces<LibraryImportSubmissionResult>(StatusCodes.Status202Accepted)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireManager();
+    }
+
+    [MagpieCommand("reject", "POST", "candidates/reject", "Reject library import candidates until restored")]
+    internal async Task<IResult> RejectLibraryImportCandidatesAsync(
+        [FromServices] ILibraryImportService libraryImportService,
+        AuthenticatedUser user,
+        [FromBody] BulkAction<LibraryImportCandidateQuery> action,
+        CancellationToken cancellationToken)
+    {
+        var count = await libraryImportService.RejectAsync(action, user.Id, cancellationToken).ConfigureAwait(false);
+        return Results.Ok(new BulkResult { Count = count });
+    }
+
+    [MagpieCommand("restore", "POST", "candidates/restore", "Restore rejected library import candidates")]
+    internal async Task<IResult> RestoreLibraryImportCandidatesAsync(
+        [FromServices] ILibraryImportService libraryImportService,
+        AuthenticatedUser user,
+        [FromBody] BulkAction<LibraryImportCandidateQuery> action,
+        CancellationToken cancellationToken)
+    {
+        var count = await libraryImportService
+            .RestoreAsync(action, user.Id, correlationId: null, cancellationToken)
+            .ConfigureAwait(false);
+        return Results.Ok(new BulkResult { Count = count });
+    }
+
+    [MagpieCommand(
+        "content-candidates",
+        "GET",
+        "content/{id:guid}/candidates",
+        "List the discovered files that wait for association with a library item or its descendants")]
+    internal async Task<IResult> QueryContentLibraryImportCandidatesAsync(
+        [FromServices] ILibraryImportService libraryImportService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        return Results.Ok(await libraryImportService
+            .QueryLibraryTargetCandidatesAsync(id, cancellationToken)
+            .ConfigureAwait(false));
+    }
+
+    [MagpieCommand(
+        "content-associate",
+        "POST",
+        "content/{id:guid}/associate",
+        "Associate discovered files with a library item or its descendants")]
+    internal async Task<IResult> AssociateContentLibraryImportCandidatesAsync(
+        [FromServices] ILibraryImportService libraryImportService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] BulkAction<LibraryImportCandidateQuery> action,
+        CancellationToken cancellationToken)
+    {
+        if (action.Filter is not null)
+        {
+            return Results.Problem(
+                "Select the files to associate by id.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var candidates = await libraryImportService
+            .QueryLibraryTargetCandidatesAsync(id, cancellationToken)
+            .ConfigureAwait(false);
+        var candidateIds = candidates
+            .Select(candidate => candidate.Id)
+            .Where(candidateId => action.Ids is null || action.Ids.Contains(candidateId))
+            .ToList();
+        var result = await libraryImportService
+            .AssociateAsync(candidateIds, user.Id, correlationId: null, cancellationToken)
+            .ConfigureAwait(false);
+        return Results.Json(result, statusCode: StatusCodes.Status202Accepted);
     }
 
     [MagpieCommand("candidates", "GET", "candidates", "List library import candidates")]

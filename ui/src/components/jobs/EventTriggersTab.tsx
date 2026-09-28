@@ -13,6 +13,7 @@ import {
 import type { ApiEventTrigger } from '@/hooks/useEventTriggers';
 import { countExecutableEventContextCriteria } from '@/lib/eventContextCriteria';
 import type { TemplateOption } from '@/lib/jobExecution';
+import type { Role } from '@/auth/types';
 import { EventTriggerForm } from './EventTriggerForm';
 import { eventPatternLabel } from './eventPatternPresets';
 import type { useEventTriggerCrud } from './useEventTriggerCrud';
@@ -25,10 +26,19 @@ interface EventTriggersTabProps {
     crud: EventTriggerCrud;
     templates: TemplateOption[];
     systemJobTypes?: ReadonlySet<string>;
+    userScopeOnly?: boolean;
     canManage: boolean;
+    ownerRole?: Role;
 }
 
-export function EventTriggersTab({ crud, templates, systemJobTypes, canManage }: EventTriggersTabProps) {
+export function EventTriggersTab({
+    crud,
+    templates,
+    systemJobTypes,
+    userScopeOnly = false,
+    canManage,
+    ownerRole,
+}: EventTriggersTabProps) {
     const {
         triggers,
         togglingTriggers,
@@ -56,7 +66,7 @@ export function EventTriggersTab({ crud, templates, systemJobTypes, canManage }:
                         key={trigger.id}
                         trigger={trigger}
                         isToggling={togglingTriggers.has(trigger.id)}
-                        canManage={canManage && !isSystemScoped}
+                        canManage={canManage && !isSystemScoped && (!userScopeOnly || trigger.scope === 'User')}
                         onEdit={() => handleEdit(trigger)}
                         onDelete={() => handleDeleteClick(trigger)}
                         onToggle={(enabled) => handleToggle(trigger, enabled)}
@@ -74,6 +84,7 @@ export function EventTriggersTab({ crud, templates, systemJobTypes, canManage }:
                 currentTemplateId={formInitialValues?.templateId}
                 onSubmit={handleSubmit}
                 isSubmitting={isSaving}
+                ownerRole={ownerRole}
             />
 
             <Dialog

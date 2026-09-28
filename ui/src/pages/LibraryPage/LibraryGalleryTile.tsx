@@ -1,13 +1,16 @@
-import { type KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { useOpenLocalContentPreview } from '@/components/content/LocalContentPreview';
 
-import { ContentMonitoringIndicator, ContentPoster } from '@/components/content/ContentCardPrimitives';
+import {
+    ContentFulfillmentBadge,
+    ContentMonitoringIndicator,
+    ContentPoster,
+} from '@/components/content/ContentCardPrimitives';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
-import { Checkbox } from '@/components/ui/Checkbox';
+import { SelectionCircleToggle } from '@/components/ui/SelectionCircleToggle';
 import { ContentGalleryPosterSlot } from '@/components/ui/Slot';
 import { useLongPress } from '@/hooks/ui/useLongPress';
 import { getStandardMetadataField, useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
-import { getFulfillmentDotColor } from '@/types/content';
 import type { ContentListItem } from '@/types';
 
 export interface LibraryGalleryTileProps {
@@ -26,15 +29,56 @@ export function LibraryGalleryTile({
     onLongPress,
 }: LibraryGalleryTileProps) {
     const longPress = useLongPress({ onLongPress: onLongPress ?? (() => {}) });
+    const openPreview = useOpenLocalContentPreview();
     const typeIconName = useTypeIconName()(item.contentType);
     const { contentTypes } = useLibraryTypes();
     const levelDef = contentTypes
         .find((type) => type.slug === item.contentType)
         ?.levels.find((level) => level.slug === item.level);
 
+    const text = (
+        <>
+            <span className="library-gallery-tile__title-row">
+                <ContentMonitoringIndicator
+                    monitoring={item.monitoring}
+                    effectiveMonitoring={item.effectiveMonitoring}
+                    className="library-gallery-tile__monitoring"
+                    activeClassName="library-gallery-tile__monitoring--active"
+                />
+                <span className="library-gallery-tile__title" title={item.title}>
+                    {item.title}
+                    {item.year !== undefined && <span className="library-gallery-tile__year"> ({item.year})</span>}
+                </span>
+            </span>
+            <ContentFulfillmentBadge
+                fulfillment={item.fulfillment}
+                importPending={item.importPending}
+                className="library-gallery-tile__fulfillment"
+            />
+        </>
+    );
+
     const inner = (
         <>
-            <span className="library-gallery-tile__poster">
+            <div className="library-gallery-tile__poster">
+                {selectionMode ? (
+                    // The whole poster is a pointer target. The checkbox is the control for keyboards and screen readers.
+                    <button
+                        type="button"
+                        className="library-gallery-tile__poster-target"
+                        aria-hidden="true"
+                        tabIndex={-1}
+                        onClick={onToggle}
+                    />
+                ) : (
+                    <Link
+                        to={`/library/${item.id}`}
+                        className="library-gallery-tile__poster-target"
+                        aria-label={`Open ${item.title}`}
+                        {...longPress.handlers}
+                        onClick={(event) => longPress.consumeClick(event)}
+                    />
+                )}
                 <ContentGalleryPosterSlot
                     contentId={item.id}
                     level={item.level}
@@ -52,9 +96,12 @@ export function LibraryGalleryTile({
                     />
                 </ContentGalleryPosterSlot>
                 {selectionMode && (
-                    <span className="library-gallery-tile__check">
-                        <Checkbox checked={selected} size="sm" aria-hidden="true" tabIndex={-1} />
-                    </span>
+                    <SelectionCircleToggle
+                        selected={selected}
+                        onToggle={() => onToggle?.()}
+                        aria-label={`Select ${item.title}`}
+                        data-action="select-row"
+                    />
                 )}
                 <CdnPhosphorIcon
                     name={typeIconName}
@@ -63,64 +110,28 @@ export function LibraryGalleryTile({
                     className="library-gallery-tile__type"
                     aria-hidden="true"
                 />
-            </span>
-            <span className="library-gallery-tile__title-row">
-                {item.effectiveMonitoring ? (
-                    <span
-                        className="library-gallery-tile__status-dot"
-                        style={{ '--dot-color': getFulfillmentDotColor(item.fulfillment) } as React.CSSProperties}
-                        aria-hidden="true"
-                    />
-                ) : (
-                    <ContentMonitoringIndicator
-                        monitoring={item.monitoring}
-                        effectiveMonitoring={item.effectiveMonitoring}
-                        className="library-gallery-tile__unmonitored"
-                    />
-                )}
-                <span className="library-gallery-tile__title" title={item.title}>
-                    {item.title}
-                    {item.year !== undefined && <span className="library-gallery-tile__year"> ({item.year})</span>}
-                </span>
-            </span>
+            </div>
+            {selectionMode ? (
+                <button
+                    type="button"
+                    className="library-gallery-tile__text"
+                    aria-label={`Preview ${item.title}`}
+                    onClick={(event) => openPreview(item.id, event.currentTarget)}
+                >
+                    {text}
+                </button>
+            ) : (
+                <Link to={`/library/${item.id}`} className="library-gallery-tile__text">
+                    {text}
+                </Link>
+            )}
         </>
     );
 
-    if (selectionMode) {
-        const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                onToggle?.();
-            }
-        };
-
-        return (
-            <div
-                className="library-gallery-tile library-gallery-tile--selectable"
-                role="button"
-                tabIndex={0}
-                aria-pressed={selected}
-                aria-label={`Select ${item.title}`}
-                data-selected={selected ? 'true' : 'false'}
-                onClick={onToggle}
-                onKeyDown={handleKeyDown}
-            >
-                {inner}
-            </div>
-        );
-    }
-
     return (
-        <Link
-            to={`/library/${item.id}`}
-            className="library-gallery-tile"
-            data-content-id={item.id}
-            data-selected="false"
-            {...longPress.handlers}
-            onClick={(event) => longPress.consumeClick(event)}
-        >
+        <div className="library-gallery-tile" data-content-id={item.id} data-selected={selected ? 'true' : 'false'}>
             {inner}
-        </Link>
+        </div>
     );
 }
 

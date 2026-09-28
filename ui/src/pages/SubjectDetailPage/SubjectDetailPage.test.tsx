@@ -468,6 +468,33 @@ describe('SubjectDetailPage', () => {
             expect(screen.queryByText('Create filter')).not.toBeInTheDocument();
         });
 
+        it('offers a single Search library floating action to Viewer users', async () => {
+            mockCurrentRole.current = Role.Viewer;
+
+            renderWithRouter('subject-1');
+
+            await screen.findByRole('heading', { name: /Breaking Bad/i, level: 1 });
+            expect(document.querySelector('.quick-actions-button__fab')).toHaveAttribute(
+                'aria-label',
+                'Search library',
+            );
+        });
+
+        it('lists Search library, Add content and Refresh in the Subject Actions sheet for Requester users', async () => {
+            const user = userEvent.setup();
+            mockCurrentRole.current = Role.Requester;
+
+            renderWithRouter('subject-1');
+
+            await user.click(await screen.findByRole('button', { name: 'Subject Actions' }));
+            const sheet = await screen.findByRole('dialog', { name: 'Subject Actions' });
+            expect(
+                within(within(sheet).getByRole('group', { name: 'Quick actions' }))
+                    .getAllByRole('button')
+                    .map((action) => action.textContent),
+            ).toEqual(['Search library', 'Add content', 'Refresh']);
+        });
+
         it('shows Search library, Add content and Refresh for Requester users', async () => {
             mockCurrentRole.current = Role.Requester;
 
@@ -691,6 +718,34 @@ describe('SubjectDetailPage', () => {
             const bio = await screen.findByText((_, element) => element?.textContent === longDescription);
             expect(bio).toHaveClass('subject-detail-page__bio');
             expect(bio.textContent).toBe(longDescription);
+        });
+
+        it('shows the full biography, unclamped, as the last row of the Details tab', async () => {
+            renderWithRouter('subject-1', undefined, '?tab=details');
+
+            const panel = await screen.findByRole('region', { name: 'Details' });
+            const terms = within(panel).getAllByRole('term');
+            const biography = within(panel).getByText(
+                "A chemistry teacher diagnosed with inoperable lung cancer turns to manufacturing and selling methamphetamine with a former student in order to secure his family's future.",
+            );
+            expect(terms[terms.length - 1]).toHaveTextContent('Biography');
+            expect(biography).toHaveClass('subject-detail-page__biography');
+            expect(biography).not.toHaveClass('subject-detail-page__bio');
+        });
+
+        it('labels the full text Description for a subject that is not a person', async () => {
+            mockApiGet.mockImplementation((url: string) =>
+                url === '/subjects/subject-1'
+                    ? Promise.resolve({ ...mockApiSubject, kind: 'studio' })
+                    : Promise.reject({ status: 404, message: 'Not found' }),
+            );
+            renderWithRouter('subject-1', undefined, '?tab=details');
+
+            const panel = await screen.findByRole('region', { name: 'Details' });
+            await waitFor(() => {
+                const terms = within(panel).getAllByRole('term');
+                expect(terms[terms.length - 1]).toHaveTextContent('Description');
+            });
         });
 
         it('renders explicitly labeled genres below the hero in the shared aligned row', async () => {
@@ -1165,6 +1220,7 @@ describe('SubjectDetailPage', () => {
                 'Birth date',
                 'Death date',
                 'Ethnicity',
+                'Biography',
             ]);
             expect(
                 within(screen.getByRole('heading', { name: 'Alternate texts' }).closest('section') as HTMLElement)

@@ -30,7 +30,17 @@ internal sealed class LabelSubjectKindDefinitionProvider : ISubjectKindDefinitio
             PluralDisplayName = "Labels",
             IconName = "equalizer",
             SupportedMetadataFields = LabelMetadataFields,
-            CustomMetadataFields = []
+            CustomMetadataFields = [],
+            RelationshipRoles =
+            [
+                new()
+                {
+                    Slug = "music-label",
+                    DisplayName = "Label",
+                    Description = "The record labels, separated by spaces.",
+                    Examples = ["Example Records", "Other Records"]
+                }
+            ]
         };
     }
 }

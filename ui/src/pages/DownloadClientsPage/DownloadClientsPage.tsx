@@ -9,13 +9,14 @@ import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
 
 import { Badge } from '@/components/ui/Badge';
-import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
+import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
 import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
+import { ListFilterToolbar, type ListFilterField } from '@/components/ui/ListFilterToolbar';
 import { Pager } from '@/components/ui/Pager';
 import { MultiSelectColumnFilter, encodeMultiValue, decodeMultiValue } from '@/components/ui/MultiSelectColumnFilter';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -94,6 +95,13 @@ const PAGE_SIZE = 25;
 const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
 
 const SORT_KEYS = ['name', 'provider', 'status', 'enabled', 'checked'] as const;
+const SORT_OPTIONS = [
+    { id: 'name', label: 'Name' },
+    { id: 'provider', label: 'Provider' },
+    { id: 'status', label: 'Status' },
+    { id: 'enabled', label: 'Enabled' },
+    { id: 'checked', label: 'Checked' },
+];
 
 const DEFAULT_FILTERS = { provider: '', status: '', enabled: '' };
 
@@ -568,6 +576,17 @@ export function DownloadClientsPage() {
     );
 
     const hasActiveFilters = provider.length > 0 || status !== '' || enabled !== '';
+    const filterFields: ListFilterField[] = [
+        {
+            id: 'provider',
+            label: 'Provider',
+            kind: 'multi',
+            value: provider,
+            options: providerOptions.map((value) => ({ value, label: value })),
+        },
+        { id: 'status', label: 'Status', kind: 'facet', value: status, options: statusOptions },
+        { id: 'enabled', label: 'Enabled', kind: 'facet', value: enabled, options: enabledOptions },
+    ];
 
     const pageCount = Math.max(1, Math.ceil(filteredClients.length / PAGE_SIZE));
     const currentPage = Math.min(page, pageCount);
@@ -659,7 +678,20 @@ export function DownloadClientsPage() {
                     </Button>
                 </BulkActionsToolbar>
 
-                <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+                <ListFilterToolbar
+                    fields={filterFields}
+                    onCommit={(values) =>
+                        setFilters({
+                            provider: encodeMultiValue(values.provider as string[]),
+                            status: values.status as string,
+                            enabled: values.enabled as string,
+                        })
+                    }
+                    sorting={sorting}
+                    sortOptions={SORT_OPTIONS}
+                    onSortingChange={setSorting}
+                    selection={{ active: selection.selectionMode, onToggle: selection.toggleSelectionMode }}
+                />
 
                 <div className="download-clients-table" data-area="clients">
                     <DataTable<DownloadClientItem>
@@ -691,6 +723,7 @@ export function DownloadClientsPage() {
                             className="download-clients-table__pager"
                             page={currentPage}
                             pageCount={pageCount}
+                            totalItems={filteredClients.length}
                             onFirst={() => setPage(1)}
                             onPrevious={() => setPage(Math.max(1, currentPage - 1))}
                             onNext={() => setPage(Math.min(pageCount, currentPage + 1))}

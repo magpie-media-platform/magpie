@@ -10,50 +10,58 @@ namespace Magpie.QueryLanguage;
 
 internal static class FilterFieldRegistryExtensions
 {
-    private static readonly HashSet<CriteriaValueOperator> UnsupportedImageUrlOperators =
+    private static readonly HashSet<CriteriaValueOperator> StringCollectionOperators =
     [
-        CriteriaValueOperator.GreaterThan,
-        CriteriaValueOperator.GreaterThanOrEqual,
-        CriteriaValueOperator.LessThan,
-        CriteriaValueOperator.LessThanOrEqual,
+        CriteriaValueOperator.Equals,
+        CriteriaValueOperator.NotEquals,
         CriteriaValueOperator.ContainsString,
         CriteriaValueOperator.NotContainsString,
         CriteriaValueOperator.StartsWithString,
         CriteriaValueOperator.NotStartsWithString,
         CriteriaValueOperator.EndsWithString,
         CriteriaValueOperator.NotEndsWithString,
+        CriteriaValueOperator.IsNull,
+        CriteriaValueOperator.IsNotNull,
     ];
 
-    private static readonly HashSet<CriteriaValueOperator> UnsupportedRelationshipTextOperators =
+    private static readonly HashSet<CriteriaValueOperator> IntegerCollectionOperators =
     [
+        CriteriaValueOperator.Equals,
+        CriteriaValueOperator.NotEquals,
         CriteriaValueOperator.GreaterThan,
         CriteriaValueOperator.GreaterThanOrEqual,
         CriteriaValueOperator.LessThan,
         CriteriaValueOperator.LessThanOrEqual,
-        CriteriaValueOperator.NotStartsWithString,
-        CriteriaValueOperator.NotEndsWithString,
+        CriteriaValueOperator.IsNull,
+        CriteriaValueOperator.IsNotNull,
     ];
 
-    private static readonly HashSet<CriteriaValueOperator> UnsupportedRelationshipContainerIdOperators =
+    private static readonly HashSet<CriteriaValueOperator> ImageUrlCollectionOperators =
     [
-        CriteriaValueOperator.GreaterThan,
-        CriteriaValueOperator.GreaterThanOrEqual,
-        CriteriaValueOperator.LessThan,
-        CriteriaValueOperator.LessThanOrEqual,
+        CriteriaValueOperator.Equals,
+        CriteriaValueOperator.NotEquals,
+        CriteriaValueOperator.IsNull,
+        CriteriaValueOperator.IsNotNull,
+    ];
+
+    private static readonly HashSet<CriteriaValueOperator> RelationshipSubjectOperators =
+    [
+        CriteriaValueOperator.Equals,
+        CriteriaValueOperator.NotEquals,
         CriteriaValueOperator.ContainsString,
         CriteriaValueOperator.NotContainsString,
         CriteriaValueOperator.StartsWithString,
-        CriteriaValueOperator.NotStartsWithString,
         CriteriaValueOperator.EndsWithString,
-        CriteriaValueOperator.NotEndsWithString,
+        CriteriaValueOperator.IsNull,
+        CriteriaValueOperator.IsNotNull,
     ];
 
-    private static readonly HashSet<CriteriaValueOperator> UnsupportedRelationshipExternalIdOperators =
+    private static readonly HashSet<CriteriaValueOperator> RelationshipContainerIdOperators =
     [
-        CriteriaValueOperator.GreaterThan,
-        CriteriaValueOperator.GreaterThanOrEqual,
-        CriteriaValueOperator.LessThan,
-        CriteriaValueOperator.LessThanOrEqual,
+        CriteriaValueOperator.Equals,
+        CriteriaValueOperator.NotEquals,
+        CriteriaValueOperator.IsNull,
+        CriteriaValueOperator.IsNotNull,
     ];
 
     private static readonly CollectionFieldDefinition GenreFieldDefinition = CreateGenreFieldDefinition(nameof(Genre));
@@ -93,6 +101,12 @@ internal static class FilterFieldRegistryExtensions
 
     private static readonly CollectionFieldDefinition RelationshipsFieldDefinition =
         CreateRelationshipFieldDefinition(nameof(MetadataCriteria.Relationships));
+
+    private static readonly CollectionFieldDefinition MediaFileFieldDefinition =
+        CreateMediaFileFieldDefinition(nameof(MediaFile));
+
+    private static readonly CollectionFieldDefinition MediaFilesFieldDefinition =
+        CreateMediaFileFieldDefinition(nameof(ContentHierarchyItemCriteria.MediaFiles));
 
     private static readonly MetadataCollectionMutation<GenreCriteria> GenreCollectionMutation = new(
         metadata => metadata.Genres,
@@ -172,7 +186,7 @@ internal static class FilterFieldRegistryExtensions
                     Level = AddCriterion(ctx.ContentItem.Level, op, v, vs)
                 })),
             [nameof(ContentHierarchyItemCriteria.Monitoring)] =
-                new StructField<ContentTransformContext, bool>(
+                new StructField<ContentTransformContext, MonitoringMode>(
                     (ctx, op, v, vs) => ctx.SetContentItem(ctx.ContentItem with
                     {
                         Monitoring = AddCriterion(ctx.ContentItem.Monitoring, op, v ?? default, vs)
@@ -190,6 +204,13 @@ internal static class FilterFieldRegistryExtensions
                     (ctx, value) => ctx.SetContentItem(ctx.ContentItem with
                     {
                         HasSearchableTitle = value
+                    })),
+            [nameof(ContentHierarchyItemCriteria.ImportPending)] =
+                new BooleanField<ContentTransformContext>(
+                    ctx => ctx.ContentItem.ImportPending,
+                    (ctx, value) => ctx.SetContentItem(ctx.ContentItem with
+                    {
+                        ImportPending = value
                     })),
             [nameof(ContentHierarchyItemCriteria.Fulfillment)] =
                 new StructField<ContentTransformContext, FulfillmentStatus>(
@@ -212,6 +233,19 @@ internal static class FilterFieldRegistryExtensions
                     (ctx, op, v, vs) => ctx.SetContentItem(ctx.ContentItem with
                     {
                         QualityStatus = AddCriterion(ctx.ContentItem.QualityStatus, op, v ?? default, vs)
+                    })),
+            [nameof(ContentHierarchyItemCriteria.PrimaryMediaSize)] =
+                new StructField<ContentTransformContext, long>(
+                    (ctx, op, v, vs) => ctx.SetContentItem(ctx.ContentItem with
+                    {
+                        PrimaryMediaSize = AddCriterion(ctx.ContentItem.PrimaryMediaSize, op, v ?? default, vs)
+                    })),
+            [nameof(ContentHierarchyItemCriteria.PrimaryMediaFileCount)] =
+                new StructField<ContentTransformContext, int>(
+                    (ctx, op, v, vs) => ctx.SetContentItem(ctx.ContentItem with
+                    {
+                        PrimaryMediaFileCount = AddCriterion(ctx.ContentItem.PrimaryMediaFileCount,
+                            op, v ?? default, vs)
                     })),
             [nameof(ContentHierarchyItemCriteria.RootFolderId)] = new StructField<ContentTransformContext, Guid>(
                 (ctx, op, v, vs) => ctx.SetContentItem(ctx.ContentItem with
@@ -279,6 +313,8 @@ internal static class FilterFieldRegistryExtensions
             [nameof(Relationship)] = new(RelationshipFieldDefinition, RelationshipCollectionMutation.Add),
             [nameof(MetadataCriteria.Relationships)] =
                 new(RelationshipsFieldDefinition, RelationshipCollectionMutation.Add),
+            [nameof(MediaFile)] = new(MediaFileFieldDefinition, AddMediaFileCriteria),
+            [nameof(ContentHierarchyItemCriteria.MediaFiles)] = new(MediaFilesFieldDefinition, AddMediaFileCriteria),
         };
 
     private static readonly Dictionary<string, ScalarFieldInfo<SubjectTransformContext>> SubjectFields =
@@ -349,6 +385,9 @@ internal static class FilterFieldRegistryExtensions
             [nameof(MetadataCriteria.Images)] = new(ImagesFieldDefinition, ImageCollectionMutation.Add),
         };
 
+    internal static IEnumerable<CollectionFieldDefinition> ContentCollectionFieldDefinitions =>
+        ContentCollectionFields.Values.Select(collection => collection.Definition);
+
     public static ScalarFieldInfo<ContentTransformContext>? GetContentField(this string name)
     {
         return ContentFields.GetValueOrDefault(name);
@@ -357,6 +396,18 @@ internal static class FilterFieldRegistryExtensions
     public static CollectionFieldInfo<ContentTransformContext>? GetContentCollectionField(this string name)
     {
         return ContentCollectionFields.GetValueOrDefault(name);
+    }
+
+    public static IEnumerable<string> DescribeContentFields()
+    {
+        var scalars = ContentFields.Select(field =>
+            $"scalar {ToCamelCase(field.Key)} {DescribeType(field.Value.ValueType)}");
+        var collections = ContentCollectionFields.Select(field =>
+            $"collection {ToCamelCase(field.Key)} " + string.Join(" ", field.Value.Definition.ItemFields
+                .Select(item => $"{ToCamelCase(item.Key)}:{DescribeType(item.Value.ValueType)}")
+                .OrderBy(value => value, StringComparer.Ordinal)));
+
+        return scalars.Concat(collections).OrderBy(value => value, StringComparer.Ordinal);
     }
 
     public static ScalarFieldInfo<SubjectTransformContext>? GetSubjectField(this string name)
@@ -449,6 +500,36 @@ internal static class FilterFieldRegistryExtensions
         };
     }
 
+    private static CriteriaSet<PropertyCriterion<long>> LongCriterion(CriteriaValueOperator op, object? value)
+    {
+        return new()
+        {
+            And = [new() { Operator = op, Value = value is long l ? l : 0 }]
+        };
+    }
+
+    private static string ToCamelCase(string name)
+    {
+        return char.ToLowerInvariant(name[0]) + name[1..];
+    }
+
+    private static string DescribeType(Type type)
+    {
+        return type switch
+        {
+            _ when type.IsEnum =>
+                "enum " + string.Join("|", Enum.GetNames(type).OrderBy(value => value, StringComparer.Ordinal)),
+            _ when type == typeof(string) => "string",
+            _ when type == typeof(bool) => "boolean",
+            _ when type == typeof(int) => "number",
+            _ when type == typeof(long) => "long",
+            _ when type == typeof(Guid) => "guid",
+            _ when type == typeof(TimeSpan) => "timespan",
+            _ when type == typeof(TemporalValue) => "date",
+            _ => type.Name
+        };
+    }
+
     private static CriteriaSet<PropertyCriterion<T>> MergeCriteriaSet<T>(
         CriteriaSet<PropertyCriterion<T>> a,
         CriteriaSet<PropertyCriterion<T>> b)
@@ -466,7 +547,8 @@ internal static class FilterFieldRegistryExtensions
             typeof(string),
             new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
             {
-                [nameof(GenreCriteria.Name)] = new(nameof(GenreCriteria.Name), typeof(string))
+                [nameof(GenreCriteria.Name)] =
+                    new(nameof(GenreCriteria.Name), typeof(string), StringCollectionOperators)
             },
             value => new GenreCriteria
             {
@@ -494,7 +576,8 @@ internal static class FilterFieldRegistryExtensions
             typeof(string),
             new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
             {
-                [nameof(TagCriteria.Name)] = new(nameof(TagCriteria.Name), typeof(string))
+                [nameof(TagCriteria.Name)] =
+                    new(nameof(TagCriteria.Name), typeof(string), StringCollectionOperators)
             },
             value => new TagCriteria
             {
@@ -522,13 +605,20 @@ internal static class FilterFieldRegistryExtensions
             typeof(string),
             new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
             {
-                [nameof(AwardCriteria.Body)] = new(nameof(AwardCriteria.Body), typeof(string)),
-                [nameof(AwardCriteria.Name)] = new(nameof(AwardCriteria.Name), typeof(string)),
-                [nameof(AwardCriteria.Category)] = new(nameof(AwardCriteria.Category), typeof(string)),
-                [nameof(AwardCriteria.Status)] = new(nameof(AwardCriteria.Status), typeof(string)),
-                [nameof(AwardCriteria.Year)] = new(nameof(AwardCriteria.Year), typeof(int)),
-                [nameof(AwardCriteria.Language)] = new(nameof(AwardCriteria.Language), typeof(string)),
-                [nameof(AwardCriteria.Country)] = new(nameof(AwardCriteria.Country), typeof(string))
+                [nameof(AwardCriteria.Body)] =
+                    new(nameof(AwardCriteria.Body), typeof(string), StringCollectionOperators),
+                [nameof(AwardCriteria.Name)] =
+                    new(nameof(AwardCriteria.Name), typeof(string), StringCollectionOperators),
+                [nameof(AwardCriteria.Category)] =
+                    new(nameof(AwardCriteria.Category), typeof(string), StringCollectionOperators),
+                [nameof(AwardCriteria.Status)] =
+                    new(nameof(AwardCriteria.Status), typeof(string), StringCollectionOperators),
+                [nameof(AwardCriteria.Year)] =
+                    new(nameof(AwardCriteria.Year), typeof(int), IntegerCollectionOperators),
+                [nameof(AwardCriteria.Language)] =
+                    new(nameof(AwardCriteria.Language), typeof(string), StringCollectionOperators),
+                [nameof(AwardCriteria.Country)] =
+                    new(nameof(AwardCriteria.Country), typeof(string), StringCollectionOperators)
             },
             value => new AwardCriteria
             {
@@ -538,7 +628,10 @@ internal static class FilterFieldRegistryExtensions
             (a, b) => MergeAwardCriteria((AwardCriteria)a, (AwardCriteria)b));
     }
 
-    private static AwardCriteria CreateAwardFieldCriteria(string propName, CriteriaValueOperator op, object? value)
+    private static AwardCriteria CreateAwardFieldCriteria(
+        string propName,
+        CriteriaValueOperator op,
+        object? value)
     {
         return propName switch
         {
@@ -574,8 +667,10 @@ internal static class FilterFieldRegistryExtensions
             typeof(string),
             new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
             {
-                [nameof(ExternalIdCriteria.Source)] = new(nameof(ExternalIdCriteria.Source), typeof(string)),
-                [nameof(ExternalIdCriteria.Value)] = new(nameof(ExternalIdCriteria.Value), typeof(string))
+                [nameof(ExternalIdCriteria.Source)] =
+                    new(nameof(ExternalIdCriteria.Source), typeof(string), StringCollectionOperators),
+                [nameof(ExternalIdCriteria.Value)] =
+                    new(nameof(ExternalIdCriteria.Value), typeof(string), StringCollectionOperators)
             },
             value => new ExternalIdCriteria
             {
@@ -614,8 +709,10 @@ internal static class FilterFieldRegistryExtensions
             typeof(string),
             new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
             {
-                [nameof(ContentRatingCriteria.Body)] = new(nameof(ContentRatingCriteria.Body), typeof(string)),
-                [nameof(ContentRatingCriteria.Rating)] = new(nameof(ContentRatingCriteria.Rating), typeof(string))
+                [nameof(ContentRatingCriteria.Body)] =
+                    new(nameof(ContentRatingCriteria.Body), typeof(string), StringCollectionOperators),
+                [nameof(ContentRatingCriteria.Rating)] =
+                    new(nameof(ContentRatingCriteria.Rating), typeof(string), StringCollectionOperators)
             },
             value => new ContentRatingCriteria
             {
@@ -654,18 +751,24 @@ internal static class FilterFieldRegistryExtensions
             typeof(string),
             new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
             {
-                [nameof(ImageCriteria.Type)] = new(nameof(ImageCriteria.Type), typeof(string)),
-                [nameof(ImageCriteria.MimeType)] = new(nameof(ImageCriteria.MimeType), typeof(string)),
+                [nameof(ImageCriteria.Type)] =
+                    new(nameof(ImageCriteria.Type), typeof(string), StringCollectionOperators),
+                [nameof(ImageCriteria.MimeType)] =
+                    new(nameof(ImageCriteria.MimeType), typeof(string), StringCollectionOperators),
                 [nameof(ImageCriteria.Url)] =
                     new(
                         nameof(ImageCriteria.Url),
                         typeof(string),
-                        UnsupportedImageUrlOperators,
+                        ImageUrlCollectionOperators,
                         requireAbsoluteUri: true),
-                [nameof(ImageCriteria.Source)] = new(nameof(ImageCriteria.Source), typeof(string)),
-                [nameof(ImageCriteria.Language)] = new(nameof(ImageCriteria.Language), typeof(string)),
-                [nameof(ImageCriteria.Width)] = new(nameof(ImageCriteria.Width), typeof(int)),
-                [nameof(ImageCriteria.Height)] = new(nameof(ImageCriteria.Height), typeof(int))
+                [nameof(ImageCriteria.Source)] =
+                    new(nameof(ImageCriteria.Source), typeof(string), StringCollectionOperators),
+                [nameof(ImageCriteria.Language)] =
+                    new(nameof(ImageCriteria.Language), typeof(string), StringCollectionOperators),
+                [nameof(ImageCriteria.Width)] =
+                    new(nameof(ImageCriteria.Width), typeof(int), IntegerCollectionOperators),
+                [nameof(ImageCriteria.Height)] =
+                    new(nameof(ImageCriteria.Height), typeof(int), IntegerCollectionOperators)
             },
             value => new ImageCriteria
             {
@@ -675,7 +778,10 @@ internal static class FilterFieldRegistryExtensions
             (a, b) => MergeImageCriteria((ImageCriteria)a, (ImageCriteria)b));
     }
 
-    private static ImageCriteria CreateImageFieldCriteria(string propName, CriteriaValueOperator op, object? value)
+    private static ImageCriteria CreateImageFieldCriteria(
+        string propName,
+        CriteriaValueOperator op,
+        object? value)
     {
         return propName switch
         {
@@ -704,6 +810,67 @@ internal static class FilterFieldRegistryExtensions
         };
     }
 
+    private static CollectionFieldDefinition CreateMediaFileFieldDefinition(string queryName)
+    {
+        return new CollectionFieldDefinition(
+            queryName,
+            typeof(string),
+            new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
+            {
+                [nameof(MediaFileCriteria.FileKind)] =
+                    new(nameof(MediaFileCriteria.FileKind), typeof(string), StringCollectionOperators),
+                [nameof(MediaFileCriteria.MimeType)] =
+                    new(nameof(MediaFileCriteria.MimeType), typeof(string), StringCollectionOperators),
+                [nameof(MediaFileCriteria.FilePath)] =
+                    new(nameof(MediaFileCriteria.FilePath), typeof(string), StringCollectionOperators),
+                [nameof(MediaFileCriteria.FileSize)] =
+                    new(nameof(MediaFileCriteria.FileSize), typeof(long), IntegerCollectionOperators)
+            },
+            value => new MediaFileCriteria
+            {
+                FileKind = StringCriterion(CriteriaValueOperator.Equals, value)
+            },
+            CreateMediaFileFieldCriteria,
+            (a, b) => MergeMediaFileCriteria((MediaFileCriteria)a, (MediaFileCriteria)b));
+    }
+
+    private static MediaFileCriteria CreateMediaFileFieldCriteria(
+        string propName,
+        CriteriaValueOperator op,
+        object? value)
+    {
+        return propName switch
+        {
+            nameof(MediaFileCriteria.FileKind) => new() { FileKind = StringCriterion(op, value) },
+            nameof(MediaFileCriteria.MimeType) => new() { MimeType = StringCriterion(op, value) },
+            nameof(MediaFileCriteria.FilePath) => new() { FilePath = StringCriterion(op, value) },
+            nameof(MediaFileCriteria.FileSize) => new() { FileSize = LongCriterion(op, value) },
+            _ => throw new ArgumentOutOfRangeException(nameof(propName), propName, null)
+        };
+    }
+
+    private static MediaFileCriteria MergeMediaFileCriteria(MediaFileCriteria a, MediaFileCriteria b)
+    {
+        return new MediaFileCriteria
+        {
+            FileKind = MergeCriteriaSet(a.FileKind, b.FileKind),
+            MimeType = MergeCriteriaSet(a.MimeType, b.MimeType),
+            FilePath = MergeCriteriaSet(a.FilePath, b.FilePath),
+            FileSize = MergeCriteriaSet(a.FileSize, b.FileSize)
+        };
+    }
+
+    private static void AddMediaFileCriteria(ContentTransformContext context, IReadOnlyList<object> group, bool isSome)
+    {
+        var mediaFiles = context.ContentItem.MediaFiles;
+        context.SetContentItem(context.ContentItem with
+        {
+            MediaFiles = isSome
+                ? AppendSomeGroup<MediaFileCriteria>(mediaFiles, group)
+                : AppendNone<MediaFileCriteria>(mediaFiles, group)
+        });
+    }
+
     private static CollectionFieldDefinition CreateRelationshipFieldDefinition(string queryName)
     {
         return new CollectionFieldDefinition(
@@ -712,30 +879,30 @@ internal static class FilterFieldRegistryExtensions
             new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
             {
                 [nameof(RelationshipCriteria.Kind)] =
-                    new(nameof(RelationshipCriteria.Kind), typeof(string), UnsupportedRelationshipTextOperators),
+                    new(nameof(RelationshipCriteria.Kind), typeof(string), StringCollectionOperators),
                 [nameof(RelationshipCriteria.Type)] =
-                    new(nameof(RelationshipCriteria.Type), typeof(string), UnsupportedRelationshipTextOperators),
+                    new(nameof(RelationshipCriteria.Type), typeof(string), StringCollectionOperators),
                 [nameof(RelationshipCriteria.Qualifier)] =
-                    new(nameof(RelationshipCriteria.Qualifier), typeof(string), UnsupportedRelationshipTextOperators),
+                    new(nameof(RelationshipCriteria.Qualifier), typeof(string), StringCollectionOperators),
                 [nameof(RelationshipCriteria.Subject)] =
-                    new(nameof(RelationshipCriteria.Subject), typeof(string), UnsupportedRelationshipTextOperators),
+                    new(nameof(RelationshipCriteria.Subject), typeof(string), RelationshipSubjectOperators),
                 ["Name"] =
-                    new(nameof(RelationshipCriteria.Subject), typeof(string), UnsupportedRelationshipTextOperators),
+                    new(nameof(RelationshipCriteria.Subject), typeof(string), RelationshipSubjectOperators),
                 [nameof(RelationshipCriteria.RelatedMetadataContainerId)] =
                     new(
                         nameof(RelationshipCriteria.RelatedMetadataContainerId),
                         typeof(Guid),
-                        UnsupportedRelationshipContainerIdOperators),
+                        RelationshipContainerIdOperators),
                 ["ExternalId"] =
                     new(
                         nameof(ExternalIdCriteria.Value),
                         typeof(string),
-                        UnsupportedRelationshipExternalIdOperators),
+                        StringCollectionOperators),
                 ["ExternalIdSource"] =
                     new(
                         nameof(ExternalIdCriteria.Source),
                         typeof(string),
-                        UnsupportedRelationshipExternalIdOperators)
+                        StringCollectionOperators)
             },
             value => new RelationshipCriteria
             {

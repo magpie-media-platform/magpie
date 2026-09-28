@@ -1,7 +1,10 @@
-import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import { forwardRef, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import {
+    ArrowsLeftRightIcon,
+    DotsThreeVerticalIcon,
     FileIcon,
     FolderIcon,
+    PencilSimpleLineIcon,
     VideoCameraIcon,
     HardDriveIcon,
     LinkBreakIcon,
@@ -16,6 +19,16 @@ import {
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Checkbox } from '@/components/ui/Checkbox';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from '@/components/ui/DropdownMenu';
+import { useCardLayout } from '@/hooks/ui/useCardLayout';
+import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 
 import { formatInstantDate } from '@/lib/dateFormatting';
 import { formatDurationFromSeconds } from '@/lib/formatTime';
@@ -71,7 +84,16 @@ export interface FilesTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 'ch
 
     onUnlinkFile?: (file: MediaFile) => void;
 
+    onReassignFile?: (file: MediaFile) => void;
+
     onImportFile?: () => void;
+
+    onRenameFile?: (file: MediaFile) => void;
+
+    onRenameFiles?: (ids: string[]) => void;
+
+    /** Applies the rename mask to every file of this item and its descendants. */
+    onRenameAllFiles?: () => void;
 
     deletingFileId?: string | null;
 
@@ -95,6 +117,114 @@ function ImportFileButton({ onImport, importing }: { onImport: () => void; impor
             <PlusIcon weight="bold" aria-hidden="true" />
             Import file
         </Button>
+    );
+}
+
+function RenameAllFilesButton({ onRenameAll }: { onRenameAll: () => void }) {
+    return (
+        <Button variant="secondary" size="sm" onClick={onRenameAll} data-action="rename-all-files">
+            Apply rename mask to descendant files
+        </Button>
+    );
+}
+
+/**
+ * Runs a menu action after the menu closes and focus is back on its trigger. An action that opens a dialog records the
+ * focused element to return to, and the menu item is gone by the time the dialog closes.
+ */
+function useMenuAction() {
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    const pendingRef = useRef<(() => void) | null>(null);
+    return {
+        triggerRef,
+        run: (action: () => void) => () => {
+            pendingRef.current = action;
+        },
+        onCloseAutoFocus: (event: Event) => {
+            const action = pendingRef.current;
+            pendingRef.current = null;
+            if (action) {
+                event.preventDefault();
+                triggerRef.current?.focus();
+                action();
+            }
+        },
+    };
+}
+
+function FileActionsMenu({
+    file,
+    busy,
+    onReassign,
+    onRename,
+    onUnlink,
+    onDelete,
+}: {
+    file: MediaFile;
+    busy: boolean;
+    onReassign?: (file: MediaFile) => void;
+    onRename?: (file: MediaFile) => void;
+    onUnlink?: (file: MediaFile) => void;
+    onDelete?: (file: MediaFile) => void;
+}) {
+    const { triggerRef, run, onCloseAutoFocus } = useMenuAction();
+    return (
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button
+                    ref={triggerRef}
+                    variant="ghost"
+                    size="sm"
+                    className="files-tab__menu-trigger"
+                    aria-label={`Actions for ${file.fileName}`}
+                    loading={busy}
+                    data-action="file-menu"
+                    data-file-id={file.id}
+                >
+                    <DotsThreeVerticalIcon weight="bold" aria-hidden="true" />
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" onCloseAutoFocus={onCloseAutoFocus}>
+                {onReassign && (
+                    <DropdownMenuItem onSelect={run(() => onReassign(file))} data-action="reassign-file">
+                        <ArrowsLeftRightIcon weight="bold" aria-hidden="true" />
+                        Correct episode association
+                    </DropdownMenuItem>
+                )}
+                {onRename && (
+                    <DropdownMenuItem onSelect={run(() => onRename(file))} data-action="rename-file">
+                        <PencilSimpleLineIcon weight="bold" aria-hidden="true" />
+                        Apply rename mask
+                    </DropdownMenuItem>
+                )}
+                {onUnlink && (
+                    <DropdownMenuItem
+                        onSelect={run(() => onUnlink(file))}
+                        aria-label={`Unlink ${file.fileName}`}
+                        data-action="unlink-file"
+                        data-file-id={file.id}
+                    >
+                        <LinkBreakIcon weight="bold" aria-hidden="true" />
+                        Unlink
+                    </DropdownMenuItem>
+                )}
+                {onDelete && (
+                    <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                            className="files-tab__menu-item--danger"
+                            onSelect={run(() => onDelete(file))}
+                            aria-label={`Delete ${file.fileName}`}
+                            data-action="delete-file"
+                            data-file-id={file.id}
+                        >
+                            <TrashIcon weight="bold" aria-hidden="true" />
+                            Delete
+                        </DropdownMenuItem>
+                    </>
+                )}
+            </DropdownMenuContent>
+        </DropdownMenu>
     );
 }
 
@@ -194,9 +324,9 @@ function FileNameCell({ file }: { file: MediaFile }) {
             <div className="files-tab__name-info">
                 <span className="files-tab__file-name">{file.fileName}</span>
                 {folder && (
-                    <span className="files-tab__folder">
+                    <span className="files-tab__folder" title={folder}>
                         <FolderIcon weight="regular" aria-hidden="true" />
-                        {folder}
+                        <span className="files-tab__folder-path">{folder}</span>
                     </span>
                 )}
             </div>
@@ -497,7 +627,11 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
             files,
             onDeleteFile,
             onUnlinkFile,
+            onReassignFile,
             onImportFile,
+            onRenameFile,
+            onRenameFiles,
+            onRenameAllFiles,
             deletingFileId = null,
             unlinkingFileId = null,
             importing = false,
@@ -508,6 +642,13 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
         ref,
     ) => {
         const classes = ['files-tab', className].filter(Boolean).join(' ');
+        const [selectedIds, setSelectedIds] = useState<string[]>([]);
+        // In the card layout each file card's actions go into a menu, so the card keeps one line of controls.
+        const compact = useCardLayout();
+        // Below 640 px the content actions button carries rename-all and import, so the tab keeps only per-file work.
+        const phone = useMediaQuery('(max-width: 639px)');
+        const renameAll = phone ? undefined : onRenameAllFiles;
+        const importFile = phone ? undefined : onImportFile;
 
         if (files.length === 0) {
             return (
@@ -516,8 +657,11 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                         icon={<FileIcon weight="thin" aria-hidden="true" />}
                         title={emptyMessage}
                         action={
-                            onImportFile ? (
-                                <ImportFileButton onImport={onImportFile} importing={importing} />
+                            importFile || renameAll ? (
+                                <span className="files-tab__empty-actions">
+                                    {renameAll && <RenameAllFilesButton onRenameAll={renameAll} />}
+                                    {importFile && <ImportFileButton onImport={importFile} importing={importing} />}
+                                </span>
                             ) : undefined
                         }
                         size="sm"
@@ -527,19 +671,37 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
         }
 
         const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+        const hasSelection = files.some((file) => selectedIds.includes(file.id));
+        const renameSelected = () =>
+            onRenameFiles?.(files.filter((file) => selectedIds.includes(file.id)).map((file) => file.id));
+        const hasFileActions = !!(onUnlinkFile || onDeleteFile || onRenameFile || onReassignFile);
 
         return (
             <div ref={ref} className={classes} data-component="files-tab" {...props}>
                 <div className="files-tab__header" data-testid="files-tab-header">
-                    <FileIcon weight="bold" aria-hidden="true" />
-                    <span>
-                        {files.length} {files.length === 1 ? 'file' : 'files'}
-                        {' · '}
-                        {formatFileSize(totalSize)}
+                    <span className="files-tab__summary">
+                        <FileIcon weight="bold" aria-hidden="true" />
+                        <span>
+                            {files.length} {files.length === 1 ? 'file' : 'files'}
+                            {' · '}
+                            {formatFileSize(totalSize)}
+                        </span>
                     </span>
-                    {onImportFile && (
+                    {onRenameFiles && (
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={!hasSelection}
+                            onClick={renameSelected}
+                            data-action="rename-selected-files"
+                        >
+                            Apply rename mask to selected files
+                        </Button>
+                    )}
+                    {renameAll && <RenameAllFilesButton onRenameAll={renameAll} />}
+                    {importFile && (
                         <span className="files-tab__import-action">
-                            <ImportFileButton onImport={onImportFile} importing={importing} />
+                            <ImportFileButton onImport={importFile} importing={importing} />
                         </span>
                     )}
                 </div>
@@ -553,7 +715,30 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                         return (
                             <div key={file.id} className="files-tab__panel" data-file-id={file.id}>
                                 <div className="files-tab__panel-header">
+                                    {onRenameFiles && (
+                                        <Checkbox
+                                            aria-label={`Select ${file.fileName} for rename`}
+                                            checked={selectedIds.includes(file.id)}
+                                            onCheckedChange={(checked) =>
+                                                setSelectedIds((current) =>
+                                                    checked === true
+                                                        ? [...current.filter((id) => id !== file.id), file.id]
+                                                        : current.filter((id) => id !== file.id),
+                                                )
+                                            }
+                                        />
+                                    )}
                                     <FileNameCell file={file} />
+                                    {compact && hasFileActions && (
+                                        <FileActionsMenu
+                                            file={file}
+                                            busy={isMutating}
+                                            onReassign={onReassignFile}
+                                            onRename={onRenameFile}
+                                            onUnlink={onUnlinkFile}
+                                            onDelete={onDeleteFile}
+                                        />
+                                    )}
                                 </div>
                                 <div className="files-tab__panel-meta">
                                     <QualityCell mediaInfo={file.mediaInfo} />
@@ -565,8 +750,28 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                                     )}
                                 </div>
                                 <MediaInfoPanel mediaInfo={file.mediaInfo} size={file.size} />
-                                {(onUnlinkFile || onDeleteFile) && (
+                                {!compact && hasFileActions && (
                                     <div className="files-tab__file-actions">
+                                        {onReassignFile && (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => onReassignFile(file)}
+                                                disabled={isMutating}
+                                            >
+                                                Correct episode association
+                                            </Button>
+                                        )}
+                                        {onRenameFile && (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => onRenameFile(file)}
+                                                disabled={isMutating}
+                                            >
+                                                Apply rename mask
+                                            </Button>
+                                        )}
                                         {onUnlinkFile && (
                                             <UnlinkFileButton
                                                 file={file}

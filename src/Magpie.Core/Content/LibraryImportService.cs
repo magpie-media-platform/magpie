@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -12,6 +13,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Core.Jobs;
 using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
 using Magpie.Models.Data;
@@ -43,8 +45,11 @@ internal sealed class LibraryImportService(
     IReleaseEvaluationService releaseEvaluationService,
     IEnumerable<IContentHierarchyMetadataProvider> metadataProviders,
     TimeProvider timeProvider,
+    IRootFolderRepository rootFolderRepository,
     ILogger<LibraryImportService> logger) : ILibraryImportService
 {
+    private static readonly TimeSpan PendingChildLevelWait = TimeSpan.FromMinutes(30);
+
     private static string ExceptionMessages(Exception exception) =>
         string.Join(" -> ", GenerateExceptionMessages(exception));
 
@@ -228,6 +233,115 @@ internal sealed class LibraryImportService(
             }
         }
 
+        return await SubmitCoreAsync(
+            ids,
+            monitoringMode,
+            (action as LibraryImportSubmissionRequest)?.RenamePreview,
+            associate: false,
+            actingUserId,
+            correlationId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<LibraryImportSubmissionResult> AssociateMissingFilesAsync(
+        IReadOnlyCollection<LibraryImportCandidate> candidates,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        var targeted = candidates
+            .Where(candidate => candidate.Matches.Count == 1 && candidate.ContentHierarchyItemId is not null)
+            .OrderBy(candidate => candidate.FilePath, StringComparer.Ordinal)
+            .ThenBy(candidate => candidate.Id)
+            .ToList();
+        if (targeted.Count == 0)
+        {
+            return new() { Queued = [], Skipped = [] };
+        }
+
+        var inFlight = await libraryImportCandidateRepository.QueryAllAsync(
+            new LibraryImportCandidateQuery
+            {
+                ContentHierarchyItemIds = [.. targeted.Select(candidate => candidate.ContentHierarchyItemId!.Value)],
+                Statuses = [LibraryImportCandidateStatus.Queued, LibraryImportCandidateStatus.Importing]
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var claimedTargets = inFlight.Select(candidate => candidate.ContentHierarchyItemId!.Value).ToHashSet();
+        var ids = new List<Guid>();
+        foreach (var candidate in targeted)
+        {
+            var target = candidate.ContentHierarchyItemId!.Value;
+            if (!claimedTargets.Contains(target) &&
+                await HasNoPrimaryFileAsync(target, cancellationToken).ConfigureAwait(false))
+            {
+                claimedTargets.Add(target);
+                ids.Add(candidate.Id);
+            }
+        }
+
+        return ids.Count == 0
+            ? new() { Queued = [], Skipped = [] }
+            : await AssociateAsync(ids, actingUserId, correlationId, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<LibraryImportCandidate>> RefreshLibraryTargetsAsync(
+        IReadOnlyCollection<LibraryImportCandidate> candidates,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var changed = new List<LibraryImportCandidate>();
+        foreach (var candidate in candidates.Where(candidate => candidate.Matches.Count == 1))
+        {
+            var target = await ResolveLibraryTargetAsync(candidate, cancellationToken).ConfigureAwait(false);
+            if (target != candidate.ContentHierarchyItemId &&
+                await libraryImportCandidateRepository
+                    .TryUpdateTargetAsync(candidate.Id, target, actingUserId, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                changed.Add(candidate with { ContentHierarchyItemId = target });
+            }
+        }
+
+        return changed;
+    }
+
+    private async Task<bool> HasNoPrimaryFileAsync(Guid contentHierarchyItemId, CancellationToken cancellationToken)
+    {
+        var item = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        var level = item is null
+            ? null
+            : contentTypeRegistry.GetDefinitionFor(item.ContentType)?.LevelDefinitions
+                .FirstOrDefault(definition => definition.Slug == item.Level);
+        return level is not null && !(item!.ContentItem?.MediaFiles ?? [])
+            .Any(file => FileSystem.IsPrimaryFile(fileSystem, level, file));
+    }
+
+    public async Task<LibraryImportSubmissionResult> AssociateAsync(
+        IReadOnlyCollection<Guid> candidateIds,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        return await SubmitCoreAsync(
+            [.. candidateIds.Distinct()],
+            LibraryImportMonitoringMode.Inherit,
+            renamePreview: null,
+            associate: true,
+            actingUserId,
+            correlationId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<LibraryImportSubmissionResult> SubmitCoreAsync(
+        IReadOnlyList<Guid> ids,
+        LibraryImportMonitoringMode monitoringMode,
+        FileRenamePreview? renamePreview,
+        bool associate,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken)
+    {
         var queued = new List<LibraryImportQueuedResult>();
         var skipped = new List<LibraryImportSkippedResult>();
 
@@ -238,14 +352,17 @@ internal sealed class LibraryImportService(
             var candidate = await libraryImportCandidateRepository
                 .GetByIdAsync(id, cancellationToken)
                 .ConfigureAwait(false);
-            if (candidate is null || candidate.Matches.Count == 0)
+            if (candidate is null || candidate.Matches.Count == 0 ||
+                associate && candidate.ContentHierarchyItemId is null)
             {
                 skipped.Add(new()
                 {
                     CandidateId = id,
                     Reason = candidate is null
                         ? "Candidate no longer exists."
-                        : "Candidate has no match. Match it before you import it."
+                        : candidate.Matches.Count == 0
+                            ? "Candidate has no match."
+                            : "Candidate has no existing library item to associate with."
                 });
                 continue;
             }
@@ -265,15 +382,29 @@ internal sealed class LibraryImportService(
 
             try
             {
+                var parameters = new Dictionary<string, string>
+                {
+                    [MagpieJobs.Parameters.CandidateId] = id.ToString("D"),
+                    [MagpieJobs.Parameters.MonitoringMode] = monitoringMode.ToString()
+                };
+                if (associate)
+                {
+                    parameters[MagpieJobs.Parameters.Associate] = bool.TrueString;
+                }
+                else if (renamePreview is not null && renamePreview.Files.Any(file => file.CandidateId == id))
+                {
+                    parameters["renamePreview"] = JsonSerializer.Serialize(new FileRenamePreview
+                    {
+                        HasMask = renamePreview.HasMask,
+                        Files = [.. renamePreview.Files.Where(file => file.CandidateId == id)]
+                    });
+                }
+
                 var executionId = await jobManager.ExecuteAsync(
                     new JobEnqueueRequest
                     {
                         JobType = MagpieJobs.Types.RootFolderContentImportItem,
-                        Parameters = new Dictionary<string, string>
-                        {
-                            [MagpieJobs.Parameters.CandidateId] = id.ToString("D"),
-                            [MagpieJobs.Parameters.MonitoringMode] = monitoringMode.ToString()
-                        },
+                        Parameters = parameters,
                         Mode = JobExecutionMode.Queue,
                         UserId = actingUserId,
                         CorrelationId = correlationId,
@@ -411,21 +542,50 @@ internal sealed class LibraryImportService(
             return null;
         }
 
-        return BuildGroup(
-            representative.GroupKey ?? groupKey,
-            representative,
-            members
-                .GroupBy(member => member.Status)
-                .ToDictionary(group => group.Key, group => group.Count()));
+        var groups = await QueryCandidateGroupsAsync(
+            new LibraryImportCandidateQuery
+            {
+                RootFolderId = query.RootFolderId,
+                ScanRunId = query.ScanRunId,
+                GroupKey = representative.GroupKey ?? groupKey
+            },
+            new() { PageNumber = 1, PageSize = 1 },
+            cancellationToken).ConfigureAwait(false);
+        return groups.Items.FirstOrDefault();
     }
 
-    public async Task<LibraryImportCompletionResult> ImportCandidateAsync(
+    public Task<LibraryImportCompletionResult> ImportCandidateAsync(
         Guid candidateId,
         int matchIndex,
         LibraryImportMonitoringMode monitoringMode,
         Guid? actingUserId,
         Guid? correlationId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ImportCoreAsync(
+            candidateId, matchIndex, monitoringMode, associate: false, actingUserId, correlationId, cancellationToken);
+
+    public Task<LibraryImportCompletionResult> AssociateCandidateAsync(
+        Guid candidateId,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken = default) =>
+        ImportCoreAsync(
+            candidateId,
+            0,
+            LibraryImportMonitoringMode.Inherit,
+            associate: true,
+            actingUserId,
+            correlationId,
+            cancellationToken);
+
+    private async Task<LibraryImportCompletionResult> ImportCoreAsync(
+        Guid candidateId,
+        int matchIndex,
+        LibraryImportMonitoringMode monitoringMode,
+        bool associate,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken)
     {
         var candidate = await libraryImportCandidateRepository
             .GetByIdAsync(candidateId, cancellationToken)
@@ -468,13 +628,14 @@ internal sealed class LibraryImportService(
 
         var match = candidate.Matches[matchIndex];
 
-        (Guid HierarchyItemId, Guid ContentItemId)? completion;
+        (Guid HierarchyItemId, Guid ContentItemId, MediaFile? Kept)? completion;
         try
         {
             completion = await CompleteImportAsync(
                 candidate,
                 match,
                 monitoringMode,
+                associate,
                 actingUserId,
                 correlationId,
                 cancellationToken)
@@ -483,6 +644,10 @@ internal sealed class LibraryImportService(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (ChildLevelPendingException ex)
+        {
+            return new() { Status = LibraryImportCompletionStatus.Waiting, Message = ex.Message };
         }
         catch (Exception ex)
         {
@@ -506,10 +671,9 @@ internal sealed class LibraryImportService(
                     supported => supported == "*" || supported == candidate.ContentType));
             var reason = providerAnswered
                 ? $"The provider found no match for {match.ExternalIdKey}={match.ExternalId}. " +
-                    "The match was removed. Match the file again before you import it."
+                    "The match was removed."
                 : $"No {match.ProviderType} metadata provider is available for content type " +
-                    $"{candidate.ContentType}. The match was kept. Import the file again when the provider " +
-                    "is available.";
+                    $"{candidate.ContentType}. The match was kept.";
             var failed = await libraryImportCandidateRepository
                 .MarkImportFailedAsync(candidateId, reason, actingUserId, cancellationToken)
                 .ConfigureAwait(false);
@@ -529,6 +693,19 @@ internal sealed class LibraryImportService(
             }
 
             return Failed(reason);
+        }
+
+        if (result.Kept is { } kept)
+        {
+            await libraryImportCandidateRepository
+                .TryResetImportAsync(
+                    candidate.Id,
+                    $"{Path.GetFileName(candidate.FilePath)} does not have a better quality rank than " +
+                    $"{Path.GetFileName(kept.FilePath)}, the copy that stays, so it was not attached.",
+                    actingUserId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return Skipped("The item keeps another copy of the file, so no file was attached.");
         }
 
         await libraryImportCandidateRepository
@@ -619,6 +796,224 @@ internal sealed class LibraryImportService(
             .ConfigureAwait(false);
     }
 
+    public async Task<Guid?> ResolveLibraryTargetAsync(
+        LibraryImportCandidate candidate,
+        CancellationToken cancellationToken = default)
+    {
+        if (candidate.Matches.Count != 1)
+        {
+            return null;
+        }
+
+        try
+        {
+            var root = await FindLibraryRootAsync(candidate, candidate.Matches[0], cancellationToken)
+                .ConfigureAwait(false);
+            if (root is null)
+            {
+                return null;
+            }
+
+            var routed = await RouteFileAsync(
+                    root,
+                    candidate.FilePath,
+                    candidate.ParsedSignals,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return routed.StoppedEarly ? null : routed.Node.Id;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "The library import found no existing library item for candidate {LibraryImportCandidateId}",
+                candidate.Id);
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<LibraryImportCandidate>> QueryLibraryTargetCandidatesAsync(
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default)
+    {
+        const int pageSize = 1_000;
+        var targetIds = new List<Guid> { contentHierarchyItemId };
+        for (var pageNumber = 1; ; pageNumber++)
+        {
+            var page = await contentHierarchyItemRepository.QueryIdsAsync(
+                new ContentHierarchyItemCriteria { AncestorId = contentHierarchyItemId },
+                new PagingParameter { PageNumber = pageNumber, PageSize = pageSize },
+                sort: null,
+                cancellationToken).ConfigureAwait(false);
+            targetIds.AddRange(page);
+            if (page.Count < pageSize)
+            {
+                break;
+            }
+        }
+
+        return await libraryImportCandidateRepository.QueryAllAsync(
+            new LibraryImportCandidateQuery
+            {
+                ContentHierarchyItemIds = targetIds,
+                Statuses =
+                [
+                    LibraryImportCandidateStatus.Pending,
+                    LibraryImportCandidateStatus.Failed,
+                    LibraryImportCandidateStatus.Queued,
+                    LibraryImportCandidateStatus.Importing
+                ],
+                HasMatches = true
+            },
+            new SortParameter
+            {
+                PropertyName = nameof(LibraryImportCandidate.FilePath),
+                Direction = SortDirection.Ascending
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<int> RejectAsync(
+        BulkAction<LibraryImportCandidateQuery> action,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var rejected = 0;
+        foreach (var candidateId in await CollectIdsAsync(action, cancellationToken).ConfigureAwait(false))
+        {
+            if (await TransitionWithAuditAsync(
+                    candidateId,
+                    libraryImportCandidateRepository.TryRejectAsync,
+                    "FileRejected",
+                    "Rejected the matches of",
+                    actingUserId,
+                    correlationId: null,
+                    cancellationToken).ConfigureAwait(false))
+            {
+                rejected++;
+            }
+        }
+
+        return rejected;
+    }
+
+    public async Task<int> RestoreAsync(
+        BulkAction<LibraryImportCandidateQuery> action,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        var restored = 0;
+        var selection = action with
+        {
+            Filter = action.Filter is null
+                ? null
+                : action.Filter with { Status = LibraryImportCandidateStatus.Rejected }
+        };
+        foreach (var candidateId in await CollectIdsAsync(selection, cancellationToken).ConfigureAwait(false))
+        {
+            if (await TransitionWithAuditAsync(
+                    candidateId,
+                    libraryImportCandidateRepository.TryRestoreAsync,
+                    "FileRestored",
+                    "Restored matching for",
+                    actingUserId,
+                    correlationId,
+                    cancellationToken).ConfigureAwait(false))
+            {
+                restored++;
+            }
+        }
+
+        if (restored > 0)
+        {
+            await jobManager.ExecuteAsync(
+                new JobEnqueueRequest
+                {
+                    JobType = MagpieJobs.Types.LibraryImportMatchResolution,
+                    Mode = JobExecutionMode.Queue,
+                    UserId = actingUserId,
+                    CorrelationId = correlationId,
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return restored;
+    }
+
+    private async Task<bool> TransitionWithAuditAsync(
+        Guid candidateId,
+        Func<Guid, Guid?, CancellationToken, Task<bool>> transition,
+        string operation,
+        string detail,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken)
+    {
+        return await transactionManager.ExecuteWithTransactionAsync(
+            async ct =>
+            {
+                var candidate = await libraryImportCandidateRepository.GetByIdAsync(candidateId, ct)
+                    .ConfigureAwait(false);
+                if (candidate is null || !await transition(candidateId, actingUserId, ct).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
+                await auditRecordRepository.CreateAsync(
+                    new AuditRecord
+                    {
+                        Category = AuditCategories.Jobs,
+                        Operation = operation,
+                        EntityType = nameof(LibraryImportCandidate),
+                        EntityId = candidateId.ToString(),
+                        Detail = $"{detail} {Path.GetFileName(candidate.FilePath)}.",
+                        Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                        UserId = actingUserId,
+                        CorrelationId = correlationId
+                    },
+                    ct).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyCollection<Guid>> CollectIdsAsync(
+        BulkAction<LibraryImportCandidateQuery> action,
+        CancellationToken cancellationToken)
+    {
+        var ids = new HashSet<Guid>(action.Ids ?? []);
+        if (action.Filter is not null)
+        {
+            ids.UnionWith(await LoadCandidateIdsAsync(action.Filter, cancellationToken).ConfigureAwait(false));
+        }
+
+        return ids;
+    }
+
+    private async Task<ContentHierarchyItem?> FindLibraryRootAsync(
+        LibraryImportCandidate candidate,
+        LibraryImportMatch match,
+        CancellationToken cancellationToken)
+    {
+        var level = contentTypeRegistry.GetRootLevelSlug(candidate.ContentType, match.LevelSlug);
+        var found = await contentHierarchyItemRepository.FindByExternalIdentitiesAsync(
+            [(candidate.ContentType, level, match.ExternalIdKey, match.ExternalId)],
+            cancellationToken).ConfigureAwait(false);
+        if (found.Count == 0)
+        {
+            return null;
+        }
+
+        var root = await contentHierarchyItemRepository.GetByIdAsync(found.Values.Single(), cancellationToken)
+            .ConfigureAwait(false);
+        return root?.EffectiveRootFolderId == candidate.RootFolderId ? root : null;
+    }
+
     public async Task<bool> UpdateFulfillmentFromFilesAsync(
         Guid contentHierarchyItemId,
         Guid? actingUserId,
@@ -627,6 +1022,448 @@ internal sealed class LibraryImportService(
         return await contentFileService
             .UpdateFulfillmentAsync(contentHierarchyItemId, actingUserId, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    public Task<MediaFileCleanupPlan> PlanAsync(Guid? rootId, CancellationToken cancellationToken = default) =>
+        BuildPlanAsync(rootId, rankPlannedReassigns: true, cancellationToken);
+
+    private async Task<MediaFileCleanupPlan> BuildPlanAsync(
+        Guid? rootId,
+        bool rankPlannedReassigns,
+        CancellationToken cancellationToken)
+    {
+        var items = await LoadItemsWithFilesAsync(rootId, cancellationToken).ConfigureAwait(false);
+        var context = new PlanContext { RankPlannedReassigns = rankPlannedReassigns };
+        foreach (var item in items)
+        {
+            context.Items[item.Id] = item;
+            foreach (var file in item.ContentItem?.MediaFiles ?? [])
+            {
+                context.Owners[file.Id] = item.Id;
+            }
+        }
+
+        foreach (var container in items.Where(IsContainer))
+        {
+            await PlanRebindAsync(container, context, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var leaf in context.Items.Values.Where(item => !IsContainer(item)).ToList())
+        {
+            await PlanDuplicatesAsync(leaf, context, cancellationToken).ConfigureAwait(false);
+        }
+
+        return context.Plan;
+    }
+
+    public async Task<IReadOnlyList<MediaFileCleanupRowResult>> ApplyAsync(
+        MediaFileCleanupApplyRequest request,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var results = new List<MediaFileCleanupRowResult>();
+        var reassignRows = request.Rows.Where(row => row.Action == MediaFileCleanupAction.Reassign).ToList();
+        if (reassignRows.Count > 0)
+        {
+            var plan = await PlanAsync(request.RootId, cancellationToken).ConfigureAwait(false);
+            foreach (var row in reassignRows)
+            {
+                var planned = plan.Reassign.FirstOrDefault(candidate => candidate.MediaFileId == row.MediaFileId &&
+                    candidate.FilePath == row.FilePath &&
+                    candidate.TargetItemId == row.TargetItemId);
+                results.Add(await RunAsync(
+                        row,
+                        planned,
+                        () => contentService.ReassignFileAsync(
+                            planned!.CurrentItemId,
+                            planned.MediaFileId,
+                            new()
+                            {
+                                TargetContentHierarchyItemId = planned.TargetItemId!.Value,
+                                ExpectedFilePath = planned.FilePath
+                            },
+                            actingUserId,
+                            cancellationToken))
+                    .ConfigureAwait(false));
+            }
+        }
+
+        var removalRows = request.Rows
+            .Where(row => row.Action is MediaFileCleanupAction.Unlink or MediaFileCleanupAction.Delete)
+            .ToList();
+        if (removalRows.Count > 0)
+        {
+            var plan = await BuildPlanAsync(request.RootId, rankPlannedReassigns: false, cancellationToken)
+                .ConfigureAwait(false);
+            var dryRun = await PlanAsync(request.RootId, cancellationToken).ConfigureAwait(false);
+            foreach (var row in removalRows)
+            {
+                bool Matches(MediaFileCleanupRow candidate) =>
+                    candidate.MediaFileId == row.MediaFileId &&
+                    candidate.FilePath == row.FilePath &&
+                    candidate.KeepMediaFileId == row.KeepMediaFileId;
+                var planned = dryRun.Unlink.Any(Matches) ? plan.Unlink.FirstOrDefault(Matches) : null;
+                if (planned is not null &&
+                    row.Action == MediaFileCleanupAction.Delete &&
+                    !fileSystem.FileExists(planned.KeepFilePath!))
+                {
+                    results.Add(new()
+                    {
+                        MediaFileId = row.MediaFileId,
+                        Action = row.Action,
+                        Message = $"The copy that stays, {planned.KeepFilePath}, is not on disk, so this file is " +
+                            "not deleted."
+                    });
+                    continue;
+                }
+
+                results.Add(await RunAsync(
+                        row,
+                        planned,
+                        () => row.Action == MediaFileCleanupAction.Delete
+                            ? DeleteMediaFileAsync(
+                                planned!.CurrentItemId,
+                                planned.MediaFileId,
+                                actingUserId,
+                                cancellationToken)
+                            : contentService.UnlinkFileAsync(
+                                planned!.CurrentItemId,
+                                planned.MediaFileId,
+                                actingUserId,
+                                cancellationToken))
+                    .ConfigureAwait(false));
+            }
+        }
+
+        results.AddRange(request.Rows
+            .Where(row => row.Action == MediaFileCleanupAction.Review)
+            .Select(row => new MediaFileCleanupRowResult
+            {
+                MediaFileId = row.MediaFileId,
+                Action = row.Action,
+                Message = "A review row needs a decision, so apply skips it."
+            }));
+        return results;
+    }
+
+    private static async Task<MediaFileCleanupRowResult> RunAsync(
+        MediaFileCleanupRow row,
+        MediaFileCleanupRow? planned,
+        Func<Task<bool>> action)
+    {
+        var result = new MediaFileCleanupRowResult { MediaFileId = row.MediaFileId, Action = row.Action };
+        if (planned is null)
+        {
+            return result with
+            {
+                Message = row.Action == MediaFileCleanupAction.Delete
+                    ? "The current plan does not supersede this file, so it is not deleted."
+                    : "The row no longer matches the current plan."
+            };
+        }
+
+        try
+        {
+            return await action().ConfigureAwait(false)
+                ? result with { Applied = true }
+                : result with { Message = "The file or its item no longer exists." };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return result with { Message = ex.Message };
+        }
+    }
+
+    private async Task<IReadOnlyList<ContentHierarchyItem>> LoadItemsWithFilesAsync(
+        Guid? rootId,
+        CancellationToken cancellationToken)
+    {
+        var items = (await contentHierarchyItemRepository.QueryAllAsync(
+                new ContentHierarchyItemCriteria
+                {
+                    AncestorId = rootId,
+                    MediaFiles = new() { Some = [[new MediaFileCriteria()]] }
+                },
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false)).ToList();
+        var root = rootId is { } id
+            ? await contentHierarchyItemRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false)
+            : null;
+        if (root is not null && root.ContentItem?.MediaFiles.Count > 0)
+        {
+            items.Insert(0, root);
+        }
+
+        return items;
+    }
+
+    private bool IsContainer(ContentHierarchyItem item) =>
+        contentTypeRegistry.GetChildLevels(item.ContentType, item.Level).Count > 0;
+
+    private bool Accepts(ContentHierarchyLevelDefinition level, MediaFile file) =>
+        (level.AcceptedFileTypes.Count > 0 &&
+            fileSystem.MatchesAnyFileType(file.FilePath, file.MimeType, level.AcceptedFileTypes)) ||
+        fileSystem.MatchesAnyFileType(file.FilePath, file.MimeType, level.AcceptedSidecarTypes);
+
+    private ContentHierarchyLevelDefinition? LevelOf(ContentHierarchyItem item) =>
+        contentTypeRegistry.GetDefinitionFor(item.ContentType)?.LevelDefinitions
+            .FirstOrDefault(level => level.Slug == item.Level);
+
+    private async Task PlanRebindAsync(
+        ContentHierarchyItem container,
+        PlanContext context,
+        CancellationToken cancellationToken)
+    {
+        var leafLevels = contentTypeRegistry.GetDefinitionFor(container.ContentType)?.LevelDefinitions
+            .Where(level => contentTypeRegistry.GetChildLevels(container.ContentType, level.Slug).Count == 0)
+            .ToList() ?? [];
+        var provider = contentTypeRegistry.FindProviderFor(container.ContentType);
+        var ownLevel = LevelOf(container);
+        foreach (var file in container.ContentItem?.MediaFiles ?? [])
+        {
+            if (ownLevel is not null && Accepts(ownLevel, file))
+            {
+                continue;
+            }
+
+            var primary = leafLevels.Any(level => level.AcceptedFileTypes.Count > 0 &&
+                fileSystem.MatchesAnyFileType(file.FilePath, file.MimeType, level.AcceptedFileTypes));
+            if (!primary && !leafLevels.Any(level =>
+                    fileSystem.MatchesAnyFileType(file.FilePath, file.MimeType, level.AcceptedSidecarTypes)))
+            {
+                continue;
+            }
+
+            var row = new MediaFileCleanupRow
+            {
+                MediaFileId = file.Id,
+                FilePath = file.FilePath,
+                Primary = primary,
+                CurrentItemId = container.Id,
+                CurrentItem = await NameAsync(container.Id, context, cancellationToken).ConfigureAwait(false),
+                Action = MediaFileCleanupAction.Review,
+                Reason = string.Empty,
+            };
+            try
+            {
+                var route = await RouteFileAsync(
+                        container,
+                        file.FilePath,
+                        RootFolderContentDiscoveryJob.ToSignalDictionary(provider?.Parse(file.FilePath, out _)),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (route.StoppedEarly)
+                {
+                    context.Plan.Review.Add(row with
+                    {
+                        Reason = $"The binding matched no single item below {route.Node.Level} '{route.Node.Name}'."
+                    });
+                    continue;
+                }
+
+                context.Plan.Reassign.Add(row with
+                {
+                    TargetItemId = route.Node.Id,
+                    TargetItem = await NameAsync(route.Node.Id, context, cancellationToken).ConfigureAwait(false),
+                    Action = MediaFileCleanupAction.Reassign,
+                    Reason = $"The binding matched {route.Node.Level} '{route.Node.Name}'."
+                });
+                context.Items.TryAdd(route.Node.Id, route.Node);
+                if (!context.Incoming.TryGetValue(route.Node.Id, out var incoming))
+                {
+                    context.Incoming[route.Node.Id] = incoming = [];
+                }
+
+                incoming.Add(file);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                context.Plan.Review.Add(row with { Reason = ex.Message });
+            }
+        }
+    }
+
+    private async Task PlanDuplicatesAsync(
+        ContentHierarchyItem leaf,
+        PlanContext context,
+        CancellationToken cancellationToken)
+    {
+        if (LevelOf(leaf) is not { } level)
+        {
+            return;
+        }
+
+        var incoming = context.RankPlannedReassigns ? context.Incoming.GetValueOrDefault(leaf.Id) ?? [] : [];
+        var files = (leaf.ContentItem?.MediaFiles ?? []).Concat(incoming).ToList();
+        var primaries = files.Where(file => FileSystem.IsPrimaryFile(fileSystem, level, file))
+            .OrderBy(file => file.FilePath, StringComparer.Ordinal)
+            .ToList();
+        if (primaries.Count < 2)
+        {
+            return;
+        }
+
+        var ranks = new Dictionary<Guid, int?>();
+        foreach (var file in primaries)
+        {
+            var score = await releaseEvaluationService.ScoreFileForContentAsync(file, leaf.Id, cancellationToken)
+                .ConfigureAwait(false);
+            ranks[file.Id] = score?.MatchedRankOrdinal;
+        }
+
+        var best = ranks.Values.Min();
+        if (best is null)
+        {
+            foreach (var file in primaries)
+            {
+                context.Plan.Review.Add(await RowAsync(
+                        file,
+                        true,
+                        null,
+                        null,
+                        MediaFileCleanupAction.Review,
+                        "No copy of this item has a quality rank, so the plan cannot choose the copy to keep.",
+                        context,
+                        cancellationToken)
+                    .ConfigureAwait(false));
+            }
+
+            return;
+        }
+
+        var bestFiles = primaries.Where(file => ranks[file.Id] == best).ToList();
+        var keep = bestFiles[0];
+        if (bestFiles.Count > 1)
+        {
+            foreach (var file in bestFiles)
+            {
+                context.Plan.Review.Add(await RowAsync(
+                        file,
+                        true,
+                        best,
+                        null,
+                        MediaFileCleanupAction.Review,
+                        $"{bestFiles.Count} copies share the best rank {best}; choose the copy to keep.",
+                        context,
+                        cancellationToken)
+                    .ConfigureAwait(false));
+            }
+        }
+
+        var rootFolder = await rootFolderRepository.GetByIdAsync(leaf.EffectiveRootFolderId, cancellationToken)
+            .ConfigureAwait(false);
+        var unlinked = new List<MediaFile>();
+        foreach (var file in primaries.Where(file => ranks[file.Id] != best))
+        {
+            var rank = ranks[file.Id];
+            if (rank is null)
+            {
+                context.Plan.Review.Add(await RowAsync(
+                        file,
+                        true,
+                        null,
+                        keep,
+                        MediaFileCleanupAction.Review,
+                        "The copy has no quality rank, so the plan cannot compare it with the others.",
+                        context,
+                        cancellationToken)
+                    .ConfigureAwait(false));
+                continue;
+            }
+
+            if (rootFolder?.UpgradeFileHandling != UpgradeFileHandling.Replace)
+            {
+                context.Plan.Review.Add(await RowAsync(
+                        file,
+                        true,
+                        rank,
+                        keep,
+                        MediaFileCleanupAction.Review,
+                        $"Rank {rank} is worse than rank {best} of the copy that stays, but the root folder keeps " +
+                        "both copies of an upgrade.",
+                        context,
+                        cancellationToken)
+                    .ConfigureAwait(false));
+                continue;
+            }
+
+            context.Plan.Unlink.Add(await RowAsync(
+                    file,
+                    true,
+                    rank,
+                    keep,
+                    MediaFileCleanupAction.Unlink,
+                    $"Rank {rank} is worse than rank {best} of the copy that stays.",
+                    context,
+                    cancellationToken)
+                .ConfigureAwait(false));
+            unlinked.Add(file);
+        }
+
+        var unlinkedPaths = unlinked.Select(file => file.FilePath).ToList();
+        var stayingPaths = primaries.Except(unlinked).Select(file => file.FilePath).ToList();
+        var sidecars = files
+            .Where(file => !FileSystem.IsPrimaryFile(fileSystem, level, file))
+            .DistinctBy(file => file.Id)
+            .Select(file => (
+                File: file,
+                Primary: DownloadImportItemJob.FindPrimary(file.FilePath, unlinkedPaths)))
+            .Where(pair => pair.Primary is not null &&
+                DownloadImportItemJob.FindPrimary(pair.File.FilePath, stayingPaths) is null);
+        foreach (var (sidecar, primaryPath) in sidecars)
+        {
+            context.Plan.Unlink.Add(await RowAsync(
+                    sidecar,
+                    false,
+                    null,
+                    keep,
+                    MediaFileCleanupAction.Unlink,
+                    $"The sidecar belongs to {primaryPath}, which this plan unlinks.",
+                    context,
+                    cancellationToken)
+                .ConfigureAwait(false));
+        }
+    }
+
+    private async Task<MediaFileCleanupRow> RowAsync(
+        MediaFile file,
+        bool primary,
+        int? rank,
+        MediaFile? keep,
+        MediaFileCleanupAction action,
+        string reason,
+        PlanContext context,
+        CancellationToken cancellationToken)
+    {
+        var ownerId = context.Owners[file.Id];
+        return new MediaFileCleanupRow
+        {
+            MediaFileId = file.Id,
+            FilePath = file.FilePath,
+            Primary = primary,
+            CurrentItemId = ownerId,
+            CurrentItem = await NameAsync(ownerId, context, cancellationToken).ConfigureAwait(false),
+            Action = action,
+            Reason = reason,
+            Rank = rank,
+            KeepMediaFileId = keep?.Id,
+            KeepFilePath = keep?.FilePath,
+        };
+    }
+
+    private async Task<string> NameAsync(Guid itemId, PlanContext context, CancellationToken cancellationToken)
+    {
+        if (!context.Names.TryGetValue(itemId, out var name))
+        {
+            var lineage = await contentHierarchyItemRepository.GetLineageAsync(itemId, cancellationToken)
+                .ConfigureAwait(false);
+            name = string.Join(" / ", lineage.Reverse().Select(item => item.Name));
+            context.Names[itemId] = name;
+        }
+
+        return name;
     }
 
     public async Task<bool> DeleteMediaFileAsync(
@@ -666,13 +1503,11 @@ internal sealed class LibraryImportService(
 
     private async Task<FileRouteResult> RouteFileAsync(
         ContentHierarchyItem root,
-        LibraryImportCandidate candidate,
+        string filePath,
+        Dictionary<string, List<string>> signals,
         CancellationToken cancellationToken)
     {
         var current = root;
-        var parsedTitle = FirstNonEmptySignal(candidate.ParsedSignals, ParsedFileSignalKeys.Title);
-        var release = new Release { Protocol = "file", Title = Path.GetFileName(candidate.FilePath) };
-        var fileRef = new ReleaseFileRef(candidate.FilePath, Path.GetFileName(candidate.FilePath));
 
         while (true)
         {
@@ -682,17 +1517,25 @@ internal sealed class LibraryImportService(
                 var childLevels = contentTypeRegistry.GetChildLevels(current.ContentType, current.Level);
                 if (childLevels.Count > 0)
                 {
+                    var levels = string.Join(", ", childLevels.Select(level => level.Slug));
+
+                    if (current.PendingMetadataRefresh &&
+                        timeProvider.GetUtcNow().UtcDateTime - current.CreatedAt < PendingChildLevelWait)
+                    {
+                        throw new ChildLevelPendingException(
+                            $"The import is waiting until the {levels} level below {current.Level} " +
+                            $"'{current.Name}' exists.");
+                    }
+
                     throw new InvalidOperationException(
-                        $"The target {string.Join(", ", childLevels.Select(level => level.Slug))} level does not " +
-                        $"exist yet below {current.Level}.");
+                        $"The target {levels} level does not exist yet below {current.Level}.");
                 }
 
                 return new(current, StoppedEarly: false);
             }
 
-            var next = await ResolveFileMatchAsync(release, current, children, fileRef, cancellationToken)
-                    .ConfigureAwait(false)
-                ?? ResolveByTitleSignal(children, parsedTitle);
+            var next = await ResolveFileMatchAsync(current, children, filePath, signals, cancellationToken)
+                .ConfigureAwait(false);
             if (next is null)
             {
                 return new(current, StoppedEarly: true);
@@ -703,17 +1546,27 @@ internal sealed class LibraryImportService(
     }
 
     private async Task<ContentHierarchyItem?> ResolveFileMatchAsync(
-        Release release,
         ContentHierarchyItem parent,
         IReadOnlyList<ContentHierarchyItem> children,
-        ReleaseFileRef fileRef,
+        string filePath,
+        Dictionary<string, List<string>> signals,
         CancellationToken cancellationToken)
     {
+        if (contentTypeRegistry.FindProviderFor(parent.ContentType) is
+            IFileRoutingContentTypeDefinitionProvider fileRouter)
+        {
+            var childId = fileRouter.ResolveFileChild(parent, children, signals);
+            return children.SingleOrDefault(child => child.Id == childId);
+        }
+
+        var release = new Release { Protocol = "file", Title = Path.GetFileName(filePath) };
+        var fileRef = new ReleaseFileRef(filePath, Path.GetFileName(filePath));
         var assignments = await releaseEvaluationService
             .AssignFilesToLeavesAsync(release, parent, children, [fileRef], cancellationToken)
             .ConfigureAwait(false);
         var leafId = assignments.FirstOrDefault()?.LeafContentHierarchyItemId;
-        return leafId is { } id ? children.FirstOrDefault(child => child.Id == id) : null;
+        return (leafId is { } id ? children.FirstOrDefault(child => child.Id == id) : null)
+            ?? ResolveByTitleSignal(children, FirstNonEmptySignal(signals, ParsedFileSignalKeys.Title));
     }
 
     private async Task<IReadOnlyList<ContentHierarchyItem>> ListDirectChildrenAsync(
@@ -737,12 +1590,43 @@ internal sealed class LibraryImportService(
     private LibraryImportCompletionResult Failed(string message) =>
         new() { Status = LibraryImportCompletionStatus.Failed, Message = message };
 
-    private async Task<(Guid HierarchyItemId, Guid ContentItemId)?> CompleteImportAsync(
+    private async Task<(Guid HierarchyItemId, Guid ContentItemId, MediaFile? Kept)?> CompleteImportAsync(
+        LibraryImportCandidate candidate,
+        LibraryImportMatch match,
+        LibraryImportMonitoringMode monitoringMode,
+        bool associate,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken)
+    {
+        var root = associate
+            ? await FindLibraryRootAsync(candidate, match, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"The library has no item for {match.ExternalIdKey}={match.ExternalId} in this root folder. " +
+                    "No content was created and no file was attached.")
+            : await HydrateForImportAsync(candidate, match, monitoringMode, actingUserId, cancellationToken)
+                .ConfigureAwait(false);
+        if (root is null)
+        {
+            return null;
+        }
+
+        var routed = await RouteFileAsync(
+                root,
+                candidate.FilePath,
+                candidate.ParsedSignals,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return await AttachRoutedFileAsync(
+                candidate, match, routed, associate, actingUserId, correlationId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<ContentHierarchyItem?> HydrateForImportAsync(
         LibraryImportCandidate candidate,
         LibraryImportMatch match,
         LibraryImportMonitoringMode monitoringMode,
         Guid? actingUserId,
-        Guid? correlationId,
         CancellationToken cancellationToken)
     {
         var hydrated = await contentService.HydrateWithDescendantsFromExternalIdAsync(
@@ -778,24 +1662,61 @@ internal sealed class LibraryImportService(
             cancellationToken)
             .ConfigureAwait(false);
 
-        var root = hydrated.Value.Root;
-        var routed = await RouteFileAsync(root, candidate, cancellationToken).ConfigureAwait(false);
+        return hydrated.Value.Root;
+    }
+
+    private async Task<(Guid HierarchyItemId, Guid ContentItemId, MediaFile? Kept)?> AttachRoutedFileAsync(
+        LibraryImportCandidate candidate,
+        LibraryImportMatch match,
+        FileRouteResult routed,
+        bool associate,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken)
+    {
+        if (routed.StoppedEarly)
+        {
+            throw new InvalidOperationException(
+                $"The file assignment is unresolved below {routed.Node.Level} '{routed.Node.Name}'. " +
+                "No file was attached.");
+        }
+
         var hierarchyItemId = routed.Node.Id;
-        var fallbackNote = routed.StoppedEarly
-            ? $" The file could not be aligned below level {routed.Node.Level}; it was attached there."
-            : string.Empty;
 
-        var discoveredPath = await ResolveDiscoveredPathAsync(
-            hierarchyItemId,
-            candidate.FilePath,
-            cancellationToken).ConfigureAwait(false);
+        // Association keeps the folder of an item that already has files; an empty item takes the folder of the file.
+        var keepFolder = associate && (await contentHierarchyItemRepository
+            .GetByIdAsync(hierarchyItemId, cancellationToken)
+            .ConfigureAwait(false))?.ContentItem?.MediaFiles.Count > 0;
+        var discoveredPath = keepFolder
+            ? null
+            : await ResolveDiscoveredPathAsync(hierarchyItemId, candidate.FilePath, cancellationToken)
+                .ConfigureAwait(false);
 
-        var contentItemId = await transactionManager.ExecuteWithTransactionAsync(
+        var (contentItemId, kept) = await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
+                var lineage = await contentHierarchyItemRepository.GetLineageAsync(hierarchyItemId, ct)
+                    .ConfigureAwait(false);
+                if (lineage.Count > 0)
+                {
+                    await contentHierarchyItemRepository.LockAsync(lineage[^1].Id, ct).ConfigureAwait(false);
+                }
+
+                if (await KeepBestCopyAsync(hierarchyItemId, candidate.FilePath, actingUserId, ct)
+                    .ConfigureAwait(false) is { } copy)
+                {
+                    return (copy.ContentItemId, copy);
+                }
+
                 var now = timeProvider.GetUtcNow().UtcDateTime;
                 if (discoveredPath is not null)
                 {
+                    if (discoveredPath.ContentHierarchyItemId != discoveredPath.RootId)
+                    {
+                        await contentHierarchyItemRepository
+                            .LockAsync(discoveredPath.ContentHierarchyItemId, ct).ConfigureAwait(false);
+                    }
+
                     var pathOwner = await contentHierarchyItemRepository
                         .GetByIdAsync(discoveredPath.ContentHierarchyItemId, ct)
                         .ConfigureAwait(false);
@@ -808,36 +1729,53 @@ internal sealed class LibraryImportService(
                     var pathOrigin = pathOwner.Settings.GetValueOrDefault("content.path.origin");
                     var canReplacePath = string.Equals(pathOrigin, "Generated", StringComparison.OrdinalIgnoreCase) ||
                         pathOrigin is null && pathOwner.Path is null;
+                    var alreadyDiscovered = pathOwner.Path is not null &&
+                        fileSystem.PathsEqual(pathOwner.Path, discoveredPath.AbsolutePath);
+
+                    var refreshedYear = pathOwner.MetadataContainer?.Contributions
+                        .OrderBy(contribution => contribution.Ordinal)
+                        .ThenBy(contribution => contribution.ProviderType, StringComparer.Ordinal)
+                        .Select(contribution => contribution.PublishDate?.Year)
+                        .FirstOrDefault(year => year is not null);
+                    var refreshedPlaceholder = discoveredPath.WasMetadataPlaceholder &&
+                        !pathOwner.PendingMetadataRefresh &&
+                        pathOwner.DateLastRefreshed is not null &&
+                        !string.IsNullOrWhiteSpace(pathOwner.Name) &&
+                        string.Equals(pathOwner.Path, pathOwner.Name.ToGeneratedContentPath(refreshedYear),
+                            StringComparison.Ordinal);
                     if (!canReplacePath ||
-                        !string.Equals(pathOwner.Path, discoveredPath.OriginalPath, StringComparison.Ordinal) ||
-                        pathOwner.ModifiedAt != discoveredPath.OriginalModifiedAt)
+                        !alreadyDiscovered && !refreshedPlaceholder &&
+                        !string.Equals(pathOwner.Path, discoveredPath.OriginalPath, StringComparison.Ordinal))
                     {
                         throw new InvalidOperationException(
                             $"The path of content hierarchy item {discoveredPath.ContentHierarchyItemId} " +
                             "changed during discovery.");
                     }
 
-                    var pathUpdated = await contentHierarchyItemRepository
-                        .PatchAsync(
-                            new ContentHierarchyItemPatch
-                            {
-                                Id = pathOwner.Id,
-                                Path = new() { Value = discoveredPath.AbsolutePath },
-                                Settings = new()
-                                {
-                                    Add = new Dictionary<string, string>
-                                    {
-                                        ["content.path.origin"] = "Generated"
-                                    }
-                                }
-                            },
-                            actingUserId,
-                            ct)
-                        .ConfigureAwait(false);
-                    if (!pathUpdated)
+                    if (!alreadyDiscovered)
                     {
-                        throw new KeyNotFoundException(
-                            $"Content hierarchy item {discoveredPath.ContentHierarchyItemId} no longer exists.");
+                        var pathUpdated = await contentHierarchyItemRepository
+                            .PatchAsync(
+                                new ContentHierarchyItemPatch
+                                {
+                                    Id = pathOwner.Id,
+                                    Path = new() { Value = discoveredPath.AbsolutePath },
+                                    Settings = new()
+                                    {
+                                        Add = new Dictionary<string, string>
+                                        {
+                                            ["content.path.origin"] = "Generated"
+                                        }
+                                    }
+                                },
+                                actingUserId,
+                                ct)
+                            .ConfigureAwait(false);
+                        if (!pathUpdated)
+                        {
+                            throw new KeyNotFoundException(
+                                $"Content hierarchy item {discoveredPath.ContentHierarchyItemId} no longer exists.");
+                        }
                     }
                 }
 
@@ -864,17 +1802,77 @@ internal sealed class LibraryImportService(
                         EntityType = nameof(ContentHierarchyItem),
                         EntityId = hierarchyItemId.ToString(),
                         Detail = $"Imported {Path.GetFileName(candidate.FilePath)} using external ID " +
-                            $"{match.ExternalIdKey}={match.ExternalId}.{fallbackNote}",
+                            $"{match.ExternalIdKey}={match.ExternalId}.",
                         Timestamp = now,
                         UserId = actingUserId,
                         CorrelationId = correlationId
                     },
                     ct).ConfigureAwait(false);
-                return attachedContentItemId;
+                return (attachedContentItemId, (MediaFile?)null);
             },
         cancellationToken).ConfigureAwait(false);
 
-        return (hierarchyItemId, contentItemId);
+        return (hierarchyItemId, contentItemId, kept);
+    }
+
+    private async Task<MediaFile?> KeepBestCopyAsync(
+        Guid contentHierarchyItemId,
+        string filePath,
+        Guid? actingUserId,
+        CancellationToken cancellationToken)
+    {
+        var item = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (item is null || LevelOf(item) is not { } level)
+        {
+            return null;
+        }
+
+        var fullPath = fileSystem.GetFullPath(filePath);
+        var copies = (item.ContentItem?.MediaFiles ?? [])
+            .Where(file => !fileSystem.PathsEqual(file.FilePath, fullPath) &&
+                FileSystem.IsPrimaryFile(fileSystem, level, file) &&
+                fileSystem.PathsEqual(Path.ChangeExtension(file.FilePath, null), Path.ChangeExtension(fullPath, null)))
+            .ToList();
+        if (copies.Count == 0)
+        {
+            return null;
+        }
+
+        var mimeType = await fileSystem.LookupMimeTypeAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        var imported = new MediaFile
+        {
+            FileKind = fileSystem.ResolveFileKind(mimeType).ToString(),
+            MimeType = mimeType,
+            FilePath = fullPath,
+            FileSize = fileSystem.GetFileSize(fullPath)
+        };
+        if (!FileSystem.IsPrimaryFile(fileSystem, level, imported))
+        {
+            return null;
+        }
+
+        var rank = (await releaseEvaluationService
+            .ScoreFileForContentAsync(imported, contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false))?.MatchedRankOrdinal;
+        foreach (var copy in copies)
+        {
+            var copyRank = (await releaseEvaluationService
+                .ScoreFileForContentAsync(copy, contentHierarchyItemId, cancellationToken)
+                .ConfigureAwait(false))?.MatchedRankOrdinal;
+            if (!(rank < copyRank))
+            {
+                return copy;
+            }
+        }
+
+        foreach (var copy in copies)
+        {
+            await contentService.UnlinkFileAsync(contentHierarchyItemId, copy.Id, actingUserId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return null;
     }
 
     private async Task ApplyImportMonitoringAsync(
@@ -900,7 +1898,10 @@ internal sealed class LibraryImportService(
                 new BulkPatch<ContentHierarchyItemCriteria, ContentHierarchyItemPatch>
                 {
                     Ids = [root.Id],
-                    Patch = new() { Monitoring = new ScalarPatch<bool?> { Value = true } },
+                    Patch = new()
+                    {
+                        Monitoring = new ScalarPatch<MonitoringMode?> { Value = MonitoringMode.Monitored }
+                    },
                 },
                 actingUserId,
                 cancellationToken).ConfigureAwait(false);
@@ -921,7 +1922,7 @@ internal sealed class LibraryImportService(
                             And = [new() { Operator = CriteriaValueOperator.NotEquals, Value = leafLevelSlug }],
                         },
                     },
-                    Patch = new() { Monitoring = new ScalarPatch<bool?> { Value = null } },
+                    Patch = new() { Monitoring = new ScalarPatch<MonitoringMode?> { Value = null } },
                 },
                 actingUserId,
                 cancellationToken).ConfigureAwait(false);
@@ -962,7 +1963,7 @@ internal sealed class LibraryImportService(
                         ],
                     },
                 },
-                Patch = new() { Monitoring = new ScalarPatch<bool?> { Value = true } },
+                Patch = new() { Monitoring = new ScalarPatch<MonitoringMode?> { Value = MonitoringMode.Monitored } },
             },
             actingUserId,
             cancellationToken).ConfigureAwait(false);
@@ -1006,7 +2007,10 @@ internal sealed class LibraryImportService(
             return null;
         }
 
-        return new DiscoveredPath(owner.Id, owner.Path, owner.ModifiedAt, fileDirectory);
+        var wasMetadataPlaceholder = owner.PendingMetadataRefresh &&
+            !string.IsNullOrWhiteSpace(owner.Path) &&
+            string.Equals(owner.Path, owner.Slug.NormalizeContentPathSegment(), StringComparison.Ordinal);
+        return new DiscoveredPath(owner.Id, lineage[^1].Id, owner.Path, fileDirectory, wasMetadataPlaceholder);
     }
 
     private async Task TryWriteAuditAsync(
@@ -1050,11 +2054,212 @@ internal sealed class LibraryImportService(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<FileRenamePreview> PreviewRenamesAsync(
+        LibraryImportRenameSelection selection,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = selection.Ids.ToHashSet();
+        foreach (var filter in selection.Filters)
+        {
+            ids.UnionWith(await LoadCandidateIdsAsync(filter, cancellationToken).ConfigureAwait(false));
+        }
+
+        var files = new List<FileRenameEntry>();
+        var routed = new List<(Guid CandidateId, string Path, IReadOnlyList<ContentHierarchyItem> Lineage)>();
+        var hasMask = false;
+        foreach (var id in ids)
+        {
+            var candidate = await libraryImportCandidateRepository.GetByIdAsync(id, cancellationToken)
+                .ConfigureAwait(false);
+            var entry = new FileRenameEntry { CandidateId = id, OriginalPath = candidate?.FilePath ?? string.Empty };
+            try
+            {
+                if (candidate is null || candidate.Matches.Count == 0)
+                {
+                    throw new InvalidOperationException("The import candidate has no available metadata match.");
+                }
+
+                hasMask |= await contentFileService.HasRenameMaskAsync(candidate.RootFolderId, cancellationToken)
+                    .ConfigureAwait(false);
+
+                var match = candidate.Matches[0];
+                var nodes = await contentService.PreviewImportHierarchyAsync(new PreviewByExternalIdRequest
+                {
+                    ProviderType = match.ProviderType,
+                    ExternalIdKey = match.ExternalIdKey,
+                    ExternalId = match.ExternalId,
+                    ContentType = candidate.ContentType,
+                    LevelSlug = match.LevelSlug
+                }, candidate.RootFolderId, cancellationToken).ConfigureAwait(false);
+                var current = nodes[0];
+                var lineage = new List<ContentHierarchyItem> { current };
+                var ancestor = current;
+                while (ancestor.ParentId is { } parentId && nodes.FirstOrDefault(node => node.Id == parentId)
+                    is { } parent)
+                {
+                    lineage.Add(parent);
+                    ancestor = parent;
+                }
+
+                while (true)
+                {
+                    var children = nodes.Where(node => node.ParentId == current.Id).ToArray();
+                    if (children.Length == 0)
+                    {
+                        var childLevels = contentTypeRegistry.GetChildLevels(current.ContentType, current.Level);
+                        if (childLevels.Count > 0 && current.PendingMetadataRefresh)
+                        {
+                            throw new InvalidOperationException(
+                                $"The {string.Join(", ", childLevels.Select(level => level.Slug))} level below " +
+                                $"{current.Level} '{current.Name}' does not exist yet because its metadata " +
+                                "refresh is pending.");
+                        }
+
+                        if (childLevels.Count > 0)
+                        {
+                            throw new InvalidOperationException("The target child level does not exist yet.");
+                        }
+
+                        break;
+                    }
+
+                    var next = await ResolveFileMatchAsync(
+                            current,
+                            children,
+                            candidate.FilePath,
+                            candidate.ParsedSignals,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (next is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"The file assignment is unresolved below {current.Level}.");
+                    }
+
+                    current = next;
+                    lineage.Insert(0, current);
+                }
+
+                var preview = await contentFileService.PreviewImportRenameMaskAsync(
+                    lineage, candidate.FilePath, cancellationToken).ConfigureAwait(false);
+                hasMask |= preview.HasMask;
+                files.AddRange(preview.Files.Select(file => file with { CandidateId = id }));
+                routed.Add((id, candidate.FilePath, lineage));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                files.Add(entry with { Error = ex.Message });
+            }
+        }
+
+        var primaryPlans = files.Where(file => !file.IsSidecar).ToArray();
+        foreach (var route in routed.Where(route => primaryPlans.Count(file =>
+            file.ContentHierarchyItemId == route.Lineage[0].Id) > 1))
+        {
+            var combined = await contentFileService.PreviewImportRenameMaskAsync(route.Lineage, route.Path,
+                cancellationToken, primaryPlans.Where(file =>
+                    file.ContentHierarchyItemId == route.Lineage[0].Id).ToArray()).ConfigureAwait(false);
+            files.RemoveAll(file => file.CandidateId == route.CandidateId);
+            files.AddRange(combined.Files.Select(file => file with { CandidateId = route.CandidateId }));
+        }
+
+        return new()
+        {
+            HasMask = hasMask,
+            Files = files.Select(file => file.DestinationPath is not null &&
+            files.Any(other => other.CandidateId != file.CandidateId && other.DestinationPath is not null &&
+                !(file.IsSidecar && other.IsSidecar && file.MediaFileId.HasValue &&
+                    file.MediaFileId == other.MediaFileId) &&
+                fileSystem.PathsEqual(file.DestinationPath, other.DestinationPath))
+                ? file with { Error = "Multiple selected files have the same destination." }
+                : file).ToArray()
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<LibraryImportCompletionResult> ImportWithRenameAsync(
+        Guid candidateId,
+        int matchIndex,
+        LibraryImportMonitoringMode monitoringMode,
+        FileRenamePreview preview,
+        Guid? actingUserId,
+        Guid? correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        var candidate = await libraryImportCandidateRepository.GetByIdAsync(candidateId, cancellationToken)
+            .ConfigureAwait(false);
+        var result = await ImportCandidateAsync(candidateId, matchIndex, monitoringMode, actingUserId,
+            correlationId, cancellationToken).ConfigureAwait(false);
+        if (result.Status != LibraryImportCompletionStatus.Completed || result.ContentHierarchyItemId is not { } id)
+        {
+            return result;
+        }
+
+        var acceptedFile = preview.Files.FirstOrDefault(file => file.CandidateId == candidateId &&
+            candidate is not null && fileSystem.PathsEqual(candidate.FilePath, file.OriginalPath));
+        if (acceptedFile is null || candidate is null ||
+            !fileSystem.PathsEqual(candidate.FilePath, acceptedFile.OriginalPath))
+        {
+            return result with
+            {
+                Message = "Association completed. Rename failed: the import file changed after preview."
+            };
+        }
+
+        try
+        {
+            var current = await contentFileService.PreviewRenameMaskAsync(id, new(), cancellationToken)
+                .ConfigureAwait(false);
+            var entries = preview.Files.Select(entry => entry with
+            {
+                ContentHierarchyItemId = id,
+                MediaFileId = current.Files.FirstOrDefault(file =>
+                    fileSystem.PathsEqual(file.OriginalPath, entry.OriginalPath))?.MediaFileId
+            }).ToArray();
+            var renamed = await contentFileService.ExecuteRenameMaskAsync(id,
+                new() { HasMask = true, Files = entries },
+                actingUserId, cancellationToken).ConfigureAwait(false);
+            return result with
+            {
+                Message = renamed.Files.All(file => file.Completed)
+                    ? "Association and explicit rename completed."
+                    : "Association completed. Rename failed: " +
+                        string.Join("; ", renamed.Files.Where(file => file.Error is not null)
+                            .Select(file => file.Error))
+            };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Association completed but explicit rename failed for candidate {CandidateId}",
+                candidateId);
+            return result with { Message = "Association completed. Rename failed: " + ex.Message };
+        }
+    }
+
     private sealed record DiscoveredPath(
         Guid ContentHierarchyItemId,
+        Guid RootId,
         string? OriginalPath,
-        DateTime? OriginalModifiedAt,
-        string AbsolutePath);
+        string AbsolutePath,
+        bool WasMetadataPlaceholder);
 
     private sealed record FileRouteResult(ContentHierarchyItem Node, bool StoppedEarly);
+
+    private sealed class ChildLevelPendingException(string message) : Exception(message);
+
+    private sealed class PlanContext
+    {
+        public bool RankPlannedReassigns { get; init; }
+
+        public MediaFileCleanupPlan Plan { get; } = new();
+
+        public Dictionary<Guid, ContentHierarchyItem> Items { get; } = [];
+
+        public Dictionary<Guid, Guid> Owners { get; } = [];
+
+        public Dictionary<Guid, List<MediaFile>> Incoming { get; } = [];
+
+        public Dictionary<Guid, string> Names { get; } = [];
+    }
 }

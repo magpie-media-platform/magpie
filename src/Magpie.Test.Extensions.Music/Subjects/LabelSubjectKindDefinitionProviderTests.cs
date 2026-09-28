@@ -29,4 +29,18 @@ public class LabelSubjectKindDefinitionProviderTests
             Assert.That(definition.CustomMetadataFields, Is.Empty);
         }
     }
+
+    [Test]
+    public void GetSubjectKindDefinitions_DeclaresLabelRole_WhenEnumerated()
+    {
+        // Arrange
+        var provider = new LabelSubjectKindDefinitionProvider();
+
+        // Act
+        var roles = provider.GetSubjectKindDefinitions().Single(definition => definition.Slug == "music-label")
+            .RelationshipRoles.Select(role => role.Slug);
+
+        // Assert
+        Assert.That(roles, Is.EqualTo((string[])["music-label"]));
+    }
 }

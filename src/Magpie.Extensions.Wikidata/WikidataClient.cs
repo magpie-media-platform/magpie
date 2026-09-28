@@ -11,22 +11,20 @@ using System.Threading.Tasks;
 using Magpie.Extensions.Wikidata.Mapping;
 using Magpie.Extensions.Wikidata.QueryEngine;
 
-using Microsoft.Extensions.Logging;
+using Magpie.Sdk.Http;
 
 namespace Magpie.Extensions.Wikidata;
 
 internal sealed class WikidataClient(
     IHttpClientFactory httpClientFactory,
-    TimeProvider timeProvider,
-    ILogger<WikidataClient> logger) : IWikidataClient
+    IUpstreamCooldown cooldown,
+    TimeProvider timeProvider) : IWikidataClient
 {
     public const string HttpClientName = "magpie.wikidata";
 
     public const string DefaultApiUrl = "https://www.wikidata.org/w/api.php";
 
     public const string DefaultSparqlUrl = "https://query.wikidata.org/sparql";
-
-    private const int MaxLagRetries = 1;
 
     private const int SparqlGetThreshold = 1800;
 
@@ -35,8 +33,6 @@ internal sealed class WikidataClient(
     private const int EntitySearchPageLimit = 10;
 
     private static readonly TimeSpan ActionTimeout = TimeSpan.FromSeconds(20);
-
-    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(10);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -109,11 +105,9 @@ internal sealed class WikidataClient(
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var continuation = default(int?);
         var pages = 0;
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMinutes(1));
         do
         {
-            timeout.Token.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
             if (pages++ == EntitySearchPageLimit)
             {
                 throw new WikidataBudgetException("Wikidata entity search scanned too many pages without finishing.");
@@ -142,7 +136,7 @@ internal sealed class WikidataClient(
             var envelope = await GetActionJsonAsync<EntitySearchResponseDto>(
                 BuildUri(DefaultApiUrl, parameters),
                 context,
-                timeout.Token).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
             if (envelope?.Search is null)
             {
                 throw new HttpRequestException("Wikidata returned no entity search result.");
@@ -179,9 +173,6 @@ internal sealed class WikidataClient(
         RequestContext context,
         CancellationToken cancellationToken)
     {
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(request.Timeout);
-
         var encoded = "query=" + Uri.EscapeDataString(request.QueryText) + "&format=json";
         var useGet = DefaultSparqlUrl.Length + 1 + encoded.Length <= SparqlGetThreshold;
         using var message = useGet
@@ -196,18 +187,7 @@ internal sealed class WikidataClient(
             };
         AddHeaders(message, context, "application/sparql-results+json");
 
-        HttpResponseMessage response;
-        try
-        {
-            response = await SendAsync(message, timeoutSource.Token).ConfigureAwait(false);
-        }
-        catch
-        {
-            timeoutSource.CancelAfter(Timeout.InfiniteTimeSpan);
-            throw;
-        }
-
-        timeoutSource.CancelAfter(Timeout.InfiniteTimeSpan);
+        var response = await SendAsync(message, context, request.Timeout, cancellationToken).ConfigureAwait(false);
         using (response)
         {
             EnsureNotRateLimited(response);
@@ -263,26 +243,6 @@ internal sealed class WikidataClient(
             ?? throw new JsonException("Wikidata returned a malformed " + endpoint + " envelope.");
     }
 
-    private static TimeSpan ResolveMaxLagRetryDelay(HttpResponseMessage response, TimeProvider timeProvider)
-    {
-        var retryAfter = response.Headers.RetryAfter;
-        if (retryAfter?.Delta is { } delta && delta >= TimeSpan.Zero)
-        {
-            return delta < MaxRetryDelay ? delta : MaxRetryDelay;
-        }
-
-        if (retryAfter?.Date is { } date)
-        {
-            var until = date - timeProvider.GetUtcNow();
-            if (until > TimeSpan.Zero)
-            {
-                return until < MaxRetryDelay ? until : MaxRetryDelay;
-            }
-        }
-
-        return TimeSpan.FromSeconds(1);
-    }
-
     private static Uri BuildUri(string baseUrl, IReadOnlyList<(string Key, string Value)> parameters)
     {
         var builder = new StringBuilder(baseUrl);
@@ -316,13 +276,22 @@ internal sealed class WikidataClient(
 
     private async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage message,
+        RequestContext context,
+        TimeSpan requestTimeout,
         CancellationToken cancellationToken)
     {
+        cooldown.Check(message, null, cancellationToken);
         await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            cooldown.Check(message, null, cancellationToken);
+            using var timeoutSource = timeProvider.CreateCancellationTokenSource(requestTimeout);
+            using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeoutSource.Token);
             using var client = httpClientFactory.CreateClient(HttpClientName);
-            return await client.SendAsync(message, cancellationToken).ConfigureAwait(false);
+            UpstreamRequestAccounting.Record(context.UpstreamRequestObserver);
+            return await client.SendAsync(message, linkedSource.Token).ConfigureAwait(false);
         }
         finally
         {
@@ -336,43 +305,28 @@ internal sealed class WikidataClient(
         CancellationToken cancellationToken)
         where T : class
     {
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(ActionTimeout);
-
-        for (var attempt = 0; ; attempt++)
+        using var message = new HttpRequestMessage(HttpMethod.Get, uri);
+        AddHeaders(message, context, accept: null);
+        using var response = await SendAsync(message, context, ActionTimeout, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
         {
-            using var message = new HttpRequestMessage(HttpMethod.Get, uri);
-            AddHeaders(message, context, accept: null);
-            using var response = await SendAsync(message, timeoutSource.Token).ConfigureAwait(false);
-            if (response.StatusCode == HttpStatusCode.NotFound)
-            {
-                return null;
-            }
-
-            EnsureNotRateLimited(response);
-            response.EnsureSuccessStatusCode();
-            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var error = ReadActionError(body);
-            if (string.Equals(error?.Code, "maxlag", StringComparison.OrdinalIgnoreCase) &&
-                attempt < MaxLagRetries)
-            {
-                var lagDelay = ResolveMaxLagRetryDelay(response, timeProvider);
-                logger.LogWarning(
-                    "Wikidata Action API reported maxlag; the client retries after {DelaySeconds}s.",
-                    lagDelay.TotalSeconds);
-                await Task.Delay(lagDelay, timeoutSource.Token).ConfigureAwait(false);
-                continue;
-            }
-
-            if (error is not null)
-            {
-                throw new HttpRequestException(
-                    string.Equals(error.Code, "maxlag", StringComparison.OrdinalIgnoreCase)
-                        ? "Wikidata remained unavailable due to maxlag."
-                        : "Wikidata Action API returned an error.");
-            }
-
-            return Deserialize<T>(body, "Action API");
+            return null;
         }
+
+        EnsureNotRateLimited(response);
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        var error = ReadActionError(body);
+        if (string.Equals(error?.Code, "maxlag", StringComparison.OrdinalIgnoreCase))
+        {
+            throw cooldown.RecordThrottle(message, null, response);
+        }
+
+        if (error is not null)
+        {
+            throw new HttpRequestException("Wikidata Action API returned an error.");
+        }
+
+        return Deserialize<T>(body, "Action API");
     }
 }

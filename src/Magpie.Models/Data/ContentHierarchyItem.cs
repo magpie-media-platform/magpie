@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 
+using Magpie.Models.Enums;
+
 namespace Magpie.Models.Data;
 
 /// <summary>
@@ -54,14 +56,14 @@ public record ContentHierarchyItem
     public required string Name { get; set; }
 
     /// <summary>
-    /// Whether the item is monitored, or <see langword="null"/> to inherit.
+    /// The monitoring mode of the item, or <see langword="null"/> to inherit.
     /// </summary>
-    public bool? Monitoring { get; set; }
+    public MonitoringMode? Monitoring { get; set; }
 
     /// <summary>
-    /// The monitoring value resolved from this item up the ancestor chain.
+    /// The monitoring mode resolved from this item up the ancestor chain.
     /// </summary>
-    public bool EffectiveMonitoring { get; set; }
+    public MonitoringMode EffectiveMonitoring { get; set; }
 
     /// <summary>
     /// The root folder id resolved from this item up the ancestor chain.
@@ -107,6 +109,16 @@ public record ContentHierarchyItem
     /// Whether the item awaits its first successful metadata refresh.
     /// </summary>
     public bool PendingMetadataRefresh { get; set; }
+
+    /// <summary>
+    /// Whether a discovered file waits to import into the item, derived from the import candidates when read.
+    /// </summary>
+    public bool ImportPending { get; set; }
+
+    /// <summary>
+    /// The names of the tags on the item, or <see langword="null"/> when the read did not load them.
+    /// </summary>
+    public List<string>? Tags { get; set; }
 
     /// <summary>
     /// The UTC time the record was created.

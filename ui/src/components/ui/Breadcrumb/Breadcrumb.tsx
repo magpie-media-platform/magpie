@@ -49,7 +49,7 @@ export const Breadcrumb = forwardRef<HTMLElement, BreadcrumbProps>(
 
         return (
             <nav ref={ref} className={classes} aria-label="Breadcrumb" data-component="breadcrumb" {...props}>
-                <ol className="breadcrumb__list">
+                <ol className="breadcrumb__list" role="list">
                     {hasCollapsedItems && (
                         <li className="breadcrumb__item">
                             <span className="breadcrumb__ellipsis" aria-hidden="true">

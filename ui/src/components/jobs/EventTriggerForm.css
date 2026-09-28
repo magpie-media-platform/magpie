@@ -65,6 +65,11 @@
         gap: var(--space-xs);
     }
 
+    .event-trigger-form__parameter-section .job-parameter-field__label-row,
+    .event-trigger-form__parameter-section .event-trigger-form__toggle-wrapper {
+        flex-wrap: wrap;
+    }
+
     .event-trigger-form__parameter-section .job-parameter-field__label-row {
         display: flex;
         align-items: center;

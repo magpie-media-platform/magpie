@@ -79,11 +79,19 @@ export async function executeJobRequest(request: JobExecutionRequest): Promise<J
     return normalizeJobActionDisposition(response);
 }
 
+/** The job ran but ended Failed or Cancelled, as opposed to a request that could not start it. */
+export class JobExecutionEndedError extends Error {
+    constructor(readonly disposition: JobActionDisposition) {
+        super(disposition.statusMessage ?? `Job execution ${String(disposition.status).toLowerCase()}.`);
+        this.name = 'JobExecutionEndedError';
+    }
+}
+
 export async function executeImmediateJobRequest(request: ImmediateJobExecutionRequest): Promise<JobActionDisposition> {
     const response = await apiPost<JobActionResponse>('/jobs/execute-immediate', request);
     const disposition = normalizeJobActionDisposition(response);
     if (disposition.status === 'Failed' || disposition.status === 'Cancelled') {
-        throw new Error(disposition.statusMessage ?? `Job execution ${disposition.status.toLowerCase()}.`);
+        throw new JobExecutionEndedError(disposition);
     }
 
     return disposition;

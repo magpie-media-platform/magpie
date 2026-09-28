@@ -1,5 +1,7 @@
 using System;
 
+using Magpie.Models.Enums;
+
 namespace Magpie.Models.Data;
 
 /// <summary>
@@ -18,7 +20,7 @@ public sealed record ContentHierarchyItemAncestry
     public Guid? ParentId { get; set; }
 
     /// <summary>
-    /// The effective monitoring value of the item.
+    /// The effective monitoring mode of the item.
     /// </summary>
-    public bool EffectiveMonitoring { get; set; }
+    public MonitoringMode EffectiveMonitoring { get; set; }
 }

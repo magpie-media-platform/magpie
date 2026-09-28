@@ -45,6 +45,10 @@
         justify-content: flex-end;
         gap: var(--space-sm);
         margin-bottom: var(--space-md);
+
+        @media (max-width: 639px) {
+            display: none;
+        }
     }
 
     .file-types-page__dialog-body {

@@ -1,0 +1,33 @@
+@layer components {
+    .file-rename-preview {
+        max-height: 50vh;
+        overflow: auto;
+        overflow-wrap: anywhere;
+    }
+
+    /* Matches the DataTable card breakpoint: labels sit above the values so long paths get the full card width. */
+    @media (max-width: 1023px) {
+        .file-rename-preview .data-table__cell {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: var(--space-2xs);
+        }
+    }
+
+    .file-rename-dialog {
+        max-width: 70rem;
+    }
+
+    .file-rename-dialog__tokens {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        margin-top: var(--space-md);
+
+        & .select-trigger {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            text-align: start;
+        }
+    }
+}

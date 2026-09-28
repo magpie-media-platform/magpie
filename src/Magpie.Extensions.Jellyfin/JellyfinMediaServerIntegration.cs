@@ -48,6 +48,8 @@ internal sealed class JellyfinMediaServerIntegration(
 
     public string ProviderType => ProviderTypeName;
 
+    public string DisplayName => Constants.DisplayName;
+
     public IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; } =
     [
         new()

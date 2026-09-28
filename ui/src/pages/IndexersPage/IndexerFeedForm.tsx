@@ -15,8 +15,9 @@ import { useIndexerFeedProviderTypes } from '@/hooks/useProviderTypes';
 import { omitUnchangedSecretSettings, secretsConfiguredForEdit, useIndexerFeedSchema } from '@/hooks/useProviderSchema';
 import { foldDefaultsIntoBaseline } from '@/hooks/useFormDirty';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
+import { focusFirstInvalidField } from '@/lib/focusFirstInvalidField';
 
-import './IndexerFeedForm.css';
+import '@/components/configuration/IndexerFeedForm.css';
 
 export interface IndexerFeedFormValues {
     id?: string;
@@ -63,7 +64,11 @@ export function IndexerFeedForm({
 
     const cleanValuesRef = useRef<IndexerFeedFormValues>(initialValues ?? emptyValues);
 
-    const { types: providerTypes, isLoading: isLoadingProviderTypes } = useIndexerFeedProviderTypes();
+    const {
+        types: providerTypes,
+        labels: providerLabels,
+        isLoading: isLoadingProviderTypes,
+    } = useIndexerFeedProviderTypes();
     const schemaQuery = useIndexerFeedSchema(values.provider || null);
     const schema = useMemo(() => schemaQuery.data ?? [], [schemaQuery.data]);
     const secretsConfigured = useMemo(() => secretsConfiguredForEdit(schema, isEditing), [schema, isEditing]);
@@ -211,6 +216,7 @@ export function IndexerFeedForm({
         (e: React.SubmitEvent) => {
             e.preventDefault();
             if (!validate()) {
+                focusFirstInvalidField(e.currentTarget);
                 return;
             }
             if (conflictState === 'stale') {
@@ -278,7 +284,7 @@ export function IndexerFeedForm({
                             {isEditing ? (
                                 <Input
                                     id="feed-provider"
-                                    value={values.provider}
+                                    value={providerLabels[values.provider] ?? values.provider}
                                     readOnly
                                     disabled
                                     data-field="provider"
@@ -308,7 +314,7 @@ export function IndexerFeedForm({
                                     <SelectContent>
                                         {providerTypes.map((type) => (
                                             <SelectItem key={type} value={type}>
-                                                {type}
+                                                {providerLabels[type]}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>

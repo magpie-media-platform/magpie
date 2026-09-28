@@ -74,6 +74,59 @@ public class SearchPlannerTests
         Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
     }
 
+    [TestCase("book-publisher", true)]
+    [TestCase("network", false)]
+    [TestCase("cast", false)]
+    public void Plan_KnownEmpty_OnlyWhenARequiredRelationshipTypeCannotComeFromTvmaze(
+        string relationshipType,
+        bool expectedKnownEmpty)
+    {
+        // Arrange
+        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
+        var criteria = new MetadataCriteria
+        {
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [
+                    [
+                        new RelationshipCriteria
+                        {
+                            Type = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And =
+                                [
+                                    new PropertyCriterion<string>
+                                    {
+                                        Operator = CriteriaValueOperator.Equals,
+                                        Values = [relationshipType]
+                                    }
+                                ]
+                            },
+                            Subject = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And =
+                                [
+                                    new PropertyCriterion<string>
+                                    {
+                                        Operator = CriteriaValueOperator.ContainsString,
+                                        Values = ["Penguin"]
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                ],
+            },
+        };
+
+        // Act
+        var plan = planner.Compile(criteria);
+
+        // Assert
+        Assert.That(plan is SearchPlanNode.KnownEmpty, Is.EqualTo(expectedKnownEmpty));
+    }
+
     [Test]
     public void Plan_KnownEmpty_WhenProviderTypeNegationExcludesTvmaze()
     {

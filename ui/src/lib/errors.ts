@@ -129,7 +129,7 @@ export function candidateSearchErrorMessage(error: unknown): string {
             return details.message;
         }
     }
-    if (isApiError(error) && error.status === 400) {
+    if (isApiError(error) && (error.status === 400 || error.status === 503)) {
         return getErrorMessage(error, 'Search failed. Please try again.');
     }
     return 'Search failed. Please try again.';

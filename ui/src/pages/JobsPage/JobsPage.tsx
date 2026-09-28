@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/Switch';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { JobExecutionFilters, type JobExecutionFilterState } from '@/components/ui/JobExecutionFilters';
 import { ExecutionRow } from '@/components/jobs/ExecutionRow';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -203,6 +204,7 @@ export function JobsPage() {
                 name: spec.displayName || spec.jobType,
                 enabled: spec.enabled,
                 onDemand: spec.onDemand,
+                supportsImmediate: spec.supportsImmediate,
                 scope: spec.scope,
                 supportedTriggerModes,
                 defaultSchedule: spec.defaultSchedule,
@@ -302,6 +304,38 @@ export function JobsPage() {
         : !hasRunnableJobs
           ? 'No on-demand jobs are available to run'
           : undefined;
+
+    const tabActions: QuickAction[] =
+        activeTab === 'executions'
+            ? runButtonDisabled
+                ? []
+                : [
+                      {
+                          id: 'run-job',
+                          label: 'Run a job',
+                          icon: <LightningIcon weight="bold" />,
+                          onClick: () => setRunDialogOpen(true),
+                      },
+                  ]
+            : !canManageTriggers
+              ? []
+              : activeTab === 'schedules'
+                ? [
+                      {
+                          id: 'add-schedule',
+                          label: 'Add Schedule',
+                          icon: <CalendarBlankIcon weight="bold" />,
+                          onClick: schedCrud.handleAdd,
+                      },
+                  ]
+                : [
+                      {
+                          id: 'add-event-trigger',
+                          label: 'Add Event Trigger',
+                          icon: <LightningIcon weight="bold" />,
+                          onClick: eventCrud.handleAdd,
+                      },
+                  ];
 
     const loadingState = (
         <div className="jobs-page__loading" data-testid="jobs-page__loading">
@@ -432,6 +466,7 @@ export function JobsPage() {
                                 data-component="executions-pager"
                                 page={page}
                                 pageCount={totalPages}
+                                totalItems={totalExecutions}
                                 onFirst={() => setPage(1)}
                                 onPrevious={() => setPage(page - 1)}
                                 onNext={() => setPage(page + 1)}
@@ -516,6 +551,8 @@ export function JobsPage() {
                     </TabsContent>
                 </Tabs>
             </PullToRefresh>
+
+            <QuickActionsButton actions={tabActions} title="Job Actions" />
 
             <RunJobDialog
                 open={runDialogOpen}

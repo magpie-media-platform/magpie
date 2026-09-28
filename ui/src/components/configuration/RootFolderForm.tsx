@@ -5,6 +5,7 @@ import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { deepEqual } from '@/hooks/useFormDirty';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 
+import { RenameTokenReference } from '@/components/content/RenameTokenReference';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
@@ -17,6 +18,7 @@ import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/co
 import type { LibraryLevelDefinition, LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { useQualityTierLists } from '@/hooks/useQualityTierLists';
 import type { RootFolderDefault, UpgradeFileHandling } from '@/hooks/useRootFolders';
+import { focusFirstInvalidField } from '@/lib/focusFirstInvalidField';
 
 import './RootFolderForm.css';
 
@@ -29,6 +31,7 @@ export interface RootFolderFormValues {
     defaultMonitoring: boolean | null;
     renameTemplate: string;
     upgradeFileHandling: UpgradeFileHandling;
+    autoImport: boolean;
     defaults: Record<string, RootFolderDefault>;
 }
 
@@ -78,6 +81,7 @@ const emptyValues: RootFolderFormValues = {
     defaultMonitoring: null,
     renameTemplate: '',
     upgradeFileHandling: 'Replace',
+    autoImport: false,
     defaults: {},
 };
 
@@ -217,6 +221,7 @@ export function RootFolderForm({
             values.defaultMonitoring !== cleanValuesRef.current.defaultMonitoring ||
             values.renameTemplate !== cleanValuesRef.current.renameTemplate ||
             values.upgradeFileHandling !== cleanValuesRef.current.upgradeFileHandling ||
+            values.autoImport !== cleanValuesRef.current.autoImport ||
             !deepEqual(values.defaults, cleanValuesRef.current.defaults) ||
             renameEnabled !== cleanRenameEnabledRef.current,
         [values, renameEnabled],
@@ -315,6 +320,10 @@ export function RootFolderForm({
         setValues((prev) => ({ ...prev, isDefault }));
     }, []);
 
+    const handleAutoImportChange = useCallback((autoImport: boolean) => {
+        setValues((prev) => ({ ...prev, autoImport }));
+    }, []);
+
     const handleUpgradeFileHandlingChange = useCallback((value: string) => {
         setValues((prev) => ({ ...prev, upgradeFileHandling: value as UpgradeFileHandling }));
     }, []);
@@ -333,6 +342,11 @@ export function RootFolderForm({
 
     const handleRenameTemplateChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         setValues((prev) => ({ ...prev, renameTemplate: e.target.value }));
+        setErrors((prev) => ({ ...prev, renameTemplate: '' }));
+    }, []);
+
+    const handleRenameTokenInsert = useCallback((token: string) => {
+        setValues((prev) => ({ ...prev, renameTemplate: prev.renameTemplate + token }));
         setErrors((prev) => ({ ...prev, renameTemplate: '' }));
     }, []);
 
@@ -402,6 +416,7 @@ export function RootFolderForm({
         (e: React.SubmitEvent) => {
             e.preventDefault();
             if (!validate()) {
+                focusFirstInvalidField(e.currentTarget);
                 return;
             }
             if (conflictState === 'stale') {
@@ -676,17 +691,35 @@ export function RootFolderForm({
                         <div className="root-folder-form__field">
                             <div className="root-folder-form__toggle-row">
                                 <Switch
+                                    id="folder-auto-import"
+                                    checked={values.autoImport}
+                                    onCheckedChange={handleAutoImportChange}
+                                    disabled={isSubmitting}
+                                    data-field="auto-import"
+                                />
+                                <Label htmlFor="folder-auto-import">Auto-import confident matches</Label>
+                            </div>
+                            <p className="root-folder-form__help">
+                                Discovery associates a file with an existing library item without review when its match
+                                is confident. Ambiguous matches stay pending. Magpie does not create content, and does
+                                not move or rename files.
+                            </p>
+                        </div>
+
+                        <div className="root-folder-form__field">
+                            <div className="root-folder-form__toggle-row">
+                                <Switch
                                     id="folder-rename-enabled"
                                     checked={renameEnabled}
                                     onCheckedChange={handleRenameEnabledChange}
                                     disabled={isSubmitting}
                                     data-field="rename-enabled"
                                 />
-                                <Label htmlFor="folder-rename-enabled">Rename files on import</Label>
+                                <Label htmlFor="folder-rename-enabled">Configure a file rename mask</Label>
                             </div>
                             <p className="root-folder-form__help">
-                                When off, imported files keep their original names. When on, Magpie renames files using
-                                the template below.
+                                Saving a mask does not rename existing files. Association keeps file names unless you
+                                explicitly apply the mask after reviewing its preview. Download placement is separate.
                             </p>
                             {renameEnabled && (
                                 <>
@@ -705,8 +738,16 @@ export function RootFolderForm({
                                     />
                                     <p className="root-folder-form__help">
                                         Placeholders use the <code>{'{Token}'}</code> form. An example is{' '}
-                                        <code>{'{Title} ({Year}).{Ext}'}</code>.
+                                        <code>{'{Title} ({Year}).{Ext}'}</code>. A <code>/</code> makes a folder under
+                                        the folder-providing parent, such as <code>{'{studio}/{Title}.{Ext}'}</code>.
                                     </p>
+                                    <RenameTokenReference
+                                        request={{
+                                            contentType: values.contentType || undefined,
+                                            template: values.renameTemplate,
+                                        }}
+                                        onInsert={isSubmitting ? undefined : handleRenameTokenInsert}
+                                    />
                                 </>
                             )}
                         </div>

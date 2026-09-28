@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiDelete } from '@/lib/api';
-import { contentQueryKeys } from './useContent';
 
 interface RemoveContentVariables {
     contentHierarchyItemId: string;
@@ -15,7 +14,7 @@ export function useRemoveContent() {
             return apiDelete(`/content/${contentHierarchyItemId}?deleteFromLibrary=${deleteFiles}`);
         },
         onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: contentQueryKeys.all });
+            void queryClient.invalidateQueries();
         },
     });
 }

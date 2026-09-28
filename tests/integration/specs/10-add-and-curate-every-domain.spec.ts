@@ -54,8 +54,8 @@ interface ContentItem {
     level: string;
     contentType: string;
     parentId?: string | null;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
     rootFolderId?: string | null;
     effectiveRootFolderId: string;
     qualityTierListId?: string | null;
@@ -454,7 +454,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                         rootFolderId: null,
                         monitoring: null,
                         effectiveRootFolderId: movieRoot.id,
-                        effectiveMonitoring: true,
+                        effectiveMonitoring: 'Monitored',
                         effectiveQualityTierListId: movieRoot.defaults.movie!.qualityTierListId,
                     });
                     return id;
@@ -531,18 +531,18 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                     const television = domainByType(added, 'tv');
                     const season = await childNamed(api, television.topId, 'Curation Journey Season 1');
                     const episode4 = await childNamed(api, season.id, 'Curation Journey Episode 4');
-                    await api.patch(`/api/content/${television.topId}`, { monitoring: { value: false } });
+                    await api.patch(`/api/content/${television.topId}`, { monitoring: { value: 'Unmonitored' } });
                     await waitForNoActiveJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
                     for (const number of [1, 2, 3]) {
                         expect(
                             await childNamed(api, season.id, `Curation Journey Episode ${number}`),
-                        ).toMatchObject({ monitoring: null, effectiveMonitoring: false });
+                        ).toMatchObject({ monitoring: null, effectiveMonitoring: 'Unmonitored' });
                     }
-                    await api.patch(`/api/content/${episode4.id}`, { monitoring: { value: true } });
+                    await api.patch(`/api/content/${episode4.id}`, { monitoring: { value: 'Monitored' } });
                     await waitForNoActiveJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
                     expect(await api.get<ContentItem>(`/api/content/${episode4.id}`)).toMatchObject({
-                        monitoring: true,
-                        effectiveMonitoring: true,
+                        monitoring: 'Monitored',
+                        effectiveMonitoring: 'Monitored',
                     });
                 },
             );
@@ -555,7 +555,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 await waitForNoActiveJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
                 expect(await api.get<ContentItem>(`/api/content/${episode4.id}`)).toMatchObject({
                     monitoring: null,
-                    effectiveMonitoring: false,
+                    effectiveMonitoring: 'Unmonitored',
                 });
             });
 
@@ -572,7 +572,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 await expect(page.locator('[data-component="bulk-actions-toolbar"]')).toContainText('3 selected');
                 for (const id of ids) {
                     await api.patch(`/api/content/${id}`, {
-                        monitoring: { value: false },
+                        monitoring: { value: 'Unmonitored' },
                         rootFolderId: { value: null },
                         qualityTierListId: { value: null },
                     });
@@ -580,7 +580,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 const result = await api.patch<{ count: number; error?: string | null }>('/api/content/bulk', {
                     ids,
                     patch: {
-                        monitoring: { value: true },
+                        monitoring: { value: 'Monitored' },
                         rootFolderId: { value: movieRoot.id },
                         qualityTierListId: { value: movieRoot.defaults.movie!.qualityTierListId },
                     },
@@ -588,7 +588,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 expect(result).toEqual({ count: 3, error: null });
                 for (const id of ids) {
                     expect(await api.get<ContentItem>(`/api/content/${id}`)).toMatchObject({
-                        monitoring: true,
+                        monitoring: 'Monitored',
                         rootFolderId: movieRoot.id,
                         qualityTierListId: movieRoot.defaults.movie!.qualityTierListId,
                     });
@@ -603,11 +603,11 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
             await test.step('two sessions patch the same item and neither change is silently lost', async () => {
                 const secondSession = (await loginAdmin(ADMIN_USERNAME, ADMIN_PASSWORD)).api;
                 await Promise.all([
-                    api.patch(`/api/content/${chosenId}`, { monitoring: { value: false } }),
+                    api.patch(`/api/content/${chosenId}`, { monitoring: { value: 'Unmonitored' } }),
                     secondSession.patch(`/api/content/${chosenId}`, { rootFolderId: { value: null } }),
                 ]);
                 expect(await api.get<ContentItem>(`/api/content/${chosenId}`)).toMatchObject({
-                    monitoring: false,
+                    monitoring: 'Unmonitored',
                     rootFolderId: null,
                 });
             });
@@ -616,7 +616,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 const changedName = `${movieRoot.name} Curated`;
                 const book = domainByType(added, 'book');
                 await api.patch(`/api/root-folders/${movieRoot.id}`, { name: { value: changedName } });
-                await api.patch(`/api/content/${book.topId}`, { monitoring: { value: false } });
+                await api.patch(`/api/content/${book.topId}`, { monitoring: { value: 'Unmonitored' } });
                 const admin = (await api.get<Paged<User>>('/api/users?pageSize=100')).items.find(
                     (user) => user.username === ADMIN_USERNAME,
                 )!;
@@ -899,7 +899,7 @@ async function assertHydratedDomain(
     await drainContentMetadataRefreshItems(api);
     expect(top).toMatchObject({
         monitoring: null,
-        effectiveMonitoring: true,
+        effectiveMonitoring: 'Monitored',
         rootFolderId: root.id,
         effectiveRootFolderId: root.id,
         qualityTierListId: null,
@@ -919,7 +919,7 @@ async function assertHydratedDomain(
     if (target.id !== topId) {
         expect(target).toMatchObject({
             monitoring: null,
-            effectiveMonitoring: true,
+            effectiveMonitoring: 'Monitored',
             rootFolderId: null,
             effectiveRootFolderId: root.id,
             qualityTierListId: null,

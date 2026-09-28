@@ -26,6 +26,8 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Magpie.Extensions.Tmdb\Magpie.Extensions.Tmdb.csproj" />
+      <ProjectReference Include="..\Magpie.Extensions.Movies\Magpie.Extensions.Movies.csproj" />
+      <ProjectReference Include="..\Magpie.Extensions.Tv\Magpie.Extensions.Tv.csproj" />
   </ItemGroup>
 
 </Project>

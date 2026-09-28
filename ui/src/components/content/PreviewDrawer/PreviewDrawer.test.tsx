@@ -1,6 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { useState } from 'react';
+vi.mock('@/hooks/useLocalContentPreview', () => ({
+    useLocalContentPreview: () => ({ data: undefined, error: null, isPending: false }),
+}));
 
 vi.mock('@/hooks/usePreviewByExternalId', () => ({
     usePreviewByExternalId: vi.fn(),
@@ -100,6 +104,31 @@ describe('PreviewDrawer', () => {
                 contentType: 'movies',
             });
         });
+    });
+
+    it.each(['Escape', 'Close'])('returns focus to the opener after %s', async (dismissal) => {
+        mockHook({ data: preview });
+        const user = userEvent.setup();
+        function Opener() {
+            const [open, setOpen] = useState(false);
+            return (
+                <>
+                    <button onClick={() => setOpen(true)}>Open preview</button>
+                    <PreviewDrawer open={open} onOpenChange={setOpen} target={target} />
+                </>
+            );
+        }
+        render(<Opener />);
+
+        const opener = screen.getByRole('button', { name: 'Open preview' });
+        opener.focus();
+        await user.keyboard('{Enter}');
+        const drawer = await screen.findByTestId('preview-drawer');
+        if (dismissal === 'Escape') await user.keyboard('{Escape}');
+        else await user.click(within(drawer).getByRole('button', { name: /^close$/i }));
+
+        await waitFor(() => expect(screen.queryByTestId('preview-drawer')).not.toBeInTheDocument());
+        expect(opener).toHaveFocus();
     });
 
     it('renders title, preview hero, and related subjects from the preview', async () => {

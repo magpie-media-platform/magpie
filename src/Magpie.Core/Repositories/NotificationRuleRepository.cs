@@ -34,7 +34,7 @@ internal sealed class NotificationRuleRepository(
 {
     private readonly TimeProvider _time = timeProvider;
 
-    private static void ApplyPatch(
+    internal static void ApplyPatch(
         IDictionary<string, string> values,
         DictionaryPatch<string, string?, string?> patch)
     {

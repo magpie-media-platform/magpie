@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { EditorView } from '@codemirror/view';
 import { undo } from '@codemirror/commands';
 import { lintGutter, setDiagnostics } from '@codemirror/lint';
@@ -392,6 +392,38 @@ describe('FilterQueryEditor', () => {
 
             expect(screen.queryByRole('alert')).not.toBeInTheDocument();
             expect(screen.getByTestId('filter-editor')).not.toHaveClass('filter-query-editor--invalid');
+        });
+    });
+
+    describe('submit', () => {
+        it('runs the query once on Ctrl+Enter without inserting a line', () => {
+            // Arrange
+            const onSubmit = vi.fn();
+            const onChange = vi.fn();
+            render(<FilterQueryEditor value="year > 2000" onChange={onChange} onSubmit={onSubmit} />);
+
+            // Act
+            fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', ctrlKey: true });
+
+            // Assert
+            expect(onSubmit).toHaveBeenCalledTimes(1);
+            expect(onChange).not.toHaveBeenCalled();
+        });
+
+        it('inserts a new line on Enter and does not run the query', () => {
+            // Arrange
+            const onSubmit = vi.fn();
+            const onChange = vi.fn();
+            render(<FilterQueryEditor value="year > 2000" onChange={onChange} onSubmit={onSubmit} />);
+            const view = EditorView.findFromDOM(screen.getByRole('textbox'))!;
+            act(() => view.dispatch({ selection: { anchor: view.state.doc.length } }));
+
+            // Act
+            fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+
+            // Assert
+            expect(onSubmit).not.toHaveBeenCalled();
+            expect(onChange).toHaveBeenCalledWith('year > 2000\n');
         });
     });
 });

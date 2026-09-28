@@ -6,12 +6,38 @@ import {
     setContentFilter,
     setContentFilterSelection,
     splitClauses,
+    hasComplexContentFilter,
 } from './contentColumnFilters';
 
 describe('contentColumnFilters', () => {
+    it('marks nested and repeated predicates as advanced instead of showing an arbitrary value', () => {
+        expect(hasComplexContentFilter('monitoring != Unmonitored or monitoring = Unmonitored', 'monitoring')).toBe(
+            true,
+        );
+        expect(readContentFilter('title contains "a" and title contains "b"', 'title')).toBe('');
+        expect(hasComplexContentFilter('title startswith "a"', 'title')).toBe(true);
+        expect(readContentFilter('Fulfillment = "partial"', 'fulfillment')).toBe('Partial');
+        expect(hasComplexContentFilter('fulfillment in (Missing, Partial)', 'fulfillment')).toBe(true);
+        expect(hasComplexContentFilter('publishDate >= "1999"', 'publishDateFrom')).toBe(true);
+    });
+
+    it('preserves strings and grouping when changing an unrelated restriction', () => {
+        expect(setContentFilter('title contains "spy and city" or tag has "classic"', 'fulfillment', 'Missing')).toBe(
+            '(title contains "spy and city" or tag has "classic") and fulfillment = Missing',
+        );
+        expect(
+            setContentFilter('fulfillment = Missing and (title contains "a" or title contains "b")', 'fulfillment', ''),
+        ).toBe('(title contains "a" or title contains "b")');
+    });
     describe('setContentFilter', () => {
         it('adds a predicate to an empty query', () => {
-            expect(setContentFilter('', 'monitoring', 'true')).toBe('monitoring = true');
+            expect(setContentFilter('', 'monitoring', 'true')).toBe('monitoring != Unmonitored');
+        });
+
+        it('reads and writes the Shotgun predicate', () => {
+            const query = setContentFilter('genre has "Action"', 'monitoring', 'shotgun');
+            expect(query).toBe('genre has "Action" and monitoring = Shotgun');
+            expect(readContentFilter(query, 'monitoring')).toBe('shotgun');
         });
 
         it('quotes string predicates', () => {
@@ -19,22 +45,22 @@ describe('contentColumnFilters', () => {
         });
 
         it('replaces an existing predicate for the same field in place', () => {
-            const result = setContentFilter('monitoring = true', 'monitoring', 'false');
-            expect(result).toBe('monitoring = false');
+            const result = setContentFilter('monitoring != Unmonitored', 'monitoring', 'false');
+            expect(result).toBe('monitoring = Unmonitored');
         });
 
         it('removes a predicate when the value is empty', () => {
-            expect(setContentFilter('monitoring = true', 'monitoring', '')).toBe('');
+            expect(setContentFilter('monitoring != Unmonitored', 'monitoring', '')).toBe('');
         });
 
         it('preserves unrelated predicates when editing one field', () => {
-            const query = 'genre has "Action" and monitoring = true';
+            const query = 'genre has "Action" and monitoring != Unmonitored';
             const result = setContentFilter(query, 'monitoring', 'false');
-            expect(result).toBe('genre has "Action" and monitoring = false');
+            expect(result).toBe('genre has "Action" and monitoring = Unmonitored');
         });
 
         it('preserves unrecognised predicates when removing a field', () => {
-            const query = 'genre has "Action" and monitoring = true';
+            const query = 'genre has "Action" and monitoring != Unmonitored';
             expect(setContentFilter(query, 'monitoring', '')).toBe('genre has "Action"');
         });
 
@@ -45,9 +71,9 @@ describe('contentColumnFilters', () => {
         });
 
         it('does not mangle a query that uses or / groups (preserved verbatim)', () => {
-            const query = 'monitoring = true or monitoring = false';
+            const query = 'monitoring != Unmonitored or monitoring = Unmonitored';
             const result = setContentFilter(query, 'title', 'dune');
-            expect(result).toBe('monitoring = true or monitoring = false and title contains "dune"');
+            expect(result).toBe('(monitoring != Unmonitored or monitoring = Unmonitored) and title contains "dune"');
         });
     });
 
@@ -101,9 +127,9 @@ describe('contentColumnFilters', () => {
         });
 
         it('clears both owned predicates and preserves unrelated predicates', () => {
-            const query = 'contentType = "kind-x" and level = "kind-x-scene" and monitoring = true';
+            const query = 'contentType = "kind-x" and level = "kind-x-scene" and monitoring != Unmonitored';
 
-            expect(setContentFilterSelection(query, null)).toBe('monitoring = true');
+            expect(setContentFilterSelection(query, null)).toBe('monitoring != Unmonitored');
         });
     });
 
@@ -113,19 +139,19 @@ describe('contentColumnFilters', () => {
             expect(predicates.map((p) => p.field)).toEqual(['contentType', 'level', 'title']);
         });
 
-        it('treats a fulfillment clause as opaque now that file status owns a dedicated control', () => {
+        it('recognizes the fulfillment clause shared by all controls', () => {
             const predicates = splitClauses('contentType = "movie" and Fulfillment = Missing');
-            expect(predicates.map((p) => p.field)).toEqual(['contentType', null]);
+            expect(predicates.map((p) => p.field)).toEqual(['contentType', 'fulfillment']);
         });
 
         it('collapses an or / group query into a single opaque clause', () => {
-            const predicates = splitClauses('monitoring = true or monitoring = false');
+            const predicates = splitClauses('monitoring != Unmonitored or monitoring = Unmonitored');
             expect(predicates).toHaveLength(1);
             expect(predicates[0].field).toBeNull();
         });
 
         it('flags genre/tag clauses as opaque (field null)', () => {
-            const predicates = splitClauses('genre has "Action" and monitoring = true');
+            const predicates = splitClauses('genre has "Action" and monitoring != Unmonitored');
             expect(predicates.map((p) => p.field)).toEqual([null, 'monitoring']);
         });
     });
@@ -141,7 +167,7 @@ describe('contentColumnFilters', () => {
         });
 
         it('splits top-level clauses while keeping a two-bound year clause opaque and intact', () => {
-            const predicates = splitClauses(`${yearClause} and monitoring = true`);
+            const predicates = splitClauses(`${yearClause} and monitoring != Unmonitored`);
             expect(predicates.map((p) => p.field)).toEqual([null, 'monitoring']);
             expect(predicates[0].raw).toBe(yearClause);
         });
@@ -149,6 +175,13 @@ describe('contentColumnFilters', () => {
         it('applies a date filter while preserving a person clause', () => {
             const result = setContentFilter(personClause, 'publishDateFrom', '2020-01-01');
             expect(result).toBe(`${personClause} and publishDate >= "2020-01-01"`);
+        });
+
+        it('applies a local filter while preserving a media file clause', () => {
+            const mediaClause = 'mediaFiles has (fileKind = "Video" and fileSize > 1000)';
+            const result = setContentFilter(mediaClause, 'monitoring', 'true');
+            expect(result).toBe(`${mediaClause} and monitoring != Unmonitored`);
+            expect(readContentFilter(result, 'monitoring')).toBe('true');
         });
 
         it('applies a date filter while preserving a two-bound year clause', () => {
@@ -174,9 +207,9 @@ describe('contentColumnFilters', () => {
             expect(result).toBe(personClause);
         });
 
-        it('reads a date filter that sits alongside parenthesised clauses', () => {
+        it('does not misrepresent a date range combined with another year predicate', () => {
             const query = `${yearClause} and publishDate <= "2020-12-31" and ${personClause}`;
-            expect(readContentFilter(query, 'publishDateTo')).toBe('2020-12-31');
+            expect(readContentFilter(query, 'publishDateTo')).toBe('');
         });
 
         it('does not regress the no-parenthesis date filter case', () => {
@@ -186,7 +219,7 @@ describe('contentColumnFilters', () => {
         });
 
         it('keeps a quoted value containing " and " as a single clause', () => {
-            const predicates = splitClauses('title contains "spy and the city" and monitoring = true');
+            const predicates = splitClauses('title contains "spy and the city" and monitoring != Unmonitored');
             expect(predicates.map((p) => p.field)).toEqual(['title', 'monitoring']);
             expect(predicates[0].value).toBe('spy and the city');
         });

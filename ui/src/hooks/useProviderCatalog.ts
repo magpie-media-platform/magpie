@@ -8,7 +8,21 @@ import type { IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
 export interface ProviderDescriptor {
     kind: string;
     providerType: string;
+    displayName: string;
     schema: IntegrationSettingDefinition[];
+}
+
+export interface ProviderChoices {
+    types: string[];
+    labels: Record<string, string>;
+}
+
+export function selectProviderChoices(providers: ProviderDescriptor[], kind: string): ProviderChoices {
+    const ofKind = providers.filter((provider) => provider.kind === kind);
+    return {
+        types: ofKind.map((provider) => provider.providerType),
+        labels: Object.fromEntries(ofKind.map((provider) => [provider.providerType, provider.displayName])),
+    };
 }
 
 export const providerCatalogQueryKey = ['providers'] as const;

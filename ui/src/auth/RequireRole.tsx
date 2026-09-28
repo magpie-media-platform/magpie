@@ -1,20 +1,20 @@
 import type { ReactNode } from 'react';
 
 import { useAuth } from './useAuth';
-import type { Role } from './types';
+import type { Permission, Role } from './types';
 
-export interface RequireRoleProps {
-    min: Role;
-
+export type RequireRoleProps = {
     children: ReactNode;
 
     fallback?: ReactNode;
-}
+} & ({ min: Role } | { permission: Permission });
 
-export function RequireRole({ min, children, fallback = null }: RequireRoleProps) {
-    const { hasRole } = useAuth();
+export function RequireRole(props: RequireRoleProps) {
+    const { children, fallback = null } = props;
+    const { hasRole, hasPermission } = useAuth();
+    const allowed = 'permission' in props ? hasPermission(props.permission) : hasRole(props.min);
 
-    if (!hasRole(min)) {
+    if (!allowed) {
         return <>{fallback}</>;
     }
 

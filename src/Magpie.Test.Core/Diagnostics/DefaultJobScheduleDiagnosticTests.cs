@@ -7,7 +7,10 @@ using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Config;
 using Magpie.Core.Diagnostics;
+using Magpie.Core.Jobs;
+using Magpie.Core.Jobs.Downloads;
 using Magpie.Core.Jobs.Fulfillment;
+using Magpie.Core.Jobs.Metadata;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -150,9 +153,7 @@ public sealed class DefaultJobScheduleDiagnosticTests
             Assert.That(
                 findings.Single(finding => finding.AffectedEntity == "Job:extension-job").Detail,
                 Is.EqualTo("Enabled triggers reference extension-job, but this node cannot run it, and " +
-                    "4200 queued execution(s) wait for it. " +
-                    "Restore its extension or remove its triggers and cancel its queued executions. " +
-                    "In a cluster, first check whether another scheduler-eligible node provides the handler."));
+                    "4200 queued execution(s) wait for it."));
             _executions.Verify(
                 repository => repository.QueryAsync(
                     It.IsAny<JobExecutionQuery>(), It.IsAny<PagingParameter>(), null, It.IsAny<CancellationToken>()),
@@ -199,6 +200,31 @@ public sealed class DefaultJobScheduleDiagnosticTests
             Is.Not.Null);
     }
 
+    [TestCase("0", 0)]
+    [TestCase("-1", 1)]
+    public async Task RunAsync_ReportsInvalidFailedDownloadRetention_WhenRetentionDaysAreNegative(
+        string days,
+        int expectedCount)
+    {
+        // Arrange
+        _releaseSearchTrigger.JobType = "RetentionCleanup";
+        _releaseSearchTrigger.Name = "Retention cleanup";
+        _releaseSearchTrigger.Parameters = new() { ["failedDownloadRetentionDays"] = days };
+        var spec = RetentionCleanupJob.Spec;
+        _jobRegistry.Setup(registry => registry.TryGetJobSpec("RetentionCleanup", out spec)).Returns(true);
+
+        // Act
+        var findings = await _subject.RunAsync(DiagnosticContext.Empty).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            findings,
+            Has.Exactly(expectedCount).Matches<DiagnosticFinding>(finding =>
+                finding.Title ==
+                    "Schedule Retention cleanup has invalid timing parameter failedDownloadRetentionDays" &&
+                finding.Severity == DiagnosticFindingSeverity.Error));
+    }
+
     [TestCase(DataType.String)]
     [TestCase(DataType.Boolean)]
     public async Task RunAsync_OmitsSpecAuthoringErrors_WhenTimingParameterHasWrongType(DataType type)
@@ -238,4 +264,37 @@ public sealed class DefaultJobScheduleDiagnosticTests
         Assert.That(findings, Has.None.Matches<DiagnosticFinding>(value => value.Severity ==
              DiagnosticFindingSeverity.Error));
     }
+
+    [TestCaseSource(nameof(ValidatedTimingParameters))]
+    public void BuiltInSpec_DeclaresValidatedTimingParameterWithTheReadType(
+        JobSpec spec,
+        string parameterName,
+        DataType expectedType)
+    {
+        // Act
+        var parameter = spec.Parameters.SingleOrDefault(candidate => candidate.Name == parameterName);
+
+        // Assert
+        Assert.That(parameter?.Type, Is.EqualTo(expectedType));
+    }
+
+    private static TestCaseData[] ValidatedTimingParameters() =>
+    [
+        new(ReleaseAutoGrabScanJob.Spec, MagpieJobs.Parameters.RetryCooldownHours, DataType.Number),
+        new(RetentionCleanupJob.Spec, MagpieJobs.Parameters.JobExecutionRetentionDays, DataType.Number),
+        new(RetentionCleanupJob.Spec, MagpieJobs.Parameters.AuditRetentionDays, DataType.Number),
+        new(RetentionCleanupJob.Spec, MagpieJobs.Parameters.ReleaseObservationRetentionDays, DataType.Number),
+        new(RetentionCleanupJob.Spec, MagpieJobs.Parameters.FailedDownloadRetentionDays, DataType.Number),
+        new(DownloadStuckDetectionJob.Spec, MagpieJobs.Parameters.FetchingMinutes, DataType.Number),
+        new(DownloadStuckDetectionJob.Spec, MagpieJobs.Parameters.StalledMinutes, DataType.Number),
+        new(DownloadImportScanJob.Spec, MagpieJobs.Parameters.SettleMinutes, DataType.Number),
+        new(DatabaseMaintenanceJob.Spec, MagpieJobs.Parameters.BackupEnabled, DataType.Boolean),
+        new(DatabaseMaintenanceJob.Spec, MagpieJobs.Parameters.OptimizeEnabled, DataType.Boolean),
+        new(DatabaseMaintenanceJob.Spec, MagpieJobs.Parameters.BackupIntervalDays, DataType.Number),
+        new(DatabaseMaintenanceJob.Spec, MagpieJobs.Parameters.BackupRetentionCount, DataType.Number),
+        new(DatabaseMaintenanceJob.Spec, MagpieJobs.Parameters.OptimizeIntervalDays, DataType.Number),
+        new(IntegrationHealthCheckJob.Spec, MagpieJobs.Parameters.StaleAfterMinutes, DataType.Number),
+        new(IntegrationHealthCheckJob.Spec, MagpieJobs.Parameters.TimeoutSeconds, DataType.Number),
+        new(MediaInfoExtractScanJob.Spec, MagpieJobs.Parameters.MaxAgeHours, DataType.Number),
+    ];
 }

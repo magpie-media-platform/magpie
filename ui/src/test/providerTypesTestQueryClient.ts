@@ -37,7 +37,12 @@ export function createTestQueryClient(seed: SeededProviderTypes = {}): QueryClie
     } as const;
     for (const key of Object.keys(kinds) as (keyof typeof kinds)[]) {
         for (const providerType of new Set([...(seed[key] ?? []), ...Object.keys(seed.schemas?.[key] ?? {})])) {
-            providers.push({ kind: kinds[key], providerType, schema: seed.schemas?.[key]?.[providerType] ?? [] });
+            providers.push({
+                kind: kinds[key],
+                providerType,
+                displayName: providerType,
+                schema: seed.schemas?.[key]?.[providerType] ?? [],
+            });
         }
     }
     if (providers.length > 0 || Object.keys(kinds).some((key) => key in seed)) {

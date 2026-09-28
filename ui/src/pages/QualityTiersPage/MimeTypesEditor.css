@@ -59,6 +59,6 @@
     .mime-types-editor__error {
         flex-basis: 100%;
         font-size: var(--text-xs);
-        color: var(--status-error);
+        color: var(--status-unhealthy);
     }
 }

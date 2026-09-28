@@ -116,7 +116,7 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
                 </CardHeader>
 
                 <CardBody className="onboarding-checklist__body">
-                    <ol className="onboarding-checklist__steps">
+                    <ol className="onboarding-checklist__steps" role="list">
                         {loading ? (
                             <>
                                 <SkeletonStep />

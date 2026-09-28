@@ -1,15 +1,20 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -18,7 +23,11 @@ namespace Magpie.Core.Repositories;
 
 internal sealed class MediaFileRepository(
     MagpieDbContext context,
-    ILogger<MediaFileRepository> logger) : IMediaFileRepository
+    ILogger<MediaFileRepository> logger,
+    ITransactionManager transactionManager,
+    IContentRepository contentRepository,
+    IContentHierarchyItemRepository hierarchyRepository,
+    IEventBus eventBus) : IMediaFileRepository
 {
     public async Task<MediaFile?> GetByPathAsync(string filePath, CancellationToken cancellationToken = default)
     {
@@ -136,11 +145,21 @@ internal sealed class MediaFileRepository(
     {
         try
         {
-            mediaFile.PathKey = ToMediaFilePathKey(mediaFile.FilePath);
-            mediaFile.CreatedByUserId = createdByUserId;
-            context.MediaFiles.Add(mediaFile);
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            return mediaFile;
+            return await transactionManager.ExecuteWithTransactionAsync(async ct =>
+            {
+                var owners = await LockOwnersAsync([mediaFile.ContentItemId], ct).ConfigureAwait(false);
+                mediaFile.PathKey = ToMediaFilePathKey(mediaFile.FilePath);
+                mediaFile.CreatedByUserId = createdByUserId;
+                context.MediaFiles.Add(mediaFile);
+                await context.SaveChangesAsync(ct).ConfigureAwait(false);
+                foreach (var owner in owners)
+                {
+                    await contentRepository.ReconcileMediaStateAsync(owner, createdByUserId, ct)
+                        .ConfigureAwait(false);
+                }
+
+                return mediaFile;
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -157,10 +176,25 @@ internal sealed class MediaFileRepository(
     {
         try
         {
-            return await context.MediaFiles
-                .Where(m => m.Id == mediaFileId)
-                .ExecuteDeleteAsync(cancellationToken)
-                .ConfigureAwait(false) > 0;
+            return await transactionManager.ExecuteWithTransactionAsync(async ct =>
+            {
+                var current = await GetByIdAsync(mediaFileId, ct).ConfigureAwait(false);
+                if (current is null)
+                {
+                    return false;
+                }
+
+                var owners = await LockOwnersAsync([current.ContentItemId], ct).ConfigureAwait(false);
+                var removed = await context.MediaFiles.Where(file => file.Id == mediaFileId &&
+                    file.ContentItemId == current.ContentItemId).ExecuteDeleteAsync(ct).ConfigureAwait(false) > 0;
+                foreach (var owner in owners)
+                {
+                    await contentRepository.ReconcileMediaStateAsync(owner, deletedByUserId, ct)
+                        .ConfigureAwait(false);
+                }
+
+                return removed;
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -169,6 +203,9 @@ internal sealed class MediaFileRepository(
         }
     }
 
+    private static string ToMediaFilePathKey(string filePath) =>
+        OperatingSystem.IsWindows() ? filePath.ToUpperInvariant() : filePath;
+
     public async Task<bool> UpdateAsync(
         MediaFile mediaFile,
         Guid? modifiedByUserId,
@@ -176,23 +213,64 @@ internal sealed class MediaFileRepository(
     {
         try
         {
-            var pathKey = ToMediaFilePathKey(mediaFile.FilePath);
-            var updated = await context.MediaFiles
-                .Where(item => item.Id == mediaFile.Id)
-                .ExecuteUpdateAsync(
-                    s => s
-                        .SetProperty(item => item.ContentItemId, mediaFile.ContentItemId)
-                        .SetProperty(item => item.FileKind, mediaFile.FileKind)
-                        .SetProperty(item => item.MimeType, mediaFile.MimeType)
-                        .SetProperty(item => item.FilePath, mediaFile.FilePath)
-                        .SetProperty(item => item.PathKey, pathKey)
-                        .SetProperty(item => item.FileSize, mediaFile.FileSize)
-                        .SetProperty(item => item.MediaInfo, mediaFile.MediaInfo)
-                        .SetProperty(item => item.ModifiedAt, mediaFile.ModifiedAt)
-                        .SetProperty(item => item.ModifiedByUserId, modifiedByUserId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return updated > 0;
+            return await transactionManager.ExecuteWithTransactionAsync(async ct =>
+            {
+                var current = await GetByIdAsync(mediaFile.Id, ct).ConfigureAwait(false);
+                if (current is null)
+                {
+                    return false;
+                }
+
+                var mediaInfoChanged = !string.Equals(
+                    JsonSerializer.Serialize(current.MediaInfo),
+                    JsonSerializer.Serialize(mediaFile.MediaInfo),
+                    StringComparison.Ordinal);
+
+                var owners = await LockOwnersAsync([current.ContentItemId, mediaFile.ContentItemId], ct)
+                    .ConfigureAwait(false);
+                var pathKey = ToMediaFilePathKey(mediaFile.FilePath);
+                var updated = await context.MediaFiles
+                    .Where(item => item.Id == mediaFile.Id && item.ContentItemId == current.ContentItemId)
+                    .ExecuteUpdateAsync(
+                        s => s
+                            .SetProperty(item => item.ContentItemId, mediaFile.ContentItemId)
+                            .SetProperty(item => item.FileKind, mediaFile.FileKind)
+                            .SetProperty(item => item.MimeType, mediaFile.MimeType)
+                            .SetProperty(item => item.FilePath, mediaFile.FilePath)
+                            .SetProperty(item => item.PathKey, pathKey)
+                            .SetProperty(item => item.FileSize, mediaFile.FileSize)
+                            .SetProperty(item => item.MediaInfo, mediaFile.MediaInfo)
+                            .SetProperty(item => item.FileModifiedAt, mediaFile.FileModifiedAt)
+                            .SetProperty(item => item.ReplacedAt, mediaFile.ReplacedAt)
+                            .SetProperty(item => item.DownloadId, mediaFile.DownloadId)
+                            .SetProperty(item => item.ModifiedAt, mediaFile.ModifiedAt)
+                            .SetProperty(item => item.ModifiedByUserId, modifiedByUserId),
+                        ct)
+                    .ConfigureAwait(false);
+                foreach (var owner in owners)
+                {
+                    await contentRepository.ReconcileMediaStateAsync(owner, modifiedByUserId, ct)
+                        .ConfigureAwait(false);
+                }
+
+                if (updated > 0 && mediaInfoChanged)
+                {
+                    foreach (var owner in owners)
+                    {
+                        var impact = new ContentEventImpact
+                        {
+                            HierarchyItemId = owner,
+                            ItemId = mediaFile.ContentItemId
+                        };
+                        await transactionManager.OnCommittedAsync(token => eventBus.PublishAsync(
+                            ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(
+                                impact,
+                                [nameof(MediaFile.MediaInfo)]), token), ct).ConfigureAwait(false);
+                    }
+                }
+
+                return updated > 0;
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -201,8 +279,38 @@ internal sealed class MediaFileRepository(
         }
     }
 
-    private static string ToMediaFilePathKey(string filePath) =>
-        OperatingSystem.IsWindows() ? filePath.ToUpperInvariant() : filePath;
+    private async Task<IReadOnlyList<Guid>> LockOwnersAsync(
+        IReadOnlyCollection<Guid> contentIds,
+        CancellationToken cancellationToken)
+    {
+        var owners = await context.ContentItems.AsNoTracking().Where(item => contentIds.Contains(item.Id))
+            .Select(item => item.ContentHierarchyItemId).ToListAsync(cancellationToken).ConfigureAwait(false);
+        var roots = new HashSet<Guid>();
+        foreach (var owner in owners)
+        {
+            var lineage = await hierarchyRepository.GetLineageAsync(owner, cancellationToken).ConfigureAwait(false);
+            if (lineage.Count > 0)
+            {
+                roots.Add(lineage[^1].Id);
+            }
+        }
+
+        foreach (var root in roots.Order())
+        {
+            await hierarchyRepository.LockAsync(root, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var owner in owners)
+        {
+            var lineage = await hierarchyRepository.GetLineageAsync(owner, cancellationToken).ConfigureAwait(false);
+            if (lineage.Count > 0 && !roots.Contains(lineage[^1].Id))
+            {
+                throw new DbUpdateConcurrencyException("The media hierarchy moved before its files could change.");
+            }
+        }
+
+        return owners;
+    }
 
     private IQueryable<MediaFile> ApplySort(
         IQueryable<MediaFile> items,

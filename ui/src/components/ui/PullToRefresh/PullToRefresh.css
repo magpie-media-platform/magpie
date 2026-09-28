@@ -2,8 +2,7 @@
     .pull-to-refresh {
         display: flex;
         flex-direction: column;
-        height: 100%;
-        overflow: hidden;
+        min-height: 100%;
         touch-action: pan-y;
     }
 
@@ -59,31 +58,12 @@
     .pull-to-refresh__content {
         flex: 1;
         min-height: 0;
-        overflow: hidden auto;
-        overscroll-behavior-y: contain;
-    }
-
-    @media (max-width: 767px) {
-        .pull-to-refresh[data-state] {
-            flex: none;
-            height: auto;
-            overflow: visible;
-        }
-
-        .pull-to-refresh[data-state] > .pull-to-refresh__content {
-            flex: none;
-            min-height: auto;
-            overflow: visible;
-        }
+        min-width: 0;
     }
 
     @media (min-width: 768px) and (hover: hover) and (pointer: fine) {
         .pull-to-refresh__indicator {
             display: none;
-        }
-
-        .pull-to-refresh__content {
-            height: 100%;
         }
     }
 }

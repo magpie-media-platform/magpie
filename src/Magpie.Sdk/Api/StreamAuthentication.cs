@@ -6,7 +6,7 @@ namespace Magpie.Sdk.Api;
 public static class StreamAuthentication
 {
     /// <summary>
-    /// The name of the HttpOnly cookie that carries the access JWT for the live-update stream.
+    /// The base name of the HttpOnly cookie that carries the access JWT for the live-update stream.
     /// </summary>
     public const string CookieName = "magpie.stream";
 

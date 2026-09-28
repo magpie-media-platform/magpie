@@ -1,7 +1,7 @@
 import type { ContentFilterSelection } from './contentFilterOptions';
-import { escapeQueryString, unescapeQueryString } from './simpleFilterQuery';
+import { escapeQueryString, monitoringClause, parseMonitoringClause, unescapeQueryString } from './simpleFilterQuery';
 
-type ContentFilterField = 'monitoring' | 'title' | 'publishDateFrom' | 'publishDateTo';
+type ContentFilterField = 'monitoring' | 'fulfillment' | 'title' | 'publishDateFrom' | 'publishDateTo';
 
 type ClassifiedContentFilterField = ContentFilterField | 'contentType' | 'level';
 
@@ -9,14 +9,16 @@ interface Predicate {
     field: ClassifiedContentFilterField | null;
     raw: string;
     value?: string;
+    grouped?: boolean;
 }
 
 const CONTENT_TYPE_RE = /^contentType\s*=\s*"((?:\\.|[^"\\])*)"$/i;
 const LEVEL_RE = /^level\s*=\s*"((?:\\.|[^"\\])*)"$/i;
-const MONITORING_RE = /^monitoring\s*=\s*(true|false)$/i;
+const FULFILLMENT_RE =
+    /^fulfillment\s*=\s*(?:"(Missing|Partial|Upgradable|Fulfilled|FulfilledExternally)"|(Missing|Partial|Upgradable|Fulfilled|FulfilledExternally))$/i;
 const TITLE_RE = /^title\s+contains\s+"((?:\\.|[^"\\])*)"$/i;
-const PUBLISH_FROM_RE = /^publishDate\s*>=\s*"((?:\\.|[^"\\])*)"$/i;
-const PUBLISH_TO_RE = /^publishDate\s*<=\s*"((?:\\.|[^"\\])*)"$/i;
+const PUBLISH_FROM_RE = /^publishDate\s*>=\s*"(\d{4}-\d{2}-\d{2})"$/i;
+const PUBLISH_TO_RE = /^publishDate\s*<=\s*"(\d{4}-\d{2}-\d{2})"$/i;
 
 function classify(clause: string): Predicate {
     const trimmed = clause.trim();
@@ -31,9 +33,17 @@ function classify(clause: string): Predicate {
         return { field: 'level', raw: trimmed, value: unescapeQueryString(level[1]) };
     }
 
-    const monitoring = trimmed.match(MONITORING_RE);
+    const monitoring = parseMonitoringClause(trimmed);
     if (monitoring) {
-        return { field: 'monitoring', raw: trimmed, value: monitoring[1] };
+        return { field: 'monitoring', raw: trimmed, value: monitoring };
+    }
+
+    const fulfillment = trimmed.match(FULFILLMENT_RE);
+    if (fulfillment) {
+        const value = ['Missing', 'Partial', 'Upgradable', 'Fulfilled', 'FulfilledExternally'].find(
+            (status) => status.toLowerCase() === (fulfillment[1] ?? fulfillment[2]).toLowerCase(),
+        );
+        return { field: 'fulfillment', raw: trimmed, value };
     }
 
     const title = trimmed.match(TITLE_RE);
@@ -110,7 +120,7 @@ export function splitClauses(query: string): Predicate[] {
             const delimiter = trimmed.slice(i).match(AND_OR_DELIMITER);
             if (delimiter) {
                 if (delimiter[1].toLowerCase() === 'or') {
-                    return [{ field: null, raw: trimmed }];
+                    return [{ field: null, raw: trimmed, grouped: true }];
                 }
                 clauses.push(current);
                 current = '';
@@ -139,7 +149,9 @@ function serializeClause(field: ClassifiedContentFilterField, value: string): st
         case 'level':
             return `level = "${quoted}"`;
         case 'monitoring':
-            return `monitoring = ${value}`;
+            return monitoringClause(value);
+        case 'fulfillment':
+            return `fulfillment = ${value}`;
         case 'title':
             return `title contains "${quoted}"`;
         case 'publishDateFrom':
@@ -150,8 +162,25 @@ function serializeClause(field: ClassifiedContentFilterField, value: string): st
 }
 
 export function readContentFilter(query: string, field: ContentFilterField): string {
+    if (hasComplexContentFilter(query, field)) return '';
     const predicate = splitClauses(query).find((p) => p.field === field);
     return predicate?.value ?? '';
+}
+
+export function hasComplexContentFilter(query: string, field: ClassifiedContentFilterField): boolean {
+    const predicates = splitClauses(query);
+    const name = field.startsWith('publishDate') ? 'publishDate' : field;
+    const fieldPattern = new RegExp(`\\b${name}\\s*(?:[=!<>]|!?[a-z]+\\b)`, 'i');
+    return (
+        predicates.filter((predicate) => predicate.field === field).length > 1 ||
+        predicates.some(
+            (predicate) => !predicate.field && fieldPattern.test(predicate.raw.replace(/"(?:\\.|[^"\\])*"/g, '""')),
+        )
+    );
+}
+
+function preservedClause(predicate: Predicate): string {
+    return predicate.grouped ? `(${predicate.raw})` : predicate.raw;
 }
 
 export function setContentFilter(query: string, field: ContentFilterField, value: string): string {
@@ -159,7 +188,7 @@ export function setContentFilter(query: string, field: ContentFilterField, value
     const cleaned = value.trim();
 
     const kept = predicates.filter((p) => p.field !== field);
-    const clauses = kept.map((p) => (p.field ? serializeClause(p.field, p.value ?? '') : p.raw));
+    const clauses = kept.map(preservedClause);
 
     if (cleaned) {
         clauses.push(serializeClause(field, cleaned));
@@ -169,6 +198,7 @@ export function setContentFilter(query: string, field: ContentFilterField, value
 }
 
 export function readContentFilterSelection(query: string): ContentFilterSelection | null {
+    if (hasComplexContentFilter(query, 'contentType') || hasComplexContentFilter(query, 'level')) return null;
     const predicates = splitClauses(query);
     const contentType = predicates.find((predicate) => predicate.field === 'contentType')?.value;
     if (!contentType) {
@@ -182,9 +212,7 @@ export function readContentFilterSelection(query: string): ContentFilterSelectio
 export function setContentFilterSelection(query: string, selection: ContentFilterSelection | null): string {
     const predicates = splitClauses(query);
     const kept = predicates.filter((predicate) => predicate.field !== 'contentType' && predicate.field !== 'level');
-    const clauses = kept.map((predicate) =>
-        predicate.field ? serializeClause(predicate.field, predicate.value ?? '') : predicate.raw,
-    );
+    const clauses = kept.map(preservedClause);
 
     if (selection) {
         clauses.push(serializeClause('contentType', selection.contentType));

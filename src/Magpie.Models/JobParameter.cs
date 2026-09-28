@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.Text.Json.Serialization;
+
 using Magpie.Models.Enums;
 
 namespace Magpie.Models;
@@ -15,4 +19,17 @@ public sealed record JobParameter(
     string? Description,
     DataType Type,
     bool Required,
-    string? DefaultValue);
+    string? DefaultValue)
+{
+    /// <summary>
+    /// Checks a supplied or default schedule value without external access and returns an error or null.
+    /// </summary>
+    [JsonIgnore]
+    public Func<string?, string?>? ValidateValue { get; set; }
+
+    /// <summary>
+    /// Uses parameters and UTC time to check a schedule value, replacing its type check, and returns an error or null.
+    /// </summary>
+    [JsonIgnore]
+    public Func<string?, IReadOnlyDictionary<string, string>, DateTime, string?>? ValidateScheduleValue { get; set; }
+}

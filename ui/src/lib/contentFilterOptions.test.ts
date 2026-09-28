@@ -136,4 +136,28 @@ describe('contentFilterOptions', () => {
 
         expect(parseContentFilterSelectionValue(contentFilterSelectionValue(selection))).toEqual(selection);
     });
+
+    it('includes registered child levels when a local list can show descendants', () => {
+        const options = buildContentFilterOptions(
+            [
+                {
+                    id: 'tv',
+                    name: 'TV',
+                    pluralName: 'TV',
+                    slug: 'tv',
+                    levels: [
+                        { slug: 'show', displayName: 'Show', parentSlug: null, standardFactFields: [] },
+                        { slug: 'season', displayName: 'Season', parentSlug: 'show', standardFactFields: [] },
+                    ],
+                },
+            ],
+            undefined,
+            true,
+        );
+        expect(options.map(({ label, level }) => ({ label, level }))).toEqual([
+            { label: 'TV', level: undefined },
+            { label: 'TV > Show', level: 'show' },
+            { label: 'TV > Season', level: 'season' },
+        ]);
+    });
 });

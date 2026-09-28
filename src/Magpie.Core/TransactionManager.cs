@@ -44,6 +44,7 @@ internal sealed class TransactionManager(
         {
             _postCommitActions.Clear();
             await RollbackAsync(transaction, cancellationToken).ConfigureAwait(false);
+            context.ChangeTracker.Clear();
             RecordOutcome(started, committed: false);
             throw;
         }
@@ -77,6 +78,7 @@ internal sealed class TransactionManager(
         {
             _postCommitActions.Clear();
             await RollbackAsync(transaction, cancellationToken).ConfigureAwait(false);
+            context.ChangeTracker.Clear();
             RecordOutcome(started, committed: false);
             throw;
         }

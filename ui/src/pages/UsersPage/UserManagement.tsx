@@ -84,6 +84,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
 
     const {
         users,
+        totalItems,
         isLoading: isLoadingUsers,
         isCreating,
         isUpdating,
@@ -247,11 +248,12 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
     const selection = useBulkSelection({
         pageRowIds: selectableIds,
         totalCount: selectableIds.length,
-        resetKey: String(page),
+        allowSelectAllAcrossPages: false,
+        resetKey: authUserId,
     });
     const selectedUsers = useMemo(
-        () => selectableUsers.filter((u) => selection.isRowChecked(u.id)),
-        [selectableUsers, selection],
+        () => selection.selectedIds.filter((id) => id !== authUserId).map((id) => ({ id })),
+        [authUserId, selection.selectedIds],
     );
 
     const handleBulkDeleteUsers = useCallback(async () => {
@@ -307,7 +309,11 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
 
     return (
         <>
-            <div className="users-page__user-actions" data-component="user-toolbar">
+            <div
+                className="users-page__user-actions"
+                data-component="user-toolbar"
+                data-selection-mode={selection.selectionMode}
+            >
                 <SelectModeToggle
                     mobileOnly={false}
                     active={selection.selectionMode}
@@ -395,6 +401,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
                     className="users-page__pager"
                     page={page}
                     pageCount={pageCount}
+                    totalItems={totalItems}
                     onFirst={() => onPageChange(1)}
                     onPrevious={() => onPageChange(page - 1)}
                     onNext={() => onPageChange(page + 1)}

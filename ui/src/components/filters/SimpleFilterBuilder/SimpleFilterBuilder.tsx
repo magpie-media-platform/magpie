@@ -43,6 +43,7 @@ export interface SimpleFilterBuilderProps extends Omit<ComponentPropsWithoutRef<
     restrictContentType?: string;
 
     lockContentLevel?: string;
+    includeAllContentLevels?: boolean;
 
     defaultSubjectKind?: string;
 
@@ -56,21 +57,33 @@ const ANY_VALUE = '__any__';
 
 type SimpleMetadataField = 'Title' | 'PublishDate' | 'Genres' | 'Relationships';
 
-interface NeutralYearDraft {
+interface QueryDraft {
     query: string;
     sourceQuery: string;
+    applied?: boolean;
+}
+
+interface NeutralYearDraft extends QueryDraft {
     releaseYear: string;
     yearOps: YearOp[];
 }
 
-interface EditDraft {
-    query: string;
-    sourceQuery: string;
+interface EditDraft extends QueryDraft {
     fields: FieldState;
 }
 
 function sameQuery(a: string | null | undefined, b: string | null | undefined): boolean {
     return (a ?? '').trim() === (b ?? '').trim();
+}
+
+function draftMatches(draft: QueryDraft | null, value: string): boolean {
+    return draft !== null && (sameQuery(draft.query, value) || (!draft.applied && sameQuery(draft.sourceQuery, value)));
+}
+
+function isNewlyApplied<T extends QueryDraft>(draft: T | null, value: string): draft is T {
+    return (
+        draft !== null && !draft.applied && !sameQuery(draft.query, draft.sourceQuery) && sameQuery(draft.query, value)
+    );
 }
 
 const SIMPLE_FIELD_KEYS: Record<SimpleMetadataField, string[]> = {
@@ -143,25 +156,21 @@ export function SimpleFilterBuilder({
     defaultContentType,
     restrictContentType,
     lockContentLevel,
+    includeAllContentLevels = false,
     defaultSubjectKind,
     lockSubjectKind = false,
     className,
+    children,
     ...props
 }: SimpleFilterBuilderProps) {
     const { contentTypes, subjectTypes, isLoading: registryLoading } = useLibraryTypes();
 
     const parsedFields = useMemo(() => parseQuery(value, context) ?? { ...EMPTY_FIELDS }, [value, context]);
     const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
-    const matchedEditDraft =
-        editDraft !== null && (sameQuery(editDraft.query, value) || sameQuery(editDraft.sourceQuery, value))
-            ? editDraft
-            : null;
+    const matchedEditDraft = draftMatches(editDraft, value) ? editDraft : null;
     const currentFields = matchedEditDraft?.fields ?? parsedFields;
     const [neutralYearDraft, setNeutralYearDraft] = useState<NeutralYearDraft | null>(null);
-    const draftMatchesValue =
-        context === 'content' &&
-        neutralYearDraft !== null &&
-        (sameQuery(neutralYearDraft.query, value) || sameQuery(neutralYearDraft.sourceQuery, value));
+    const draftMatchesValue = context === 'content' && draftMatches(neutralYearDraft, value);
     const fields = useMemo(() => {
         if (!draftMatchesValue || neutralYearDraft === null) {
             return currentFields;
@@ -176,21 +185,25 @@ export function SimpleFilterBuilder({
     useEffect(() => {
         if (neutralYearDraft && !draftMatchesValue) {
             setNeutralYearDraft(null);
+        } else if (isNewlyApplied(neutralYearDraft, value)) {
+            setNeutralYearDraft({ ...neutralYearDraft, applied: true });
         }
-    }, [neutralYearDraft, draftMatchesValue]);
+    }, [neutralYearDraft, draftMatchesValue, value]);
 
     useEffect(() => {
         if (editDraft && matchedEditDraft === null) {
             setEditDraft(null);
+        } else if (isNewlyApplied(editDraft, value)) {
+            setEditDraft({ ...editDraft, applied: true });
         }
-    }, [editDraft, matchedEditDraft]);
+    }, [editDraft, matchedEditDraft, value]);
 
     const maxYear = useMemo(() => new Date().getFullYear() + MAX_YEAR_OFFSET, []);
 
     const contentLevelLocked = context === 'content' && Boolean(restrictContentType) && Boolean(lockContentLevel);
     const contentFilterOptions = useMemo(
-        () => buildContentFilterOptions(contentTypes, restrictContentType),
-        [contentTypes, restrictContentType],
+        () => buildContentFilterOptions(contentTypes, restrictContentType, includeAllContentLevels),
+        [contentTypes, restrictContentType, includeAllContentLevels],
     );
     const queryContentSelection = useMemo(
         () => (context === 'content' ? readContentFilterSelection(value) : null),
@@ -535,6 +548,8 @@ export function SimpleFilterBuilder({
                     {tagField}
                 </>
             )}
+
+            {children}
         </div>
     );
 }

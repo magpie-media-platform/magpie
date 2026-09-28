@@ -7,12 +7,14 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -29,20 +31,38 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ReleaseRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IReleaseRepository _subject = null!;
     private Guid _userId;
     private Guid _indexerId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .ConfigureWarnings(warnings => warnings.Throw(RelationalEventId.MultipleCollectionIncludeWarning))
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var user = new User
         {
@@ -561,6 +581,192 @@ public sealed class ReleaseRepositoryTests
         {
             Assert.That(items, Has.Count.EqualTo(1));
             Assert.That(items, Has.One.With.Property(nameof(Release.Id)).EqualTo(release1.Id));
+        }
+    }
+
+    [TestCase(false, 0)]
+    [TestCase(true, 1)]
+    public async Task QueryAsync_ReturnsTheUnmatchedRelease_OnlyWhenIncludeUnmatchedIsSet(
+        bool includeUnmatched,
+        int expectedCount)
+    {
+        // Arrange
+        var metadataContainer = new MetadataContainer();
+        _context.MetadataContainers.Add(metadataContainer);
+        var hierarchyItem = new ContentHierarchyItem
+        {
+            MetadataContainerId = metadataContainer.Id,
+            ContentType = "type-a",
+            Level = "Type A",
+            Slug = "unmatched-item",
+            Name = "Unmatched Item",
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem);
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            Title = "Unmatched.Release",
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope
+        {
+            ReleaseId = release.Id,
+            ContentHierarchyItemId = hierarchyItem.Id,
+            Status = ReleaseScopeStatus.Unmatched,
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(
+                new() { ContentHierarchyItemId = hierarchyItem.Id, IncludeUnmatched = includeUnmatched },
+                new() { PageNumber = 1, PageSize = 100 },
+                null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items.Count(), Is.EqualTo(expectedCount));
+    }
+
+    [Test]
+    public async Task UpdateAsync_KeepsTheUnmatchedScope_WhenAnIdentityMergeFoldsAnUnmatchedAlias()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var metadataContainer = new MetadataContainer();
+        _context.MetadataContainers.Add(metadataContainer);
+        var hierarchyItem = new ContentHierarchyItem
+        {
+            MetadataContainerId = metadataContainer.Id,
+            ContentType = "type-a",
+            Level = "Type A",
+            Slug = "merged-item",
+            Name = "Merged Item",
+            CreatedAt = now
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem);
+        var canonical = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "canonical",
+            Title = "Merged.Release",
+            PublishDate = now,
+            CreatedAt = now,
+            ObservedAt = now
+        };
+        canonical.IdentityKeys.Add(
+            new ReleaseIdentityKey { Authority = "btih", Value = "canonical-hash", Ordinal = 0 });
+        var alias = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "alias",
+            Title = "Merged.Release",
+            PublishDate = now,
+            CreatedAt = now,
+            ObservedAt = now
+        };
+        alias.IdentityKeys.Add(new ReleaseIdentityKey { Authority = "btih", Value = "alias-hash", Ordinal = 0 });
+        _context.Releases.AddRange(canonical, alias);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.AddRange(
+            new ReleaseScope { ReleaseId = canonical.Id, ContentHierarchyItemId = hierarchyItem.Id },
+            new ReleaseScope
+            {
+                ReleaseId = alias.Id,
+                ContentHierarchyItemId = hierarchyItem.Id,
+                Status = ReleaseScopeStatus.Unmatched
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        canonical.IdentityKeys.Clear();
+        canonical.IdentityKeys.Add(
+            new ReleaseIdentityKey { Authority = "btih", Value = "canonical-hash", Ordinal = 0 });
+        canonical.IdentityKeys.Add(new ReleaseIdentityKey { Authority = "btih", Value = "alias-hash", Ordinal = 1 });
+
+        // Act
+        await _subject.UpdateAsync(canonical, _userId, default).ConfigureAwait(false);
+
+        // Assert
+        var scopes = await _context.ReleaseScopes.AsNoTracking().ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(scopes, Has.Count.EqualTo(1));
+            Assert.That(scopes[0].ReleaseId, Is.EqualTo(canonical.Id));
+            Assert.That(scopes[0].Status, Is.EqualTo(ReleaseScopeStatus.Unmatched));
+        }
+    }
+
+    [Test]
+    public async Task DeleteWhereAsync_KeepsTheUnmatchedRelease_WhenRetentionDeletesUnobservedReleases()
+    {
+        // Arrange
+        var observedAt = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+        var metadataContainer = new MetadataContainer();
+        _context.MetadataContainers.Add(metadataContainer);
+        var hierarchyItem = new ContentHierarchyItem
+        {
+            MetadataContainerId = metadataContainer.Id,
+            ContentType = "type-a",
+            Level = "Type A",
+            Slug = "retained-item",
+            Name = "Retained Item",
+            CreatedAt = observedAt
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem);
+        var unmatched = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "unmatched",
+            Title = "Unmatched.Release",
+            PublishDate = observedAt,
+            CreatedAt = observedAt,
+            ObservedAt = observedAt
+        };
+        var matched = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "matched",
+            Title = "Matched.Release",
+            PublishDate = observedAt,
+            CreatedAt = observedAt,
+            ObservedAt = observedAt
+        };
+        _context.Releases.AddRange(unmatched, matched);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.AddRange(
+            new ReleaseScope
+            {
+                ReleaseId = unmatched.Id,
+                ContentHierarchyItemId = hierarchyItem.Id,
+                Status = ReleaseScopeStatus.Unmatched
+            },
+            new ReleaseScope { ReleaseId = matched.Id, ContentHierarchyItemId = hierarchyItem.Id });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var deleted = await _subject.DeleteWhereAsync(
+                new ReleaseQuery
+                {
+                    ObservedAt = new Range<DateTime>(null, new DateTime(2026, 9, 8, 0, 0, 0, DateTimeKind.Utc))
+                })
+            .ConfigureAwait(false);
+
+        // Assert
+        var remaining = await _context.Releases.AsNoTracking().Select(release => release.Id).ToListAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.EqualTo(1));
+            Assert.That(remaining, Is.EqualTo([unmatched.Id]));
         }
     }
 

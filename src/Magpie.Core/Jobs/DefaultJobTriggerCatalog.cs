@@ -176,6 +176,16 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
+                    JobType = MagpieJobs.Types.MediaFileReconciliation,
+                    Scope = JobScope.Administrative,
+                    Name = "Media file reconciliation schedule",
+                    Schedule = "0 3 * * *",
+                    ExecutionMode = JobExecutionMode.Queue,
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
                     JobType = MagpieJobs.Types.MetadataContainerCleanup,
                     Scope = JobScope.Administrative,
                     Name = "Metadata container cleanup schedule",
@@ -190,6 +200,16 @@ public static class DefaultJobTriggerCatalog
                     Scope = JobScope.Administrative,
                     Name = "Orphaned subject pruning schedule",
                     Schedule = "15 2 * * *",
+                    ExecutionMode = JobExecutionMode.Queue,
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
+                    JobType = MagpieJobs.Types.RootFolderContentDiscovery,
+                    Scope = JobScope.Content,
+                    Name = "Root folder content discovery schedule",
+                    Schedule = "30 4 * * *",
                     ExecutionMode = JobExecutionMode.Queue,
                     Enabled = true,
                     CreatedAt = now,
@@ -234,6 +254,19 @@ public static class DefaultJobTriggerCatalog
                     Scope = JobScope.Administrative,
                     Name = "Media server refresh on download import",
                     EventFilter = SingleEventFilter(MagpieEvents.Names.DownloadImported),
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
+                    JobType = MagpieJobs.Types.DownloadFulfilledCancellation,
+                    Scope = JobScope.Administrative,
+                    Name = "Cancel fulfilled downloads on download import",
+                    EventFilter = SingleEventFilter(MagpieEvents.Names.DownloadImported),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.DownloadId] = $"${{event.{MagpieEvents.Keys.DownloadId}}}"
+                    },
                     Enabled = true,
                     CreatedAt = now,
                 },

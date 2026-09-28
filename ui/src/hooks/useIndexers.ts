@@ -304,6 +304,15 @@ async function deleteIndexerFeed(id: string): Promise<void> {
     return apiDelete(`/indexer-feeds/${id}`);
 }
 
+export function useConfiguredIndexerCount(): number | undefined {
+    return useQuery({
+        queryKey: indexerQueryKeys.list(),
+        queryFn: fetchIndexers,
+        select: countConfiguredIndexerInstances,
+        staleTime: POLLING_INTERVALS.normal / 2,
+    }).data;
+}
+
 export function useIndexers(options?: { syncFeed?: JobActionLifecycleOptions<string> }) {
     useInvalidateQueriesOnEvents(
         [

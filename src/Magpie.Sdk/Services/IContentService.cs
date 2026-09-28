@@ -18,6 +18,65 @@ namespace Magpie.Sdk.Services;
 public interface IContentService
 {
     /// <summary>
+    /// Corrects a file association within a content hierarchy.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The current hierarchy owner</param>
+    /// <param name="mediaFileId">The file to correct</param>
+    /// <param name="request">The selected destination and expected file path</param>
+    /// <param name="actingUserId">The user who corrects the association</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> ReassignFileAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        ReassignContentFileRequest request,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets an import hierarchy for a read-only preview without creating library items.
+    /// </summary>
+    /// <param name="request">The selected external metadata identity</param>
+    /// <param name="rootFolderId">The root folder selected for import</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<IReadOnlyList<ContentHierarchyItem>> PreviewImportHierarchyAsync(
+        PreviewByExternalIdRequest request,
+        Guid rootFolderId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the registered rename tokens and previews a rename mask with example or content values.
+    /// </summary>
+    /// <param name="request">The content type or selected content and the mask to preview</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<RenameTokenReference> GetRenameTokenReferenceAsync(
+        RenameTokenRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Previews explicit masks for selected files or descendant files without changing storage.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The selected content parent or owner</param>
+    /// <param name="selection">The file selection</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<FileRenamePreview> PreviewRenameMaskAsync(
+        Guid contentHierarchyItemId,
+        FileRenameSelection selection,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Applies the valid entries of a previously displayed explicit rename preview.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The selected content parent or owner</param>
+    /// <param name="preview">The displayed preview</param>
+    /// <param name="userId">The user that requests the move</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<FileRenamePreview> ExecuteRenameMaskAsync(
+        Guid contentHierarchyItemId,
+        FileRenamePreview preview,
+        Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Queries the content hierarchy items in the library.
     /// </summary>
     /// <param name="query">The filter criteria for the content items</param>

@@ -53,6 +53,11 @@ public sealed record RootFolderPatch
     public ScalarPatch<UpgradeFileHandling>? UpgradeFileHandling { get; init; }
 
     /// <summary>
+    /// The patch for whether discovery associates confident matches with existing library content.
+    /// </summary>
+    public ScalarPatch<bool>? AutoImport { get; init; }
+
+    /// <summary>
     /// The patch for the default quality tier lists keyed by hierarchy level.
     /// </summary>
     public ScalarPatch<Dictionary<string, RootFolderDefault>>? Defaults { get; init; }

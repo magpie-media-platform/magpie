@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,6 +28,37 @@ internal sealed class ContentMetadataSearcher(
     public string ProviderType => Constants.ProviderType;
 
     public IEnumerable<string> SupportedContentTypes => [TvContentType];
+
+    /// <inheritdoc />
+    public async Task<MetadataSearchBatch> ContinueSearchAsync(
+        string contentType,
+        ContentHierarchyItemCriteria query,
+        int maxResults,
+        string defaultLanguagePreference,
+        object? continuation,
+        CancellationToken cancellationToken = default)
+    {
+        var fingerprint = JsonSerializer.Serialize(new { contentType, query, defaultLanguagePreference });
+        if (continuation is not null &&
+            (continuation is not SearchCheckpoint previous || previous.Fingerprint != fingerprint))
+        {
+            throw new MetadataSearchContinuationException("The TVmaze checkpoint does not match this search.");
+        }
+
+        if (contentType != TvContentType)
+        {
+            return new MetadataSearchBatch();
+        }
+
+        var progress = (continuation as SearchCheckpoint)?.Progress.Copy() ?? new QueryProgress();
+        progress.ValidateOnly = maxResults == 0;
+        var plan = planner.Plan(query, maxResults) with { Progress = progress };
+        var page = await executor.ExecuteAsync(plan, cancellationToken).ConfigureAwait(false);
+        progress.Delivered.UnionWith(page.Matches.Select(candidate =>
+            int.Parse(candidate.ExternalId, CultureInfo.InvariantCulture)));
+        cancellationToken.ThrowIfCancellationRequested();
+        return new MetadataSearchBatch { Page = page, Continuation = new SearchCheckpoint(fingerprint, progress) };
+    }
 
     public async Task<IEnumerable<MetadataSearchCandidate>> SearchAsync(
         ContentHierarchyLevelDefinition levelDefinition,
@@ -101,4 +134,6 @@ internal sealed class ContentMetadataSearcher(
         var show = await client.GetShowWithEmbedsAsync(id, ["cast", "crew"], cancellationToken).ConfigureAwait(false);
         return show.ToMetadataSearchCandidate();
     }
+
+    private sealed record SearchCheckpoint(string Fingerprint, QueryProgress Progress);
 }

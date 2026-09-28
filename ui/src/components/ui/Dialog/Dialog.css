@@ -131,6 +131,7 @@
         line-height: var(--leading-tight);
         color: var(--text-primary);
         margin: 0;
+        overflow-wrap: anywhere;
     }
 
     .dialog-description {

@@ -4,6 +4,8 @@ namespace Magpie.Extensions.MusicBrainz.QueryEngine;
 
 internal sealed record QueryPlan
 {
+    internal QueryProgress? Progress { get; init; }
+
     public PlanNode? Root { get; init; }
 
     public required int RequestedPage { get; init; }

@@ -1,8 +1,9 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider, MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useState } from 'react';
 
 import { SubjectsPage } from './SubjectsPage';
 import type { ApiSubject, ApiMetadataContainer, SubjectQueryParams } from '@/hooks/useSubjects';
@@ -204,6 +205,7 @@ describe('SubjectsPage', () => {
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -316,6 +318,58 @@ describe('SubjectsPage', () => {
     });
 
     describe('advanced filter (FilterBar, like content)', () => {
+        it.each([
+            { state: 'initial', subjects: [], error: null },
+            { state: 'loaded', subjects: mockApiSubjects, error: null },
+            { state: 'failed', subjects: [], error: new Error('Request failed') },
+        ])('filter_PreservesEntry_WhenSubjectRequestIsPendingWith$state data', async ({ subjects, error }) => {
+            // Arrange
+            vi.useFakeTimers();
+            const initialRequest = { ...vi.mocked(useSubjects)(), subjects, isLoading: true };
+            let finishRequest!: (result: ReturnType<typeof useSubjects>) => void;
+            vi.mocked(useSubjects).mockImplementation(function useSubjectRequest() {
+                const [result, setResult] = useState(initialRequest);
+                finishRequest = setResult;
+                return result;
+            });
+            const queryClient = createTestQueryClient();
+            const router = createMemoryRouter([{ path: '/library/subjects/:subjectType', element: <SubjectsPage /> }], {
+                initialEntries: ['/library/subjects/person?filter=title+contains+%22A%22'],
+            });
+            render(
+                <QueryClientProvider client={queryClient}>
+                    <RouterProvider router={router} />
+                </QueryClientProvider>,
+            );
+            const input = screen.getByRole('textbox', { name: 'Related' });
+            expect(input).toBeEnabled();
+            expect(screen.getByRole('textbox', { name: 'Tag' })).toBeEnabled();
+
+            // Act
+            input.focus();
+            fireEvent.change(input, { target: { value: 'AB' } });
+            await act(async () => {
+                vi.advanceTimersByTime(350);
+            });
+            fireEvent.change(input, { target: { value: 'ABC' } });
+            act(() => {
+                finishRequest({ ...initialRequest, subjects: error ? [] : mockApiSubjects, isLoading: false, error });
+            });
+
+            // Assert
+            expect(input).toHaveValue('ABC');
+            expect(input).toBeInTheDocument();
+            expect(input).toHaveFocus();
+            expect((input as HTMLInputElement).selectionStart).toBe(3);
+            await act(async () => {
+                vi.advanceTimersByTime(350);
+            });
+            expect(router.state.location.search).toBe('?filter=title+contains+%22ABC%22');
+            expect(useSubjects).toHaveBeenLastCalledWith(
+                expect.objectContaining({ filter: 'kind = "person" and (title contains "ABC")' }),
+            );
+        });
+
         it('starts expanded when the subjects table layout is visible at 1024px', () => {
             const matchMedia = createMatchMedia(1024);
             vi.spyOn(window, 'matchMedia').mockImplementation(matchMedia);

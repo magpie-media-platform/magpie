@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -296,9 +296,108 @@ describe('LibraryAddPage', () => {
         vi.restoreAllMocks();
     });
 
+    it('Cancel_ReleasesBusyState_WhenLiveSearchIsPending', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((path: string) => {
+            if (path.startsWith('/content-search')) return new Promise(() => {});
+            return Promise.resolve([]);
+        });
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByTestId('library-add-page__loading');
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Cancel search' }));
+
+        // Assert
+        expect(screen.queryByTestId('library-add-page__loading')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^search$/i })).toBeEnabled();
+        expect(vi.mocked(apiGet)).toHaveBeenCalledWith(
+            expect.stringContaining('/content-search'),
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+        const searchOptions = vi.mocked(apiGet).mock.calls.find(([url]) => url.startsWith('/content-search'))?.[1];
+        expect(searchOptions?.signal?.aborted).toBe(true);
+    });
+
+    it('Cancel_PrecedesSearch_WhenLiveSearchIsPending', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((path: string) => {
+            if (path.startsWith('/content-search')) return new Promise(() => {});
+            return Promise.resolve([]);
+        });
+        renderLive();
+
+        // Act
+        await screen.findByTestId('library-add-page__loading');
+
+        // Assert
+        const search = screen.getByRole('button', { name: /^search$/i });
+        expect(search.previousElementSibling).toBe(screen.getByRole('button', { name: 'Cancel search' }));
+        expect(search.nextElementSibling).toBeNull();
+    });
+
+    it('Cancel_RestoresDeliveredPage_WhenLiveContinuationIsPending', async () => {
+        // Arrange
+        let finishCancelled!: (value: unknown) => void;
+        let searchCallCount = 0;
+        vi.mocked(apiGet).mockImplementation((path: string) => {
+            if (!path.startsWith('/content-search')) return Promise.resolve([]);
+            searchCallCount++;
+            if (searchCallCount === 1) {
+                return Promise.resolve({
+                    ...candidateSearchResult([candidateSearchedCandidate], { hasMore: true }),
+                    continuation: 'first-page',
+                    nextContinuation: 'second-page',
+                });
+            }
+            if (searchCallCount === 2) return new Promise((resolve) => (finishCancelled = resolve));
+            return Promise.resolve({
+                ...candidateSearchResult([{ ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' }], {
+                    requestedPage: 2,
+                }),
+                continuation: 'second-page',
+            });
+        });
+        const user = userEvent.setup();
+        renderLive();
+        expect(await screen.findByText('The Matrix')).toBeInTheDocument();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+        await screen.findByTestId('library-add-page__loading');
+        const cancelledSignal = vi
+            .mocked(apiGet)
+            .mock.calls.filter(([path]) => path.startsWith('/content-search'))[1][1]?.signal;
+        await user.click(screen.getByRole('button', { name: 'Cancel search' }));
+        finishCancelled(candidateSearchResult([{ ...candidateSearchedCandidate, externalId: '999', title: 'Stale' }]));
+
+        // Assert
+        expect(cancelledSignal?.aborted).toBe(true);
+        expect(await resultsTable().findByText('The Matrix')).toBeInTheDocument();
+        expect(screen.queryByText('Stale')).not.toBeInTheDocument();
+        expect(screen.getByText('Page 1')).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+        expect(await resultsTable().findByText('Reloaded')).toBeInTheDocument();
+        expect(
+            vi
+                .mocked(apiGet)
+                .mock.calls.filter(([path]) => path.startsWith('/content-search'))
+                .map(([path]) => path),
+        ).toEqual([
+            '/content-search?query=genre+has+%22Action%22&page=1',
+            '/content-search?query=genre+has+%22Action%22&page=2&continuation=second-page',
+            '/content-search?query=genre+has+%22Action%22&page=2&continuation=second-page',
+        ]);
+    });
+
     it('shows the page empty state when more pages exist', async () => {
         // Arrange
-        mockCandidateSearchResponse = candidateSearchResult([], { hasMore: true });
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([], { hasMore: true }),
+            continuation: 'first-page',
+            nextContinuation: 'second-page',
+        };
         const user = userEvent.setup();
         renderLive();
 
@@ -320,13 +419,18 @@ describe('LibraryAddPage', () => {
         expect(screen.getByRole('button', { name: /next page/i })).toBeDisabled();
     });
 
-    it.each(['table', 'drawer'])('Add_ShowsServerMessage_WhenRejected %s', async (surface) => {
+    it.each([
+        ['table', 400, 'Choose a writable root folder.'],
+        ['drawer', 400, 'Choose a writable root folder.'],
+        ['table', 503, 'The provider is busy. Try again later.'],
+        ['drawer', 503, 'The provider is busy. Try again later.'],
+    ])('Add_ShowsServerMessage_WhenRejected %s %i', async (surface, status, message) => {
         // Arrange
         mockApiGetByPath({
             rootFolders: [rootFolder('rf-archive', 'Archive', candidateSearchedCandidate.contentType)],
         });
         mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
-        vi.mocked(apiPost).mockRejectedValue(new ApiError(400, 'Choose a writable root folder.'));
+        vi.mocked(apiPost).mockRejectedValue(new ApiError(status, message, { status, detail: message }));
         const user = userEvent.setup();
         renderLive();
         await user.click(screen.getByRole('button', { name: /^search$/i }));
@@ -342,7 +446,7 @@ describe('LibraryAddPage', () => {
         }
 
         // Assert
-        expect(await screen.findByText('Choose a writable root folder.')).toBeInTheDocument();
+        expect(await screen.findByText(message)).toBeInTheDocument();
     });
 
     it('renders the page header and the initial empty state', () => {
@@ -565,13 +669,15 @@ describe('LibraryAddPage', () => {
             expect(screen.queryByTestId('library-add-page__error')).not.toBeInTheDocument();
         });
 
-        it('enables Search once a criterion is present and runs provider candidate search normally', async () => {
+        it('Search_ReturnsCandidates_WhenLiveCriterionIsPresent', async () => {
+            // Arrange
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
             const user = userEvent.setup();
 
             renderLive('genre has "Action"');
 
+            // Assert
             const search = screen.getByRole('button', { name: /^search$/i }) as HTMLButtonElement;
             await waitFor(() => {
                 expect(search.disabled).toBe(false);
@@ -579,14 +685,20 @@ describe('LibraryAddPage', () => {
             expect(screen.queryByTestId('library-add-page__filter-empty')).not.toBeInTheDocument();
 
             vi.mocked(apiGet).mockClear();
+            // Act
             await user.click(search);
+            // Assert
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=genre+has+%22Action%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             });
         });
 
-        it('submits current criteria with Enter through the search error path', async () => {
+        it('Search_ShowsError_WhenLiveCriteriaSubmittedWithEnter', async () => {
+            // Arrange
             mockCandidateSearchError = {
                 name: 'ApiError',
                 status: 400,
@@ -601,35 +713,48 @@ describe('LibraryAddPage', () => {
                 </TestWrapper>,
             );
 
+            // Act
             const tag = screen.getByLabelText('Tag');
             await user.type(tag, 'favorite');
             await user.type(tag, '{Enter}');
 
+            // Assert
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=tag+has+%22favorite%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=tag+has+%22favorite%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
                 expect(screen.getByTestId('library-add-page__error')).toBeInTheDocument();
             });
             expect(screen.getByText(/unexpected token/i)).toBeInTheDocument();
         });
 
-        it('runs provider candidate search from edited criteria and renders candidates', async () => {
+        it('Search_RendersCandidates_WhenLiveCriteriaAreEdited', async () => {
+            // Arrange
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
             const user = userEvent.setup();
 
             renderLive();
 
+            // Act
             await user.click(screen.getByRole('button', { name: /^search$/i }));
 
+            // Assert
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=genre+has+%22Action%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
             await waitFor(() => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             });
             expect(resultsTable().getByText('1999')).toBeInTheDocument();
             expect(resultsTable().getByText('Mar 31, 1999')).toBeInTheDocument();
+            // Act
             fireEvent.error(screen.getByTestId('library-add-page__result-image'));
+            // Assert
             expect(screen.queryByTestId('library-add-page__result-image')).not.toBeInTheDocument();
             expect(document.querySelector('.library-add-page__poster--placeholder')).toBeInTheDocument();
         });
@@ -744,7 +869,8 @@ describe('LibraryAddPage', () => {
             );
         });
 
-        it('surfaces parse details returned by candidate search without a parse pre-flight', async () => {
+        it('Search_ShowsParseDetails_WhenCandidateRequestFailsValidation', async () => {
+            // Arrange
             mockApiGetByPath({});
             mockCandidateSearchError = {
                 name: 'ApiError',
@@ -756,14 +882,19 @@ describe('LibraryAddPage', () => {
 
             renderLive();
 
+            // Act
             await user.click(screen.getByRole('button', { name: /^search$/i }));
 
+            // Assert
             await waitFor(() => {
                 expect(screen.getByTestId('library-add-page__error')).toBeInTheDocument();
             });
             expect(screen.getByText(/unexpected token/i)).toBeInTheDocument();
             expect(mockParseMagpieQl).not.toHaveBeenCalled();
-            expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+            expect(apiGet).toHaveBeenCalledWith(
+                '/content-search?query=genre+has+%22Action%22&page=1',
+                expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            );
         });
 
         it('surfaces a bad-request ProblemDetails detail from provider search', async () => {
@@ -925,6 +1056,31 @@ describe('LibraryAddPage', () => {
             });
         });
 
+        it('shows a query parse error on the query when saving a filter', async () => {
+            mockParseMagpieQl.mockResolvedValue({ error: { message: 'Expected value' } });
+            const user = userEvent.setup();
+
+            renderLive();
+
+            const saveButton = await waitFor(() => {
+                const btn = document.querySelector('[data-action="save-filter"]') as HTMLElement | null;
+                expect(btn).toBeInTheDocument();
+                return btn!;
+            });
+            await user.click(saveButton);
+            const dialog = await screen.findByRole('dialog');
+            const nameInput = within(dialog).getByLabelText(/filter name/i);
+            await user.type(nameInput, 'Valid Name');
+            await user.click(within(dialog).getByRole('button', { name: /save filter/i }));
+
+            const alert = await within(dialog).findByRole('alert');
+            expect(alert).toHaveTextContent('The filter query is not valid');
+            expect(alert).toHaveTextContent('Expected value');
+            expect(nameInput).not.toHaveAttribute('aria-invalid', 'true');
+            expect(nameInput).toHaveValue('Valid Name');
+            expect(apiPost).not.toHaveBeenCalledWith('/content-filters', expect.anything());
+        });
+
         it('adds a table candidate in place', async () => {
             mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
@@ -954,6 +1110,26 @@ describe('LibraryAddPage', () => {
             expect(document.querySelector('[data-component="filter-bar"]')).toBeInTheDocument();
             expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             expect(mockNavigate).not.toHaveBeenCalledWith('/library/new-matrix-id');
+        });
+
+        it('returns focus to the table preview button after the preview drawer closes', async () => {
+            mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+            mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+            vi.mocked(apiPost).mockResolvedValueOnce(candidatePreview);
+            const user = userEvent.setup();
+
+            renderLive();
+
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+            const previewButton = await resultsTable().findByRole('button', { name: 'The Matrix' });
+            previewButton.focus();
+            await user.keyboard('{Enter}');
+            await screen.findByTestId('preview-drawer');
+            await user.keyboard('{Escape}');
+
+            await waitFor(() => expect(screen.queryByTestId('preview-drawer')).not.toBeInTheDocument());
+            expect(previewButton).toBeInTheDocument();
+            expect(previewButton).toHaveFocus();
         });
 
         it('applies the same retained Added state after adding from the preview drawer', async () => {
@@ -1246,31 +1422,95 @@ describe('LibraryAddPage', () => {
             });
         });
 
-        it('runs saved-filter provider candidate search and renders read-only results (no editor)', async () => {
+        it('Cancel_PrecedesSearch_WhenSavedFilterSearchIsPending', async () => {
+            // Arrange
+            vi.mocked(apiGet).mockImplementation((path: string) => {
+                if (path.startsWith('/content-search')) return new Promise(() => {});
+                return Promise.resolve([]);
+            });
+            const user = userEvent.setup();
+            renderLive('');
+            await user.click(screen.getByRole('tab', { name: /saved filter/i }));
+            await user.click(document.querySelector('[data-field="saved-filter"]') as HTMLElement);
+            await user.click(await screen.findByRole('option', { name: 'Action Hits' }));
+
+            // Act
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+            await screen.findByTestId('library-add-page__loading');
+
+            // Assert
+            const search = screen.getByRole('button', { name: /^search$/i });
+            expect(search.previousElementSibling).toBe(screen.getByRole('button', { name: 'Cancel search' }));
+            expect(search.nextElementSibling).toBeNull();
+        });
+
+        it('Cancel_AllowsFreshSearch_WhenSavedFilterSearchIsPending', async () => {
+            // Arrange
+            let searchCallCount = 0;
+            vi.mocked(apiGet).mockImplementation((path: string) => {
+                if (!path.startsWith('/content-search')) return Promise.resolve([]);
+                searchCallCount++;
+                if (searchCallCount === 1) return new Promise(() => {});
+                return Promise.resolve(candidateSearchResult([candidateSearchedCandidate]));
+            });
+            const user = userEvent.setup();
+            renderLive('');
+            await user.click(screen.getByRole('tab', { name: /saved filter/i }));
+            await user.click(document.querySelector('[data-field="saved-filter"]') as HTMLElement);
+            await user.click(await screen.findByRole('option', { name: 'Action Hits' }));
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+            await screen.findByTestId('library-add-page__loading');
+            const cancelledSignal = vi
+                .mocked(apiGet)
+                .mock.calls.find(([path]) => path.startsWith('/content-search'))?.[1]?.signal;
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Cancel search' }));
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+            // Assert
+            expect(cancelledSignal?.aborted).toBe(true);
+            expect(await resultsTable().findByText('The Matrix')).toBeInTheDocument();
+            expect(screen.queryByTestId('library-add-page__error')).not.toBeInTheDocument();
+            expect(searchCallCount).toBe(2);
+        });
+
+        it('Search_RendersReadOnlyCandidates_WhenSavedFilterRuns', async () => {
+            // Arrange
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
             const user = userEvent.setup();
 
             renderLive();
 
+            // Assert
             await waitFor(() => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             });
             vi.mocked(apiGet).mockClear();
 
+            // Act
             await user.click(screen.getByRole('tab', { name: /saved filter/i }));
 
+            // Assert
             expect(document.querySelector('[data-component="filter-bar"]')).not.toBeInTheDocument();
 
+            // Act
             const savedTrigger = document.querySelector('[data-field="saved-filter"]') as HTMLElement;
             await user.click(savedTrigger);
             await user.click(await screen.findByRole('option', { name: 'Action Hits' }));
 
+            // Assert
             expect(apiGet).not.toHaveBeenCalledWith(expect.stringContaining('/content-search'));
+            // Act
             await user.click(screen.getByRole('button', { name: /^search$/i }));
 
+            // Assert
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=genre+has+%22Action%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
             const savedCall = vi
                 .mocked(apiPost)
@@ -1323,34 +1563,45 @@ describe('LibraryAddPage', () => {
             expect(mockNavigate).toHaveBeenCalledWith('/filters?edit=shared-1');
         });
 
-        it('disables the Search button until a saved filter is selected, then runs provider candidate search', async () => {
+        it('Search_EnablesButton_WhenSavedFilterIsSelected', async () => {
+            // Arrange
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
             const user = userEvent.setup();
 
             renderLive();
 
+            // Assert
             await waitFor(() => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             });
             vi.mocked(apiGet).mockClear();
 
+            // Act
             await user.click(screen.getByRole('tab', { name: /saved filter/i }));
 
+            // Assert
             const initialSearch = screen.getByRole('button', { name: /^search$/i }) as HTMLButtonElement;
             expect(initialSearch).toBeInTheDocument();
             expect(initialSearch.disabled).toBe(true);
 
+            // Act
             const savedTrigger = document.querySelector('[data-field="saved-filter"]') as HTMLElement;
             await user.click(savedTrigger);
             await user.click(await screen.findByRole('option', { name: 'Action Hits' }));
 
+            // Assert
             expect((screen.getByRole('button', { name: /^search$/i }) as HTMLButtonElement).disabled).toBe(false);
             expect(apiGet).not.toHaveBeenCalledWith(expect.stringContaining('/content-search'));
 
+            // Act
             await user.click(screen.getByRole('button', { name: /^search$/i }));
+            // Assert
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=genre+has+%22Action%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
             await waitFor(() => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
@@ -1391,7 +1642,7 @@ describe('LibraryAddPage', () => {
     });
 
     describe('preload deep-link', () => {
-        function renderWithState(state: Record<string, unknown>) {
+        function renderWithState(state: Record<string, unknown>, reactStrictMode = false) {
             return render(
                 <QueryClientProvider client={createTestQueryClient()}>
                     <MemoryRouter initialEntries={[{ pathname: '/library/add', state }]}>
@@ -1405,33 +1656,98 @@ describe('LibraryAddPage', () => {
                         </ToastStateProvider>
                     </MemoryRouter>
                 </QueryClientProvider>,
+                { reactStrictMode },
             );
         }
 
-        it('lands a bare-query preload on the Live tab and immediately searches', async () => {
+        it('Preload_StartsLiveSearch_WhenStrictModeReplaysEffects', async () => {
+            // Arrange
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
 
-            renderWithState({ filterQuery: 'contentType = "shows"' });
+            // Act
+            renderWithState({ filterQuery: 'contentType = "shows"' }, true);
 
+            // Assert
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /live filter/i })).toHaveAttribute('aria-selected', 'true');
             });
             expect(document.querySelector('[data-component="filter-bar"]')).toBeInTheDocument();
 
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=contentType+%3D+%22shows%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=contentType+%3D+%22shows%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
+            expect(
+                vi.mocked(apiGet).mock.calls.find(([path]) => path.startsWith('/content-search'))?.[1]?.signal?.aborted,
+            ).toBe(false);
             await waitFor(() => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             });
         });
 
-        it('prefills the live filter from a ?contentType= query param without fetching, then searches on click', async () => {
+        it('Preload_StartsAFreshSearch_WhenANewPreloadArrivesWhileThePageIsOpen', async () => {
+            // Arrange
+            let searchCallCount = 0;
+            vi.mocked(apiGet).mockImplementation((path: string) => {
+                if (!path.startsWith('/content-search')) return Promise.resolve([]);
+                searchCallCount++;
+                return Promise.resolve({
+                    ...candidateSearchResult([candidateSearchedCandidate], {
+                        hasMore: searchCallCount === 1,
+                        requestedPage: searchCallCount === 2 ? 2 : 1,
+                    }),
+                    continuation: searchCallCount === 2 ? 'second-page' : 'first-page',
+                    nextContinuation: searchCallCount === 1 ? 'second-page' : null,
+                });
+            });
+            const router = createMemoryRouter([{ path: '/library/add', element: <LibraryAddPage /> }], {
+                initialEntries: [{ pathname: '/library/add', state: { filterQuery: 'title contains "dark"' } }],
+            });
+            const user = userEvent.setup();
+            render(
+                <QueryClientProvider client={createTestQueryClient()}>
+                    <ToastStateProvider>
+                        <TooltipProvider>
+                            <ToastProvider>
+                                <RouterProvider router={router} />
+                                <ToastViewport />
+                            </ToastProvider>
+                        </TooltipProvider>
+                    </ToastStateProvider>
+                </QueryClientProvider>,
+            );
+            await waitFor(() => expect(resultsTable().getByText('The Matrix')).toBeInTheDocument());
+            await user.click(screen.getByRole('button', { name: /next page/i }));
+            await waitFor(() => expect(searchCallCount).toBe(2));
+
+            // Act
+            await act(() => router.navigate('/library/add', { state: { filterQuery: 'title contains "matrix"' } }));
+
+            // Assert
+            await waitFor(() => expect(searchCallCount).toBe(3));
+            expect(
+                vi
+                    .mocked(apiGet)
+                    .mock.calls.filter(([path]) => path.startsWith('/content-search'))
+                    .map(([path]) => path),
+            ).toEqual([
+                '/content-search?query=title+contains+%22dark%22&page=1',
+                '/content-search?query=title+contains+%22dark%22&page=2&continuation=second-page',
+                '/content-search?query=title+contains+%22matrix%22&page=1',
+            ]);
+            expect(await screen.findByText('Page 1')).toBeInTheDocument();
+        });
+
+        it('Search_UsesPrefilledContentType_WhenLiveDeepLinkIsSubmitted', async () => {
+            // Arrange
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
             const user = userEvent.setup();
 
+            // Act
             render(
                 <QueryClientProvider client={createTestQueryClient()}>
                     <MemoryRouter initialEntries={['/library/add?contentType=movies']}>
@@ -1447,15 +1763,21 @@ describe('LibraryAddPage', () => {
                 </QueryClientProvider>,
             );
 
+            // Assert
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /live filter/i })).toHaveAttribute('aria-selected', 'true');
             });
             expect(apiGet).not.toHaveBeenCalledWith(expect.stringContaining('/content-search'));
             expect(screen.getByTestId('library-add-page__empty-initial')).toBeInTheDocument();
 
+            // Act
             await user.click(screen.getByRole('button', { name: /^search$/i }));
+            // Assert
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=contentType+%3D+%22movies%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=contentType+%3D+%22movies%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
             expect(mockParseMagpieQl).not.toHaveBeenCalled();
             await waitFor(() => {
@@ -1463,7 +1785,8 @@ describe('LibraryAddPage', () => {
             });
         });
 
-        it('auto-runs ad-hoc provider candidate search for an owned saved-filter preload on the Saved tab', async () => {
+        it('Preload_StartsOwnedSavedSearch_WhenStrictModeReplaysEffects', async () => {
+            // Arrange
             mockUseContentFilters.mockReturnValue({
                 filters: [
                     {
@@ -1485,20 +1808,26 @@ describe('LibraryAddPage', () => {
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
 
-            renderWithState({ filterQuery: 'genre has "Action"', savedFilterId: 'my-1' });
+            // Act
+            renderWithState({ filterQuery: 'genre has "Action"', savedFilterId: 'my-1' }, true);
 
+            // Assert
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /saved filter/i })).toHaveAttribute('aria-selected', 'true');
             });
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=genre+has+%22Action%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
             await waitFor(() => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             });
         });
 
-        it('holds an owned filter deep-link until its formatted query resolves, then runs the real query', async () => {
+        it('Preload_WaitsForFormattedQuery_WhenOwnedFilterDeepLinkResolves', async () => {
+            // Arrange
             const ownedUnresolved = {
                 id: 'my-1',
                 name: 'My Action',
@@ -1540,8 +1869,10 @@ describe('LibraryAddPage', () => {
                     </MemoryRouter>
                 </QueryClientProvider>
             );
+            // Act
             const { rerender } = render(ui);
 
+            // Assert
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /saved filter/i })).toHaveAttribute('aria-selected', 'true');
             });
@@ -1549,6 +1880,7 @@ describe('LibraryAddPage', () => {
             expect(apiGet).not.toHaveBeenCalledWith(expect.stringContaining('/content-search'));
             expect(screen.queryByTestId('library-add-page__error')).not.toBeInTheDocument();
 
+            // Act
             mockUseContentFilters.mockReturnValue({
                 filters: [{ ...ownedUnresolved, query: 'genre has "Action"' }],
                 isLoading: false,
@@ -1557,8 +1889,12 @@ describe('LibraryAddPage', () => {
             });
             rerender(ui);
 
+            // Assert
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=genre+has+%22Action%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
             await waitFor(() => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
@@ -1566,7 +1902,8 @@ describe('LibraryAddPage', () => {
             expect(mockParseMagpieQl).not.toHaveBeenCalledWith('', 'content');
         });
 
-        it('holds a saved-filter preload until the filter list loads, then lands on the Saved tab', async () => {
+        it('Preload_SelectsSavedTab_WhenSavedFilterListLoads', async () => {
+            // Arrange
             mockUseContentFilters.mockReturnValue({
                 filters: [],
                 isLoading: true,
@@ -1597,10 +1934,13 @@ describe('LibraryAddPage', () => {
                     </MemoryRouter>
                 </QueryClientProvider>
             );
+            // Act
             const { rerender } = render(ui);
 
+            // Assert
             expect(apiPost).not.toHaveBeenCalled();
 
+            // Act
             mockUseContentFilters.mockReturnValue({
                 filters: [
                     {
@@ -1621,15 +1961,20 @@ describe('LibraryAddPage', () => {
             });
             rerender(ui);
 
+            // Assert
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /saved filter/i })).toHaveAttribute('aria-selected', 'true');
             });
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=genre+has+%22Action%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
         });
 
-        it('auto-runs a shared saved-filter preload on the Saved tab (read-only)', async () => {
+        it('Preload_StartsSharedSavedSearch_WhenStrictModeReplaysEffects', async () => {
+            // Arrange
             mockUseContentFilters.mockReturnValue({
                 filters: [
                     {
@@ -1651,14 +1996,19 @@ describe('LibraryAddPage', () => {
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
 
-            renderWithState({ filterQuery: 'genre has "Action"', savedFilterId: 'shared-1' });
+            // Act
+            renderWithState({ filterQuery: 'genre has "Action"', savedFilterId: 'shared-1' }, true);
 
+            // Assert
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /saved filter/i })).toHaveAttribute('aria-selected', 'true');
             });
             expect(document.querySelector('[data-component="filter-bar"]')).not.toBeInTheDocument();
             await waitFor(() => {
-                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
+                expect(apiGet).toHaveBeenCalledWith(
+                    '/content-search?query=genre+has+%22Action%22&page=1',
+                    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+                );
             });
             await waitFor(() => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();

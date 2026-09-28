@@ -66,6 +66,13 @@
         margin-bottom: var(--space-md);
     }
 
+    @media (max-width: 639px) {
+        .my-jobs-page__section-header,
+        .my-jobs-page__executions-toolbar > [data-action='run-job'] {
+            display: none;
+        }
+    }
+
     .my-jobs-page__executions-toolbar {
         display: flex;
         flex-wrap: wrap;

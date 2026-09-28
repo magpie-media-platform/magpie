@@ -81,11 +81,6 @@ public record JobExecution
     public DateTime? LastHeartbeat { get; set; }
 
     /// <summary>
-    /// The UTC time the execution times out.
-    /// </summary>
-    public DateTime? TimeoutAt { get; set; }
-
-    /// <summary>
     /// The earliest UTC time the execution can start.
     /// </summary>
     public DateTime? NotBeforeAt { get; set; }

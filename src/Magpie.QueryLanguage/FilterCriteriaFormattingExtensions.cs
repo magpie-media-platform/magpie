@@ -75,6 +75,7 @@ internal static class FilterCriteriaFormattingExtensions
         parts.AddRange(FormatPropertyCriteria(nameof(item.Slug), item.Slug));
         parts.AddRange(FormatPropertyCriteria(nameof(item.Name), item.Name));
         parts.AddRange(FormatPropertyCriteria(nameof(item.Monitoring), item.Monitoring));
+
         if (item.PendingMetadataRefresh is { } pendingMetadataRefresh)
         {
             parts.Add(new QueryPart(
@@ -87,10 +88,23 @@ internal static class FilterCriteriaFormattingExtensions
             parts.Add(new QueryPart($"{nameof(item.HasSearchableTitle)} = {FormatValue(hasSearchableTitle)}", false));
         }
 
+        if (item.ImportPending is { } importPending)
+        {
+            parts.Add(new QueryPart($"{nameof(item.ImportPending)} = {FormatValue(importPending)}", false));
+        }
+
         parts.AddRange(FormatPropertyCriteria(nameof(item.Fulfillment), item.Fulfillment));
         parts.AddRange(FormatPropertyCriteria(nameof(item.ActiveAcquisitionStatus), item.ActiveAcquisitionStatus));
         parts.AddRange(FormatPropertyCriteria(nameof(item.QualityStatus), item.QualityStatus));
+        parts.AddRange(FormatPropertyCriteria(nameof(item.PrimaryMediaSize), item.PrimaryMediaSize));
+        parts.AddRange(FormatPropertyCriteria(nameof(item.PrimaryMediaFileCount), item.PrimaryMediaFileCount));
         parts.AddRange(FormatPropertyCriteria(nameof(item.Path), item.Path));
+        parts.AddRange(FormatCollectionCriteria(
+            nameof(MediaFile),
+            nameof(item.MediaFiles),
+            item.MediaFiles,
+            FormatMediaFileCriteria,
+            _ => false));
 
         foreach (var meta in item.Metadata.And)
         {
@@ -416,6 +430,18 @@ internal static class FilterCriteriaFormattingExtensions
         parts.AddRange(FormatPropertyCriteria(nameof(criteria.Language), criteria.Language));
         parts.AddRange(FormatPropertyCriteria(nameof(criteria.Width), criteria.Width));
         parts.AddRange(FormatPropertyCriteria(nameof(criteria.Height), criteria.Height));
+
+        return JoinWithAnd(parts);
+    }
+
+    private static string FormatMediaFileCriteria(MediaFileCriteria criteria)
+    {
+        var parts = new List<QueryPart>();
+
+        parts.AddRange(FormatPropertyCriteria(nameof(criteria.FileKind), criteria.FileKind));
+        parts.AddRange(FormatPropertyCriteria(nameof(criteria.MimeType), criteria.MimeType));
+        parts.AddRange(FormatPropertyCriteria(nameof(criteria.FilePath), criteria.FilePath));
+        parts.AddRange(FormatPropertyCriteria(nameof(criteria.FileSize), criteria.FileSize));
 
         return JoinWithAnd(parts);
     }

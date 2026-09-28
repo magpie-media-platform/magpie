@@ -8,9 +8,10 @@ import {
     type FulfillmentStatus,
     type RecentContentItem,
 } from './ContentStatsWidget';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 const renderWithRouter = (ui: React.ReactElement) => {
-    return render(<MemoryRouter>{ui}</MemoryRouter>);
+    return render(<MemoryRouter>{ui}</MemoryRouter>, { wrapper: TooltipProvider });
 };
 
 const defaultCounts: FulfillmentCounts = {
@@ -186,7 +187,7 @@ describe('ContentStatsWidget recent items', () => {
                 title: 'Monitored Show',
                 addedAt: '1h ago',
                 fulfillment: 'upgradable',
-                effectiveMonitoring: true,
+                effectiveMonitoring: 'Monitored',
             },
         ];
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={items} />);
@@ -195,38 +196,50 @@ describe('ContentStatsWidget recent items', () => {
         expect(item?.querySelector('.content-stats-widget__item-status')?.textContent).toBe('Upgradable');
     });
 
-    it('suppresses the per-item fulfillment status for an excluded recent item', () => {
+    it('shows explicit unmonitored and fulfillment states separately for a recent item', () => {
+        // Arrange
         const items: RecentContentItem[] = [
             {
                 id: 'ex1',
                 title: 'Unmonitored Show',
                 addedAt: '1h ago',
                 fulfillment: 'missing',
-                effectiveMonitoring: false,
+                monitoring: 'Unmonitored',
+                effectiveMonitoring: 'Unmonitored',
             },
         ];
+
+        // Act
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={items} />);
 
+        // Assert
         const item = document.querySelector('[data-content-id="ex1"]');
         expect(item).toBeInTheDocument();
-        expect(item?.querySelector('.content-stats-widget__item-status')).toBeNull();
-        expect(item).not.toHaveAttribute('data-status');
+        expect(item?.querySelector('.content-stats-widget__item-status')).toHaveTextContent('Missing');
+        expect(item).toHaveAttribute('data-status', 'missing');
+        expect(screen.getByLabelText('Unmonitored')).toBeInTheDocument();
     });
 
-    it('suppresses the per-item fulfillment status when exclusion is inherited', () => {
+    it('shows inherited unmonitored and fulfillment states separately for a recent item', () => {
+        // Arrange
         const items: RecentContentItem[] = [
             {
                 id: 'inh1',
                 title: 'Inherited Excluded',
                 addedAt: '1h ago',
                 fulfillment: 'missing',
-                effectiveMonitoring: false,
+                monitoring: null,
+                effectiveMonitoring: 'Unmonitored',
             },
         ];
+
+        // Act
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={items} />);
 
+        // Assert
         const item = document.querySelector('[data-content-id="inh1"]');
-        expect(item?.querySelector('.content-stats-widget__item-status')).toBeNull();
+        expect(item?.querySelector('.content-stats-widget__item-status')).toHaveTextContent('Missing');
+        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
     });
 });
 

@@ -1,11 +1,13 @@
-import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter, useSearchParams, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { LocalContentPreviewProvider } from '@/components/content/LocalContentPreview';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/api')>()),
     apiGet: vi.fn(),
     apiPost: vi.fn(),
     apiDelete: vi.fn(),
@@ -58,7 +60,7 @@ vi.mock('@/auth', async () => {
 
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
-import { apiGet, apiPost, apiDelete } from '@/lib/api';
+import { ApiError, apiGet, apiPost, apiDelete } from '@/lib/api';
 import { formatDateTime } from '@/lib/dateFormatting';
 import type { ApiDownload, DownloadStatusValue, PagedDownloads } from '@/hooks/useDownloads';
 import type { ApiDownloadClient } from '@/hooks/useDownloadClients';
@@ -360,8 +362,7 @@ function createTestWrapper(queryClient: QueryClient) {
     };
 }
 
-function createUrlWrapper(url: string) {
-    const queryClient = createTestQueryClient();
+function createUrlWrapper(url: string, queryClient = createTestQueryClient()) {
     return function TestWrapperWithUrl({ children }: { children: ReactNode }) {
         return (
             <QueryClientProvider client={queryClient}>
@@ -381,9 +382,19 @@ function createUrlWrapper(url: string) {
     };
 }
 
-function setupApiGet(source: ApiDownload[] = mockApiDownloads) {
+function setupApiGet(source: ApiDownload[] = mockApiDownloads, detailError?: Error) {
     const mockApiGet = vi.mocked(apiGet);
     mockApiGet.mockImplementation((url: string) => {
+        const detailMatch = url.match(/^\/downloads\/([^/?]+)$/);
+        if (detailMatch) {
+            if (detailError) {
+                return Promise.reject(detailError);
+            }
+            const download = source.find((item) => item.id === detailMatch[1]);
+            return download
+                ? Promise.resolve(download)
+                : Promise.reject(new ApiError(404, 'The selected download no longer exists.'));
+        }
         if (url.startsWith('/downloads')) {
             return Promise.resolve(respondDownloads(url, source));
         }
@@ -621,10 +632,15 @@ describe('DownloadsPage table columns', () => {
         });
     });
 
-    it('navigates to the library item when the title link is clicked (SPA, no reload)', async () => {
+    it('opens a local preview without leaving downloads when the title is clicked', async () => {
         const user = userEvent.setup();
         const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        render(
+            <LocalContentPreviewProvider>
+                <DownloadsPage />
+            </LocalContentPreviewProvider>,
+            { wrapper: createTestWrapper(queryClient) },
+        );
 
         await waitFor(() => {
             expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
@@ -633,7 +649,8 @@ describe('DownloadsPage table columns', () => {
         await user.click(within(getTable()).getByRole('link', { name: 'Breaking Bad' }));
 
         await waitFor(() => {
-            expect(screen.getByText('Library Detail')).toBeInTheDocument();
+            expect(screen.getByTestId('preview-drawer')).toBeInTheDocument();
+            expect(screen.queryByText('Library Detail')).not.toBeInTheDocument();
         });
     });
 });
@@ -923,7 +940,10 @@ describe('DownloadsPage details modal', () => {
         setupApiGet();
     });
 
-    afterEach(() => vi.restoreAllMocks());
+    afterEach(() => {
+        vi.restoreAllMocks();
+        mockHasPermission.mockImplementation(() => true);
+    });
 
     it('opens a modal showing the file name, transfer id, and release title', async () => {
         const user = userEvent.setup();
@@ -994,6 +1014,256 @@ describe('DownloadsPage details modal', () => {
         const dialog = await screen.findByTestId('download-details-dialog');
         expect(within(dialog).getByText('Hash mismatch after download')).toBeInTheDocument();
         expect(within(dialog).getByText('Download errored')).toBeInTheDocument();
+    });
+
+    it('refreshes an open held-import dialog from the current history row', async () => {
+        const waitingReason =
+            'Waiting for destination capacity: insufficient free space. Required: 1394 bytes. Available: 100 bytes.';
+        const downloads: ApiDownload[] = [
+            {
+                id: 'capacity-import',
+                downloadClientId: 'client-1',
+                downloadClientName: 'SABnzbd',
+                externalId: 'capacity_import_1',
+                title: 'Capacity.Import.Hold',
+                status: 'Importing',
+                statusReason: waitingReason,
+                heldByPolicy: true,
+                dateCompleted: '2026-09-22T16:20:00Z',
+                createdAt: '2026-09-22T16:00:00Z',
+                modifiedAt: '2026-09-22T16:20:00Z',
+            },
+        ];
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        setupApiGet(downloads);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await screen.findByText('Capacity.Import.Hold');
+        await user.click(screen.getByRole('button', { name: /actions for capacity\.import\.hold/i }));
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+
+        const dialog = await screen.findByTestId('download-details-dialog');
+        expect(dialog.querySelector('[data-detail="Status"]')).toHaveTextContent('Importing');
+        expect(dialog.querySelector('[data-detail="Status reason"]')).toHaveTextContent(waitingReason);
+
+        downloads[0] = {
+            ...downloads[0],
+            status: 'Imported',
+            statusReason: null,
+            modifiedAt: '2026-09-22T16:26:20Z',
+        };
+        await queryClient.invalidateQueries();
+
+        const history = document.querySelector('[aria-label="Download history"]');
+        await waitFor(() => expect(history).toHaveTextContent('Imported'));
+        expect(history).toHaveTextContent('Held by client');
+        await waitFor(() => expect(dialog.querySelector('[data-detail="Status"]')).toHaveTextContent('Imported'));
+        expect(dialog.querySelector('[data-detail="Client hold"]')).toHaveTextContent('Held by client');
+        expect(dialog.querySelector('[data-detail="Status reason"]')).toBeNull();
+        expect(within(dialog).queryByText(waitingReason)).not.toBeInTheDocument();
+    });
+
+    it('keeps filtered capacity recovery current through changed and cleared reasons', async () => {
+        const oldReason =
+            'Waiting for destination capacity: insufficient free space. Required: 1394 bytes. Available: 100 bytes.';
+        const changedReason =
+            'Waiting for destination capacity: insufficient free space. Required: 1394 bytes. Available: 900 bytes.';
+        const downloads: ApiDownload[] = [
+            {
+                id: 'filtered-capacity-import',
+                downloadClientId: 'client-1',
+                downloadClientName: 'SABnzbd',
+                externalId: 'filtered_capacity_import',
+                title: 'Filtered.Capacity.Import',
+                status: 'Importing',
+                statusReason: oldReason,
+                heldByPolicy: true,
+                dateCompleted: '2026-09-22T16:20:00Z',
+                createdAt: '2026-09-22T16:00:00Z',
+                modifiedAt: '2026-09-22T16:20:00Z',
+            },
+        ];
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        setupApiGet(downloads);
+        const queryClient = createTestQueryClient();
+        const user = userEvent.setup();
+        render(<DownloadsPage />, {
+            wrapper: createUrlWrapper('/downloads?tab=history&hstate=Importing', queryClient),
+        });
+
+        await screen.findByText('Filtered.Capacity.Import');
+        await user.click(screen.getByRole('button', { name: /actions for filtered\.capacity\.import/i }));
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+
+        const dialog = await screen.findByTestId('download-details-dialog');
+        await waitFor(() => expect(dialog.querySelector('[data-detail="Status reason"]')).toHaveTextContent(oldReason));
+
+        downloads[0] = {
+            ...downloads[0],
+            statusReason: changedReason,
+            modifiedAt: '2026-09-22T16:23:00Z',
+        };
+        await queryClient.invalidateQueries({ queryKey: ['downloads'] });
+
+        await waitFor(() =>
+            expect(dialog.querySelector('[data-detail="Status reason"]')).toHaveTextContent(changedReason),
+        );
+        expect(within(dialog).queryByText(oldReason)).not.toBeInTheDocument();
+
+        downloads[0] = {
+            ...downloads[0],
+            status: 'Imported',
+            statusReason: null,
+            modifiedAt: '2026-09-22T16:26:20Z',
+        };
+        await queryClient.invalidateQueries({ queryKey: ['downloads'] });
+
+        const history = document.querySelector('[aria-label="Download history"]');
+        await waitFor(() => expect(history).not.toHaveTextContent('Filtered.Capacity.Import'));
+        await waitFor(() => expect(dialog.querySelector('[data-detail="Status"]')).toHaveTextContent('Imported'));
+        expect(dialog.querySelector('[data-detail="Status reason"]')).toBeNull();
+        expect(within(dialog).queryByText(changedReason)).not.toBeInTheDocument();
+    });
+
+    it('keeps selected details current when the row moves outside the current page', async () => {
+        const downloads: ApiDownload[] = [
+            {
+                id: 'paged-capacity-import',
+                downloadClientId: 'client-1',
+                externalId: 'paged_capacity_import',
+                title: 'Paged.Capacity.Import',
+                status: 'Importing',
+                statusReason: 'Waiting for capacity before page movement.',
+                dateCompleted: '2026-09-30T12:00:00Z',
+                createdAt: '2026-09-22T16:00:00Z',
+            },
+            ...Array.from(
+                { length: 25 },
+                (_, index): ApiDownload => ({
+                    id: `history-${index + 1}`,
+                    downloadClientId: 'client-1',
+                    externalId: `history_${index + 1}`,
+                    title: `History.Item.${index + 1}`,
+                    status: 'Imported',
+                    dateCompleted: `2026-09-${String(index + 1).padStart(2, '0')}T12:00:00Z`,
+                    createdAt: '2026-09-01T00:00:00Z',
+                }),
+            ),
+        ];
+        setupApiGet(downloads);
+        const queryClient = createTestQueryClient();
+        const user = userEvent.setup();
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history', queryClient) });
+
+        await screen.findByText('Paged.Capacity.Import');
+        await openRowMenu(user, /actions for paged\.capacity\.import/i);
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+        const dialog = await screen.findByTestId('download-details-dialog');
+        await waitFor(() => expect(dialog.querySelector('[data-detail="Status"]')).toHaveTextContent('Importing'));
+
+        downloads[0] = {
+            ...downloads[0],
+            status: 'Imported',
+            statusReason: null,
+            dateCompleted: '2026-08-01T12:00:00Z',
+            modifiedAt: '2026-09-22T16:26:20Z',
+        };
+        await queryClient.invalidateQueries({ queryKey: ['downloads'] });
+
+        const table = document.querySelector('[data-component="data-table"]');
+        await waitFor(() => expect(table).not.toHaveTextContent('Paged.Capacity.Import'));
+        await waitFor(() => expect(dialog.querySelector('[data-detail="Status"]')).toHaveTextContent('Imported'));
+        expect(dialog.querySelector('[data-detail="Status reason"]')).toBeNull();
+    });
+
+    it('uses current selected details instead of an inactive queue snapshot', async () => {
+        const downloads: ApiDownload[] = [
+            {
+                id: 'cross-tab-download',
+                downloadClientId: 'client-1',
+                externalId: 'cross_tab_download',
+                title: 'Cross.Tab.Download',
+                status: 'Downloading',
+                statusReason: 'Old queue status.',
+                createdAt: '2026-09-22T16:00:00Z',
+            },
+        ];
+        setupApiGet(downloads);
+        const queryClient = createTestQueryClient();
+        const user = userEvent.setup();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Cross.Tab.Download')).toBeInTheDocument());
+        downloads[0] = {
+            ...downloads[0],
+            status: 'Imported',
+            statusReason: null,
+            heldByPolicy: true,
+            dateCompleted: '2026-09-22T16:26:20Z',
+            modifiedAt: '2026-09-22T16:26:20Z',
+        };
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await waitFor(() => expect(within(getTable()).getByText('Cross.Tab.Download')).toBeInTheDocument());
+        await openRowMenu(user, /actions for cross\.tab\.download/i);
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+
+        const dialog = await screen.findByTestId('download-details-dialog');
+        await waitFor(() => expect(dialog.querySelector('[data-detail="Status"]')).toHaveTextContent('Imported'));
+        expect(dialog.querySelector('[data-detail="Client hold"]')).toHaveTextContent('Held by client');
+        expect(within(dialog).queryByText('Old queue status.')).not.toBeInTheDocument();
+    });
+
+    it('bounds the selected-detail query to the open viewer dialog', async () => {
+        mockHasPermission.mockImplementation((permission: string) =>
+            testHasPermission(Role.Viewer, permission as Permission),
+        );
+        setupApiGet();
+        const queryClient = createTestQueryClient();
+        const user = userEvent.setup();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        expect(vi.mocked(apiGet).mock.calls.filter(([url]) => /^\/downloads\/[^/?]+$/.test(url))).toHaveLength(0);
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+        await waitFor(() =>
+            expect(vi.mocked(apiGet).mock.calls.filter(([url]) => url === '/downloads/dl-1')).toHaveLength(1),
+        );
+
+        await user.click(screen.getByRole('button', { name: /close/i }));
+        await waitFor(() => expect(screen.queryByTestId('download-details-dialog')).not.toBeInTheDocument());
+        await queryClient.invalidateQueries({ queryKey: ['downloads'] });
+        expect(vi.mocked(apiGet).mock.calls.filter(([url]) => url === '/downloads/dl-1')).toHaveLength(1);
+    });
+
+    it.each([
+        {
+            error: new ApiError(404, 'The selected download no longer exists.'),
+            title: 'Download no longer exists',
+            description: 'The selected download was removed.',
+        },
+        {
+            error: new ApiError(503, 'Download storage is unavailable.'),
+            title: 'Download details unavailable',
+            description: 'Download storage is unavailable.',
+        },
+    ])('shows selected identity and $title for a detail read failure', async ({ error, title, description }) => {
+        setupApiGet(mockApiDownloads, error);
+        const user = userEvent.setup();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+
+        const dialog = await screen.findByTestId('download-details-dialog');
+        expect(within(dialog).getByRole('heading', { name: 'Breaking Bad' })).toBeInTheDocument();
+        expect(await within(dialog).findByText(title)).toBeInTheDocument();
+        expect(within(dialog).getByText(description)).toBeInTheDocument();
+        expect(dialog.querySelector('[data-component="release-download"]')).toBeNull();
     });
 });
 
@@ -1230,7 +1500,8 @@ describe('DownloadsPage filters and summary', () => {
         });
     });
 
-    it('filters by status via the Status header funnel and offers a Clear filters reset', async () => {
+    it('FilterByStatus_ClearsFromSharedToolbar_WhenStatusIsActive', async () => {
+        // Arrange
         const user = userEvent.setup();
         const mockApiGet = setupApiGet();
         const queryClient = createTestQueryClient();
@@ -1238,9 +1509,11 @@ describe('DownloadsPage filters and summary', () => {
 
         await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
 
+        // Act
         await user.click(within(getTable()).getByRole('button', { name: 'Filter by Status' }));
         await user.click(await screen.findByRole('menuitemradio', { name: 'Paused' }));
 
+        // Assert
         await waitFor(() => {
             const filtered = mockApiGet.mock.calls
                 .map((c) => String(c[0]))
@@ -1248,17 +1521,18 @@ describe('DownloadsPage filters and summary', () => {
             expect(filtered).toBe(true);
         });
 
-        const filterBar = getTable().querySelector('[data-component="data-table-filter-bar"]') as HTMLElement;
-        const clearFilters = within(filterBar).getByRole('button', { name: 'Clear filters' });
-        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
-
+        // Act
+        const clearFilters = within(screen.getByLabelText('Active filters')).getByRole('button', { name: 'Clear all' });
         await user.click(clearFilters);
+
+        // Assert
         await waitFor(() => {
             expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
         });
     });
 
-    it('clears an active queue filter from the table filter bar', async () => {
+    it('ClearQueueFilters_RestoresRows_WhenUrlFilterIsActive', async () => {
+        // Arrange
         const user = userEvent.setup();
         render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qstate=Paused') });
 
@@ -1266,35 +1540,35 @@ describe('DownloadsPage filters and summary', () => {
             expect(within(getTable()).getByText('The.Gentlemen.S01E03.1080p.WEB.x264')).toBeInTheDocument(),
         );
 
-        const filterBar = getTable().querySelector('[data-component="data-table-filter-bar"]') as HTMLElement;
-        const clearFilters = within(filterBar).getByRole('button', { name: 'Clear filters' });
-        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
-
+        // Act
+        const clearFilters = within(screen.getByLabelText('Active filters')).getByRole('button', { name: 'Clear all' });
         await user.click(clearFilters);
 
+        // Assert
         await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
-        expect(getTable().querySelector('[data-component="data-table-filter-bar"]')).not.toBeInTheDocument();
+        expect(screen.queryByLabelText('Active filters')).not.toBeInTheDocument();
     });
 
-    it('clears an active history filter from the table filter bar', async () => {
+    it('ClearHistoryFilters_RestoresRows_WhenUrlFilterIsActive', async () => {
+        // Arrange
         const user = userEvent.setup();
         render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history&hclient=client-1') });
 
         await waitFor(() => expect(within(getTable()).getByText('The Bear')).toBeInTheDocument());
 
-        const filterBar = getTable().querySelector('[data-component="data-table-filter-bar"]') as HTMLElement;
-        const clearFilters = within(filterBar).getByRole('button', { name: 'Clear filters' });
-        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
-
+        // Act
+        const clearFilters = within(screen.getByLabelText('Active filters')).getByRole('button', { name: 'Clear all' });
         await user.click(clearFilters);
 
+        // Assert
         await waitFor(() =>
             expect(within(getTable()).getByText('Oppenheimer.2023.2160p.UHD.BluRay.x265')).toBeInTheDocument(),
         );
-        expect(getTable().querySelector('[data-component="data-table-filter-bar"]')).not.toBeInTheDocument();
+        expect(screen.queryByLabelText('Active filters')).not.toBeInTheDocument();
     });
 
-    it('clears an active queue filter from the card-layout list toolbar at a 390px viewport', async () => {
+    it('ClearQueueFilters_RestoresCards_WhenViewportIsCompact', async () => {
+        // Arrange
         vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
         render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qstate=Paused') });
@@ -1305,16 +1579,19 @@ describe('DownloadsPage filters and summary', () => {
         const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]') as HTMLElement;
         expect(toolbar).toBeInTheDocument();
 
-        const clearFilters = within(toolbar).getByRole('button', { name: 'Clear filters' });
-        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
+        expect(within(toolbar).getByRole('button', { name: 'Filters, 1 active' })).toBeInTheDocument();
 
+        // Act
+        const clearFilters = within(screen.getByLabelText('Active filters')).getByRole('button', { name: 'Clear all' });
         await user.click(clearFilters);
 
+        // Assert
         await waitFor(() => expect(within(queueCards).getByText('Breaking Bad')).toBeInTheDocument());
-        expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+        expect(screen.queryByLabelText('Active filters')).not.toBeInTheDocument();
     });
 
-    it('keeps the card-layout list toolbar reachable when a queue filter matches no rows', async () => {
+    it('ClearQueueFilters_RestoresCards_WhenCompactResultIsEmpty', async () => {
+        // Arrange
         vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
         render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qclient=client-2&qstate=Paused') });
@@ -1326,17 +1603,20 @@ describe('DownloadsPage filters and summary', () => {
         const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]') as HTMLElement;
         expect(toolbar).toBeInTheDocument();
 
-        const clearFilters = within(toolbar).getByRole('button', { name: 'Clear filters' });
-        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
+        expect(within(toolbar).getByRole('button', { name: 'Filters, 2 active' })).toBeInTheDocument();
 
+        // Act
+        const clearFilters = within(screen.getByLabelText('Active filters')).getByRole('button', { name: 'Clear all' });
         await user.click(clearFilters);
 
+        // Assert
         await waitFor(() => expect(within(queueCards).getByText('Breaking Bad')).toBeInTheDocument());
         expect(within(queueCards).queryByText('No active downloads')).not.toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+        expect(screen.queryByLabelText('Active filters')).not.toBeInTheDocument();
     });
 
-    it('keeps the card-layout list toolbar reachable when a history filter matches no rows', async () => {
+    it('ClearHistoryFilters_RestoresCards_WhenCompactResultIsEmpty', async () => {
+        // Arrange
         vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
         render(<DownloadsPage />, {
@@ -1350,14 +1630,16 @@ describe('DownloadsPage filters and summary', () => {
         const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]') as HTMLElement;
         expect(toolbar).toBeInTheDocument();
 
-        const clearFilters = within(toolbar).getByRole('button', { name: 'Clear filters' });
-        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
+        expect(within(toolbar).getByRole('button', { name: 'Filters, 2 active' })).toBeInTheDocument();
 
+        // Act
+        const clearFilters = within(screen.getByLabelText('Active filters')).getByRole('button', { name: 'Clear all' });
         await user.click(clearFilters);
 
+        // Assert
         await waitFor(() => expect(within(historyCards).getByText('The Bear')).toBeInTheDocument());
         expect(within(historyCards).queryByText('No download history')).not.toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+        expect(screen.queryByLabelText('Active filters')).not.toBeInTheDocument();
     });
 });
 
@@ -1668,6 +1950,32 @@ describe('DownloadsPage paging', () => {
             expect(advanced).toBe(true);
         });
     });
+
+    it('BulkPause_TargetsSelectionsFromBothPages_WhenReturningToTheFirstPage', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        vi.mocked(apiPost).mockResolvedValue(undefined);
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        // Act
+        await waitFor(() => expect(getTableRow('q-0')).toBeInTheDocument());
+        await user.click(within(getTableRow('q-0')).getByRole('checkbox'));
+        await user.click(screen.getByRole('button', { name: /go to next page/i }));
+        await waitFor(() => expect(getTableRow('q-25')).toBeInTheDocument());
+        await user.click(within(getTableRow('q-25')).getByRole('checkbox'));
+        await user.click(screen.getByRole('button', { name: /go to previous page/i }));
+        await waitFor(() => expect(getTableRow('q-0')).toBeInTheDocument());
+
+        // Assert
+        expect(within(getTableRow('q-0')).getByRole('checkbox')).toBeChecked();
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+        await user.click(within(bar).getByRole('button', { name: /^pause$/i }));
+        await waitFor(() => expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/downloads/q-0/pause'));
+        expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/downloads/q-25/pause');
+        expect(vi.mocked(apiPost)).toHaveBeenCalledTimes(2);
+    });
 });
 
 describe('DownloadsPage bulk selection', () => {
@@ -1679,6 +1987,42 @@ describe('DownloadsPage bulk selection', () => {
     });
 
     afterEach(() => vi.restoreAllMocks());
+
+    it('BulkPause_TracksCurrentPageCapability_WhenSelectedDownloadRefreshes', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        let source = mockApiDownloads.map((download) =>
+            download.id === 'dl-1' ? { ...download, canPause: false } : download,
+        );
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/downloads')) return Promise.resolve(respondDownloads(url, source));
+            if (url === '/download-clients') return Promise.resolve(mockApiClients);
+            return Promise.resolve([]);
+        });
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        await waitFor(() => expect(getTableRow('dl-1')).toBeInTheDocument());
+        await user.click(within(getTableRow('dl-1')).getByRole('checkbox'));
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        expect(within(bar).getByRole('button', { name: 'Pause' })).toBeDisabled();
+
+        // Act
+        source = mockApiDownloads;
+        await queryClient.invalidateQueries({ queryKey: ['downloads', 'list'] });
+
+        // Assert
+        await waitFor(() => expect(within(bar).getByRole('button', { name: 'Pause' })).toBeEnabled());
+
+        // Act
+        source = mockApiDownloads.map((download) =>
+            download.id === 'dl-1' ? { ...download, canPause: false } : download,
+        );
+        await queryClient.invalidateQueries({ queryKey: ['downloads', 'list'] });
+
+        // Assert
+        await waitFor(() => expect(within(bar).getByRole('button', { name: 'Pause' })).toBeDisabled());
+        expect(within(getTableRow('dl-1')).getByRole('checkbox')).toBeChecked();
+    });
 
     it('does not render a Clear all control', async () => {
         const queryClient = createTestQueryClient();
@@ -1752,6 +2096,54 @@ describe('DownloadsPage bulk selection', () => {
         expect(within(bar).getByRole('button', { name: /remove/i })).toBeEnabled();
     });
 
+    it('keeps a desktop History selection visible and usable across layout switches', async () => {
+        let width = 1440;
+        const listeners = new Set<(event: { matches: boolean }) => void>();
+        const matches = (query: string) => {
+            const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+            const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+            return (
+                (minWidth === null || width >= Number(minWidth[1])) &&
+                (maxWidth === null || width <= Number(maxWidth[1]))
+            );
+        };
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                get matches() {
+                    return matches(query);
+                },
+                media: query,
+                addEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+                    listeners.add(Object.assign(listener, { query })),
+                removeEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+                    listeners.delete(listener),
+            })),
+        );
+        const resize = (next: number) =>
+            act(() => {
+                width = next;
+                for (const listener of listeners) {
+                    listener({ matches: matches((listener as unknown as { query: string }).query) });
+                }
+            });
+        const user = userEvent.setup();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+        await user.click(await screen.findByRole('tab', { name: /history/i }));
+        await user.click(await screen.findByRole('checkbox', { name: /select the bear/i }));
+
+        resize(390);
+        const mobileBar = await waitFor(
+            () => document.querySelector('[data-component="downloads-mobile-selection-bar-history"]') as HTMLElement,
+        );
+        expect(within(mobileBar).getByText('1 selected')).toBeInTheDocument();
+        expect(within(mobileBar).getByRole('button', { name: /forget/i })).toBeEnabled();
+
+        resize(1440);
+        const desktopBar = document.querySelector('[data-component="downloads-bulk-bar-history"]') as HTMLElement;
+        expect(within(desktopBar).getByText('1 selected')).toBeInTheDocument();
+    });
+
     it('selects and clears the visible mobile page on each tab', async () => {
         vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
@@ -1814,7 +2206,7 @@ describe('DownloadsPage bulk selection', () => {
         await user.click(screen.getByRole('button', { name: 'Select The Bear' }));
 
         await user.click(screen.getByRole('tab', { name: /active/i }));
-        expect(screen.getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Select Breaking Bad' })).toHaveAttribute('aria-pressed', 'true');
         expect(
             within(
@@ -1823,17 +2215,17 @@ describe('DownloadsPage bulk selection', () => {
         ).toBeInTheDocument();
 
         await user.click(screen.getByRole('tab', { name: /history/i }));
-        expect(screen.getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Select The Bear' })).toHaveAttribute('aria-pressed', 'true');
 
-        await user.click(screen.getByRole('button', { name: /stop selecting/i }));
+        await user.click(screen.getByRole('button', { name: 'Select', pressed: true }));
         expect(screen.queryByRole('button', { name: 'Select The Bear' })).not.toBeInTheDocument();
         await user.click(screen.getByRole('button', { name: /^select$/i }));
         expect(screen.getByRole('button', { name: 'Select The Bear' })).toHaveAttribute('aria-pressed', 'false');
 
         await user.click(screen.getByRole('tab', { name: /active/i }));
         expect(screen.getByRole('button', { name: 'Select Breaking Bad' })).toHaveAttribute('aria-pressed', 'true');
-        await user.click(screen.getByRole('button', { name: /stop selecting/i }));
+        await user.click(screen.getByRole('button', { name: 'Select', pressed: true }));
         expect(screen.queryByRole('button', { name: 'Select Breaking Bad' })).not.toBeInTheDocument();
         await user.click(screen.getByRole('button', { name: /^select$/i }));
         expect(screen.getByRole('button', { name: 'Select Breaking Bad' })).toHaveAttribute('aria-pressed', 'false');
@@ -2307,7 +2699,7 @@ describe('DownloadsPage select all across pages', () => {
         expect(mockApiPost).toHaveBeenCalledWith(config.route, {
             filter: {
                 downloadClientId: undefined,
-                statuses: ['Downloaded', 'Importing', 'Imported', 'Failed', 'Cancelled'],
+                statuses: ['Downloaded', 'Importing', 'Imported', 'Failed', 'Faulted', 'Cancelled'],
                 excludeIds: [],
             },
         });

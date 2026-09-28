@@ -8,6 +8,7 @@ vi.mock('@/hooks/useLibraryTypes', () => ({
 }));
 
 import { DayView } from './DayView';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 function makeEvent(id: string, title: string): CalendarEvent {
     return {
@@ -18,26 +19,26 @@ function makeEvent(id: string, title: string): CalendarEvent {
         contentType: 'tv',
         level: 'episode',
         fulfillment: 'missing',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
     };
 }
 
 describe('DayView', () => {
     it('renders empty state when no events', () => {
-        render(<DayView viewEvents={[]} onEventClick={vi.fn()} />);
+        render(<DayView viewEvents={[]} onEventClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(screen.getByText('No events on this day')).toBeInTheDocument();
     });
 
     it('renders event cards when events are provided', () => {
         const events = [makeEvent('1', 'Shogun'), makeEvent('2', 'Fallout')];
-        render(<DayView viewEvents={events} onEventClick={vi.fn()} />);
+        render(<DayView viewEvents={events} onEventClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(screen.getByText('Shogun')).toBeInTheDocument();
         expect(screen.getByText('Fallout')).toBeInTheDocument();
     });
 
     it('has the correct data-component attribute', () => {
-        const { container } = render(<DayView viewEvents={[]} onEventClick={vi.fn()} />);
+        const { container } = render(<DayView viewEvents={[]} onEventClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(container.querySelector('[data-component="day-view"]')).toBeInTheDocument();
     });
 });

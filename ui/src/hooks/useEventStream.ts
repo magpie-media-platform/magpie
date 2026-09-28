@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 
 import { ENTITY_ID_CONTEXT_KEYS } from './entityIdContextKeys';
+import { connectLiveUpdates } from '@/lib/liveUpdates';
 
 export interface EventStreamPayload {
     name: string;
@@ -24,22 +25,10 @@ interface EventSubscription {
     owner: string;
 }
 
-const API_BASE = (() => {
-    try {
-        const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
-        return env?.VITE_API_URL ?? '/api';
-    } catch {
-        return '/api';
-    }
-})();
-
 const NO_ENTITY_IDS: readonly string[] = [];
 
 const subscriptions = new Map<number, EventSubscription>();
 let nextSubscriptionId = 0;
-let source: EventSource | null = null;
-let hasConnected = false;
-let disconnected = false;
 
 interface ActiveEventSubscription {
     context: Readonly<Record<string, string>>;
@@ -75,20 +64,6 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
     };
 }
 
-function dispatchMessage(message: MessageEvent): void {
-    let payload: EventStreamPayload;
-    try {
-        payload = JSON.parse(message.data) as EventStreamPayload;
-    } catch {
-        if (import.meta.env.DEV) {
-            console.warn('useEventStream: failed to parse SSE payload', message.data);
-        }
-        return;
-    }
-
-    dispatchPayload(payload);
-}
-
 function dispatchPayload(payload: EventStreamPayload): void {
     for (const subscription of subscriptions.values()) {
         if (subscription.eventNames.size > 0 && !subscription.eventNames.has(payload.name)) {
@@ -119,46 +94,11 @@ function dispatchPayload(payload: EventStreamPayload): void {
     }
 }
 
-function openEventStream(): void {
-    if (source !== null || typeof EventSource === 'undefined') {
-        return;
-    }
-
-    const url = new URL(`${API_BASE}/events/stream`, window.location.origin);
-    source = new EventSource(url.toString(), { withCredentials: true });
-    source.onmessage = dispatchMessage;
-    source.onopen = () => {
-        if (hasConnected && disconnected) {
-            dispatchPayload({ name: 'stream.reconnected', context: {} });
-        }
-        hasConnected = true;
-        disconnected = false;
-    };
-    source.onerror = () => {
-        disconnected = true;
-        if (import.meta.env.DEV) {
-            console.warn('useEventStream: SSE connection error; EventSource will attempt to reconnect');
-        }
-    };
-}
-
-function closeEventStream(): void {
-    source?.close();
-    source = null;
-    hasConnected = false;
-    disconnected = false;
-}
-
-export function useGlobalEventStreamConnection(active: boolean): void {
+export function useGlobalEventStreamConnection(active: boolean, userId = ''): void {
     useEffect(() => {
-        if (!active) {
-            closeEventStream();
-            return;
-        }
-
-        openEventStream();
-        return closeEventStream;
-    }, [active]);
+        if (!active) return;
+        return connectLiveUpdates(userId, dispatchPayload);
+    }, [active, userId]);
 }
 
 export function useEventStream(

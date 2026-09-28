@@ -100,6 +100,11 @@ public sealed record ContentRelease
     public DownloadStatus? AcquisitionStatus { get; init; }
 
     /// <summary>
+    /// The reason that acquisition waits before a download starts.
+    /// </summary>
+    public string? AcquisitionWaitingReason { get; init; }
+
+    /// <summary>
     /// The reason that the acquisition failed.
     /// </summary>
     public DownloadFailureReason? FailureReason { get; init; }
@@ -118,4 +123,9 @@ public sealed record ContentRelease
     /// The UTC time of the grab, or <see langword="null"/> when the release was not grabbed.
     /// </summary>
     public DateTime? GrabbedAt { get; init; }
+
+    /// <summary>
+    /// The status of the release in the scope of the content item.
+    /// </summary>
+    public ReleaseScopeStatus Status { get; init; }
 }

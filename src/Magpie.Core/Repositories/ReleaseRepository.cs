@@ -333,20 +333,38 @@ internal sealed class ReleaseRepository(
             .Select(scope => scope.ContentHierarchyItemId)
             .ToHashSetAsync(cancellationToken)
             .ConfigureAwait(false);
-        var aliasScopeIds = await context.ReleaseScopes
+        var aliasScopes = await context.ReleaseScopes
             .AsNoTracking()
             .Where(scope => aliasIds.Contains(scope.ReleaseId))
-            .Select(scope => scope.ContentHierarchyItemId)
-            .Distinct()
+            .GroupBy(scope => scope.ContentHierarchyItemId)
+            .Select(group => new
+            {
+                ContentHierarchyItemId = group.Key,
+                Unmatched = group.Any(scope => scope.Status == ReleaseScopeStatus.Unmatched),
+            })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        foreach (var contentHierarchyItemId in aliasScopeIds.Where(canonicalScopeIds.Add))
+        foreach (var aliasScope in aliasScopes)
         {
-            context.ReleaseScopes.Add(new ReleaseScope
+            if (canonicalScopeIds.Add(aliasScope.ContentHierarchyItemId))
             {
-                ReleaseId = canonical.Id,
-                ContentHierarchyItemId = contentHierarchyItemId,
-            });
+                context.ReleaseScopes.Add(new ReleaseScope
+                {
+                    ReleaseId = canonical.Id,
+                    ContentHierarchyItemId = aliasScope.ContentHierarchyItemId,
+                    Status = aliasScope.Unmatched ? ReleaseScopeStatus.Unmatched : ReleaseScopeStatus.Matched,
+                });
+            }
+            else if (aliasScope.Unmatched)
+            {
+                await context.ReleaseScopes
+                    .Where(scope => scope.ReleaseId == canonical.Id &&
+                        scope.ContentHierarchyItemId == aliasScope.ContentHierarchyItemId)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(scope => scope.Status, ReleaseScopeStatus.Unmatched),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
 
         await context.ReleaseScopes
@@ -434,6 +452,7 @@ internal sealed class ReleaseRepository(
                 var releaseIds = (
                     from c in context.ReleaseScopes.AsNoTracking()
                     where contentNodeIds.Contains(c.ContentHierarchyItemId)
+                    where query.IncludeUnmatched || c.Status == ReleaseScopeStatus.Matched
                     select c.ReleaseId)
                     .Distinct();
                 releases = releases.Where(r => releaseIds.Contains(r.Id));
@@ -869,6 +888,14 @@ internal sealed class ReleaseRepository(
                 pageNumber++;
             }
 
+            // An unmatched scope row is the only record of a user's unmatch, so its release is kept.
+            var unmatchedReleaseIds = await context.ReleaseScopes
+                .AsNoTracking()
+                .Where(scope => scope.Status == ReleaseScopeStatus.Unmatched)
+                .Select(scope => scope.ReleaseId)
+                .ToHashSetAsync(cancellationToken)
+                .ConfigureAwait(false);
+            releases.RemoveAll(release => unmatchedReleaseIds.Contains(release.Id));
             if (releases.Count == 0)
             {
                 return 0;

@@ -28,4 +28,18 @@ public sealed class PublisherSubjectKindDefinitionProviderTests
             Assert.That(definition.CustomMetadataFields, Is.Empty);
         }
     }
+
+    [Test]
+    public void GetSubjectKindDefinitions_DeclaresPublisherRole_WhenEnumerated()
+    {
+        // Arrange
+        var provider = new PublisherSubjectKindDefinitionProvider();
+
+        // Act
+        var roles = provider.GetSubjectKindDefinitions().Single(definition => definition.Slug == "book-publisher")
+            .RelationshipRoles.Select(role => role.Slug);
+
+        // Assert
+        Assert.That(roles, Is.EqualTo((string[])["publisher"]));
+    }
 }

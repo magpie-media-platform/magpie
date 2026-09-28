@@ -1,5 +1,13 @@
 import { apiFetch, ApiError, renewAccessToken, type AuthTokenResponse } from './api';
-import { clearAuthStorage, storeAuthTokens, tokenExpirationStorage, tokenStorage } from './tokenStorage';
+import {
+    authScope,
+    clearAuthStorage,
+    sessionGeneration,
+    storeAuthTokens,
+    tokenExpirationStorage,
+    tokenStorage,
+} from './tokenStorage';
+import { withAuthSessionLock } from './authSessionLock';
 import { isRole, Role, roleFromApi, type EffectivePermissions, type PermissionGrant } from '@/auth/types';
 
 interface LoginRequest {
@@ -16,7 +24,7 @@ interface JwtUser {
     role: Role;
 }
 
-export function decodeJwtUser(token: string): JwtUser | null {
+function readJwtClaims(token: string) {
     try {
         const parts = token.split('.');
         if (parts.length !== 3) {
@@ -25,7 +33,26 @@ export function decodeJwtUser(token: string): JwtUser | null {
 
         const payload = parts[1];
         const decodedPayload = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-        const claims = JSON.parse(decodedPayload);
+        return JSON.parse(decodedPayload);
+    } catch {
+        return null;
+    }
+}
+
+export function getStoredSessionCacheUserId(): string | undefined {
+    // Expired claims identify the cache owner, but must not authenticate the user.
+    const claims = readJwtClaims(tokenStorage.get() ?? '');
+    const id =
+        claims?.['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier'] ||
+        claims?.sub ||
+        claims?.nameid;
+    return typeof id === 'string' && id ? id : undefined;
+}
+
+export function decodeJwtUser(token: string): JwtUser | null {
+    try {
+        const claims = readJwtClaims(token);
+        if (!claims) return null;
 
         if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now()) {
             return null;
@@ -60,51 +87,47 @@ export function decodeJwtUser(token: string): JwtUser | null {
 }
 
 export async function login(username: string, password: string): Promise<JwtUser> {
-    const response = await apiFetch<AuthTokenResponse>('/auth/login', {
-        method: 'POST',
-        body: { username, password } satisfies LoginRequest,
-        skipAuth: true,
+    clearAuthStorage();
+    const generation = sessionGeneration();
+    return withAuthSessionLock(authScope(), async (signal) => {
+        if (sessionGeneration() !== generation) throw new ApiError(409, 'The session changed.');
+        const response = await apiFetch<AuthTokenResponse>('/auth/login', {
+            method: 'POST',
+            body: { username, password } satisfies LoginRequest,
+            skipAuth: true,
+            signal,
+        });
+        signal.throwIfAborted();
+        if (sessionGeneration() !== generation) throw new ApiError(409, 'The session changed.');
+        const user = decodeJwtUser(response.accessToken);
+        if (!user) throw new ApiError(500, 'Failed to decode user from token');
+        storeAuthTokens(response.accessToken, response.accessTokenExpiresAt);
+        return user;
     });
-
-    storeAuthTokens(response.accessToken, response.accessTokenExpiresAt);
-
-    const user = decodeJwtUser(response.accessToken);
-    if (!user) {
-        throw new ApiError(500, 'Failed to decode user from token');
-    }
-
-    return user;
 }
 
 export async function logout(): Promise<void> {
     const token = tokenStorage.get();
-
+    clearAuthStorage();
     try {
-        await apiFetch('/auth/logout', {
-            method: 'POST',
-            ...(token ? { headers: { Authorization: `Bearer ${token}` } } : { skipAuth: true }),
+        await withAuthSessionLock(authScope(), async (signal) => {
+            // A later login waits behind this revocation; it must not cancel the queued logout.
+            await apiFetch('/auth/logout', {
+                method: 'POST',
+                signal,
+                ...(token ? { headers: { Authorization: `Bearer ${token}` } } : { skipAuth: true }),
+            });
         });
     } catch {
         void 0;
-    } finally {
-        clearAuthStorage();
     }
 }
 
 export async function refreshAccessToken(baseUrl?: string): Promise<JwtUser> {
-    try {
-        const accessToken = await renewAccessToken(baseUrl);
-
-        const user = decodeJwtUser(accessToken);
-        if (!user) {
-            throw new ApiError(500, 'Failed to decode user from token');
-        }
-
-        return user;
-    } catch (error) {
-        clearAuthStorage();
-        throw error;
-    }
+    const accessToken = await renewAccessToken(baseUrl);
+    const user = decodeJwtUser(accessToken);
+    if (!user) throw new ApiError(500, 'Failed to decode user from token');
+    return user;
 }
 
 interface RawPermissionGrant {

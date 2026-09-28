@@ -1,29 +1,16 @@
-import { clearAuthStorage, storeAuthTokens, tokenStorage } from './tokenStorage';
+import { authScope, clearAuthStorage, sessionGeneration, storeAuthTokens, tokenStorage } from './tokenStorage';
+import { withAuthSessionLock } from './authSessionLock';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 const REFRESH_ENDPOINT = '/auth/refresh';
 
-let refreshInFlight: Promise<void> | null = null;
+const refreshInFlight = new Map<string, Promise<string>>();
 
 const isRefreshEndpoint = (path: string): boolean => {
     const cleaned = path.split('?')[0].split('#')[0].replace(/\/+$/, '');
     return cleaned.endsWith(REFRESH_ENDPOINT);
 };
-
-const AUTH_FAILURE_DISPATCHED = Symbol('magpie.api.authFailureDispatched');
-
-type AuthFailureMarked = { [AUTH_FAILURE_DISPATCHED]?: true };
-
-function markAuthFailureDispatched(error: object): void {
-    Object.defineProperty(error, AUTH_FAILURE_DISPATCHED, { value: true });
-}
-
-function isAuthFailureDispatched(error: unknown): boolean {
-    return (
-        typeof error === 'object' && error !== null && (error as AuthFailureMarked)[AUTH_FAILURE_DISPATCHED] === true
-    );
-}
 
 export interface AuthTokenResponse {
     accessToken: string;
@@ -31,32 +18,57 @@ export interface AuthTokenResponse {
     accessTokenExpiresAt: string;
 }
 
-export async function renewAccessToken(baseUrl?: string): Promise<string> {
-    const response = await apiFetch<AuthTokenResponse>('/auth/refresh', {
-        baseUrl,
-        method: 'POST',
-        skipAuth: true,
-    });
+export function renewAccessToken(baseUrl?: string): Promise<string> {
+    const generation = sessionGeneration(baseUrl);
+    const scope = authScope(baseUrl);
+    const key = `${scope}:${generation}`;
+    const existing = refreshInFlight.get(key);
+    if (existing) return existing;
 
-    storeAuthTokens(response.accessToken, response.accessTokenExpiresAt);
-
-    return response.accessToken;
-}
-
-async function ensureRefresh(baseUrl?: string): Promise<void> {
-    if (refreshInFlight) {
-        return refreshInFlight;
-    }
-
-    refreshInFlight = (async () => {
-        try {
-            await renewAccessToken(baseUrl);
-        } finally {
-            refreshInFlight = null;
+    const previousToken = tokenStorage.get(baseUrl);
+    if (!previousToken) return Promise.reject(new ApiError(401, 'No stored session is available.'));
+    const renewal = withAuthSessionLock(scope, async (signal) => {
+        if (sessionGeneration(baseUrl) !== generation) {
+            throw new ApiError(409, 'The session changed while renewal was pending.');
         }
-    })();
-
-    return refreshInFlight;
+        const currentToken = tokenStorage.get(baseUrl);
+        if (currentToken && currentToken !== previousToken) return currentToken;
+        let renewalToken = previousToken;
+        try {
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const response = await apiFetch<AuthTokenResponse>(REFRESH_ENDPOINT, {
+                    baseUrl,
+                    method: 'POST',
+                    skipAuth: true,
+                    signal,
+                    // The previous bearer survives a reload and identifies retries of this rotation.
+                    headers: { Authorization: `Bearer ${renewalToken}` },
+                });
+                signal.throwIfAborted();
+                if (sessionGeneration(baseUrl) !== generation) {
+                    throw new ApiError(409, 'The session changed while renewal was pending.');
+                }
+                storeAuthTokens(response.accessToken, response.accessTokenExpiresAt, baseUrl);
+                renewalToken = response.accessToken;
+                if (new Date(response.accessTokenExpiresAt).getTime() > Date.now()) {
+                    window.dispatchEvent(new CustomEvent(AUTH_RENEWED_EVENT, { detail: { scope } }));
+                    return response.accessToken;
+                }
+            }
+            throw new ApiError(503, 'Session renewal has not returned a current access token.');
+        } catch (error) {
+            if (sessionGeneration(baseUrl) === generation) {
+                const newerToken = tokenStorage.get(baseUrl);
+                if (newerToken && newerToken !== renewalToken) return newerToken;
+                if (isApiError(error) && (error.status === 401 || error.status === 403)) {
+                    invalidateSession(generation, renewalToken, baseUrl);
+                }
+            }
+            throw error;
+        }
+    }).finally(() => refreshInFlight.delete(key));
+    refreshInFlight.set(key, renewal);
+    return renewal;
 }
 
 export class ApiError extends Error {
@@ -105,10 +117,12 @@ export function isAbortError(error: unknown): boolean {
 }
 
 export const AUTH_FAILURE_EVENT = 'magpie:auth:failure';
+export const AUTH_RENEWED_EVENT = 'magpie:auth:renewed';
 
-function dispatchAuthFailure(error: object): void {
-    markAuthFailureDispatched(error);
-    window.dispatchEvent(new CustomEvent(AUTH_FAILURE_EVENT));
+function invalidateSession(generation: string, token: string | null, baseUrl?: string): void {
+    if (sessionGeneration(baseUrl) !== generation || tokenStorage.get(baseUrl) !== token) return;
+    clearAuthStorage(baseUrl);
+    if (authScope(baseUrl) === authScope()) window.dispatchEvent(new CustomEvent(AUTH_FAILURE_EVENT));
 }
 
 interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
@@ -187,7 +201,7 @@ function buildRequest(
 
     let sentToken: string | null = null;
     if (!skipAuth && apiOrigin && !headers.has('Authorization')) {
-        const token = tokenStorage.get();
+        const token = tokenStorage.get(baseUrl);
         if (token) {
             headers.set('Authorization', `Bearer ${token}`);
             sentToken = token;
@@ -216,6 +230,7 @@ export async function apiFetchResponse(path: string, options: ApiRequestOptions 
     const isAuthFailure = (response: Response) => response.status === 401;
     const callerHeaders = new Headers(options.headers);
     const callerProvidedAuth = callerHeaders.has('Authorization');
+    const generation = sessionGeneration(options.baseUrl);
 
     let { url, init, skipAuth, sentToken } = buildRequest(path, options);
 
@@ -230,7 +245,8 @@ export async function apiFetchResponse(path: string, options: ApiRequestOptions 
         const isRefresh = isRefreshEndpoint(path);
         const managedAuth = !skipAuth && !callerProvidedAuth && !isRefresh;
 
-        const currentToken = tokenStorage.get();
+        if (sessionGeneration(options.baseUrl) !== generation) throw await errorFromResponse(response);
+        const currentToken = tokenStorage.get(options.baseUrl);
         if (managedAuth && currentToken && currentToken !== sentToken) {
             ({ url, init, skipAuth, sentToken } = buildRequest(path, options));
             try {
@@ -250,19 +266,10 @@ export async function apiFetchResponse(path: string, options: ApiRequestOptions 
         const canRetry = managedAuth && isAuthFailure(response);
 
         if (canRetry) {
-            try {
-                await ensureRefresh(options.baseUrl);
-            } catch (error) {
-                if (isAuthFailureDispatched(error)) {
-                    throw error;
-                }
-                const apiError = await errorFromResponse(response);
-                clearAuthStorage();
-                dispatchAuthFailure(apiError);
-                throw apiError;
-            }
+            await renewAccessToken(options.baseUrl);
+            if (sessionGeneration(options.baseUrl) !== generation) throw await errorFromResponse(response);
 
-            ({ url, init, skipAuth } = buildRequest(path, options));
+            ({ url, init, skipAuth, sentToken } = buildRequest(path, options));
             try {
                 response = await fetch(url, init);
             } catch (error) {
@@ -271,15 +278,11 @@ export async function apiFetchResponse(path: string, options: ApiRequestOptions 
 
             if (isAuthFailure(response)) {
                 const apiError = await errorFromResponse(response);
-                clearAuthStorage();
-                dispatchAuthFailure(apiError);
+                invalidateSession(generation, sentToken, options.baseUrl);
                 throw apiError;
             }
         } else if (isAuthFailure(response)) {
-            const apiError = await errorFromResponse(response);
-            clearAuthStorage();
-            dispatchAuthFailure(apiError);
-            throw apiError;
+            throw await errorFromResponse(response);
         }
     }
 

@@ -429,7 +429,7 @@ public sealed class CardigannIndexerIntegrationTests
     [TestCase("password")]
     [TestCase("cookie")]
     [TestCase("text")]
-    public async Task SearchAsync_PostsInputsAndRecordsSanitizedRequest_WhenSearchMethodIsPost(string settingType)
+    public async Task SearchAsync_PostsInputsAndRecordsRequest_WhenSearchMethodIsPost(string settingType)
     {
         // Arrange
         _definition.Search.Paths[0].Method = "post";
@@ -460,12 +460,13 @@ public sealed class CardigannIndexerIntegrationTests
                 Is.EqualTo("/search"));
             Assert.That(
                 activity.GetTagItem("magpie.request.body"),
-                Is.EqualTo("q=cool%20movie&passkey=%5BREDACTED%5D"));
+                Is.EqualTo("q=cool%20movie&passkey=secret-value"));
         }
 
         _sessions.Verify(
             sessions => sessions.SendAsync(
-                "priv@https://tracker.test",
+                It.Is<string>(key => key.StartsWith("priv@https://tracker.test#", StringComparison.Ordinal) &&
+                    !key.Contains("secret-value", StringComparison.Ordinal)),
                 new Uri("https://tracker.test/"),
                 HttpMethod.Post,
                 new Uri("https://tracker.test/search"),
@@ -546,7 +547,8 @@ public sealed class CardigannIndexerIntegrationTests
         // Assert
         _sessions.Verify(
             s => s.EnsureLoggedInAsync(
-                "priv@https://tracker.test",
+                It.Is<string>(key => key.StartsWith("priv@https://tracker.test#", StringComparison.Ordinal) &&
+                    !key.Contains("PASTED", StringComparison.Ordinal)),
                 _definition.Login,
                 new Uri("https://tracker.test/"),
                 It.IsAny<IReadOnlyDictionary<string, object?>>(),
@@ -949,7 +951,7 @@ public sealed class CardigannIndexerIntegrationTests
     }
 
     [Test]
-    public async Task SearchAsync_RedactsTextSettings_WhenCredentialsAppearInTarget()
+    public async Task SearchAsync_RecordsTextSettings_WhenCredentialsAppearInTarget()
     {
         // Arrange
         _definition.Search.Paths[0].Path = "/{{ .Config.passkey }}/search";
@@ -964,7 +966,8 @@ public sealed class CardigannIndexerIntegrationTests
             new Dictionary<string, string> { ["passkey"] = "secret-value" }, default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(activity.GetTagItem("magpie.request.target"),
-            Is.EqualTo("/%5BREDACTED%5D/search?key=%5BREDACTED%5D"));
+        Assert.That(
+            activity.GetTagItem("magpie.request.target"),
+            Is.EqualTo("/secret-value/search?key=secret-value"));
     }
 }

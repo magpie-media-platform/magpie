@@ -46,6 +46,11 @@ public sealed record RootFolderCreate
     public UpgradeFileHandling? UpgradeFileHandling { get; init; }
 
     /// <summary>
+    /// Whether discovery associates confident matches with existing library content without user acceptance.
+    /// </summary>
+    public bool AutoImport { get; init; }
+
+    /// <summary>
     /// The default quality tier lists keyed by hierarchy level.
     /// </summary>
     public Dictionary<string, RootFolderDefault> Defaults { get; init; } = [];

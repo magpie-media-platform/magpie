@@ -30,6 +30,7 @@ public sealed class DownloadImportScanJobTests
 
     private Mock<IDownloadRepository> _downloadRepository = null!;
     private Mock<IJobManager> _jobManager = null!;
+    private Mock<IJobExecutionRepository> _executions = null!;
     private IJob _subject = null!;
     private JobContext _jobContext = null!;
 
@@ -49,8 +50,13 @@ public sealed class DownloadImportScanJobTests
             .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Guid.NewGuid());
 
+        _executions = new Mock<IJobExecutionRepository> { CallBase = true };
+        _executions.Setup(repository => repository.QueryAsync(It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { Items = [] });
         _subject = new DownloadImportScanJob(
             _downloadRepository.Object,
+            _executions.Object,
             _jobManager.Object,
             TimeProvider.System,
             NullLogger<DownloadImportScanJob>.Instance,
@@ -64,6 +70,165 @@ public sealed class DownloadImportScanJobTests
             ExecutionMode: JobExecutionMode.Queue,
             Parameters: new Dictionary<string, string>(),
             Event: null);
+    }
+
+    [TestCase(JobExecutionStatus.Queued)]
+    [TestCase(JobExecutionStatus.Running)]
+    [TestCase(JobExecutionStatus.CancellationRequested)]
+    public async Task ExecuteAsync_ProtectsImport_WhenExecutionIsStillActive(JobExecutionStatus status)
+    {
+        // Arrange
+        var id = Guid.NewGuid();
+        _downloadRepository.Setup(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [new() { Id = id, Title = "Active", ExternalId = "active", Status = DownloadStatus.Importing }]
+            });
+        _executions.Setup(repository => repository.QueryAsync(It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items = [new()
+                {
+                    JobType = "DownloadImportItem", Status = status,
+                    TriggerContext = new() { ["event.context.download.id"] = id.ToString("D") },
+                    Parameters = new() { ["downloadId"] = id.ToString("D") }
+                }]
+            });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(manager => manager.ExecuteAsync(It.IsAny<JobEnqueueRequest>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestCase("fail")]
+    [TestCase("skip")]
+    [TestCase("replace")]
+    [TestCase(null)]
+    public async Task ExecuteAsync_RetainsExplicitPolicy_WhenPreviousAttemptNeedsRecovery(string? mode)
+    {
+        // Arrange
+        var id = Guid.NewGuid();
+        var parameters = new Dictionary<string, string> { ["downloadId"] = id.ToString("D") };
+        if (mode is not null)
+        {
+            parameters["collisionMode"] = mode;
+        }
+
+        _downloadRepository.Setup(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [new()
+                {
+                    Id = id, Title = "Recovery", ExternalId = "recovery", Status = DownloadStatus.Downloaded
+                }]
+            });
+        _executions.Setup(repository => repository.QueryAsync(It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items =
+                [
+                    new()
+                    {
+                        JobType = "DownloadImportItem", Status = JobExecutionStatus.Cancelled,
+                        Parameters = parameters, CreatedAt = new DateTime(2026, 9, 8, 10, 0, 0, DateTimeKind.Utc)
+                    },
+                    new()
+                    {
+                        JobType = "DownloadImportItem", Status = JobExecutionStatus.Completed,
+                        Parameters = new() { ["downloadId"] = id.ToString("D"), ["dryRun"] = "true",
+                            ["collisionMode"] = "fail" },
+                        CreatedAt = new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc)
+                    }
+                ]
+            });
+        JobEnqueueRequest? queued = null;
+        _jobManager.Setup(manager => manager.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<JobEnqueueRequest, CancellationToken>((request, _) => queued = request)
+            .ReturnsAsync(Guid.NewGuid());
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(queued!.Parameters, Is.EquivalentTo(parameters));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ProtectsImport_WhenExecutionStartsAfterHistoryRead()
+    {
+        // Arrange
+        var id = new Guid("abcdefff-1234-5678-90ab-cdef12345678");
+        _downloadRepository.Setup(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [new() { Id = id, Title = "Active", ExternalId = "active", Status = DownloadStatus.Importing }]
+            });
+        _executions.Setup(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query => query.Statuses != null),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items = [new()
+                {
+                    JobType = "DownloadImportItem", Status = JobExecutionStatus.Running,
+                    Parameters = new() { ["downloadId"] = " abcdefff-1234-5678-90ab-cdef12345678 " }
+                }]
+            });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _jobManager.Verify(manager => manager.ExecuteAsync(It.IsAny<JobEnqueueRequest>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _executions.Verify(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query => query.Statuses == null),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Once);
+            _executions.Verify(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query => query.Statuses != null && query.ParameterValueReferences == null),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [TestCase(ImportCollisionMode.Fail, "Fail")]
+    [TestCase(ImportCollisionMode.Skip, "Skip")]
+    [TestCase(ImportCollisionMode.Replace, "Replace")]
+    [TestCase(null, null)]
+    public async Task ExecuteAsync_RetainsStoredPolicy_WhenExecutionHistoryWasRemoved(
+        ImportCollisionMode? mode, string? expected)
+    {
+        // Arrange
+        var id = Guid.NewGuid();
+        _downloadRepository.Setup(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [new()
+                {
+                    Id = id, Title = "Recovery", ExternalId = "recovery", Status = DownloadStatus.Importing,
+                    ImportCollisionMode = mode
+                }]
+            });
+        JobEnqueueRequest? queued = null;
+        _jobManager.Setup(manager => manager.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<JobEnqueueRequest, CancellationToken>((request, _) => queued = request)
+            .ReturnsAsync(Guid.NewGuid());
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(queued!.Parameters!.GetValueOrDefault("collisionMode"), Is.EqualTo(expected));
     }
 
     [Test]
@@ -88,8 +253,10 @@ public sealed class DownloadImportScanJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<Download> { Items = [download], TotalItems = 1 });
 
+        var correlationId = Guid.NewGuid();
+
         // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext with { CorrelationId = correlationId }).ConfigureAwait(false);
 
         // Assert
         _jobManager.Verify(
@@ -101,9 +268,46 @@ public sealed class DownloadImportScanJobTests
                     r.Parameters["downloadId"] == download.Id.ToString("D") &&
                     r.Mode == JobExecutionMode.Queue &&
                     r.UserId == null &&
-                    r.CorrelationId == null),
+                    r.CorrelationId == correlationId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_QueuesImportInTheRecoveryCorrelation_WhenAPreviousAttemptHasAnotherCorrelation()
+    {
+        // Arrange
+        var id = Guid.NewGuid();
+        var recoveryCorrelationId = Guid.NewGuid();
+        _downloadRepository.Setup(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [new()
+                {
+                    Id = id, Title = "Recovery", ExternalId = "recovery", Status = DownloadStatus.Downloaded
+                }]
+            });
+        _executions.Setup(repository => repository.QueryAsync(It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items = [new()
+                {
+                    JobType = "DownloadImportItem", Status = JobExecutionStatus.Cancelled,
+                    Parameters = new() { ["downloadId"] = id.ToString("D") }, CorrelationId = Guid.NewGuid()
+                }]
+            });
+        JobEnqueueRequest? queued = null;
+        _jobManager.Setup(manager => manager.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<JobEnqueueRequest, CancellationToken>((request, _) => queued = request)
+            .ReturnsAsync(Guid.NewGuid());
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext with { CorrelationId = recoveryCorrelationId }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(queued?.CorrelationId, Is.EqualTo(recoveryCorrelationId));
     }
 
     [Test]
@@ -127,7 +331,7 @@ public sealed class DownloadImportScanJobTests
         SortParameter? observedSort = null;
         _downloadRepository
             .Setup(r => r.QueryAsync(
-                It.IsAny<DownloadQuery>(),
+                It.Is<DownloadQuery>(query => query.HasImportRecoveryState == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -266,7 +470,11 @@ public sealed class DownloadImportScanJobTests
                     It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 500),
                     It.IsAny<SortParameter?>(),
                     It.IsAny<CancellationToken>()),
-                Times.Once);
+                Times.Exactly(2));
+            _executions.Verify(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query => query.JobType == "DownloadImportItem" &&
+                    query.Statuses == null && query.ParameterValueReferences == null),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Once);
             _jobManager.Verify(
                 manager => manager.ExecuteAsync(
                     It.Is<JobEnqueueRequest>(request =>

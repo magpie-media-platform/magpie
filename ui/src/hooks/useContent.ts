@@ -125,9 +125,10 @@ async function findResolvingAncestor(
     let parentId = item.parentId;
     while (parentId && !seen.has(parentId) && seen.size <= MAX_ANCESTOR_DEPTH) {
         seen.add(parentId);
+        const ancestorId = parentId;
         const parent = await queryClient.fetchQuery({
-            queryKey: contentQueryKeys.detail(parentId),
-            queryFn: () => fetchContentById(parentId!),
+            queryKey: contentQueryKeys.detail(ancestorId),
+            queryFn: () => fetchContentById(ancestorId),
             staleTime: 0,
         });
         if (hasOwnValue(parent)) {
@@ -361,9 +362,11 @@ export function useSetQualityTierList() {
     });
 }
 
-async function fetchContentList(params?: ContentQueryParams): Promise<PagedContentHierarchyItems> {
-    const url = buildUrl('/content', params);
-    return apiGet<PagedContentHierarchyItems>(url);
+async function fetchContentList(
+    params?: ContentQueryParams,
+    signal?: AbortSignal,
+): Promise<PagedContentHierarchyItems> {
+    return apiGet<PagedContentHierarchyItems>(buildUrl('/content', params), { signal });
 }
 
 async function fetchContentById(id: string): Promise<ApiContentHierarchyItem> {
@@ -431,7 +434,7 @@ export function useContentList(params?: ContentQueryParams, options?: { enabled?
     });
     return useQuery({
         queryKey: contentQueryKeys.list(params),
-        queryFn: () => fetchContentList(params),
+        queryFn: ({ signal }) => fetchContentList(params, signal),
         select: (data): ContentListResult => ({
             items: Array.isArray(data?.items) ? data.items.map(mapToContentListItem) : [],
             pageNumber: data?.pageNumber ?? 1,

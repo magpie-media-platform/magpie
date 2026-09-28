@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     FolderOpenIcon,
     HardDrivesIcon,
@@ -12,7 +13,7 @@ import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 import { useBulkRun } from '@/hooks/useBulkRun';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { Badge } from '@/components/ui/Badge';
-import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
+import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
@@ -20,6 +21,7 @@ import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { DiskSpaceWidget } from '@/components/ui/DiskSpaceWidget';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
+import { ListFilterToolbar, type ListFilterField } from '@/components/ui/ListFilterToolbar';
 import { Pager } from '@/components/ui/Pager';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
@@ -40,6 +42,8 @@ import { RootFolderForm, type RootFolderFormValues } from '@/components/configur
 import './RootFoldersPage.css';
 import '@/styles/bulk-actions-toolbar.css';
 import '@/styles/card-actions.css';
+
+const EDIT_PARAM = 'edit';
 
 function getContentTypeName(id: string, contentTypes: LibraryTypeDefinition[]): string {
     const contentType = contentTypes.find((ct) => ct.id === id);
@@ -64,6 +68,7 @@ function toRootFolderFormValues(folder: ApiRootFolder): RootFolderFormValues {
         defaultMonitoring: folder.defaultMonitoring,
         renameTemplate: folder.renameTemplate ?? '',
         upgradeFileHandling: folder.upgradeFileHandling,
+        autoImport: folder.autoImport,
         defaults: folder.defaults ?? {},
     };
 }
@@ -73,11 +78,18 @@ const PAGE_SIZE = 25;
 const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
 
 const SORT_KEYS = ['name', 'path', 'contentType', 'monitoring'] as const;
+const SORT_OPTIONS = [
+    { id: 'name', label: 'Name' },
+    { id: 'path', label: 'Path' },
+    { id: 'contentType', label: 'Type' },
+    { id: 'monitoring', label: 'Monitoring' },
+];
 
 const DEFAULT_FILTERS = { contentType: '' };
 
 export function RootFoldersPage() {
     useDocumentTitle('Root Folders');
+    const [searchParams, setSearchParams] = useSearchParams();
     const [formOpen, , openForm, closeForm] = useToggle();
     const [editingFolder, setEditingFolder] = useState<RootFolderFormValues | null>(null);
     const [deletingFolder, setDeletingFolder] = useState<ApiRootFolder | null>(null);
@@ -155,6 +167,24 @@ export function RootFoldersPage() {
         [folders, openForm],
     );
 
+    const editLinkAppliedRef = useRef<string | null>(null);
+    useEffect(() => {
+        const editId = searchParams.get(EDIT_PARAM);
+        if (!editId || editLinkAppliedRef.current === editId || !folders.some((f) => f.id === editId)) {
+            return;
+        }
+        editLinkAppliedRef.current = editId;
+        handleEditFolder(editId);
+        setSearchParams(
+            (prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete(EDIT_PARAM);
+                return next;
+            },
+            { replace: true },
+        );
+    }, [searchParams, folders, handleEditFolder, setSearchParams]);
+
     const handleFormSubmit = useCallback(
         async (values: RootFolderFormValues) => {
             try {
@@ -169,6 +199,7 @@ export function RootFoldersPage() {
                         defaultMonitoring: { value: values.defaultMonitoring },
                         renameTemplate: { value: renameTemplateValue },
                         upgradeFileHandling: { value: values.upgradeFileHandling },
+                        autoImport: { value: values.autoImport },
                         defaults: { value: values.defaults },
                     });
                     toast({
@@ -185,6 +216,7 @@ export function RootFoldersPage() {
                         defaultMonitoring: values.defaultMonitoring,
                         renameTemplate: renameTemplateValue,
                         upgradeFileHandling: values.upgradeFileHandling,
+                        autoImport: values.autoImport,
                         defaults: values.defaults,
                     });
                     toast({
@@ -461,6 +493,9 @@ export function RootFoldersPage() {
     );
 
     const hasActiveFilters = contentTypeFilter !== '';
+    const filterFields: ListFilterField[] = [
+        { id: 'contentType', label: 'Type', kind: 'facet', value: contentTypeFilter, options: contentTypeOptions },
+    ];
 
     const pageCount = Math.max(1, Math.ceil(filteredFolders.length / PAGE_SIZE));
     const currentPage = Math.min(page, pageCount);
@@ -554,7 +589,14 @@ export function RootFoldersPage() {
                     </Button>
                 </BulkActionsToolbar>
 
-                <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+                <ListFilterToolbar
+                    fields={filterFields}
+                    onCommit={(values) => setFilters({ contentType: values.contentType as string })}
+                    sorting={sorting}
+                    sortOptions={SORT_OPTIONS}
+                    onSortingChange={setSorting}
+                    selection={{ active: selection.selectionMode, onToggle: selection.toggleSelectionMode }}
+                />
 
                 <div className="root-folders-table" data-area="root-folders">
                     <DataTable<ApiRootFolder>
@@ -586,6 +628,7 @@ export function RootFoldersPage() {
                             className="root-folders-table__pager"
                             page={currentPage}
                             pageCount={pageCount}
+                            totalItems={filteredFolders.length}
                             onFirst={() => setPage(1)}
                             onPrevious={() => setPage(Math.max(1, currentPage - 1))}
                             onNext={() => setPage(Math.min(pageCount, currentPage + 1))}

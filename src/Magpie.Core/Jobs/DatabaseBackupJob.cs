@@ -30,7 +30,6 @@ internal sealed class DatabaseBackupJob(
         Enabled = true,
         OnDemand = true,
         SupportsImmediate = false,
-        Timeout = TimeSpan.FromMinutes(30),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule],
         ConcurrencyScope = ConcurrencyScope.Global,
         Parameters =

@@ -2,6 +2,7 @@ using System;
 using System.Text.Json.Serialization;
 
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
@@ -24,7 +25,7 @@ public sealed record ContentHierarchyItemPatch : TagsPatch
     /// <summary>
     /// The patch for <see cref="ContentHierarchyItem.Monitoring"/>.
     /// </summary>
-    public ScalarPatch<bool?>? Monitoring { get; init; }
+    public ScalarPatch<MonitoringMode?>? Monitoring { get; init; }
 
     /// <summary>
     /// The patch for <see cref="ContentHierarchyItem.Path"/>.

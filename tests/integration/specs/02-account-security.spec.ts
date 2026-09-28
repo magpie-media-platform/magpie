@@ -223,7 +223,7 @@ test.describe.serial('Journey 2: the locked door', () => {
             expect(login.status()).toBe(200);
             const accessToken = ((await login.json()) as LoginResponse).accessToken;
             const refreshCookie = (await session.storageState()).cookies.find(
-                (cookie) => cookie.name === 'magpie.refresh',
+                (cookie) => cookie.name.startsWith('magpie.refresh.'),
             );
             expect(refreshCookie).toBeDefined();
 
@@ -249,7 +249,7 @@ test.describe.serial('Journey 2: the locked door', () => {
             expect(login.status()).toBe(200);
             const previousAccessToken = ((await login.json()) as LoginResponse).accessToken;
             const previousRefreshCookie = (await session.storageState()).cookies.find(
-                (cookie) => cookie.name === 'magpie.refresh',
+                (cookie) => cookie.name.startsWith('magpie.refresh.'),
             );
             expect(previousRefreshCookie).toBeDefined();
             const refresh = await session.post('/api/auth/refresh');

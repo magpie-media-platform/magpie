@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -66,7 +67,23 @@ public sealed class MediaInfoExtractItemJobTests
         _extractor = new Mock<IMediaInfoExtractor>();
         _extractor
             .Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MediaInfo { Container = "matroska" });
+            .ReturnsAsync(new MediaInfo
+            {
+                Container = "matroska",
+                DurationSeconds = 5400,
+                BitRate = 8_000_000,
+                Tracks =
+                [
+                    new MediaInfoTrack
+                    {
+                        Type = "video",
+                        Name = "Main",
+                        Width = 3840,
+                        Height = 2160,
+                        VideoRange = "HDR10"
+                    }
+                ]
+            });
 
         _progress = new Mock<IProgressReporter>();
 
@@ -113,7 +130,12 @@ public sealed class MediaInfoExtractItemJobTests
                         file.Id == mediaFileId &&
                         file.MimeType == "video/x-matroska" &&
                         file.FileSize == 1024 &&
-                        file.MediaInfo!.Container == "matroska"),
+                        file.MediaInfo!.Container == "matroska" &&
+                        file.MediaInfo.DurationSeconds == 5400 &&
+                        file.MediaInfo.BitRate == 8_000_000 &&
+                        file.MediaInfo.Tracks.Single().Width == 3840 &&
+                        file.MediaInfo.Tracks.Single().Height == 2160 &&
+                        file.MediaInfo.Tracks.Single().VideoRange == "HDR10"),
                     null,
                     It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -272,6 +294,144 @@ public sealed class MediaInfoExtractItemJobTests
                 p => p.Report(1, "The media information refresh completed and did not change the media file."),
                 Times.Once);
         }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReportsUnchanged_WhenQueuedPathNoLongerMatchesStoredPath()
+    {
+        // Arrange
+        var mediaFileId = Guid.NewGuid();
+        _mediaFileRepository
+            .Setup(r => r.GetByIdAsync(mediaFileId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MediaFile
+            {
+                Id = mediaFileId,
+                ContentItemId = Guid.NewGuid(),
+                FileKind = "video",
+                FilePath = "/media/movies/renamed.mkv"
+            });
+        var jobContext = new JobContext(
+            Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["mediaFileId"] = mediaFileId.ToString("D"),
+                ["filePath"] = "/media/movies/target.mkv"
+            },
+            Event: null);
+
+        // Act
+        await _job.ExecuteAsync(jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _extractor.Verify(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mediaFileRepository.Verify(r => r.UpdateAsync(
+                It.IsAny<MediaFile>(), It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReportsUnchanged_WhenQueuedMediaFileNoLongerExists()
+    {
+        // Arrange
+        var mediaFileId = Guid.NewGuid();
+        _mediaFileRepository
+            .Setup(r => r.GetByIdAsync(mediaFileId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MediaFile?)null);
+        var jobContext = new JobContext(
+            Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["mediaFileId"] = mediaFileId.ToString("D"),
+                ["filePath"] = "/media/movies/target.mkv"
+            },
+            Event: null);
+
+        // Act
+        await _job.ExecuteAsync(jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _extractor.Verify(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mediaFileRepository.Verify(r => r.UpdateAsync(
+                It.IsAny<MediaFile>(), It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReportsUnchanged_WhenExtractorReturnsNoMediaInfo()
+    {
+        // Arrange
+        _extractor
+            .Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MediaInfo?)null);
+        var jobContext = new JobContext(
+            Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["mediaFileId"] = Guid.NewGuid().ToString("D"),
+                ["filePath"] = "/media/movies/target.mkv"
+            },
+            Event: null);
+
+        // Act
+        await _job.ExecuteAsync(jobContext).ConfigureAwait(false);
+
+        // Assert
+        _mediaFileRepository.Verify(r => r.UpdateAsync(
+            It.IsAny<MediaFile>(), It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void ExecuteAsync_Throws_WhenExtractorFails()
+    {
+        // Arrange
+        _extractor
+            .Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Probe failed."));
+        var jobContext = new JobContext(
+            Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["mediaFileId"] = Guid.NewGuid().ToString("D"),
+                ["filePath"] = "/media/movies/target.mkv"
+            },
+            Event: null);
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await _job.ExecuteAsync(jobContext).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("Probe failed."));
+    }
+
+    [Test]
+    public void ExecuteAsync_Throws_WhenExtractionIsCancelled()
+    {
+        // Arrange
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        _extractor
+            .Setup(e => e.ExtractAsync(It.IsAny<string>(), cancellation.Token))
+            .ThrowsAsync(new OperationCanceledException(cancellation.Token));
+        var jobContext = new JobContext(
+            Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["mediaFileId"] = Guid.NewGuid().ToString("D"),
+                ["filePath"] = "/media/movies/target.mkv"
+            },
+            Event: null);
+
+        // Act and Assert
+        Assert.ThrowsAsync<OperationCanceledException>(
+            async () => await _job.ExecuteAsync(jobContext, cancellation.Token).ConfigureAwait(false));
     }
 
     [Test]

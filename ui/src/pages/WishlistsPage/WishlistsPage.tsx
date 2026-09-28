@@ -62,8 +62,9 @@ export function WishlistsPage() {
     const [deleteFilterToo, setDeleteFilterToo] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const { toast } = useToast();
-    const { hasRole, user } = useAuth();
-    const canManage = hasRole(Role.Manager);
+    const { hasPermission, hasRole, user } = useAuth();
+    const isAdmin = hasRole(Role.Admin);
+    const canWriteWishlists = hasPermission('wishlists.own');
     const canCreate = hasRole(Role.Requester);
 
     const {
@@ -348,13 +349,8 @@ export function WishlistsPage() {
     const hasActiveFilters = scope === 'mine';
 
     const canEditWishlist = useCallback(
-        (wishlist: WishlistItem): boolean => canEditOwned(wishlist, user?.id, canManage, hasRole, Role.Requester),
-        [canManage, hasRole, user?.id],
-    );
-
-    const canDeleteWishlist = useCallback(
-        (wishlist: WishlistItem): boolean => canManage && canEditWishlist(wishlist),
-        [canEditWishlist, canManage],
+        (wishlist: WishlistItem): boolean => canEditOwned(wishlist, user?.id, isAdmin, canWriteWishlists),
+        [canWriteWishlists, isAdmin, user?.id],
     );
 
     const wishlistsDescription = 'Saved filters Magpie uses to automatically monitor for matching content.';
@@ -434,7 +430,7 @@ export function WishlistsPage() {
                                 wishlist={wishlist}
                                 isOwner={wishlist.ownerId === user?.id}
                                 canEdit={canEditWishlist(wishlist)}
-                                canDelete={canDeleteWishlist(wishlist)}
+                                canDelete={canEditWishlist(wishlist)}
                                 onEdit={handleEditWishlist}
                                 onDelete={handleDeleteWishlist}
                                 onLock={handleLockWishlist}

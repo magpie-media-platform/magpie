@@ -10,6 +10,7 @@ using Magpie.Data;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -24,17 +25,36 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class DownloadScopeRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IDownloadScopeRepository _subject = null!;
     private Guid _downloadClientId;
+
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
 
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var downloadClient = new DownloadClient
         {
@@ -67,6 +87,7 @@ public sealed class DownloadScopeRepositoryTests
     [TestCase(DownloadStatus.Importing, DownloadStatus.Importing)]
     [TestCase(DownloadStatus.Imported, null)]
     [TestCase(DownloadStatus.Failed, null)]
+    [TestCase(DownloadStatus.Faulted, null)]
     [TestCase(DownloadStatus.Cancelled, null)]
     public async Task CreateAsync_RecomputesActiveAcquisitionStatus_WhenTheScopeIsCreated(
         DownloadStatus status,
@@ -108,6 +129,7 @@ public sealed class DownloadScopeRepositoryTests
     [TestCase(DownloadStatus.Importing, DownloadStatus.Importing)]
     [TestCase(DownloadStatus.Imported, null)]
     [TestCase(DownloadStatus.Failed, null)]
+    [TestCase(DownloadStatus.Faulted, null)]
     [TestCase(DownloadStatus.Cancelled, null)]
     public async Task UpdateAsync_MovesActiveAcquisitionStatus_WhenTheScopeMovesToAnotherItem(
         DownloadStatus status,

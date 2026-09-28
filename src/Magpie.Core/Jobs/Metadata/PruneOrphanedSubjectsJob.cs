@@ -31,7 +31,6 @@ internal sealed class PruneOrphanedSubjectsJob(
         Scope = JobScope.Administrative,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromMinutes(10),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters = [],

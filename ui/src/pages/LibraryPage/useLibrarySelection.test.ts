@@ -12,23 +12,23 @@ function item(id: string, title: string): ContentListItem {
         level: 'movie',
         levelLabel: 'Movie',
         contentType: 'movie',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'missing',
     };
 }
 
-const contentItems = [item('a', 'Alpha'), item('b', 'Beta'), item('c', 'Gamma')];
+const contentItems = [{ ...item('a', 'Alpha'), tags: ['qa-exploration'] }, item('b', 'Beta'), item('c', 'Gamma')];
 const pageRowIds = contentItems.map((i) => i.id);
 const resetKey = 'ParentId null and ContentType = "kind-x"';
 
 describe('useLibrarySelection', () => {
-    it('exposes the selected page records as id/title pairs', () => {
+    it('exposes the selected page records with their tags', () => {
         const { result } = renderHook(() => useLibrarySelection({ pageRowIds, totalItems: 3, contentItems, resetKey }));
 
         act(() => result.current.selection.toggleRow('a', true));
 
-        expect(result.current.selectedItems).toEqual([{ id: 'a', title: 'Alpha' }]);
+        expect(result.current.selectedItems).toEqual([{ id: 'a', title: 'Alpha', tags: ['qa-exploration'] }]);
         expect(result.current.selection.pageSelectedCount).toBe(1);
         expect(result.current.selectedCount).toBe(1);
         expect(result.current.hasSelection).toBe(true);

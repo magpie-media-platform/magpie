@@ -332,6 +332,36 @@ describe('UserManagement selection', () => {
         expect(screen.getByLabelText('Select jdoe')).not.toBeDisabled();
     });
 
+    it.each([{ selectedNames: [] }, { selectedNames: ['viewer'] }, { selectedNames: ['viewer', 'jdoe'] }])(
+        'keeps one usable Add User action while selecting $selectedNames',
+        async ({ selectedNames }) => {
+            // Arrange
+            const user = userEvent.setup();
+            renderUserManagement();
+            const toolbar = document.querySelector('[data-component="user-toolbar"]') as HTMLElement;
+            expect(toolbar).toHaveAttribute('data-selection-mode', 'false');
+            expect(document.querySelector('.quick-actions-button__fab')).toBeInTheDocument();
+
+            // Act
+            await user.click(within(toolbar).getByRole('button', { name: 'Select' }));
+            for (const name of selectedNames) {
+                await user.click(screen.getByLabelText(`Select ${name}`));
+            }
+
+            // Assert
+            expect(toolbar).toHaveAttribute('data-selection-mode', 'true');
+            expect(document.querySelector('.mobile-selection-bar')).toBeInTheDocument();
+            expect(within(toolbar).getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
+            expect(within(toolbar).getByRole('button', { name: 'Add User' })).toBeInTheDocument();
+
+            // Act
+            await user.click(within(toolbar).getByRole('button', { name: 'Add User' }));
+
+            // Assert
+            expect(await screen.findByLabelText(/username/i)).toBeInTheDocument();
+        },
+    );
+
     it('clears selection when leaving select mode', async () => {
         const user = userEvent.setup();
         renderUserManagement();
@@ -340,7 +370,7 @@ describe('UserManagement selection', () => {
         await user.click(screen.getByLabelText('Select viewer'));
         expect(screen.getByLabelText('Select viewer')).toHaveAttribute('aria-pressed', 'true');
 
-        await user.click(screen.getByRole('button', { name: 'Stop selecting' }));
+        await user.click(screen.getByRole('button', { name: 'Select', pressed: true }));
         await user.click(screen.getByRole('button', { name: 'Select' }));
         expect(screen.getByLabelText('Select viewer')).toHaveAttribute('aria-pressed', 'false');
     });
@@ -384,7 +414,8 @@ describe('UserManagement selection', () => {
         });
     });
 
-    it('acts on the current page selection only when the selection spans a page change', async () => {
+    it('BulkDelete_TargetsSelectedUsersAcrossPages_WhenReturningToTheFirstPage', async () => {
+        // Arrange
         mockDeleteUser.mockResolvedValue(undefined);
         const user = userEvent.setup();
         function PagedUserManagement() {
@@ -408,22 +439,22 @@ describe('UserManagement selection', () => {
             </MemoryRouter>,
         );
 
+        // Act
         await user.click(screen.getByRole('button', { name: 'Select' }));
         await user.click(screen.getByLabelText('Select viewer'));
-        expect(
-            within(screen.getByRole('region', { name: 'User selection actions' })).getByText('1 selected'),
-        ).toBeInTheDocument();
-
         await user.click(screen.getByRole('button', { name: 'Go to next page' }));
         await screen.findByText('page2user');
-
-        expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
-
         await user.click(screen.getByLabelText('Select page2user'));
+        await user.click(screen.getByRole('button', { name: 'Go to previous page' }));
+        await screen.findByText('viewer');
+
+        // Assert
+        expect(screen.getByLabelText('Select viewer')).toHaveAttribute('aria-pressed', 'true');
         expect(
-            within(screen.getByRole('region', { name: 'User selection actions' })).getByText('1 selected'),
+            within(screen.getByRole('region', { name: 'User selection actions' })).getByText('2 selected'),
         ).toBeInTheDocument();
 
+        // Act
         await user.click(
             within(screen.getByRole('region', { name: 'User selection actions' })).getByRole('button', {
                 name: 'Delete selected users',
@@ -431,10 +462,13 @@ describe('UserManagement selection', () => {
         );
         await user.click(document.querySelector('[data-action="confirm-delete"]') as HTMLElement);
 
+        // Assert
         await waitFor(() => {
+            expect(mockDeleteUser).toHaveBeenCalledWith('user-2');
             expect(mockDeleteUser).toHaveBeenCalledWith('user-6');
         });
-        expect(mockDeleteUser).not.toHaveBeenCalledWith('user-2');
-        expect(mockDeleteUser).toHaveBeenCalledTimes(1);
+        expect(mockDeleteUser).toHaveBeenCalledTimes(2);
+        expect(mockDeleteUser).not.toHaveBeenCalledWith('user-1');
+        expect(mockDeleteUser).not.toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
     });
 });

@@ -72,10 +72,6 @@ export function ContentGalleryPosterSlot({
     selectionMode,
     preview,
 }: ContentGalleryPosterSlotProps) {
-    if (selectionMode) {
-        return <>{children}</>;
-    }
-
     return (
         <Slot
             slot="content.gallery.poster"
@@ -85,6 +81,7 @@ export function ContentGalleryPosterSlot({
                 level,
                 'poster-url': posterUrl,
                 'declares-previews': String(declaresPreviews),
+                'selection-mode': String(selectionMode),
                 ...previewContext(preview),
             }}
         >

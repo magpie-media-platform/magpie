@@ -13,4 +13,9 @@ public sealed record LibraryImportSubmissionRequest : BulkAction<LibraryImportCa
     /// The required monitoring setup for imported content.
     /// </summary>
     public LibraryImportMonitoringMode? MonitoringMode { get; init; }
+
+    /// <summary>
+    /// The explicitly accepted rename preview, or null to retain existing file paths.
+    /// </summary>
+    public FileRenamePreview? RenamePreview { get; init; }
 }

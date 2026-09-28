@@ -23,6 +23,9 @@ internal sealed class ContentHierarchyItemConfiguration : IEntityTypeConfigurati
         builder.Property(e => e.Ordinal);
         builder.Property(e => e.AlignmentKey);
         builder.Property(e => e.PendingMetadataRefresh).HasDefaultValue(false);
+
+        builder.Ignore(e => e.ImportPending);
+        builder.Ignore(e => e.Tags);
         builder.HasOne<ContentHierarchyItem>()
             .WithMany()
             .HasForeignKey(e => e.ParentId)

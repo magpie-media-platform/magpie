@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import type { MonitoringMode } from '@/types';
 
 import { MonitoringToggle } from './MonitoringToggle';
 
@@ -37,6 +38,23 @@ describe('MonitoringToggle', () => {
         await user.click(screen.getByRole('radio', { name: /^Monitor:/ }));
 
         expect(onChange).toHaveBeenCalledWith(true);
+    });
+
+    it('offers Inherit, Unmonitored, Monitored and Shotgun in order in Shotgun mode', async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(
+            <TooltipProvider>
+                <MonitoringToggle<MonitoringMode | null> value="Shotgun" onChange={onChange} shotgun />
+            </TooltipProvider>,
+        );
+
+        const options = screen.getAllByRole('radio');
+        await user.click(screen.getByRole('radio', { name: /^Unmonitored:/ }));
+
+        expect(options.map((option) => option.textContent)).toEqual(['Inherit', 'Unmonitored', 'Monitored', 'Shotgun']);
+        expect(screen.getByRole('radio', { name: /^Shotgun:/ })).toHaveAttribute('aria-checked', 'true');
+        expect(onChange).toHaveBeenCalledWith('Unmonitored');
     });
 
     it('disables every option when disabled', () => {

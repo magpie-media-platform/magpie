@@ -1,7 +1,7 @@
 import type { ScalarPatch } from './patch';
 import type { JobExecutionModeValue } from '@/lib/jobActions';
 
-import type { ContentListItem } from './content';
+import type { ContentListItem, MonitoringMode } from './content';
 
 export type RootFolderResolutionSource = 'Override' | 'Inherited' | 'ContentTypeDefault' | 'None';
 
@@ -67,7 +67,7 @@ export interface ContentRelationship {
 
 export interface UpdateContentRequest {
     id: string;
-    monitoring?: boolean | null;
+    monitoring?: MonitoringMode | null;
     qualityTierListId?: string | null;
     rootFolderId?: string | null;
     tagsToAdd?: string[];
@@ -498,7 +498,7 @@ export interface BulkResult {
 }
 
 export interface ContentHierarchyItemPatch {
-    monitoring?: ScalarPatch<boolean>;
+    monitoring?: ScalarPatch<MonitoringMode | null>;
     rootFolderId?: ScalarPatch<string | null>;
     qualityTierListId?: ScalarPatch<string | null>;
     path?: ScalarPatch<string | null>;

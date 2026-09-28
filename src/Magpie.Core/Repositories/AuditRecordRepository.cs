@@ -179,6 +179,7 @@ internal sealed class AuditRecordRepository(
         }
     }
 
+    /// <inheritdoc />
     public async Task<AuditRecord> CreateAsync(AuditRecord auditRecord, CancellationToken cancellationToken)
     {
         try
@@ -195,8 +196,21 @@ internal sealed class AuditRecordRepository(
 
             auditRecord.CorrelationId ??= jobExecutionScopes.CurrentCorrelationId;
 
-            context.AuditRecords.Add(auditRecord);
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            var entry = context.AuditRecords.Add(auditRecord);
+            try
+            {
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                if (entry.State == EntityState.Added)
+                {
+                    entry.State = EntityState.Detached;
+                }
+
+                throw;
+            }
+
             await transactionManager.OnCommittedAsync(
                 token => eventBus.PublishAsync(
                     AuditRecordEventBuilder.BuildAuditRecordCreatedEvent(auditRecord.Id), token),

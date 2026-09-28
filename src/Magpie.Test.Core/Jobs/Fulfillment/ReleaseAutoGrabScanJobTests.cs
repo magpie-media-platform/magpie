@@ -116,7 +116,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var contentBId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
+                It.Is<ContentHierarchyItemCriteria>(c => c.ImportPending == false && c.Fulfillment != null &&
                     c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
@@ -132,7 +132,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "a",
                         Name = "A",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = contentAId,
@@ -147,7 +147,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "b",
                         Name = "B",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = contentBId,
@@ -210,7 +210,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "u",
                         Name = "U",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = contentItemId,
@@ -260,7 +260,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "fresh",
                         Name = "Fresh",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = Guid.NewGuid(),
@@ -318,7 +318,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "x",
                         Name = "X",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = Guid.NewGuid(),
@@ -388,7 +388,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "x",
                         Name = "X",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = Guid.NewGuid(),
@@ -472,7 +472,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "x",
                         Name = "X",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = contentItemId,
@@ -536,7 +536,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "x",
                         Name = "X",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = contentItemId,
@@ -592,7 +592,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "x",
                         Name = "X",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = contentItemId,
@@ -651,7 +651,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "x",
                         Name = "X",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = contentItemId,
@@ -714,7 +714,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "x",
                         Name = "X",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = contentItemId,
@@ -776,7 +776,7 @@ public sealed class ReleaseAutoGrabScanJobTests
                         Level = "movie",
                         Slug = "x",
                         Name = "X",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         ContentItem = new ContentItem
                         {
                             Id = Guid.NewGuid(),

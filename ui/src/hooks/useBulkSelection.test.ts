@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 
 import { useBulkSelection } from './useBulkSelection';
@@ -6,6 +6,22 @@ import { useBulkSelection } from './useBulkSelection';
 const pageIds = ['a', 'b', 'c'];
 
 describe('useBulkSelection', () => {
+    it('SelectAllAcrossPages_StaysPageScoped_WhenTheCallerCannotActOnAllResults', () => {
+        // Arrange
+        const { result } = renderHook(() =>
+            useBulkSelection({ pageRowIds: ['a', 'b'], totalCount: 10, allowSelectAllAcrossPages: false }),
+        );
+
+        // Act
+        act(() => result.current.toggleHeader(true));
+        act(() => result.current.selectAllAcrossPages());
+
+        // Assert
+        expect(result.current.showAcrossPagesPrompt).toBe(false);
+        expect(result.current.allPages).toBe(false);
+        expect(result.current.resolve()).toEqual({ mode: 'ids', ids: ['a', 'b'] });
+    });
+
     it('defaults to an empty page selection', () => {
         const { result } = renderHook(() => useBulkSelection({ pageRowIds: pageIds, totalCount: 10 }));
 
@@ -123,6 +139,36 @@ describe('useBulkSelection', () => {
 
         expect(result.current.selectionMode).toBe(false);
         expect(result.current.hasSelection).toBe(false);
+    });
+
+    it('keeps selection mode off in the table layout when rows are selected', () => {
+        const { result } = renderHook(() => useBulkSelection({ pageRowIds: pageIds, totalCount: 10 }));
+
+        act(() => result.current.toggleRow('a', true));
+
+        expect(result.current.selectionMode).toBe(false);
+        expect(result.current.selectedCount).toBe(1);
+    });
+
+    it('shows an existing selection as selection mode in the card layout and clears it only when leaving', () => {
+        vi.stubGlobal('matchMedia', (query: string) => ({
+            matches: query.includes('max-width'),
+            media: query,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+        }));
+        const { result } = renderHook(() => useBulkSelection({ pageRowIds: pageIds, totalCount: 10 }));
+
+        act(() => result.current.toggleRow('a', true));
+
+        expect(result.current.selectionMode).toBe(true);
+        expect(result.current.selectedCount).toBe(1);
+
+        act(() => result.current.toggleSelectionMode());
+
+        expect(result.current.selectionMode).toBe(false);
+        expect(result.current.hasSelection).toBe(false);
+        vi.unstubAllGlobals();
     });
 
     it('clears everything back to the empty page-select state', () => {

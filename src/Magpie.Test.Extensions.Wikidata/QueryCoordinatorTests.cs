@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,19 +11,27 @@ using System.Threading.Tasks;
 using Magpie.Extensions.Wikidata;
 using Magpie.Extensions.Wikidata.Mapping;
 using Magpie.Extensions.Wikidata.QueryEngine;
+using Magpie.Models.Enums;
 using Magpie.Sdk.Caching;
+using Magpie.Sdk.Http;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
 
 using NUnit.Framework;
 
+using RichardSzalay.MockHttp;
+
 namespace Magpie.Test.Extensions.Wikidata;
 
 [TestFixture]
+[NonParallelizable]
 internal sealed class QueryCoordinatorTests
 {
+    private ServiceProvider _cooldownServices = null!;
+
     private Mock<ICacheFactory> _cacheFactory = null!;
 
     private IServiceScopeFactory _scopeFactory = null!;
@@ -28,6 +39,8 @@ internal sealed class QueryCoordinatorTests
     [SetUp]
     public void SetUp()
     {
+        _cooldownServices = new ServiceCollection().AddHttpClient("test-cooldown")
+            .AddUpstreamCooldown().Services.BuildServiceProvider();
         _cacheFactory = new Mock<ICacheFactory>();
         _cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
             .Returns(() =>
@@ -54,6 +67,9 @@ internal sealed class QueryCoordinatorTests
         scopeFactory.Setup(value => value.CreateScope()).Returns(scope.Object);
         _scopeFactory = scopeFactory.Object;
     }
+
+    [TearDown]
+    public void DisposeCooldownServices() => _cooldownServices.Dispose();
 
     [Test]
     public async Task GetEntitiesAsync_CompletesEveryBatch_WhenPendingIdsExceedCacheCapacity()
@@ -84,6 +100,190 @@ internal sealed class QueryCoordinatorTests
             It.IsAny<IReadOnlyCollection<string>>(),
             context,
             It.IsAny<CancellationToken>()), Times.Exactly(21));
+    }
+
+    [TestCase(false, false, false, 3)]
+    [TestCase(true, false, false, 3)]
+    [TestCase(false, true, false, 3)]
+    [TestCase(true, true, false, 3)]
+    [TestCase(false, false, true, 1)]
+    [TestCase(true, false, true, 1)]
+    [TestCase(false, true, true, 1)]
+    [TestCase(true, true, true, 4)]
+    public async Task SearchAsync_ReportsEverySharedRequest_WhenWaitersCancelOrUpstreamThrottles(
+        bool cancelOwner, bool cancelFollower, bool retry, int expectedRequests)
+    {
+        // Arrange
+        var snapshots = new ConcurrentQueue<(string? Reason, int Requests)>();
+        using var trace = new Activity("shared-request-accounting-test").Start();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "magpie.extensions.wikidata",
+            Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = (ref ActivityCreationOptions<string> options) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (activity.OperationName == "wikidata.query.execute" && activity.TraceId == trace.TraceId)
+                {
+                    snapshots.Enqueue((
+                        activity.GetTagItem("magpie.query.terminal_reason") as string,
+                        (int)(activity.GetTagItem("magpie.query.request_count") ?? 0)));
+                }
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        var firstStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstResponse = new TaskCompletionSource<HttpResponseMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var sends = 0;
+        using var http = new MockHttpMessageHandler();
+        http.Expect(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
+            .Respond(_ =>
+            {
+                Interlocked.Increment(ref sends);
+                firstStarted.SetResult(true);
+                return firstResponse.Task;
+            });
+        if (retry)
+        {
+            http.Expect(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
+                .Respond(_ =>
+                {
+                    Interlocked.Increment(ref sends);
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("{\"search\":[],\"search-continue\":50}")
+                    };
+                });
+        }
+
+        http.Expect(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
+            .Respond(_ =>
+            {
+                Interlocked.Increment(ref sends);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"search\":[]}")
+                };
+            });
+        http.Expect(HttpMethod.Post, WikidataClient.DefaultSparqlUrl)
+            .Respond(_ =>
+            {
+                Interlocked.Increment(ref sends);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"results\":{\"bindings\":[]}}")
+                };
+            });
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
+            .Returns(() => new HttpClient(http, disposeHandler: false));
+        var client = new WikidataClient(
+            factory.Object,
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
+        using var coordinator = new QueryCoordinator(client, _scopeFactory);
+        var subject = new QueryExecutor(client, coordinator, NullLogger<QueryExecutor>.Instance);
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+        var plan = new QueryPlan
+        {
+            EntityKind = EntityKind.Movie,
+            Strategy = QueryStrategy.TitleSearch,
+            Filters =
+            [
+                new QueryFilter
+                {
+                    Kind = QueryFilterKind.Title,
+                    Operator = CriteriaValueOperator.StartsWithString,
+                    Values = ["Shared lookup"]
+                }
+            ],
+            Warnings = [],
+            Page = 1,
+            UsesLocalPaging = true
+        };
+        using var cancellation = new CancellationTokenSource();
+        using var followerCancellation = new CancellationTokenSource();
+
+        // Act
+        var owner = subject.SearchAsync(plan, context, cancellation.Token);
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        var follower = subject.SearchAsync(plan, context, followerCancellation.Token);
+        if (cancelOwner)
+        {
+            await cancellation.CancelAsync().ConfigureAwait(false);
+            Assert.That(async () => await owner.ConfigureAwait(false), Throws.TypeOf<OperationCanceledException>());
+        }
+
+        if (cancelFollower)
+        {
+            await followerCancellation.CancelAsync().ConfigureAwait(false);
+            Assert.That(async () => await follower.ConfigureAwait(false), Throws.TypeOf<OperationCanceledException>());
+        }
+
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(retry
+                ? "{\"error\":{\"code\":\"maxlag\"}}"
+                : "{\"search\":[],\"search-continue\":50}")
+        };
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
+        firstResponse.SetResult(response);
+        var survivingQuery = cancelOwner && cancelFollower
+            ? subject.SearchAsync(plan, context, default)
+            : cancelFollower ? owner : follower;
+        if (retry && !(cancelOwner && cancelFollower))
+        {
+            // Assert
+            Assert.ThrowsAsync<Magpie.Models.UpstreamThrottledException>(async () =>
+                await survivingQuery.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false));
+            if (!cancelOwner)
+            {
+                Assert.ThrowsAsync<Magpie.Models.UpstreamThrottledException>(async () =>
+                    await owner.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false));
+            }
+
+            Assert.ThrowsAsync<Magpie.Models.UpstreamThrottledException>(async () =>
+                await subject.SearchAsync(plan, context, default).ConfigureAwait(false));
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(sends, Is.EqualTo(1));
+                Assert.That(snapshots.Sum(snapshot => snapshot.Requests), Is.EqualTo(1));
+            }
+
+            return;
+        }
+
+        var result = await survivingQuery
+            .WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        if (!cancelOwner)
+        {
+            await owner.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        }
+
+        var cached = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits, Is.Empty);
+            Assert.That(cached.Hits, Is.Empty);
+            Assert.That(sends, Is.EqualTo(expectedRequests));
+            Assert.That(snapshots, Has.Count.EqualTo(cancelOwner && cancelFollower ? 4 : 3));
+            Assert.That(snapshots.Sum(snapshot => snapshot.Requests), Is.EqualTo(expectedRequests));
+            Assert.That(snapshots.Last(), Is.EqualTo(("completed", 0)));
+            Assert.That(snapshots.Count(snapshot => snapshot.Reason == "cancelled"),
+                Is.EqualTo(cancelOwner && cancelFollower ? 2 : cancelOwner || cancelFollower ? 1 : 0));
+        }
+
+        http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
@@ -448,15 +648,115 @@ internal sealed class QueryCoordinatorTests
         }
     }
 
-    [Test]
-    public async Task GetEntitiesAsync_ChunksAndCachesConfirmedMissing_WhenFiftyOneIds()
+    [TestCase(false, false, false, 2, 0)]
+    [TestCase(true, false, false, 1, 1)]
+    [TestCase(false, true, false, 2, 0)]
+    [TestCase(true, false, true, 1, 1)]
+    public async Task GetEntitiesAsync_CountsEachPhysicalBatchOnce_WhenWaitersShareHydration(
+        bool cancelOwner, bool cancelFollower, bool partialFollower, int expectedOwner, int expectedFollower)
     {
         // Arrange
+        var ownerRequests = 0;
+        var followerRequests = 0;
+        var sends = 0;
+        var firstStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstResponse = new TaskCompletionSource<HttpResponseMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var http = new MockHttpMessageHandler();
+        http.Expect(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
+            .Respond(_ =>
+            {
+                Interlocked.Increment(ref sends);
+                firstStarted.SetResult(true);
+                return firstResponse.Task;
+            });
+        http.Expect(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
+            .WithQueryString("ids", "Q51")
+            .Respond(_ =>
+            {
+                Interlocked.Increment(ref sends);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"entities\":{\"Q51\":{\"id\":\"Q51\"}}}")
+                };
+            });
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
+            .Returns(() => new HttpClient(http, disposeHandler: false));
+        var client = new WikidataClient(
+            factory.Object,
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
+        using var subject = new QueryCoordinator(client, _scopeFactory);
         var context = new RequestContext
         {
             Language = "en",
             FallbackLanguages = ["en"],
-            UserAgent = "Magpie/test"
+            UserAgent = "Magpie/test",
+            UpstreamRequestObserver = () => Interlocked.Increment(ref ownerRequests)
+        };
+        var followerContext = context with
+        {
+            UpstreamRequestObserver = () => Interlocked.Increment(ref followerRequests)
+        };
+        var ids = Enumerable.Range(1, 51).Select(value => "Q" + value).ToArray();
+        using var ownerCancellation = new CancellationTokenSource();
+        using var followerCancellation = new CancellationTokenSource();
+
+        // Act
+        var owner = subject.GetEntitiesAsync(ids, context, ownerCancellation.Token);
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        var follower = subject.GetEntitiesAsync(
+            partialFollower ? ["Q51"] : ids, followerContext, followerCancellation.Token);
+        if (cancelOwner)
+        {
+            await ownerCancellation.CancelAsync().ConfigureAwait(false);
+            Assert.That(async () => await owner.ConfigureAwait(false), Throws.TypeOf<OperationCanceledException>());
+        }
+
+        if (cancelFollower)
+        {
+            await followerCancellation.CancelAsync().ConfigureAwait(false);
+            Assert.That(async () => await follower.ConfigureAwait(false), Throws.TypeOf<OperationCanceledException>());
+        }
+
+        firstResponse.SetResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"entities\":{}}")
+        });
+        var result = await (cancelFollower ? owner : follower)
+            .WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        if (!cancelOwner)
+        {
+            await owner.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        }
+
+        var cached = await subject.GetEntitiesAsync(["Q51"], followerContext, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result["Q51"].Id, Is.EqualTo("Q51"));
+            Assert.That(cached["Q51"].Id, Is.EqualTo("Q51"));
+            Assert.That(sends, Is.EqualTo(2));
+            Assert.That(ownerRequests, Is.EqualTo(expectedOwner));
+            Assert.That(followerRequests, Is.EqualTo(expectedFollower));
+        }
+
+        http.VerifyNoOutstandingExpectation();
+    }
+
+    [Test]
+    public async Task GetEntitiesAsync_ChunksAndCachesConfirmedMissing_WhenFiftyOneIds()
+    {
+        // Arrange
+        var upstreamRequests = 0;
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test",
+            UpstreamRequestObserver = () => upstreamRequests++
         };
         var batches = new List<IReadOnlyCollection<string>>();
         var client = new Mock<IWikidataClient>();
@@ -466,9 +766,10 @@ internal sealed class QueryCoordinatorTests
             It.IsAny<CancellationToken>()))
             .Returns((
                 IReadOnlyCollection<string> ids,
-                RequestContext _,
+                RequestContext requestContext,
                 CancellationToken _) =>
             {
+                requestContext.UpstreamRequestObserver?.Invoke();
                 batches.Add([.. ids]);
                 return Task.FromResult<IReadOnlyDictionary<string, EntityDto>>(
                     new Dictionary<string, EntityDto>());
@@ -486,6 +787,7 @@ internal sealed class QueryCoordinatorTests
         {
             Assert.That(first, Is.Empty);
             Assert.That(second, Is.Empty);
+            Assert.That(upstreamRequests, Is.EqualTo(2));
             Assert.That(batches, Has.Count.EqualTo(2));
             Assert.That(batches[0], Has.Count.EqualTo(50));
             Assert.That(batches[1], Has.Count.EqualTo(1));

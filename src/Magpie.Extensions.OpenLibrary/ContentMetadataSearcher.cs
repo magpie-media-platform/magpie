@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -68,12 +69,49 @@ internal sealed class ContentMetadataSearcher(
         }
     }
 
-    public async Task<MetadataSearchPage> AdvancedSearchAsync(
+    public Task<MetadataSearchPage> AdvancedSearchAsync(
         string contentType,
         ContentHierarchyItemCriteria query,
         int maxResults,
         string defaultLanguagePreference,
         CancellationToken cancellationToken = default)
+        => SearchPageAsync(contentType, query, maxResults, defaultLanguagePreference, null, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<MetadataSearchBatch> ContinueSearchAsync(
+        string contentType,
+        ContentHierarchyItemCriteria query,
+        int maxResults,
+        string defaultLanguagePreference,
+        object? continuation,
+        CancellationToken cancellationToken = default)
+    {
+        var fingerprint = JsonSerializer.Serialize(new { contentType, query, defaultLanguagePreference, _hierarchies });
+        if (continuation is not null &&
+            (continuation is not SearchCheckpoint previous || previous.Fingerprint != fingerprint))
+        {
+            throw new MetadataSearchContinuationException("The Open Library checkpoint does not match this search.");
+        }
+
+        var progress = (continuation as SearchCheckpoint)?.Progress.Copy() ?? new QueryProgress();
+        progress.ValidateOnly = maxResults == 0;
+        var page = await SearchPageAsync(contentType, query, maxResults, defaultLanguagePreference,
+            progress, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return new MetadataSearchBatch
+        {
+            Page = page,
+            Continuation = new SearchCheckpoint(fingerprint, progress)
+        };
+    }
+
+    private async Task<MetadataSearchPage> SearchPageAsync(
+        string contentType,
+        ContentHierarchyItemCriteria query,
+        int maxResults,
+        string defaultLanguagePreference,
+        QueryProgress? progress,
+        CancellationToken cancellationToken)
     {
         var hierarchy = SupportedHierarchy(contentType, query);
         if (hierarchy is null)
@@ -85,6 +123,7 @@ internal sealed class ContentMetadataSearcher(
             new QueryRequest
             {
                 Intent = QueryIntent.AdvancedSearch,
+                Progress = progress,
                 Hierarchy = hierarchy,
                 Criteria = query,
                 LanguagePreference = defaultLanguagePreference,
@@ -197,4 +236,6 @@ internal sealed class ContentMetadataSearcher(
             .ToList();
         return matches.Count == 1 ? matches[0] : null;
     }
+
+    private sealed record SearchCheckpoint(string Fingerprint, QueryProgress Progress);
 }

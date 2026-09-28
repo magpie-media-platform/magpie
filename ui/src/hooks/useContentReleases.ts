@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
-import { apiGet } from '@/lib/api';
+import { apiGet, apiPatch } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
-import type { DownloadStatusValue } from '@/types';
+import type { DownloadStatusValue, ReleaseScopeStatus } from '@/types';
 
 export interface ContentReleaseRow {
     id: string;
@@ -21,7 +21,15 @@ export interface ContentReleaseRow {
     isMatch?: boolean | null;
     rejectionReason?: string | null;
     acquisitionStatus?: DownloadStatusValue | null;
+    acquisitionWaitingReason?: string | null;
     failureReason?: string | null;
+    status?: ReleaseScopeStatus;
+}
+
+export interface SetContentReleaseUnmatchedVariables {
+    contentId: string;
+    releaseId: string;
+    status: ReleaseScopeStatus;
 }
 
 export const contentReleaseQueryKeys = {
@@ -38,6 +46,8 @@ export function useContentReleases(contentId: string | null | undefined, options
         queryFn: () => fetchContentReleases(contentId!),
         enabled: (options?.enabled ?? true) && !!contentId,
         staleTime: POLLING_INTERVALS.normal / 2,
+        refetchInterval: (query) =>
+            query.state.data?.some((release) => release.acquisitionWaitingReason) ? POLLING_INTERVALS.normal : false,
     });
     const relatedIds = [contentId, ...(query.data?.map((release) => release.id) ?? [])].filter(
         (id): id is string => !!id,
@@ -73,4 +83,14 @@ export function useContentReleases(contentId: string | null | undefined, options
         error: queryErrorOrNull(query),
         refetch: query.refetch,
     };
+}
+
+export function useSetContentReleaseUnmatched() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ contentId, releaseId, status }: SetContentReleaseUnmatchedVariables) =>
+            apiPatch(`/content/${contentId}/releases/${releaseId}`, { status: { value: status } }),
+        onSuccess: (_, { contentId }) =>
+            queryClient.invalidateQueries({ queryKey: contentReleaseQueryKeys.forContent(contentId) }),
+    });
 }

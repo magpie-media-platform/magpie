@@ -44,6 +44,70 @@ const releaseRow = (overrides: Partial<ReleaseRow> = {}): ReleaseRow => ({
 });
 
 describe('ReleasesTab', () => {
+    it.each([1024, 390])('shows a persisted capacity reason and clears it after recovery at %i px', (width) => {
+        // Arrange
+        vi.stubGlobal('matchMedia', createMatchMedia(width));
+        const reason =
+            'Waiting for destination capacity: insufficient free space. Required: 100 bytes. Available: 99 bytes.';
+        const waiting = {
+            id: 'waiting-release',
+            title: 'Waiting film',
+            protocol: 'torrent',
+            publishDate: '2026-09-22T12:00:00Z',
+            acquisitionWaitingReason: reason,
+        };
+
+        // Act
+        const { rerender } = render(<ReleasesTab releases={[waiting]} onGrab={vi.fn()} />);
+
+        // Assert
+        expect(screen.getByText('Waiting for capacity')).toBeInTheDocument();
+        expect(screen.getByText(reason)).toBeVisible();
+        expect(screen.queryByRole('button', { name: 'Grab' })).not.toBeInTheDocument();
+        expect(screen.queryByText('Failed')).not.toBeInTheDocument();
+
+        // Act
+        rerender(
+            <ReleasesTab
+                releases={[{ ...waiting, acquisitionWaitingReason: null, acquisitionStatus: 'Downloading' }]}
+                onGrab={vi.fn()}
+            />,
+        );
+
+        // Assert
+        expect(screen.queryByText('Waiting for capacity')).not.toBeInTheDocument();
+        expect(screen.queryByText(reason)).not.toBeInTheDocument();
+        expect(screen.getByText('Downloading')).toBeInTheDocument();
+    });
+
+    it('shows unavailable capacity instead of a previous failed transfer', () => {
+        // Arrange
+        const reason =
+            'Waiting for destination capacity: the capacity check is unavailable. Required: unknown. Available: 99 bytes.';
+
+        // Act
+        render(
+            <ReleasesTab
+                releases={[
+                    {
+                        id: 'waiting-release',
+                        title: 'Waiting film',
+                        protocol: 'torrent',
+                        publishDate: '2026-09-22T12:00:00Z',
+                        acquisitionStatus: 'Failed',
+                        failureReason: 'MissingFiles',
+                        acquisitionWaitingReason: reason,
+                    },
+                ]}
+                onGrab={vi.fn()}
+            />,
+        );
+
+        // Assert
+        expect(screen.getByText(reason)).toBeVisible();
+        expect(screen.queryByText('Failed')).not.toBeInTheDocument();
+    });
+
     it('renders the empty state exactly once when no releases are available', () => {
         render(<ReleasesTab releases={[]} onGrab={vi.fn()} />);
         expect(screen.getAllByText(/no releases found/i)).toHaveLength(1);
@@ -340,6 +404,23 @@ describe('ReleasesTab', () => {
         expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
     });
 
+    it('keeps Grab enabled and shows a Faulted status with the reason for a faulted download', () => {
+        render(
+            <ReleasesTab
+                releases={[releaseRow({ acquisitionStatus: 'Faulted', failureReason: 'DownloadStuck' })]}
+                onGrab={vi.fn()}
+            />,
+        );
+
+        const faulted = screen.getAllByText('Faulted');
+        expect(faulted.length).toBeGreaterThan(0);
+        for (const badge of faulted) {
+            expect(badge).toHaveAttribute('title', 'Download Stuck');
+            expect(badge.closest('[data-acquisition-status]')).toHaveAttribute('data-variant', 'stalled');
+        }
+        expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
+    });
+
     it('keeps Grab enabled and shows a Cancelled status for a cancelled download', () => {
         render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Cancelled' })]} onGrab={vi.fn()} />);
 
@@ -351,5 +432,49 @@ describe('ReleasesTab', () => {
         render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: null })]} onGrab={vi.fn()} />);
 
         expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
+    });
+
+    it.each([
+        ['Matched', 'Unmatch', 'Unmatched'],
+        ['Unmatched', 'Undo unmatch', 'Matched'],
+    ] as const)('asks a %s release to change through the %s button', async (status, label, expected) => {
+        // Arrange
+        const user = userEvent.setup();
+        const onUnmatchChange = vi.fn();
+        const release = releaseRow({ status });
+        render(<ReleasesTab releases={[release]} onGrab={vi.fn()} onUnmatchChange={onUnmatchChange} />);
+
+        // Act
+        await user.click(screen.getByRole('button', { name: label }));
+
+        // Assert
+        expect(onUnmatchChange).toHaveBeenCalledWith(release, expected);
+    });
+
+    it('shows an Unmatched status for an unmatched release that has no download', () => {
+        render(<ReleasesTab releases={[releaseRow({ status: 'Unmatched' })]} onGrab={vi.fn()} />);
+
+        expect(screen.getByText('Unmatched')).toBeInTheDocument();
+    });
+
+    it('shows both the Faulted and Unmatched states with Grab and Undo unmatch when both apply', () => {
+        render(
+            <ReleasesTab
+                releases={[releaseRow({ acquisitionStatus: 'Faulted', status: 'Unmatched' })]}
+                onGrab={vi.fn()}
+                onUnmatchChange={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByText('Faulted')).toBeInTheDocument();
+        expect(screen.getByText('Unmatched')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /grab/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Undo unmatch' })).toBeInTheDocument();
+    });
+
+    it('offers no Unmatch button when the user cannot change the match', () => {
+        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
+
+        expect(screen.queryByRole('button', { name: /unmatch/i })).not.toBeInTheDocument();
     });
 });

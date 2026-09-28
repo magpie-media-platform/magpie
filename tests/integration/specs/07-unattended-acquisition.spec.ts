@@ -26,8 +26,8 @@ interface RootFolder {
 interface ContentItem {
     id: string;
     name: string;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
     pendingMetadataRefresh: boolean;
     contentItem?: {
         id: string;
@@ -181,8 +181,8 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                     const configured = await api.get<ContentItem>(`/api/content/${id}`);
                     expect(configured).toMatchObject({
                         id: hydrated.id,
-                        monitoring: movie.monitored,
-                        effectiveMonitoring: movie.monitored,
+                        monitoring: movie.monitored ? 'Monitored' : 'Unmonitored',
+                        effectiveMonitoring: movie.monitored ? 'Monitored' : 'Unmonitored',
                         contentItem: { fulfillment: 'Missing' },
                     });
                     expect(await api.get(`/api/content/${id}/metadata`)).toMatchObject({
@@ -643,7 +643,7 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                     `/api/content/${contentByExternalId.get(movies[2]!.externalId)!.id}`,
                 );
                 expect(unmonitored).toMatchObject({
-                    effectiveMonitoring: false,
+                    effectiveMonitoring: 'Unmonitored',
                     contentItem: { fulfillment: 'Missing', mediaFiles: [] },
                 });
             });

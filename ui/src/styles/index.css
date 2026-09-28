@@ -7,12 +7,13 @@
 @import url('./motion.css');
 @import url('./utilities.css');
 
-@layer base {
+@layer utilities {
     @media (pointer: coarse) {
         input,
         textarea,
-        select {
-            font-size: 16px;
+        select,
+        [contenteditable='true'] {
+            font-size: max(1rem, 16px);
         }
     }
 }

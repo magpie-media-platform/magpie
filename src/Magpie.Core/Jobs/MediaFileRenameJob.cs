@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -34,6 +35,10 @@ internal sealed class MediaFileRenameJob(
         Parameters =
         [
             new(MagpieJobs.Parameters.MediaFileId, "The media file id to rename.", DataType.String, true, null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            }
         ],
     };
 
@@ -85,10 +90,34 @@ internal sealed class MediaFileRenameJob(
         }
 
         progress.Report(null, "The rename job will get the target path.");
+        var maskPlan = await contentFileService
+            .PreviewRenameMaskAsync(
+                contentItem.ContentHierarchyItemId,
+                new() { MediaFileIds = [mediaFileId] },
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (maskPlan.HasMask)
+        {
+            progress.Report(null, "The rename job will rename the file.");
+            var outcome = await contentFileService
+                .ExecuteRenameMaskAsync(contentItem.ContentHierarchyItemId, maskPlan, userId, cancellationToken)
+                .ConfigureAwait(false);
+            var entry = outcome.Files.FirstOrDefault(file => file.MediaFileId == mediaFileId);
+            if (entry is not { Completed: true })
+            {
+                throw new InvalidOperationException(
+                    entry?.Error ?? $"The rename mask does not apply to media file {mediaFileId}.");
+            }
+
+            progress.Report(1, "The file rename completed.");
+            return;
+        }
+
         var preview = await contentFileService
             .PreviewRenameAsync(
                 contentItem.ContentHierarchyItemId,
                 new FileInfo(mediaFile.FilePath),
+                mediaFile.MediaInfo,
                 cancellationToken)
             .ConfigureAwait(false);
 

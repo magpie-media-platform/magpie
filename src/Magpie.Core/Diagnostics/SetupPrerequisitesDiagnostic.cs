@@ -50,15 +50,13 @@ internal sealed class SetupPrerequisitesDiagnostic(
         {
             findings.Add(Error(
                 "No indexers are configured",
-                "No indexer connection exists, so searches return nothing. Add one under " +
-                "Admin > Indexers."));
+                "No indexer connection exists, so searches return nothing."));
         }
         else if (!connections.Any(c => c.Enabled))
         {
             findings.Add(Error(
                 "All indexers are disabled",
-                "Every indexer connection is disabled, so searches return nothing. Enable at least one under " +
-                "Admin > Indexers."));
+                "Every indexer connection is disabled, so searches return nothing."));
         }
 
         var clients = context.DownloadClients;
@@ -66,15 +64,13 @@ internal sealed class SetupPrerequisitesDiagnostic(
         {
             findings.Add(Error(
                 "No download client is configured",
-                "No download client is configured, so Magpie cannot send downloads. " +
-                "One can be added under Admin > Download Clients."));
+                "No download client is configured, so Magpie cannot send downloads."));
         }
         else if (!clients.Any(c => c.Enabled))
         {
             findings.Add(Error(
                 "All download clients are disabled",
-                "Every download client is disabled, so Magpie cannot send downloads. " +
-                "At least one must be enabled under Admin > Download Clients."));
+                "Every download client is disabled, so Magpie cannot send downloads."));
         }
 
         AddDuplicateDownloadClientProviderFindings(findings);
@@ -87,9 +83,7 @@ internal sealed class SetupPrerequisitesDiagnostic(
                 DiagnosticCheckId = Id,
                 Severity = DiagnosticFindingSeverity.Warning,
                 Title = "No root folder is configured",
-                Detail =
-                    "No root folder is configured, so imported files have nowhere to go. " +
-                    "One can be added under Admin > Root Folders.",
+                Detail = "No root folder is configured, so imported files have nowhere to go.",
             });
         }
 
@@ -117,8 +111,7 @@ internal sealed class SetupPrerequisitesDiagnostic(
                 Title = $"Multiple download client integrations use \"{group.Key}\"",
                 Detail =
                     $"Magpie will use {NameOf(winner)} for \"{group.Key}\" and ignore " +
-                    $"{string.Join(", ", displaced.Select(NameOf))}. " +
-                    "The duplicate integration should be removed.",
+                    $"{string.Join(", ", displaced.Select(NameOf))}.",
             });
         }
     }

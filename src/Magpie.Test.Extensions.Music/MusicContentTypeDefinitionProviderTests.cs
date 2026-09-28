@@ -158,6 +158,71 @@ public class MusicContentTypeDefinitionProviderTests
         Assert.That(result, Is.EqualTo(expected));
     }
 
+    [TestCase("", null, "Pack Artist - Album - Song.flac", ReleaseMatchResult.Indeterminate)]
+    [TestCase("", null, "Pack Artist - Track 02 - Song.flac", ReleaseMatchResult.Confident)]
+    [TestCase("Other", null, "01 - Pack Artist - Title.flac", ReleaseMatchResult.NoMatch)]
+    [TestCase("", "Other", "02 - Pack Artist - Other.flac", ReleaseMatchResult.Confident)]
+    [TestCase("Other", "Other", "01 - Pack Artist - Title.flac", ReleaseMatchResult.NoMatch)]
+    [TestCase("Title", "Title", "01 - Pack Artist - Title.flac", ReleaseMatchResult.Confident)]
+    public void IsMatch_RequiresTheTrackTitle_WhenTheTrackTitleComesFromMetadataOrName(
+        string trackName,
+        string? metadataTitle,
+        string fileName,
+        ReleaseMatchResult expected)
+    {
+        // Arrange
+        var artist = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "music",
+            Level = "artist",
+            Slug = "pack-artist",
+            Name = "Pack Artist",
+            CreatedAt = DateTime.UtcNow,
+        };
+        var album = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = artist.Id,
+            ContentType = "music",
+            Level = "album",
+            Slug = "album",
+            Name = "Album",
+            CreatedAt = DateTime.UtcNow,
+        };
+        var track = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = album.Id,
+            ContentType = "music",
+            Level = "track",
+            Slug = "track",
+            Name = trackName,
+            Ordinal = 2,
+            CreatedAt = DateTime.UtcNow,
+        };
+        var target = new ContentTarget
+        {
+            Item = track,
+            Lineage = [track, album, artist],
+            Metadata = new Dictionary<Guid, MaterializedMetadata>
+            {
+                [artist.Id] = new() { Title = "Pack Artist" },
+                [track.Id] = new() { Title = metadataTitle },
+            },
+        };
+
+        // Act
+        var result = _subject.IsMatch(
+            target,
+            [],
+            new Release { Protocol = "file", Title = fileName },
+            []);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
     [Test]
     public void Parse_Result_WhenTrackFileIsProvided()
     {

@@ -1,7 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Jobs;
@@ -10,13 +9,14 @@ using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Core.Security;
 using Magpie.Data;
-using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
+using Magpie.Sdk.Security;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -32,19 +32,36 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class NotificationRuleRepositoryTests
 {
     private MagpieDbContext _context = null!;
-    private string _dataRoot = null!;
+    private SqliteConnection _template = null!;
     private INotificationRuleRepository _subject = null!;
     private Guid _operatorId;
+
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
 
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var admin = new User
         {
@@ -77,20 +94,20 @@ public sealed class NotificationRuleRepositoryTests
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
-        _dataRoot = Path.Combine(Path.GetTempPath(), "magpie-secret-repo-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_dataRoot);
-        var hostEnvironment = new MagpieHostEnvironment(
-            NodeId: "test-node",
-            IsClustered: false,
-            IsSupervised: false,
-            SystemRoot: _dataRoot,
-            ExtensionsRoot: _dataRoot,
-            ConfigRoot: _dataRoot,
-            DataRoot: _dataRoot,
-            StartedAt: DateTime.UtcNow);
-        var protector = new DataProtectionService(new DefaultDataProtectionProvider(
-            hostEnvironment,
-            loggerFactory.CreateLogger<DefaultDataProtectionProvider>()));
+        var keyId = "test";
+        var dataProtectionProvider = new Mock<IDataProtectionProvider>();
+        dataProtectionProvider
+            .Setup(provider => provider.Protect(It.IsAny<string>()))
+            .Returns((string value) => "test:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(value)));
+        dataProtectionProvider
+            .Setup(provider => provider.Unprotect(It.IsAny<string>()))
+            .Returns((string value) => Encoding.UTF8.GetString(Convert.FromBase64String(value["test:".Length..])));
+        dataProtectionProvider
+            .Setup(provider => provider.TryGetKeyId(
+                It.Is<string>(value => value.StartsWith("test:", StringComparison.Ordinal)),
+                out keyId))
+            .Returns(true);
+        var protector = new DataProtectionService(dataProtectionProvider.Object);
 
         _subject = new NotificationRuleRepository(
             _context,
@@ -107,7 +124,6 @@ public sealed class NotificationRuleRepositoryTests
     {
         _context.Database.CloseConnection();
         _context.Dispose();
-        Directory.Delete(_dataRoot, recursive: true);
     }
 
     [Test]

@@ -63,10 +63,13 @@ interface UseWantedContentResult {
 }
 
 export const wantedQueryKeys = {
-    list: (parentId?: string) => ['wanted', 'list', { parentId: parentId ?? null }] as const,
-    upgrades: (parentId?: string) => ['wanted', 'upgrades', { parentId: parentId ?? null }] as const,
+    list: (parentId?: string, filter = '') =>
+        ['wanted', 'list', { parentId: parentId ?? null, ...(filter ? { filter } : {}) }] as const,
+    upgrades: (parentId?: string, filter = '') =>
+        ['wanted', 'upgrades', { parentId: parentId ?? null, ...(filter ? { filter } : {}) }] as const,
     descendantCounts: ['wanted', 'descendant-counts'] as const,
     missingDescendants: (contentId: string) => ['wanted', 'descendant-counts', contentId] as const,
+    hasChildren: (contentId: string) => ['wanted', 'has-children', contentId] as const,
 };
 
 function wantedScope(parentId: string | undefined): Pick<ContentQueryParams, 'parentId' | 'topLevelOnly'> {
@@ -102,21 +105,39 @@ function dedupe(items: ApiContentHierarchyItem[]): ApiContentHierarchyItem[] {
     });
 }
 
+/** Reports whether the item has any direct child, monitored or not. */
+export async function hasContentChildren(parentId: string): Promise<boolean> {
+    const url = buildUrl('/content', { parentId, pageNumber: 1, pageSize: 1 });
+    const result = await apiGet<PagedContentHierarchyItems>(url);
+    return result.totalItems > 0;
+}
+
 /** Loads every effectively monitored direct child through the public content query. */
 export async function fetchWantedChildren(parentId: string): Promise<ContentListItem[]> {
     const result = await fetchAllContent({ parentId, monitoring: true });
     return dedupe(result.items).map(mapToContentListItem);
 }
 
-export function useWantedContent(parentId?: string): UseWantedContentResult {
+export function useWantedContent(parentId?: string, filter = ''): UseWantedContentResult {
     const wantedQuery = useQuery({
-        queryKey: wantedQueryKeys.list(parentId),
-        queryFn: () => fetchAllContent({ ...wantedScope(parentId), monitoring: true, filter: WANTED_CONTAINER_FILTER }),
+        queryKey: wantedQueryKeys.list(parentId, filter),
+        queryFn: () =>
+            fetchAllContent({
+                ...wantedScope(parentId),
+                monitoring: true,
+                filter: filter.trim() ? `${WANTED_CONTAINER_FILTER} and (${filter})` : WANTED_CONTAINER_FILTER,
+            }),
         staleTime: POLLING_INTERVALS.slow / 2,
     });
     const upgradesQuery = useQuery({
-        queryKey: wantedQueryKeys.upgrades(parentId),
-        queryFn: () => fetchAllContent({ ...wantedScope(parentId), monitoring: true, fulfillment: 'Upgradable' }),
+        queryKey: wantedQueryKeys.upgrades(parentId, filter),
+        queryFn: () =>
+            fetchAllContent({
+                ...wantedScope(parentId),
+                monitoring: true,
+                fulfillment: 'Upgradable',
+                ...(filter.trim() ? { filter } : {}),
+            }),
         staleTime: POLLING_INTERVALS.slow / 2,
     });
     const scopedEntityIds = useMemo(
@@ -128,8 +149,12 @@ export function useWantedContent(parentId?: string): UseWantedContentResult {
         [parentId, wantedQuery.data?.items, upgradesQuery.data?.items],
     );
     const queryKeys = useMemo(
-        () => [wantedQueryKeys.list(parentId), wantedQueryKeys.upgrades(parentId), wantedQueryKeys.descendantCounts],
-        [parentId],
+        () => [
+            wantedQueryKeys.list(parentId, filter),
+            wantedQueryKeys.upgrades(parentId, filter),
+            wantedQueryKeys.descendantCounts,
+        ],
+        [parentId, filter],
     );
 
     useInvalidateQueriesOnEvents(WANTED_CHANGE_EVENTS, queryKeys, {
@@ -142,7 +167,7 @@ export function useWantedContent(parentId?: string): UseWantedContentResult {
     });
     useInvalidateQueriesOnEvents(
         ['qualityTierList.created', 'qualityTierList.updated', 'qualityTierList.deleted'],
-        [wantedQueryKeys.list(parentId), wantedQueryKeys.upgrades(parentId)],
+        [wantedQueryKeys.list(parentId, filter), wantedQueryKeys.upgrades(parentId, filter)],
         { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'wanted-content' },
     );
 

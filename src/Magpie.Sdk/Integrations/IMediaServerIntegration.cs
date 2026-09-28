@@ -18,6 +18,11 @@ public interface IMediaServerIntegration
     string ProviderType { get; }
 
     /// <summary>
+    /// The display name of the provider.
+    /// </summary>
+    string DisplayName => ProviderType;
+
+    /// <summary>
     /// The schema of the integration settings.
     /// </summary>
     IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; }

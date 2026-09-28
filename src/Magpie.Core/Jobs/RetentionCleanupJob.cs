@@ -42,25 +42,25 @@ internal sealed class RetentionCleanupJob(
                 "Days to retain terminal job execution rows.",
                 DataType.Number,
                 false,
-                "30"),
+                "30") { ValidateScheduleValue = ValidateRetentionDays },
             new(
                 MagpieJobs.Parameters.AuditRetentionDays,
                 "Days to retain audit records.",
                 DataType.Number,
                 false,
-                "90"),
+                "90") { ValidateScheduleValue = ValidateRetentionDays },
             new(
                 ReleaseObservationRetentionDaysParameter,
                 "Days to retain observed release rows.",
                 DataType.Number,
                 false,
-                "7"),
+                "7") { ValidateScheduleValue = ValidateRetentionDays },
             new(
                 MagpieJobs.Parameters.FailedDownloadRetentionDays,
                 "Days to retain failed download rows.",
                 DataType.Number,
                 false,
-                "30")
+                "30") { ValidateScheduleValue = ValidateRetentionDays }
         ],
     };
 
@@ -71,6 +71,12 @@ internal sealed class RetentionCleanupJob(
     private const int DefaultAuditRecordDays = 90;
     private const int DefaultReleaseDays = 7;
     private const int DefaultFailedDownloadRetentionDays = 30;
+
+    private static string? ValidateRetentionDays(
+        string? value, IReadOnlyDictionary<string, string> parameters, DateTime utcNow) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var days) &&
+        days > utcNow.Ticks / TimeSpan.TicksPerDay
+            ? "exceeds the supported date range." : null;
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {

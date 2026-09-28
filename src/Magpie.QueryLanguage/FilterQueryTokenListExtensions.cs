@@ -26,19 +26,24 @@ internal static class FilterQueryTokenListExtensions
         (FilterQueryToken.NotEndsWith, ScalarOperator.NotEndsWith),
     ];
 
+    private static readonly (FilterQueryToken Token, ScalarOperator Op)[] NullOps =
+    [
+        (FilterQueryToken.Null, ScalarOperator.IsNull),
+        (FilterQueryToken.NotNull, ScalarOperator.IsNotNull),
+    ];
+
     private static readonly (FilterQueryToken Token, ScalarOperator Op)[] MembershipAndNullOps =
     [
         (FilterQueryToken.In, ScalarOperator.In),
         (FilterQueryToken.NotIn, ScalarOperator.NotIn),
-        (FilterQueryToken.Null, ScalarOperator.IsNull),
-        (FilterQueryToken.NotNull, ScalarOperator.IsNotNull),
+        .. NullOps,
     ];
 
     private static TokenListParser<FilterQueryToken, (ScalarOperator Op, int End)> ScalarOpWithPosition { get; } =
         BuildScalarOpParser([.. ComparisonOps, .. MembershipAndNullOps]);
 
     private static TokenListParser<FilterQueryToken, (ScalarOperator Op, int End)> ItemScalarOpWithPosition { get; } =
-        BuildScalarOpParser(ComparisonOps);
+        BuildScalarOpParser([.. ComparisonOps, .. MembershipAndNullOps]);
 
     private static TokenListParser<FilterQueryToken, ValueNode> StringValue { get; } =
         Token.EqualTo(FilterQueryToken.String)
@@ -115,11 +120,17 @@ internal static class FilterQueryTokenListExtensions
     private static TokenListParser<FilterQueryToken, ItemExprNode> ItemField { get; } =
         from field in Token.EqualTo(FilterQueryToken.Identifier)
         from opInfo in ItemScalarOpWithPosition
-        from value in Value
+        from value in opInfo.Op is ScalarOperator.IsNull or ScalarOperator.IsNotNull
+            ? Parse.Return<FilterQueryToken, ValueNode?>(null)
+            : opInfo.Op is ScalarOperator.In or ScalarOperator.NotIn
+                ? ValueList.Select(v => (ValueNode?)v)
+                : Value.Select(v => (ValueNode?)v)
         select (ItemExprNode)new ItemFieldNode(field.Span.ToStringValue(), opInfo.Op, value)
         {
             Position = field.Span.Position.Absolute,
-            Length = value.Position + value.Length - field.Span.Position.Absolute,
+            Length = value is not null
+                ? value.Position + value.Length - field.Span.Position.Absolute
+                : opInfo.End - field.Span.Position.Absolute,
         };
 
     private static TokenListParser<FilterQueryToken, ItemExprNode> ItemGroup { get; } =

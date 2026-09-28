@@ -450,10 +450,9 @@ function DataTableInner<TData>(
                                     data-clickable={onRowClick ? true : undefined}
                                     aria-selected={row.getIsSelected() ? true : undefined}
                                 >
-                                    {mobileSelectionActive &&
-                                        mobileSelectionOverlay &&
-                                        (mobileSelectionOverlay.canSelect?.(row.original) ?? true) && (
-                                            <td role="gridcell" className="data-table__mobile-select-cell">
+                                    {mobileSelectionActive && mobileSelectionOverlay && (
+                                        <td role="gridcell" className="data-table__mobile-select-cell">
+                                            {(mobileSelectionOverlay.canSelect?.(row.original) ?? true) && (
                                                 <SelectionCircleToggle
                                                     selected={mobileSelectionOverlay.isSelected(row.original)}
                                                     onToggle={() => mobileSelectionOverlay.onToggle(row.original)}
@@ -464,8 +463,9 @@ function DataTableInner<TData>(
                                                     } ${mobileSelectionOverlay.rowLabel?.(row.original) ?? 'row'}`}
                                                     data-action="toggle-row-mobile"
                                                 />
-                                            </td>
-                                        )}
+                                            )}
+                                        </td>
+                                    )}
                                     {row.getVisibleCells().map((cell) => {
                                         const header = cell.column.columnDef.header;
                                         const label =
@@ -496,11 +496,12 @@ function DataTableInner<TData>(
                 </table>
             </div>
 
-            {shouldPaginate && !hidePagination && rows.length > 0 && (
+            {shouldPaginate && !hidePagination && table.getPageCount() > 1 && (
                 <Pager
                     className="data-table__pager"
                     page={table.getState().pagination.pageIndex + 1}
                     pageCount={Math.max(1, table.getPageCount())}
+                    totalItems={rowCount ?? data.length}
                     onFirst={() => table.setPageIndex(0)}
                     onPrevious={() => table.previousPage()}
                     onNext={() => table.nextPage()}

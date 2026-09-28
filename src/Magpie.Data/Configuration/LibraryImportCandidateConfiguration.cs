@@ -36,5 +36,7 @@ internal sealed class LibraryImportCandidateConfiguration : IEntityTypeConfigura
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => new { e.RootFolderId, e.ScanRunId });
         builder.HasIndex(e => new { e.Status, e.MatchCount });
+
+        builder.HasIndex(e => e.ContentHierarchyItemId);
     }
 }

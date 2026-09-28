@@ -1,14 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Enums;
 using Magpie.Models.Import;
+using Magpie.Models.Jobs;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
@@ -19,9 +22,13 @@ namespace Magpie.Core.Jobs;
 internal sealed class RootFolderContentImportItemJob(
     ILibraryImportService libraryImportService,
     ILibraryImportCandidateRepository libraryImportCandidateRepository,
+    IJobManager jobManager,
     IProgressReporter progressReporter,
+    TimeProvider timeProvider,
     ILogger<RootFolderContentImportItemJob> logger) : IJob
 {
+    private static readonly TimeSpan WaitingRetryDelay = TimeSpan.FromMinutes(1);
+
     public static readonly JobSpec Spec = new()
     {
         JobType = MagpieJobs.Types.RootFolderContentImportItem,
@@ -31,7 +38,6 @@ internal sealed class RootFolderContentImportItemJob(
         Scope = JobScope.Content,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromMinutes(30),
         SupportedTriggerModes = [JobTriggerMode.Manual],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
         LockPartitionFields = [MagpieJobs.Parameters.CandidateId],
@@ -54,7 +60,19 @@ internal sealed class RootFolderContentImportItemJob(
                 "The monitoring setup to apply during import.",
                 DataType.String,
                 false,
-                nameof(LibraryImportMonitoringMode.Inherit))
+                nameof(LibraryImportMonitoringMode.Inherit)),
+            new(
+                "renamePreview",
+                "The explicit file rename preview accepted by the user.",
+                DataType.String,
+                false,
+                null),
+            new(
+                MagpieJobs.Parameters.Associate,
+                "Whether to attach the file to existing library content only, without creating content.",
+                DataType.Boolean,
+                false,
+                bool.FalseString)
         ],
     };
 
@@ -112,7 +130,24 @@ internal sealed class RootFolderContentImportItemJob(
 
             progressReporter.Report(0, "The import will process the file.");
 
-            var result = await libraryImportService
+            var associate = context.Parameters.TryGetValue(MagpieJobs.Parameters.Associate, out var rawAssociate) &&
+                bool.TryParse(rawAssociate, out var parsedAssociate) && parsedAssociate;
+
+            var result = associate
+                ? await libraryImportService
+                    .AssociateCandidateAsync(
+                        candidateId,
+                        context.ManualTriggerUserId,
+                        context.CorrelationId,
+                        cancellationToken)
+                    .ConfigureAwait(false)
+                : context.Parameters.TryGetValue("renamePreview", out var rawPreview) &&
+                !string.IsNullOrWhiteSpace(rawPreview)
+                ? await libraryImportService.ImportWithRenameAsync(candidateId, matchIndex, monitoringMode,
+                    JsonSerializer.Deserialize<FileRenamePreview>(rawPreview)
+                        ?? throw new ArgumentException("The rename preview is invalid."),
+                    context.ManualTriggerUserId, context.CorrelationId, cancellationToken).ConfigureAwait(false)
+                : await libraryImportService
                 .ImportCandidateAsync(
                     candidateId,
                     matchIndex,
@@ -125,7 +160,7 @@ internal sealed class RootFolderContentImportItemJob(
             switch (result.Status)
             {
                 case LibraryImportCompletionStatus.Completed:
-                    progressReporter.Report(1, "The import completed.");
+                    progressReporter.Report(1, result.Message ?? "The import completed.");
                     return;
                 case LibraryImportCompletionStatus.Skipped:
                     logger.LogInformation(
@@ -134,6 +169,21 @@ internal sealed class RootFolderContentImportItemJob(
                         result.Message);
                     progressReporter.Report(1, result.Message ?? "The import found no file to process.");
                     return;
+                case LibraryImportCompletionStatus.Waiting:
+                    await jobManager.ExecuteAsync(
+                        new JobEnqueueRequest
+                        {
+                            JobType = Spec.JobType,
+                            Parameters = context.Parameters,
+                            Mode = JobExecutionMode.Queue,
+                            UserId = context.ManualTriggerUserId,
+                            CorrelationId = context.CorrelationId,
+                            IsSuccessor = true,
+                            NotBeforeAt = timeProvider.GetUtcNow().UtcDateTime.Add(WaitingRetryDelay)
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                    progressReporter.Report(1, $"{result.Message} The import will try again in 1 minute.");
+                    return;
                 default:
                     throw new MagpieException(result.Message ?? "Import failed.");
             }
@@ -141,7 +191,7 @@ internal sealed class RootFolderContentImportItemJob(
         catch (OperationCanceledException)
         {
             await libraryImportCandidateRepository
-                .TryResetImportAsync(candidateId, context.ManualTriggerUserId, CancellationToken.None)
+                .TryResetImportAsync(candidateId, null, context.ManualTriggerUserId, CancellationToken.None)
                 .ConfigureAwait(false);
             throw;
         }

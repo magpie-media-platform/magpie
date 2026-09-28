@@ -10,6 +10,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -22,18 +23,37 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class WishlistDiscoveredRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private ILoggerFactory _loggerFactory = null!;
     private IWishlistDiscoveredRepository _subject = null!;
     private Guid _wishlistId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public async Task SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync().ConfigureAwait(false);
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-        await _context.Database.OpenConnectionAsync().ConfigureAwait(false);
-        await _context.Database.EnsureCreatedAsync().ConfigureAwait(false);
 
         _loggerFactory = NullLoggerFactory.Instance;
         _subject = new WishlistDiscoveredRepository(

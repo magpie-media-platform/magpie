@@ -1545,4 +1545,41 @@ public sealed class RootFolderServiceTests
             Assert.That(result.TotalBytes, Is.EqualTo(result.Folders[0].TotalBytes));
         }
     }
+
+    [Test]
+    public async Task PatchAsync_ForwardsAutoImport_WhenItIsTheOnlyChange()
+    {
+        // Arrange
+        var rootFolderId = Guid.NewGuid();
+        _rootFolderRepository.Setup(repository => repository.GetByIdAsync(
+                rootFolderId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RootFolder
+            {
+                Id = rootFolderId,
+                Name = "Movies",
+                Path = "/movies",
+                ContentType = "movies"
+            });
+        RootFolderPatch? updated = null;
+        _rootFolderRepository.Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .Callback((RootFolderPatch applied, Guid? _, CancellationToken _) => updated = applied)
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject.PatchAsync(
+            rootFolderId,
+            new RootFolderPatch { AutoImport = new() { Value = true } },
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(updated!.AutoImport!.Value, Is.True);
+        }
+    }
 }

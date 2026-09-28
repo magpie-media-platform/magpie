@@ -48,6 +48,7 @@ const mockRules = [
             },
         },
         providerType: 'webhook',
+        settings: { url: 'https://example.test/webhook' },
         enabled: true,
         createdAt: '2024-01-01T00:00:00Z',
         modifiedAt: null,
@@ -162,6 +163,17 @@ describe('NotificationsPage', () => {
         expect(screen.getByTestId('page-header__description')).toHaveTextContent(
             'Magpie events can be sent through configured notification providers.',
         );
+    });
+
+    it('keeps the selection toggle on the list toolbar line', async () => {
+        render(
+            <TestWrapper>
+                <NotificationsPage />
+            </TestWrapper>,
+        );
+
+        const toggle = await screen.findByRole('button', { name: 'Select', pressed: false });
+        expect(toggle.closest('[data-component="mobile-list-toolbar"]')).toBeInTheDocument();
     });
 
     it('does not render enabled/disabled stat pills', async () => {
@@ -389,6 +401,7 @@ describe('NotificationsPage', () => {
         await screen.findByLabelText(/Webhook URL/i);
         expect(apiGet).toHaveBeenCalledWith('/providers');
         await user.type(screen.getByLabelText(/^Name/), 'Failures Webhook');
+        await user.type(screen.getByLabelText(/Webhook URL/i), 'https://example.test/hook');
         await user.click(screen.getByRole('button', { name: /save/i }));
 
         expect(await screen.findByText('URL is required.')).toBeInTheDocument();
@@ -485,6 +498,44 @@ describe('NotificationsPage row actions', () => {
                 }),
             );
         });
+    });
+
+    it('reports a failed test result instead of a dispatch when the provider sent nothing', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockImplementation((url: string) =>
+            Promise.resolve(
+                url.endsWith('/test') ? { success: false, message: 'The test was not sent: URL is required.' } : {},
+            ),
+        );
+
+        render(
+            <TestWrapper>
+                <NotificationsPage />
+            </TestWrapper>,
+        );
+        await user.click(await screen.findByRole('button', { name: /^test failures webhook$/i }));
+
+        expect(await screen.findByText(/The test was not sent: URL is required\./)).toBeInTheDocument();
+        expect(screen.queryByText(/Test Sent|Test Dispatched/)).not.toBeInTheDocument();
+    });
+
+    it('says the test was sent, not delivered, when the provider accepted it', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockImplementation((url: string) =>
+            Promise.resolve(
+                url.endsWith('/test') ? { success: true, message: 'Test notification sent to the provider.' } : {},
+            ),
+        );
+
+        render(
+            <TestWrapper>
+                <NotificationsPage />
+            </TestWrapper>,
+        );
+        await user.click(await screen.findByRole('button', { name: /^test failures webhook$/i }));
+
+        expect(await screen.findByText('Test Sent')).toBeInTheDocument();
+        expect(screen.getByText(/Check the destination to confirm it arrived\./)).toBeInTheDocument();
     });
 
     it('surfaces the failure reason when a Send Test fails', async () => {

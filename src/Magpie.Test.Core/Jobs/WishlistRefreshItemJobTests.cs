@@ -145,6 +145,7 @@ public sealed class WishlistRefreshItemJobTests
                     It.IsAny<ContentFilterCriteria>(),
                     It.IsAny<string>(),
                     It.IsAny<int>(),
+                    It.IsAny<string?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Never);
             _wishlistRepository.Verify(
@@ -184,6 +185,7 @@ public sealed class WishlistRefreshItemJobTests
                     It.IsAny<ContentFilterCriteria>(),
                     It.IsAny<string>(),
                     It.IsAny<int>(),
+                    It.IsAny<string?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Never);
             _wishlistRepository.Verify(
@@ -253,6 +255,7 @@ public sealed class WishlistRefreshItemJobTests
 
         var truncatedPage = ProviderMetadataCandidateSearchResult.Empty with
         {
+            NextContinuation = "page-two",
             PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = true }
         };
         var pageTwo = new ProviderMetadataCandidateSearchResult
@@ -283,6 +286,7 @@ public sealed class WishlistRefreshItemJobTests
                         "Match"),
                 It.IsAny<string>(),
                 It.IsAny<int>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(truncatedPage)
             .ReturnsAsync(pageTwo);
@@ -360,6 +364,7 @@ public sealed class WishlistRefreshItemJobTests
                             "Match"),
                     It.IsAny<string>(),
                     It.IsAny<int>(),
+                    It.IsAny<string?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Exactly(2));
         }
@@ -393,10 +398,12 @@ public sealed class WishlistRefreshItemJobTests
                 It.IsAny<ContentFilterCriteria>(),
                 string.Empty,
                 It.IsAny<int>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((ContentFilterCriteria _, string _, int page, CancellationToken _) =>
+            .ReturnsAsync((ContentFilterCriteria _, string _, int page, string? _, CancellationToken _) =>
                 new ProviderMetadataCandidateSearchResult
                 {
+                    NextContinuation = "next-page",
                     Matches =
                     [
                         .. Enumerable.Range(((page - 1) * 40) + 1, 40)
@@ -459,6 +466,7 @@ public sealed class WishlistRefreshItemJobTests
                     It.IsAny<ContentFilterCriteria>(),
                     string.Empty,
                     It.IsAny<int>(),
+                    It.IsAny<string?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Exactly(51));
             _metadataService.Verify(
@@ -466,6 +474,7 @@ public sealed class WishlistRefreshItemJobTests
                     It.IsAny<ContentFilterCriteria>(),
                     string.Empty,
                     51,
+                    It.IsAny<string?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             _contentService.Verify(
@@ -530,6 +539,7 @@ public sealed class WishlistRefreshItemJobTests
                 It.IsAny<ContentFilterCriteria>(),
                 string.Empty,
                 1,
+                It.IsAny<string?>(),
                 It.Is<CancellationToken>(token => token == cancellation.Token)))
             .ReturnsAsync(new ProviderMetadataCandidateSearchResult
             {
@@ -636,6 +646,7 @@ public sealed class WishlistRefreshItemJobTests
                 It.IsAny<ContentFilterCriteria>(),
                 string.Empty,
                 1,
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProviderMetadataCandidateSearchResult
             {
@@ -764,8 +775,9 @@ public sealed class WishlistRefreshItemJobTests
         }
     }
 
-    [Test]
-    public void ExecuteAsync_RecordsProcessedCandidate_WhenLaterSearchPageFails()
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ExecuteAsync_RecordsProcessedCandidate_WhenSearchFailsOrReturnsPartialWarnings(bool partialWarning)
     {
         // Arrange
         var wishlistId = Guid.NewGuid();
@@ -792,6 +804,7 @@ public sealed class WishlistRefreshItemJobTests
                 It.IsAny<ContentFilterCriteria>(),
                 string.Empty,
                 It.IsAny<int>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProviderMetadataCandidateSearchResult
             {
@@ -812,6 +825,8 @@ public sealed class WishlistRefreshItemJobTests
                     }
                 ],
                 PageItemCount = 1,
+                NextContinuation = "page-two",
+                Warnings = partialWarning ? ["A provider timed out. More results may remain."] : [],
                 PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = true }
             })
             .ThrowsAsync(new InvalidOperationException("The search failed."));
@@ -912,6 +927,7 @@ public sealed class WishlistRefreshItemJobTests
                 It.IsAny<ContentFilterCriteria>(),
                 string.Empty,
                 1,
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProviderMetadataCandidateSearchResult
             {
@@ -1048,6 +1064,7 @@ public sealed class WishlistRefreshItemJobTests
                 It.IsAny<ContentFilterCriteria>(),
                 string.Empty,
                 1,
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProviderMetadataCandidateSearchResult
             {
@@ -1180,6 +1197,7 @@ public sealed class WishlistRefreshItemJobTests
                 It.IsAny<ContentFilterCriteria>(),
                 string.Empty,
                 1,
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProviderMetadataCandidateSearchResult
             {
@@ -1279,6 +1297,7 @@ public sealed class WishlistRefreshItemJobTests
                 It.IsAny<ContentFilterCriteria>(),
                 string.Empty,
                 1,
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProviderMetadataCandidateSearchResult
             {

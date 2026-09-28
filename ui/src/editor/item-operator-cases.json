@@ -1,0 +1,152 @@
+[
+    {
+        "type": "String",
+        "operator": "=",
+        "query": "genres has (name = \"Drama\")"
+    },
+    {
+        "type": "String",
+        "operator": "!=",
+        "query": "genres has (name != \"Drama\")"
+    },
+    {
+        "type": "String",
+        "operator": "contains",
+        "query": "genres has (name contains \"Drama\")"
+    },
+    {
+        "type": "String",
+        "operator": "!contains",
+        "query": "genres has (name !contains \"Drama\")"
+    },
+    {
+        "type": "String",
+        "operator": "startswith",
+        "query": "genres has (name startswith \"Drama\")"
+    },
+    {
+        "type": "String",
+        "operator": "!startswith",
+        "query": "genres has (name !startswith \"Drama\")"
+    },
+    {
+        "type": "String",
+        "operator": "endswith",
+        "query": "genres has (name endswith \"Drama\")"
+    },
+    {
+        "type": "String",
+        "operator": "!endswith",
+        "query": "genres has (name !endswith \"Drama\")"
+    },
+    {
+        "type": "String",
+        "operator": "null",
+        "query": "genres has (name null)"
+    },
+    {
+        "type": "String",
+        "operator": "!null",
+        "query": "genres has (name !null)"
+    },
+    {
+        "type": "Int32",
+        "operator": "=",
+        "query": "awards has (year = 2000)"
+    },
+    {
+        "type": "Int32",
+        "operator": "!=",
+        "query": "awards has (year != 2000)"
+    },
+    {
+        "type": "Int32",
+        "operator": ">",
+        "query": "awards has (year > 2000)"
+    },
+    {
+        "type": "Int32",
+        "operator": ">=",
+        "query": "awards has (year >= 2000)"
+    },
+    {
+        "type": "Int32",
+        "operator": "<",
+        "query": "awards has (year < 2000)"
+    },
+    {
+        "type": "Int32",
+        "operator": "<=",
+        "query": "awards has (year <= 2000)"
+    },
+    {
+        "type": "Int32",
+        "operator": "null",
+        "query": "awards has (year null)"
+    },
+    {
+        "type": "Int32",
+        "operator": "!null",
+        "query": "awards has (year !null)"
+    },
+    {
+        "type": "Int64",
+        "operator": "=",
+        "query": "mediaFiles has (fileSize = 1000)"
+    },
+    {
+        "type": "Int64",
+        "operator": "!=",
+        "query": "mediaFiles has (fileSize != 1000)"
+    },
+    {
+        "type": "Int64",
+        "operator": ">",
+        "query": "mediaFiles has (fileSize > 1000)"
+    },
+    {
+        "type": "Int64",
+        "operator": ">=",
+        "query": "mediaFiles has (fileSize >= 1000)"
+    },
+    {
+        "type": "Int64",
+        "operator": "<",
+        "query": "mediaFiles has (fileSize < 1000)"
+    },
+    {
+        "type": "Int64",
+        "operator": "<=",
+        "query": "mediaFiles has (fileSize <= 1000)"
+    },
+    {
+        "type": "Int64",
+        "operator": "null",
+        "query": "mediaFiles has (fileSize null)"
+    },
+    {
+        "type": "Int64",
+        "operator": "!null",
+        "query": "mediaFiles has (fileSize !null)"
+    },
+    {
+        "type": "Guid",
+        "operator": "=",
+        "query": "relationships has (relatedMetadataContainerId = \"00000000-0000-0000-0000-000000000001\")"
+    },
+    {
+        "type": "Guid",
+        "operator": "!=",
+        "query": "relationships has (relatedMetadataContainerId != \"00000000-0000-0000-0000-000000000001\")"
+    },
+    {
+        "type": "Guid",
+        "operator": "null",
+        "query": "relationships has (relatedMetadataContainerId null)"
+    },
+    {
+        "type": "Guid",
+        "operator": "!null",
+        "query": "relationships has (relatedMetadataContainerId !null)"
+    }
+]

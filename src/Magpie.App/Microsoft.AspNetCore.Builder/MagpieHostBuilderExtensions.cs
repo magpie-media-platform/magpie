@@ -397,7 +397,7 @@ public static class MagpieHostBuilderExtensions
         return builder;
     }
 
-    private static void AddMagpieObservability(IHostApplicationBuilder builder, MagpieHostOptions hostOptions)
+    internal static void AddMagpieObservability(IHostApplicationBuilder builder, MagpieHostOptions hostOptions)
     {
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")))
         {
@@ -427,6 +427,7 @@ public static class MagpieHostBuilderExtensions
                 tracing
                 .AddSource("magpie.*")
                 .AddAspNetCoreInstrumentation(options =>
+                {
                     options.EnrichWithHttpResponse = static (activity, response) =>
                     {
                         var user = response.HttpContext.User;
@@ -439,8 +440,10 @@ public static class MagpieHostBuilderExtensions
                         {
                             activity.SetTag("magpie.auth.scheme", scheme);
                         }
-                    })
+                    };
+                })
                 .AddHttpClientInstrumentation(options =>
+                {
                     options.EnrichWithHttpRequestMessage = static (activity, _) =>
                     {
                         if (activity.Parent?.GetTagItem("indexer.id") is string indexerId)
@@ -452,13 +455,9 @@ public static class MagpieHostBuilderExtensions
                         {
                             activity.SetTag("magpie.media_server.id", mediaServerId);
                         }
-                    })
-                .AddEntityFrameworkCoreInstrumentation(options =>
-                    options.EnrichWithIDbCommand = static (activity, _) =>
-                    {
-                        activity.SetTag("db.query.text", null);
-                        activity.SetTag("db.statement", null);
-                    })
+                    };
+                })
+                .AddEntityFrameworkCoreInstrumentation()
                 .AddOtlpExporter();
             })
             .WithMetrics(metrics => metrics
@@ -473,7 +472,7 @@ public static class MagpieHostBuilderExtensions
                 options =>
                 {
                     options.IncludeFormattedMessage = true;
-                    options.IncludeScopes = true;
+                    options.IncludeScopes = false;
                 });
     }
 

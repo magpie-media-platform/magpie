@@ -653,6 +653,7 @@ export function WishlistForm({
                                         <ul
                                             className="wishlist-form__preview-list"
                                             data-testid="wishlist-form__preview-list"
+                                            role="list"
                                         >
                                             {previewCandidates.map((candidate) => (
                                                 <li
@@ -824,6 +825,10 @@ export function WishlistForm({
                                 disabled={isSubmitting || readOnly}
                                 data-field="monitoring"
                             />
+                            <p className="wishlist-form__help">
+                                Matching content is added to the library either way. This sets whether Magpie monitors
+                                it for releases.
+                            </p>
                         </fieldset>
 
                         <div className="wishlist-form__field" data-field="tags">

@@ -77,4 +77,38 @@ describe('OwnershipToggle', () => {
         expect(screen.getByRole('radio', { name: 'All' })).toHaveClass('ownership-toggle__option', 'tabs-trigger');
         expect(screen.getByRole('radio', { name: 'Mine' })).toHaveClass('ownership-toggle__option', 'tabs-trigger');
     });
+    it('enters and leaves the group with one tab stop on the selected option', async () => {
+        const user = userEvent.setup();
+        render(
+            <>
+                <button type="button">Before</button>
+                <OwnershipToggle value="mine" onValueChange={vi.fn()} />
+                <button type="button">After</button>
+            </>,
+        );
+
+        screen.getByRole('button', { name: 'Before' }).focus();
+        await user.tab();
+        expect(screen.getByRole('radio', { name: 'Mine' })).toHaveFocus();
+        await user.tab();
+        expect(screen.getByRole('button', { name: 'After' })).toHaveFocus();
+    });
+
+    it.each([
+        ['{ArrowRight}', 'all', 'mine'],
+        ['{ArrowDown}', 'all', 'mine'],
+        ['{ArrowLeft}', 'all', 'mine'],
+        ['{ArrowUp}', 'mine', 'all'],
+        ['{ArrowRight}', 'mine', 'all'],
+    ] as const)('moves the selection with %s from %s to %s', async (key, from, to) => {
+        const user = userEvent.setup();
+        const onValueChange = vi.fn();
+        render(<OwnershipToggle value={from} onValueChange={onValueChange} />);
+
+        screen.getByRole('radio', { checked: true }).focus();
+        await user.keyboard(key);
+
+        expect(onValueChange).toHaveBeenCalledWith(to);
+        expect(screen.getByRole('radio', { name: to === 'all' ? 'All' : 'Mine' })).toHaveFocus();
+    });
 });

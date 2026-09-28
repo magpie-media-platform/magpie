@@ -18,6 +18,7 @@ import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { MultiSelectColumnFilter } from '@/components/ui/MultiSelectColumnFilter';
+import { ListFilterToolbar, type ListFilterField } from '@/components/ui/ListFilterToolbar';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -400,6 +401,16 @@ export function IndexerSearchPage() {
     const isLoadingSelection = isLoadingIndexers || isLoadingConnections;
     const hasNoMode = !isLoadingSelection && selectedRows.length > 0 && modes.length === 0;
     const searchedNothing = !!data && data.connectionsAttempted === 0;
+    const resultFilterFields: ListFilterField[] = [
+        {
+            id: 'indexers',
+            label: 'Indexer(s)',
+            kind: 'multi',
+            value: indexerFilter,
+            options: selectedRows.map((row) => ({ value: row.connection.id, label: row.connection.name })),
+        },
+        { id: 'size', label: 'Size', kind: 'numberRange', value: sizeRange, unit: 'GB' },
+    ];
 
     return (
         <div className="indexer-search-page" data-page="indexer-search">
@@ -445,7 +456,22 @@ export function IndexerSearchPage() {
                             description="The selected indexers do not offer any search fields."
                         />
                     ) : (
-                        <div className="indexer-search__form">
+                        <div
+                            className="indexer-search__form"
+                            onKeyDown={(event) => {
+                                if (
+                                    event.key === 'Enter' &&
+                                    !event.nativeEvent.isComposing &&
+                                    event.target instanceof HTMLInputElement &&
+                                    !isFetching &&
+                                    !!activeMode &&
+                                    connectionIds.length > 0
+                                ) {
+                                    event.preventDefault();
+                                    handleSubmit();
+                                }
+                            }}
+                        >
                             <div className="indexer-search__field">
                                 <label htmlFor="indexer-search-mode">Query mode</label>
                                 <Select
@@ -505,7 +531,7 @@ export function IndexerSearchPage() {
 
                 {warnings.length > 0 && (
                     <Alert variant="warning" title="Some indexers failed">
-                        <ul className="indexer-search__warnings">
+                        <ul className="indexer-search__warnings" role="list">
                             {warnings.map((connection) => (
                                 <li
                                     key={connection.connectionId}
@@ -527,6 +553,20 @@ export function IndexerSearchPage() {
                                 </span>
                             )}
                         </div>
+
+                        <ListFilterToolbar
+                            fields={resultFilterFields}
+                            onCommit={(values) => {
+                                setIndexerFilter(values.indexers as string[]);
+                                setSizeRange(values.size as { min: string; max: string });
+                            }}
+                            sorting={sorting}
+                            sortOptions={[
+                                { id: 'title', label: 'Title' },
+                                { id: 'age', label: 'Age' },
+                            ]}
+                            onSortingChange={setSorting}
+                        />
 
                         {isFetching ? (
                             <div className="indexer-search__loading" role="status" aria-live="polite">

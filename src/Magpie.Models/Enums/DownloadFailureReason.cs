@@ -1,7 +1,7 @@
 namespace Magpie.Models.Enums;
 
 /// <summary>
-/// The reason a download moved to <see cref="DownloadStatus.Failed"/>.
+/// The reason a download moved to <see cref="DownloadStatus.Failed"/> or <see cref="DownloadStatus.Faulted"/>.
 /// </summary>
 public enum DownloadFailureReason
 {

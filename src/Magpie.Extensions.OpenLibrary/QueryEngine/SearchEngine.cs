@@ -17,7 +17,7 @@ internal sealed class SearchEngine(
 {
     public async Task<QueryResult> SearchAsync(QueryRequest request, CancellationToken cancellationToken)
     {
-        var plan = planner.Plan(request);
+        var plan = planner.Plan(request) with { Progress = request.Progress };
         try
         {
             return await executor.ExecuteSearchAsync(plan, cancellationToken).ConfigureAwait(false);

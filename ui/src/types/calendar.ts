@@ -1,4 +1,4 @@
-import type { FulfillmentStatus } from './content';
+import type { FulfillmentStatus, MonitoringMode } from './content';
 
 export interface CalendarEvent {
     id: string;
@@ -23,9 +23,9 @@ export interface CalendarEvent {
 
     fulfillment: FulfillmentStatus;
 
-    monitoring: boolean | null;
+    monitoring: MonitoringMode | null;
 
-    effectiveMonitoring: boolean;
+    effectiveMonitoring: MonitoringMode;
 }
 
 export type CalendarView = 'month' | 'week' | 'day' | 'list';

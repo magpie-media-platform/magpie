@@ -531,9 +531,12 @@ describe('Configured tab (mobile card collapse)', () => {
 
         await user.click(screen.getByRole('button', { name: 'Select' }));
         await user.click(screen.getByLabelText('Select NZBgeek US'));
+        expect(
+            screen.getByRole('button', { name: 'Select' }).closest('[data-component="mobile-list-toolbar"]'),
+        ).toBeInTheDocument();
         expect(screen.getByLabelText('Select NZBgeek US')).toBeChecked();
 
-        await user.click(screen.getByRole('button', { name: 'Stop selecting' }));
+        await user.click(screen.getByRole('button', { name: 'Select', pressed: true }));
         await user.click(screen.getByRole('button', { name: 'Select' }));
 
         expect(screen.getByLabelText('Select NZBgeek US')).not.toBeChecked();

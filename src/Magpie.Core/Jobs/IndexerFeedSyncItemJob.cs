@@ -50,6 +50,10 @@ internal sealed class IndexerFeedSyncItemJob(
                 DataType.String,
                 true,
                 null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            }
         ],
     };
 

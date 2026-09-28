@@ -96,9 +96,9 @@ public sealed class QueryPlannerTests
                         {
                             And = [new PropertyCriterion<string> { Value = "Dune" }]
                         },
-                        Monitoring = new CriteriaSet<PropertyCriterion<bool>>
+                        Monitoring = new CriteriaSet<PropertyCriterion<MonitoringMode>>
                         {
-                            And = [new PropertyCriterion<bool> { Value = true }]
+                            And = [new PropertyCriterion<MonitoringMode> { Value = MonitoringMode.Monitored }]
                         }
                     },
                     "Empty",

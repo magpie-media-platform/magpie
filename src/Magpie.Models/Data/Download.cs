@@ -46,6 +46,16 @@ public record Download
     public DownloadStatus Status { get; set; }
 
     /// <summary>
+    /// The explicit collision policy of the current import, or null to inherit the root-folder policy.
+    /// </summary>
+    public ImportCollisionMode? ImportCollisionMode { get; set; }
+
+    /// <summary>
+    /// The persisted file recovery state of an interrupted import, or null when no recovery is pending.
+    /// </summary>
+    public string? ImportRecoveryState { get; set; }
+
+    /// <summary>
     /// The path of the downloaded files.
     /// </summary>
     public string? OutputPath { get; set; }

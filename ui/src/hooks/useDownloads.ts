@@ -21,6 +21,7 @@ export const downloadStatusLabels: Record<DownloadStatusValue, string> = {
     Importing: 'Importing',
     Imported: 'Imported',
     Failed: 'Failed',
+    Faulted: 'Faulted',
     Cancelled: 'Cancelled',
 };
 
@@ -34,8 +35,19 @@ export const downloadStatusVariants: Record<DownloadStatusValue, BadgeVariant> =
     Importing: 'importing',
     Imported: 'imported',
     Failed: 'failed',
+    Faulted: 'stalled',
     Cancelled: 'cancelled',
 };
+
+/** Whether the download ended in a failure. */
+export function isFailedDownloadStatus(status?: DownloadStatusValue | null): boolean {
+    return status === 'Failed' || status === 'Faulted';
+}
+
+/** Whether a release with this acquisition status can be grabbed again. */
+export function canRegrab(status?: DownloadStatusValue | null): boolean {
+    return !status || isFailedDownloadStatus(status) || status === 'Cancelled';
+}
 
 export type DownloadFailureReasonValue =
     | 'BlockedExecutable'
@@ -187,6 +199,7 @@ function bulkStopDownloads(args: DownloadBulkArgs): Promise<DownloadBulkActionRe
 export const downloadQueryKeys = {
     all: ['downloads'] as const,
     list: (params?: DownloadQueryParams) => ['downloads', 'list', params ?? {}] as const,
+    detail: (id: string) => ['downloads', 'detail', id] as const,
     count: (status: DownloadStatusValue, downloadClientId?: string) =>
         ['downloads', 'count', status, downloadClientId ?? null] as const,
 };
@@ -243,6 +256,10 @@ function useDownloadEventInvalidation(
 async function fetchDownloads(params?: DownloadQueryParams): Promise<PagedDownloads> {
     const url = buildUrl('/downloads', params);
     return apiGet<PagedDownloads>(url);
+}
+
+async function fetchDownload(id: string): Promise<ApiDownload> {
+    return apiGet<ApiDownload>(`/downloads/${id}`);
 }
 
 async function removeDownload(id: string): Promise<void> {
@@ -435,6 +452,24 @@ export function useDownloads(params?: DownloadQueryParams, enabled = true) {
         bulkStopDownloads: bulkStopMutation.mutateAsync,
 
         refetch: downloadsQuery.refetch,
+    };
+}
+
+export function useDownload(id: string | null | undefined) {
+    const enabled = !!id;
+    const queryKey = downloadQueryKeys.detail(id ?? '');
+    useDownloadEventInvalidation([queryKey], enabled, { entityIds: id ? [id] : [] });
+    const downloadQuery = useQuery({
+        queryKey,
+        queryFn: () => fetchDownload(id!),
+        enabled,
+    });
+
+    return {
+        download: downloadQuery.data ?? null,
+        isLoading: downloadQuery.isLoading,
+        error: queryErrorOrNull(downloadQuery),
+        refetch: downloadQuery.refetch,
     };
 }
 

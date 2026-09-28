@@ -7,9 +7,10 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('./ui/useMediaQuery', () => ({
-    useMediaQuery: () => false,
+    useMediaQuery: vi.fn(() => false),
 }));
 
+import { useMediaQuery } from './ui/useMediaQuery';
 import { useScrollRestoration } from './useScrollRestoration';
 
 function createMockWrapper() {
@@ -49,6 +50,7 @@ describe('useScrollRestoration', () => {
     let nextRafId: number;
 
     beforeEach(() => {
+        vi.mocked(useMediaQuery).mockReturnValue(false);
         wrapper = createMockWrapper();
 
         vi.spyOn(document, 'querySelector').mockImplementation((selector: string) => {
@@ -89,6 +91,28 @@ describe('useScrollRestoration', () => {
 
         renderHook(() => useScrollRestoration());
 
+        expect(wrapper.scrollTop).toBe(0);
+    });
+
+    it('restores tablet scroll on the main area', () => {
+        // Arrange
+        vi.mocked(useMediaQuery).mockReturnValue(true);
+        const main = createMockWrapper();
+        vi.spyOn(document, 'querySelector').mockImplementation((selector: string) => {
+            if (selector === '[data-component="app-shell-main"], [data-component="admin-shell-main"]') {
+                return main as unknown as HTMLElement;
+            }
+            return null;
+        });
+        sessionStorage.setItem('magpie_scroll_/list', '350');
+
+        // Act
+        renderHook(() => useScrollRestoration());
+        flushRaf();
+
+        // Assert
+        expect(useMediaQuery).toHaveBeenCalledWith('(max-width: 1023px)');
+        expect(main.scrollTop).toBe(350);
         expect(wrapper.scrollTop).toBe(0);
     });
 

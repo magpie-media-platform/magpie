@@ -414,6 +414,23 @@ describe('IndexerSearchPage', () => {
         await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(2));
     });
 
+    it('runs the search when Enter is pressed in the query field', async () => {
+        const user = userEvent.setup();
+        render(<IndexerSearchPage />, {
+            wrapper: ({ children }) => (
+                <TestWrapper url="/admin/indexers/search?v_q=salt&mode=q&connections=conn-a,conn-b">
+                    {children}
+                </TestWrapper>
+            ),
+        });
+        await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
+
+        await user.click(await screen.findByRole('textbox', { name: 'Search' }));
+        await user.keyboard('{Enter}');
+
+        await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(2));
+    });
+
     it('writes a wider query mode to the route when its extra field is blank', async () => {
         const user = userEvent.setup();
         render(<IndexerSearchPage />, {

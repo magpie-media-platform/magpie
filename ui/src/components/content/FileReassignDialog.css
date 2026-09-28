@@ -1,0 +1,7 @@
+@layer components {
+    .file-reassign-dialog__file-name {
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+    }
+}

@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
+using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -25,6 +26,8 @@ internal sealed class SetupService(
     MagpieHostEnvironment hostEnvironment,
     ISettingsService settingsService,
     IUserService userService,
+    IUserRepository users,
+    ITransactionManager transactionManager,
     IDatabaseManagementProvider databaseManagement,
     IFileSystem fileSystem,
     ILogger<SetupService> logger) : ISetupService
@@ -133,28 +136,34 @@ internal sealed class SetupService(
             throw new MagpieException("Setup is complete.");
         }
 
-        if (await HasLocalAdministratorAsync(cancellationToken).ConfigureAwait(false))
-        {
-            throw new MagpieException("The administrator account is already claimed.");
-        }
+        return await transactionManager.ExecuteWithTransactionAsync(
+            async token =>
+            {
+                await users.LockAuthorizationAsync(SystemUserId, token).ConfigureAwait(false);
 
-        if (string.IsNullOrWhiteSpace(username) || username.Trim().Length < 3)
-        {
-            throw new MagpieException("The username must have at least 3 characters.");
-        }
+                if (await HasLocalAdministratorAsync(token).ConfigureAwait(false))
+                {
+                    throw new MagpieException("The administrator account is already claimed.");
+                }
 
-        var normalizedUsername = username.Trim();
-        if (await userService.GetAuthenticationUserAsync(normalizedUsername, cancellationToken).ConfigureAwait(false)
-            is not null)
-        {
-            throw new MagpieException("The username is unavailable.");
-        }
+                if (string.IsNullOrWhiteSpace(username) || username.Trim().Length < 3)
+                {
+                    throw new MagpieException("The username must have at least 3 characters.");
+                }
 
-        return await userService.CreateAsync(
-            new LocalUserCreate { Username = normalizedUsername, Password = password, Role = Role.Admin },
-            SystemUserId,
-            cancellationToken).ConfigureAwait(false)
-            ?? throw new MagpieException("The username is unavailable.");
+                var normalizedUsername = username.Trim();
+                if (await userService.GetAuthenticationUserAsync(normalizedUsername, token).ConfigureAwait(false)
+                    is not null)
+                {
+                    throw new MagpieException("The username is unavailable.");
+                }
+
+                return await userService.CreateAsync(
+                    new LocalUserCreate { Username = normalizedUsername, Password = password, Role = Role.Admin },
+                    SystemUserId,
+                    token).ConfigureAwait(false) ?? throw new MagpieException("The username is unavailable.");
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task CompleteAsync(CancellationToken cancellationToken = default)

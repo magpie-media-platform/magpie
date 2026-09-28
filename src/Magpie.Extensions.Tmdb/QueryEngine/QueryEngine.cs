@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.Tmdb.Mapping;
+using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging;
 
@@ -54,6 +55,25 @@ internal sealed class QueryEngine(
             return unavailable;
         }
 
+        if (request.Progress is { } progress)
+        {
+            var signature = plan.SerializePlan();
+            if (progress.PlanSignature is not null && progress.PlanSignature != signature)
+            {
+                throw new MetadataSearchContinuationException("The TMDb query plan changed. Start a new search.");
+            }
+
+            progress.PlanSignature = signature;
+            var configuration = context.ApiKey + ":" + context.Language;
+            if (progress.Configuration is not null && progress.Configuration != configuration)
+            {
+                throw new MetadataSearchContinuationException("TMDb configuration changed. Start a new search.");
+            }
+
+            progress.Configuration = configuration;
+            context = context with { Progress = progress, ValidateOnly = request.ValidateOnly };
+        }
+
         var startedTimestamp = Stopwatch.GetTimestamp();
         var activity = Telemetry.Source.StartActivity("tmdb.query.execute");
         try
@@ -92,11 +112,17 @@ internal sealed class QueryEngine(
                     cancellationToken)
             };
         }
+        catch (Magpie.Models.UpstreamThrottledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             if (activity is not null)
             {
                 activity.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity.AddException(ex);
+                activity.SetTag("error.type", ex.GetType().FullName);
                 activity.Dispose();
             }
 
@@ -165,6 +191,14 @@ internal sealed class QueryEngine(
                     hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (MetadataSearchContinuationException)
+                {
+                    throw;
+                }
+                catch (Magpie.Models.UpstreamThrottledException)
                 {
                     throw;
                 }

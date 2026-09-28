@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 
 import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import { Role } from '@/auth/types';
 
 import { EventTriggerForm, type EventTriggerFormValues, type JobTemplateOption } from './EventTriggerForm';
 import { eventPatternExample, eventPatternPresets } from './eventPatternPresets';
@@ -684,6 +685,51 @@ describe('EventTriggerForm - Parameter bindings', () => {
             );
         });
     });
+
+    it.each([
+        [Role.Requester, false],
+        [Role.Manager, true],
+    ])(
+        'offers event binding on a Content job only when the owner role %s meets its scope',
+        async (ownerRole, canBind) => {
+            const user = userEvent.setup();
+            const onSubmit = vi.fn();
+            const templates = templatesWithParameters.map((template) => ({ ...template, scope: 'Content' as const }));
+
+            render(
+                <TestWrapper>
+                    <EventTriggerForm
+                        open={true}
+                        onOpenChange={() => {}}
+                        initialValues={{
+                            id: 'trigger-1',
+                            name: 'Personal Trigger',
+                            templateId: 'parameterized-job',
+                            eventNamePatterns: ['content\\.hierarchyItem\\.created'],
+                            filters: [],
+                            enabled: true,
+                            delaySeconds: 0,
+                            parameters: { TargetId: '${event.content.hierarchyItemId}' },
+                        }}
+                        templates={templates}
+                        onSubmit={onSubmit}
+                        ownerRole={ownerRole}
+                    />
+                </TestWrapper>,
+            );
+
+            expect(screen.queryAllByRole('switch', { name: 'Bind to event' }).length > 0).toBe(canBind);
+            expect(screen.queryByTestId('event-trigger-form__literal-target') !== null).toBe(!canBind);
+            await user.click(screen.getByRole('button', { name: /save/i }));
+
+            if (canBind) {
+                await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+            } else {
+                expect(await screen.findByText('A user trigger must target a specific item.')).toBeInTheDocument();
+                expect(onSubmit).not.toHaveBeenCalled();
+            }
+        },
+    );
 
     it('keeps boolean and date controls typed until each parameter is bound', async () => {
         const user = userEvent.setup();

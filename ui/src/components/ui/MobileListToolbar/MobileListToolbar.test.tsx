@@ -10,6 +10,24 @@ const sortOptions: MobileListSortOption[] = [
 ];
 
 describe('MobileListToolbar', () => {
+    it('SortDirection_DescribesCurrentState_WhenDirectionCanToggle', () => {
+        // Arrange
+        render(
+            <MobileListToolbar
+                sorting={[{ id: 'title', desc: true }]}
+                sortOptions={sortOptions}
+                onSortingChange={vi.fn()}
+            />,
+        );
+
+        // Act
+        const direction = screen.getByRole('button', { name: 'Sort ascending' });
+
+        // Assert
+        expect(direction).toHaveAttribute('data-direction', 'desc');
+        expect(direction).toHaveAttribute('aria-description', 'Current direction: descending');
+    });
+
     it('keeps the selection control in place while its state changes', async () => {
         const user = userEvent.setup();
         const onToggle = vi.fn();
@@ -22,7 +40,8 @@ describe('MobileListToolbar', () => {
             />,
         );
 
-        await user.click(screen.getByRole('button', { name: 'Select' }));
+        const toggle = screen.getByRole('button', { name: 'Select', pressed: false });
+        await user.click(toggle);
         expect(onToggle).toHaveBeenCalledOnce();
 
         rerender(
@@ -34,11 +53,11 @@ describe('MobileListToolbar', () => {
             />,
         );
 
-        expect(screen.getByRole('button', { name: 'Stop selecting' })).toHaveAttribute(
-            'data-action',
-            'exit-select-mode',
+        expect(screen.getByRole('button', { name: 'Select', pressed: true })).toBe(toggle);
+        expect(toggle).toHaveAttribute('data-action', 'exit-select-mode');
+        expect(toggle.closest('[data-component="mobile-list-toolbar"]')).toBe(
+            screen.getByRole('group', { name: 'Sort list' }).closest('[data-component="mobile-list-toolbar"]'),
         );
-        expect(screen.getByRole('group', { name: 'Sort list' })).toBeInTheDocument();
     });
 
     it('toggles the active sort direction', async () => {

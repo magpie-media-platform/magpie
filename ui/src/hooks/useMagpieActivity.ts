@@ -92,7 +92,7 @@ function toMagpieActivityResponse(page: PagedList<MagpieActivityEntry>): MagpieA
         entries: page.items,
         correlationIds: page.items.flatMap((entry) => (entry.correlationId ? [entry.correlationId] : [])),
         totalCount: page.totalItems,
-        capped: false,
+        capped: page.totalItems > page.items.length,
         page: page.pageNumber ?? 1,
         pageSize: page.pageSize ?? page.items.length,
     };

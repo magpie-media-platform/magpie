@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { IntegrationSettingsForm } from '@/components/integrations/IntegrationSettingsForm';
+import { returnFocusOnClose } from '@/lib/returnFocus';
 
 import './IndexerForm.css';
 
@@ -50,7 +51,11 @@ export function IndexerForm({
     returnFocusRef,
 }: IndexerFormProps): ReactNode {
     const [errors, setErrors] = useState<Record<string, string>>({});
-    const { types: providerTypes, isLoading: isLoadingProviderTypes } = useIndexerProviderTypes();
+    const {
+        types: providerTypes,
+        labels: providerLabels,
+        isLoading: isLoadingProviderTypes,
+    } = useIndexerProviderTypes();
 
     const submitIndexer = useCallback(
         (submittedValues: IndexerSettingsFormValues) => {
@@ -146,12 +151,7 @@ export function IndexerForm({
                 side="right"
                 className="indexer-form__sheet"
                 data-component="indexer-form"
-                onCloseAutoFocus={(e) => {
-                    if (returnFocusRef?.current) {
-                        e.preventDefault();
-                        returnFocusRef.current.focus();
-                    }
-                }}
+                onCloseAutoFocus={returnFocusOnClose(returnFocusRef)}
             >
                 <SheetHeader>
                     <SheetTitle>Add Indexer</SheetTitle>
@@ -204,7 +204,7 @@ export function IndexerForm({
                                 <SelectContent>
                                     {providerTypes.map((type) => (
                                         <SelectItem key={type} value={type}>
-                                            {type}
+                                            {providerLabels[type]}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>

@@ -22,6 +22,7 @@ export function useLibraryPage() {
 
     const { hasRole, hasPermission, user } = useAuth();
     const canEditContent = hasPermission('content.edit');
+    const canAddContent = hasPermission('content.add');
     const canDeleteContent = hasPermission('content.delete');
     const canManageContent = hasRole(Role.Manager);
     const route = useLibraryRoute();
@@ -34,22 +35,26 @@ export function useLibraryPage() {
         routeContentTypeSlug: route.routeContentTypeSlug,
         selectedLevel: route.selectedLevel,
         user,
-        canManageContent,
-        hasRole,
+        isAdmin: hasRole(Role.Admin),
+        canWriteFilters: hasPermission('filters.own'),
     });
+    // An empty bulk filter selects nothing, so the all-levels scope needs a filter to bound it.
+    const allLevels = params.levels === 'all' && filters.filterQuery.trim() !== '';
     const content = useLibraryContent({
         contentTypeSlug: route.contentTypeSlug,
         currentContentType: route.currentContentType,
         routeContentTypeSlug: route.routeContentTypeSlug,
         selectedLevel: route.selectedLevel,
+        allLevels,
         libraryTypesError: route.libraryTypesError,
+        isRestoringFilter: filters.isRestoringFilter,
         debouncedFilterQuery: filters.debouncedFilterQuery,
-        fulfillment: filters.fulfillment,
+        filterQuery: filters.filterQuery,
         sortField: filters.sortField,
         sortDir: filters.sortDir,
         pageIndex: pagination.pagination.pageIndex,
     });
-    const hasBulkActions = canEditContent || canManageContent || canDeleteContent;
+    const hasBulkActions = !filters.isRestoringFilter && (canEditContent || canManageContent || canDeleteContent);
     const selection = useLibrarySelection({
         pageRowIds: content.pageRowIds,
         totalItems: content.totalItems,
@@ -57,7 +62,8 @@ export function useLibraryPage() {
         resetKey: [
             route.routeContentTypeSlug,
             route.selectedLevel?.slug,
-            filters.fulfillment,
+            allLevels,
+            params.savedFilter,
             filters.filterQuery.trim(),
         ].join('\u0000'),
     });
@@ -86,10 +92,10 @@ export function useLibraryPage() {
     const pageCount = Math.max(1, Math.ceil(content.totalItems / PAGE_SIZE));
     const { pageNumber, goToPage } = pagination;
     useEffect(() => {
-        if (!content.isLoading && pageNumber > pageCount) {
+        if (!content.isLoading && !filters.isRestoringFilter && pageNumber > pageCount) {
             goToPage(pageCount);
         }
-    }, [content.isLoading, pageNumber, pageCount, goToPage]);
+    }, [content.isLoading, filters.isRestoringFilter, pageNumber, pageCount, goToPage]);
 
     return {
         hasInvalidContentTypeSlug: route.hasInvalidContentTypeSlug,
@@ -100,14 +106,19 @@ export function useLibraryPage() {
         routeContentTypeSlug: route.routeContentTypeSlug,
         pageTitle: route.pageTitle,
         pageIconName: route.pageIconName,
-        handleRefresh: content.handleRefresh,
+        allLevels,
+        handleRefresh: filters.isRestoringFilter ? filters.retrySavedFilters : content.handleRefresh,
 
         canEditContent,
+        canAddContent,
         canManageContent,
         canDeleteContent,
         hasBulkActions,
 
         filterQuery: filters.filterQuery,
+        isRestoringFilter: filters.isRestoringFilter,
+        filterRestoreError: filters.filterRestoreError,
+        retrySavedFilters: filters.retrySavedFilters,
         handleFilterQueryChange: filters.handleFilterQueryChange,
         showSaveControl: filters.showSaveControl,
         saveControlLabel: filters.saveControlLabel,
@@ -120,7 +131,7 @@ export function useLibraryPage() {
         handleClearSearchAndFilters: filters.handleClearSearchAndFilters,
         addContentTo: route.addContentTo,
 
-        isLoading: content.isLoading,
+        isLoading: content.isLoading || filters.isRestoringFilter,
         contentTypeValidationPending: route.contentTypeValidationPending,
         error: content.error,
         refetch: content.refetch,
@@ -178,6 +189,7 @@ export function useLibraryPage() {
         handleSaveFilter: filters.handleSaveFilter,
         handleUpdateFilter: filters.handleUpdateFilter,
         saveFilterError: filters.saveFilterError,
+        saveFilterQueryError: filters.saveFilterQueryError,
         savedContentFilters: filters.savedContentFilters,
 
         isSavingFilter: filters.isSavingFilter,

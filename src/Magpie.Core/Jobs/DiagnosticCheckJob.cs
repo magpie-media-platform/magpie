@@ -45,7 +45,6 @@ internal sealed class DiagnosticCheckJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Requeue,
-        Timeout = TimeSpan.FromMinutes(10),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters = [],

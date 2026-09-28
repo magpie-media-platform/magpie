@@ -29,6 +29,8 @@ export interface ApiRootFolder {
 
     upgradeFileHandling: UpgradeFileHandling;
 
+    autoImport: boolean;
+
     defaults: Record<string, RootFolderDefault>;
 
     createdAt: string;
@@ -55,6 +57,8 @@ interface RootFolderCreate {
 
     upgradeFileHandling?: UpgradeFileHandling;
 
+    autoImport?: boolean;
+
     defaults: Record<string, RootFolderDefault>;
 }
 
@@ -72,6 +76,8 @@ interface RootFolderPatch {
     renameTemplate?: ScalarPatch<string | null>;
 
     upgradeFileHandling?: ScalarPatch<UpgradeFileHandling>;
+
+    autoImport?: ScalarPatch<boolean>;
 
     defaults?: ScalarPatch<Record<string, RootFolderDefault>>;
 }

@@ -67,6 +67,64 @@ describe('ColumnHeaderFilter', () => {
         const trigger = screen.getByRole('button', { name: 'Status filter locked' });
         expect(trigger).toBeDisabled();
     });
+
+    it.each([
+        ['numberRange', 'spinbutton', 'Size minimum', '2', { min: '2', max: '' }],
+        ['dateRange', 'textbox', 'Size from', '2020-01-01', { from: '2020-01-01', to: '' }],
+    ] as const)('Range_AppliesOnce_WhenEnterIsPressedIn%s', async (type, role, name, typed, expected) => {
+        // Arrange
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(
+            type === 'numberRange' ? (
+                <ColumnHeaderFilter type="numberRange" label="Size" active={false} min="" max="" onChange={onChange} />
+            ) : (
+                <ColumnHeaderFilter type="dateRange" label="Size" active={false} from="" to="" onChange={onChange} />
+            ),
+        );
+        await user.click(screen.getByRole('button', { name: 'Filter by Size' }));
+        const field = role === 'spinbutton' ? screen.getByRole(role, { name }) : screen.getByLabelText(name);
+        await user.type(field, typed);
+
+        // Act
+        await user.keyboard('{Enter}');
+
+        // Assert
+        expect(onChange).toHaveBeenCalledTimes(1);
+        expect(onChange).toHaveBeenCalledWith(expected);
+    });
+
+    it('NumberRange_CommitsFractionalMinimum_WhenAppliedFromHeader', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(
+            <ColumnHeaderFilter
+                type="numberRange"
+                label="Size"
+                active={false}
+                min=""
+                max=""
+                unit="GB"
+                onChange={onChange}
+            />,
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Filter by Size' }));
+        const minimum = screen.getByRole('spinbutton', { name: 'Size minimum (GB)' }) as HTMLInputElement;
+        await user.type(minimum, '1.5');
+
+        // Assert
+        expect(minimum).toHaveFocus();
+        expect(minimum.validity.stepMismatch).toBe(false);
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+        // Assert
+        expect(onChange).toHaveBeenCalledWith({ min: '1.5', max: '' });
+    });
 });
 
 it.each(['text', 'dateRange', 'numberRange'] as const)('uses different IDs for separate %s filters', async (type) => {

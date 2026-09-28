@@ -171,6 +171,12 @@ describe('WishlistForm', () => {
         expect(document.querySelector('[data-field="criteria"]')).toBeInTheDocument();
     });
 
+    it('explains that an unmonitored wishlist still adds matching content to the library', () => {
+        renderForm();
+
+        expect(screen.getByText(/Matching content is added to the library either way/)).toBeInTheDocument();
+    });
+
     it('makes the create filter read-only while the create request is pending', () => {
         renderForm({ isSubmitting: true });
 

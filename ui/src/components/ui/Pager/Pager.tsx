@@ -8,6 +8,8 @@ export interface PagerProps extends Omit<ComponentPropsWithoutRef<'nav'>, 'onCha
 
     pageCount?: number;
 
+    totalItems?: number;
+
     onFirst: () => void;
 
     onPrevious: () => void;
@@ -28,6 +30,7 @@ export const Pager = forwardRef<HTMLElement, PagerProps>(
         {
             page,
             pageCount,
+            totalItems,
             onFirst,
             onPrevious,
             onNext,
@@ -91,6 +94,9 @@ export const Pager = forwardRef<HTMLElement, PagerProps>(
                 >
                     <CaretDoubleRightIcon weight="bold" aria-hidden="true" />
                 </button>
+                {totalItems !== undefined && (
+                    <span className="pager__results">{`${totalItems} ${totalItems === 1 ? 'result' : 'results'}`}</span>
+                )}
             </nav>
         );
     },

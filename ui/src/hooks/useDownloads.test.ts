@@ -32,6 +32,7 @@ vi.mock('@/hooks/useInvalidateQueriesOnEvents', () => ({
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import {
+    useDownload,
     useDownloads,
     useDownloadStatusCounts,
     useDownloadStatusTotal,
@@ -251,6 +252,31 @@ describe('useDownloads', () => {
 
             expect(result.current.downloads).toHaveLength(0);
             expect(result.current.error).toBeNull();
+        });
+    });
+
+    describe('fetching one selected download', () => {
+        it('fetches the selected download and scopes event invalidation to its identity', async () => {
+            mockApiGet.mockResolvedValue(mockApiDownloads[0]);
+
+            const { result } = renderHook(() => useDownload('download-1'), { wrapper: createWrapper() });
+
+            await waitFor(() => expect(result.current.isLoading).toBe(false));
+            expect(mockApiGet).toHaveBeenCalledWith('/downloads/download-1');
+            expect(result.current.download).toEqual(mockApiDownloads[0]);
+            expect(useInvalidateQueriesOnEvents).toHaveBeenCalledWith(
+                expect.any(Array),
+                [['downloads', 'detail', 'download-1']],
+                expect.objectContaining({ entityIds: ['download-1'], exact: true }),
+            );
+        });
+
+        it('does not fetch without a selected download', () => {
+            const { result } = renderHook(() => useDownload(null), { wrapper: createWrapper() });
+
+            expect(result.current.download).toBeNull();
+            expect(result.current.error).toBeNull();
+            expect(mockApiGet).not.toHaveBeenCalled();
         });
     });
 

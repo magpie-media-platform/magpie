@@ -446,7 +446,7 @@ public sealed class UserServiceTests
                 Id = userId,
                 Username = "target",
                 ProviderType = "local",
-                Enabled = true,
+                Enabled = !enabled,
                 Role = Role.Viewer
             });
         _users
@@ -505,6 +505,122 @@ public sealed class UserServiceTests
             _refreshTokens.Verify(
                 repository => repository.DeleteByUserAsync(userId, It.IsAny<CancellationToken>()),
                 Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_KeepsTheSessionsOfTheUser_WhenTheRoleIsUnchanged()
+    {
+        // Arrange
+        var userId = new Guid("22222222-2222-2222-2222-222222222222");
+        _users
+            .Setup(repository => repository.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new User
+            {
+                Id = userId,
+                Username = "target",
+                ProviderType = "local",
+                Enabled = true,
+                Role = Role.Requester
+            });
+        _users
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<UserPatch>(),
+                CallerUserId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject
+            .PatchAsync(userId, new UserPatch { Role = new() { Value = Role.Requester } }, CallerUserId)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            _refreshTokens.Verify(
+                repository => repository.DeleteByUserAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_KeepsTheSessionsOfTheUser_WhenTheEnabledStateIsUnchanged()
+    {
+        // Arrange
+        var userId = new Guid("22222222-2222-2222-2222-222222222222");
+        _users
+            .Setup(repository => repository.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new User
+            {
+                Id = userId,
+                Username = "target",
+                ProviderType = "local",
+                Enabled = true,
+                Role = Role.Viewer
+            });
+        _users
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<UserPatch>(),
+                CallerUserId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject
+            .PatchAsync(userId, new UserPatch { Enabled = new() { Value = true } }, CallerUserId)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            _refreshTokens.Verify(
+                repository => repository.DeleteByUserAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_KeepsTheSessionsOfTheUser_WhenRoleAndEnabledStateAreUnchanged()
+    {
+        // Arrange
+        var userId = new Guid("22222222-2222-2222-2222-222222222222");
+        _users
+            .Setup(repository => repository.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new User
+            {
+                Id = userId,
+                Username = "target",
+                ProviderType = "local",
+                Enabled = false,
+                Role = Role.Manager
+            });
+        _users
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<UserPatch>(),
+                CallerUserId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _subject.PatchAsync(
+            userId,
+            new UserPatch
+            {
+                Role = new() { Value = Role.Manager },
+                Enabled = new() { Value = false }
+            },
+            CallerUserId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            _refreshTokens.Verify(
+                repository => repository.DeleteByUserAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+                Times.Never);
         }
     }
 

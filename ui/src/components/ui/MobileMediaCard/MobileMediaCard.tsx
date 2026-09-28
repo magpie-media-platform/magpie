@@ -1,5 +1,6 @@
 import { type KeyboardEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { CheckCircleIcon, CircleIcon } from '@phosphor-icons/react';
 
 import { ContentPoster } from '@/components/content/ContentCardPrimitives';
@@ -27,6 +28,7 @@ export interface MobileMediaCardProps {
     trailing?: ReactNode;
 
     to?: string;
+    previewContentId?: string;
 
     className?: string;
 
@@ -56,6 +58,7 @@ export function MobileMediaCard({
     children,
     trailing,
     to,
+    previewContentId,
     className,
     role,
     selectable = false,
@@ -77,7 +80,15 @@ export function MobileMediaCard({
     );
 
     const posterNode =
-        !selectable && posterTo && !to ? (
+        !selectable && previewContentId && !to ? (
+            <LocalContentLink
+                contentId={previewContentId}
+                className="mobile-media-card__poster-link"
+                aria-label={posterLinkLabel}
+            >
+                {poster}
+            </LocalContentLink>
+        ) : !selectable && posterTo && !to ? (
             <Link to={posterTo} className="mobile-media-card__poster-link" aria-label={posterLinkLabel}>
                 {poster}
             </Link>
@@ -145,6 +156,13 @@ export function MobileMediaCard({
     }
 
     if (to) {
+        if (previewContentId)
+            return (
+                <LocalContentLink contentId={previewContentId} className={classes} role={role} {...dataAttrs}>
+                    {posterNode}
+                    {body}
+                </LocalContentLink>
+            );
         const linkProps = onLongPress
             ? { ...longPress.handlers, onClick: (event: React.MouseEvent) => longPress.consumeClick(event) }
             : {};

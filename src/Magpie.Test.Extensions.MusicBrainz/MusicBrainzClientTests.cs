@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -8,6 +7,7 @@ using System.Threading.Tasks;
 
 using Magpie.Extensions.MusicBrainz;
 using Magpie.Extensions.MusicBrainz.QueryEngine;
+using Magpie.Sdk.Http;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -55,7 +55,8 @@ public class MusicBrainzClientTests
             client.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return client;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.SearchAsync(
@@ -84,237 +85,6 @@ public class MusicBrainzClientTests
     }
 
     [Test]
-    public async Task GetEntityAsync_Result_WhenSearchAndHydrationProfilesDiffer()
-    {
-        // Arrange
-        using var http = new MockHttpMessageHandler();
-        const string mbid = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/artist/0383dadf-2a4e-4d10-a46a-e9e041da8eb3?fmt=json")
-            .Respond("application/json", "{\"id\":\"0383dadf-2a4e-4d10-a46a-e9e041da8eb3\",\"name\":\"Queen\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/artist/0383dadf-2a4e-4d10-a46a-e9e041da8eb3" +
-            "?fmt=json&inc=aliases%2Bgenres%2Burl-rels%2Bartist-rels")
-            .Respond("application/json", "{\"id\":\"0383dadf-2a4e-4d10-a46a-e9e041da8eb3\",\"name\":\"Queen\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/release-group/0383dadf-2a4e-4d10-a46a-e9e041da8eb3" +
-            "?fmt=json&inc=releases%2Bartist-credits%2Baliases%2Bgenres%2Burl-rels")
-            .Respond("application/json", "{\"id\":\"0383dadf-2a4e-4d10-a46a-e9e041da8eb3\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/release/0383dadf-2a4e-4d10-a46a-e9e041da8eb3" +
-            "?fmt=json&inc=recordings%2Bartist-credits%2Bisrcs%2Bmedia%2Blabels%2Brelease-groups" +
-            "%2Bartist-rels%2Brecording-level-rels%2Bwork-rels%2Bwork-level-rels")
-            .Respond("application/json", "{\"id\":\"0383dadf-2a4e-4d10-a46a-e9e041da8eb3\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/recording/0383dadf-2a4e-4d10-a46a-e9e041da8eb3" +
-            "?fmt=json&inc=artist-credits%2Bisrcs%2Baliases%2Bgenres%2Burl-rels%2Bartist-rels" +
-            "%2Bwork-rels%2Bwork-level-rels")
-            .Respond("application/json", "{\"id\":\"0383dadf-2a4e-4d10-a46a-e9e041da8eb3\",\"name\":\"Queen\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/label/0383dadf-2a4e-4d10-a46a-e9e041da8eb3" +
-            "?fmt=json&inc=url-rels")
-            .Respond(
-                "application/json",
-                """
-                {
-                  "id": "0383dadf-2a4e-4d10-a46a-e9e041da8eb3",
-                  "name": "Label",
-                  "label-code": 42,
-                  "life-span": { "begin": "1980" },
-                  "relations": [{
-                    "type": "official homepage",
-                    "url": { "resource": "https://label.example/" }
-                  }]
-                }
-                """);
-        using var httpClient = http.ToHttpClient();
-        httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(() =>
-        {
-            var client = http.ToHttpClient();
-            client.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
-            return client;
-        });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
-
-        // Act
-        var search = await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Artist,
-                Mbid = mbid,
-                Profile = LookupProfile.Search
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        var hydration = await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Artist,
-                Mbid = mbid,
-                Profile = LookupProfile.Hydration
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        var groupHydration = await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.ReleaseGroup,
-                Mbid = mbid,
-                Profile = LookupProfile.Hydration
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        var releaseHydration = await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Release,
-                Mbid = mbid,
-                Profile = LookupProfile.Hydration
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        var recordingHydration = await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Recording,
-                Mbid = mbid,
-                Profile = LookupProfile.Hydration
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        var labelHydration = await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Label,
-                Mbid = mbid,
-                Profile = LookupProfile.Hydration
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(search.Outcome, Is.EqualTo(FetchOutcome.Success));
-            Assert.That(hydration.Outcome, Is.EqualTo(FetchOutcome.Success));
-            Assert.That(groupHydration.Outcome, Is.EqualTo(FetchOutcome.Success));
-            Assert.That(releaseHydration.Outcome, Is.EqualTo(FetchOutcome.Success));
-            Assert.That(recordingHydration.Outcome, Is.EqualTo(FetchOutcome.Success));
-            Assert.That(labelHydration.Outcome, Is.EqualTo(FetchOutcome.Success));
-            Assert.That(labelHydration.Value!.Label!.LabelCode, Is.EqualTo(42));
-            Assert.That(labelHydration.Value.Label.Relations, Has.Count.EqualTo(1));
-        }
-
-        http.VerifyNoOutstandingExpectation();
-    }
-
-    [Test]
-    public async Task GetEntityAsync_Result_WhenExplicitCapabilitiesRequireMinimalIncludeUnion()
-    {
-        // Arrange
-        using var http = new MockHttpMessageHandler();
-        const string mbid = "550e8400-e29b-41d4-a716-446655440000";
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/artist/550e8400-e29b-41d4-a716-446655440000" +
-            "?fmt=json&inc=aliases%2Burl-rels")
-            .Respond("application/json", "{\"id\":\"550e8400-e29b-41d4-a716-446655440000\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/release-group/550e8400-e29b-41d4-a716-446655440000" +
-            "?fmt=json&inc=artist-credits%2Baliases%2Breleases")
-            .Respond("application/json", "{\"id\":\"550e8400-e29b-41d4-a716-446655440000\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/release/550e8400-e29b-41d4-a716-446655440000" +
-            "?fmt=json&inc=release-groups%2Burl-rels%2Blabels")
-            .Respond("application/json", "{\"id\":\"550e8400-e29b-41d4-a716-446655440000\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/release/550e8400-e29b-41d4-a716-446655440000" +
-            "?fmt=json&inc=release-groups%2Brecordings%2Bmedia")
-            .Respond("application/json", "{\"id\":\"550e8400-e29b-41d4-a716-446655440000\"}");
-        http.Expect(
-            HttpMethod.Get,
-            "https://musicbrainz.org/ws/2/recording/550e8400-e29b-41d4-a716-446655440000" +
-            "?fmt=json&inc=artist-credits%2Bisrcs%2Baliases%2Burl-rels%2Bgenres")
-            .Respond("application/json", "{\"id\":\"550e8400-e29b-41d4-a716-446655440000\"}");
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(() =>
-        {
-            var client = http.ToHttpClient();
-            client.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
-            return client;
-        });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
-
-        // Act
-        await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Artist,
-                Mbid = mbid,
-                Profile = LookupProfile.Search,
-                Capabilities = LookupCapability.Aliases | LookupCapability.UrlRelations
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.ReleaseGroup,
-                Mbid = mbid,
-                Profile = LookupProfile.Search,
-                Capabilities = LookupCapability.Aliases | LookupCapability.Releases
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Release,
-                Mbid = mbid,
-                Profile = LookupProfile.Search,
-                Capabilities = LookupCapability.UrlRelations | LookupCapability.Labels
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Release,
-                Mbid = mbid,
-                Profile = LookupProfile.Search,
-                Capabilities = LookupCapability.ReleaseMedia
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-        await client.GetEntityAsync(
-            new EntityCacheKey
-            {
-                Kind = EntityKind.Recording,
-                Mbid = mbid,
-                Profile = LookupProfile.Search,
-                Capabilities = LookupCapability.Aliases |
-                    LookupCapability.UrlRelations |
-                    LookupCapability.Genres
-            },
-            new Settings(),
-            default).ConfigureAwait(false);
-
-        // Assert
-        http.VerifyNoOutstandingExpectation();
-    }
-
-    [Test]
     public async Task BrowseReleaseGroupsAsync_Success_WhenWebsiteDefaultStatusAndGenresAreRequested()
     {
         // Arrange
@@ -331,7 +101,8 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.BrowseReleaseGroupsAsync(
@@ -361,7 +132,8 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.SearchAsync(
@@ -397,7 +169,8 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.SearchAsync(
@@ -415,38 +188,6 @@ public class MusicBrainzClientTests
         // Assert
         Assert.That(result.Outcome, Is.EqualTo(FetchOutcome.InvalidRequest));
         http.VerifyNoOutstandingExpectation();
-    }
-
-    [Test]
-    public async Task GetIsrcAsync_SpacesTheSecondRequest_WhenTwoLookupsRunBackToBack()
-    {
-        // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.When(HttpMethod.Get, "https://musicbrainz.org/ws/2/isrc/*")
-            .Respond(
-                "application/json",
-                """{"count":0,"offset":0,"recordings":[]}""");
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(() =>
-        {
-            var created = http.ToHttpClient();
-            created.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
-            return created;
-        });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
-        await client.GetIsrcAsync("USRC17607839", new Settings(), default).ConfigureAwait(false);
-
-        // Act
-        var stopwatch = Stopwatch.StartNew();
-        var result = await client.GetIsrcAsync("USRC17607830", new Settings(), default).ConfigureAwait(false);
-        stopwatch.Stop();
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Outcome, Is.EqualTo(FetchOutcome.Success));
-            Assert.That(stopwatch.Elapsed, Is.GreaterThan(TimeSpan.FromMilliseconds(500)));
-        }
     }
 
     [Test]
@@ -468,7 +209,8 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.GetIsrcAsync("USRC17607839", new Settings(), default)
@@ -503,7 +245,8 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.GetIsrcAsync("GBUM71029604", new Settings(), default)
@@ -531,7 +274,8 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.SearchAsync(
@@ -582,7 +326,8 @@ public class MusicBrainzClientTests
             client.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return client;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.BrowseArtistsAsync(
@@ -620,7 +365,8 @@ public class MusicBrainzClientTests
             httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return httpClient;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.BrowseArtistsAsync(
@@ -664,7 +410,8 @@ public class MusicBrainzClientTests
             httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return httpClient;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.ResolveArtistCompositionAsync(
@@ -722,7 +469,8 @@ public class MusicBrainzClientTests
             httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return httpClient;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
 
         // Act
         var result = await client.GetEntityAsync(

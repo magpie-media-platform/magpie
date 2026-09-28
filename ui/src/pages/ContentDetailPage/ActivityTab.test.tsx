@@ -1,12 +1,14 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import { LocalContentPreviewProvider } from '@/components/content/LocalContentPreview';
 
 import { ActivityTab } from './ActivityTab';
 
@@ -17,6 +19,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
         apiGet: vi.fn(),
     };
 });
+vi.mock('@/hooks/useLibraryTypes', () => ({ useLibraryTypes: () => ({ subjectTypes: [] }) }));
 
 import { apiGet } from '@/lib/api';
 
@@ -83,6 +86,12 @@ function setupApi() {
         if (url.startsWith('/jobs/')) {
             return Promise.resolve(mockTree);
         }
+        if (url === '/content/content-1') {
+            return Promise.resolve({ id: 'content-1', name: 'Local', contentType: 'movie', level: 'movie' });
+        }
+        if (url === '/content/content-1/metadata') {
+            return Promise.resolve({ title: 'Local title' });
+        }
         return Promise.resolve(null);
     });
 }
@@ -111,7 +120,7 @@ function TestWrapper({ children, initialEntry = '/' }: { children: ReactNode; in
                 <TooltipProvider>
                     <ToastProvider>
                         <ToastStateProvider>
-                            {children}
+                            <LocalContentPreviewProvider>{children}</LocalContentPreviewProvider>
                             <ToastList />
                             <ToastViewport />
                             <LocationProbe />
@@ -132,6 +141,177 @@ function renderTab(initialEntry = '/') {
 }
 
 describe('ActivityTab', () => {
+    it.each(['Details', 'Related activity'])('keeps ContentItem identity in %s', async (view) => {
+        // Arrange
+        const user = userEvent.setup();
+        const contentItemId = '55555555-5555-5555-5555-555555555555';
+        const hierarchyId = '66666666-6666-6666-6666-666666666666';
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({
+                    items: [
+                        {
+                            id: 'audit-item',
+                            kind: 'AuditRecord',
+                            timestamp: '2024-05-01T09:00:00Z',
+                            correlationId,
+                            label: 'ItemUpdated',
+                            category: 'Content',
+                            detail: 'Item reference.',
+                            entityType: 'ContentItem',
+                            entityId: contentItemId,
+                        },
+                    ],
+                    totalItems: 1,
+                    pageNumber: 1,
+                    pageSize: 25,
+                });
+            }
+            if (url === `/content?contentItemId=${contentItemId}&pageSize=2`) {
+                return Promise.resolve({
+                    items: [{ id: hierarchyId, contentItem: { id: contentItemId } }],
+                    totalItems: 1,
+                });
+            }
+            if (url === `/content/${hierarchyId}`) {
+                return Promise.resolve({ id: hierarchyId, name: 'Local', contentType: 'movie', level: 'movie' });
+            }
+            if (url === `/content/${hierarchyId}/metadata`) return Promise.resolve({ title: 'Resolved item' });
+            return Promise.resolve(null);
+        });
+        renderTab();
+        await user.click(
+            within((await screen.findByText('Item reference.')).closest('tr')!).getByRole('button', { name: 'Detail' }),
+        );
+        const source = screen.getByRole('dialog', { name: 'Activity detail' });
+        if (view === 'Related activity') await user.click(within(source).getByRole('tab', { name: view }));
+        // Act
+        await user.click(within(source).getByRole('button', { name: 'Open content preview' }));
+        // Assert
+        expect(await screen.findByRole('dialog', { name: 'Resolved item' })).toBeInTheDocument();
+        expect(apiGet).toHaveBeenCalledWith(`/content?contentItemId=${contentItemId}&pageSize=2`, expect.anything());
+        expect(vi.mocked(apiGet).mock.calls.some(([url]) => url === `/content/${contentItemId}`)).toBe(false);
+    });
+
+    it('does not invent a preview for an unrelated entity', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({
+                    items: [
+                        {
+                            id: 'audit-unknown',
+                            kind: 'AuditRecord',
+                            timestamp: '2024-05-01T09:00:00Z',
+                            correlationId,
+                            label: 'Update',
+                            category: 'Jobs',
+                            detail: 'Other entity 33333333-3333-3333-3333-333333333333 updated.',
+                            entityType: 'OtherEntity',
+                            entityId: '33333333-3333-3333-3333-333333333333',
+                        },
+                    ],
+                    totalItems: 1,
+                    pageNumber: 1,
+                    pageSize: 25,
+                });
+            }
+            return Promise.resolve(null);
+        });
+        renderTab();
+        await user.click(
+            within(
+                (await screen.findByText('Other entity 33333333-3333-3333-3333-333333333333 updated.')).closest('tr')!,
+            ).getByRole('button', { name: 'Detail' }),
+        );
+        const source = screen.getByRole('dialog', { name: 'Activity detail' });
+        // Assert
+        expect(within(source).queryByRole('link', { name: 'Open content preview' })).not.toBeInTheDocument();
+        await user.click(within(source).getByRole('tab', { name: 'Related activity' }));
+        expect(within(source).queryByRole('link', { name: 'Open content preview' })).not.toBeInTheDocument();
+        expect(
+            vi.mocked(apiGet).mock.calls.some(([url]) => url === '/content/33333333-3333-3333-3333-333333333333'),
+        ).toBe(false);
+    });
+
+    it.each(['close button', 'Escape', 'outside click'])(
+        'keeps the selected activity and restores its preview link after %s',
+        async (dismissal) => {
+            // Arrange
+            const user = userEvent.setup();
+            // JSDOM returns a snapshot. Browsers expose live animation names during exit.
+            const getComputedStyle = window.getComputedStyle.bind(window);
+            vi.spyOn(window, 'getComputedStyle').mockImplementation(
+                (element) =>
+                    new Proxy(getComputedStyle(element), {
+                        get: (style, property) =>
+                            property === 'animationName'
+                                ? getComputedStyle(element).animationName
+                                : Reflect.get(style, property),
+                    }),
+            );
+            render(
+                <TestWrapper initialEntry="/library/content-1?tab=activity">
+                    <style>{`
+                    .sheet-content[data-state='open'] { animation-name: sheet-modal-in; }
+                    .sheet-content[data-state='closed'] { animation-name: sheet-modal-out; }
+                `}</style>
+                    <ActivityTab contentHierarchyItemId="content-1" />
+                </TestWrapper>,
+            );
+            const row = (await screen.findByText('No acceptable release.')).closest('tr')!;
+            await user.click(within(row).getByRole('button', { name: 'Detail' }));
+            const source = screen.getByRole('dialog', { name: 'Activity detail' });
+            const trigger = within(source).getByRole('link', { name: 'Open content preview' });
+            // Act
+            await user.click(trigger);
+            const preview = await screen.findByRole('dialog', { name: 'Local title' });
+            // Commit the close before the document receives the click, as in a browser event.
+            const flushClick = () => flushSync(() => {});
+            document.body.addEventListener('click', flushClick, { once: true });
+            if (dismissal === 'close button') {
+                await user.click(within(preview).getByRole('button', { name: 'Close' }));
+            } else if (dismissal === 'Escape') {
+                await user.keyboard('{Escape}');
+            } else {
+                await user.click(document.querySelector('.sheet-overlay')!);
+            }
+            document.body.removeEventListener('click', flushClick);
+            await waitFor(() => expect(preview).toHaveAttribute('data-state', 'closed'));
+            // Assert
+            expect(preview).toBeInTheDocument();
+            expect(preview).toHaveAttribute('data-state', 'closed');
+            expect(source).toBeInTheDocument();
+            // Act
+            fireEvent(
+                preview,
+                Object.assign(new Event('animationend', { bubbles: true }), { animationName: 'sheet-modal-out' }),
+            );
+            // Assert
+            await waitFor(() => expect(screen.getByRole('dialog', { name: 'Activity detail' })).toBe(source));
+            expect(within(source).getByTestId('related-events__self')).toHaveTextContent('No acceptable release.');
+            expect(within(source).getByRole('tab', { name: 'Details' })).toHaveAttribute('data-state', 'active');
+            await waitFor(() => expect(trigger).toHaveFocus());
+            expect(screen.getByTestId('activity-tab__location-search')).toHaveTextContent('?tab=activity');
+            // Act
+            await user.click(trigger);
+            const reopened = await screen.findByRole('dialog', { name: 'Local title' });
+            await user.keyboard('{Escape}');
+            fireEvent(
+                reopened,
+                Object.assign(new Event('animationend', { bubbles: true }), { animationName: 'sheet-modal-out' }),
+            );
+            // Assert
+            await waitFor(() => expect(trigger).toHaveFocus());
+            expect(within(source).getByTestId('related-events__self')).toHaveTextContent('No acceptable release.');
+            // Act
+            await user.click(within(source).getByRole('button', { name: 'Close' }));
+            // Assert
+            await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        },
+    );
+
     it('renders the activity entries as a regular table fetched from audit history', async () => {
         renderTab();
 

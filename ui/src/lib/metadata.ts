@@ -309,6 +309,19 @@ export function extractExternalIds(container?: MetadataContainer | null): Conten
     return out;
 }
 
+export function referenceDisplayName(url: string, displayName: string | null | undefined): string {
+    const trimmed = displayName?.trim();
+    if (trimmed) {
+        return trimmed;
+    }
+
+    try {
+        return new URL(url).host || url;
+    } catch {
+        return url;
+    }
+}
+
 export function extractReferences(
     container?: { contributions?: { ordinal: number; references?: MetadataReference[] | null }[] | null } | null,
 ): ContentReference[] {
@@ -332,7 +345,7 @@ export function extractReferences(
             seen.add(key);
             out.push({
                 url,
-                displayName: reference.displayName?.trim() || url,
+                displayName: referenceDisplayName(url, reference.displayName),
                 source: reference.source,
                 kind: reference.kind,
             });

@@ -12,6 +12,7 @@ import {
 import type { RunJobRequest, RunJobResult, JobScopeValue } from '@/hooks/useJobs';
 import type { ScheduleTriggerFormValues } from './ScheduleTriggerForm';
 import { buildJobParameterPatch, normalizeJobParameterValues } from './jobParameters';
+import { getErrorMessage } from '@/lib/errors';
 
 const ADMIN_SCOPE = 'Administrative' as const;
 
@@ -108,7 +109,11 @@ export function useScheduleTriggerCrud({
                 }
                 closeForm();
             } catch (error) {
-                toast({ title: 'Error', description: 'Failed to save trigger', variant: 'error' });
+                toast({
+                    title: 'Error',
+                    description: getErrorMessage(error, 'Failed to save trigger'),
+                    variant: 'error',
+                });
                 throw error;
             }
         },
@@ -136,8 +141,12 @@ export function useScheduleTriggerCrud({
             });
             closeDeleteDialog();
             setTriggerToDelete(null);
-        } catch {
-            toast({ title: 'Error', description: 'Failed to delete trigger', variant: 'error' });
+        } catch (error) {
+            toast({
+                title: 'Error',
+                description: getErrorMessage(error, 'Failed to delete trigger'),
+                variant: 'error',
+            });
         }
     }, [triggerToDelete, deleteTriggerApi, toast, closeDeleteDialog]);
 
@@ -146,8 +155,12 @@ export function useScheduleTriggerCrud({
             setTogglingTriggers((prev) => new Set([...prev, trigger.id]));
             try {
                 await updateTrigger({ id: trigger.id, patch: { enabled: { value: enabled } } });
-            } catch {
-                toast({ title: 'Error', description: 'Failed to update trigger', variant: 'error' });
+            } catch (error) {
+                toast({
+                    title: 'Error',
+                    description: getErrorMessage(error, 'Failed to update trigger'),
+                    variant: 'error',
+                });
             } finally {
                 setTogglingTriggers((prev) => {
                     const next = new Set(prev);

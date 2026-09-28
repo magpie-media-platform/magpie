@@ -4,13 +4,14 @@
         flex-wrap: wrap;
         align-items: center;
         justify-content: space-between;
-        gap: var(--space-sm);
+        gap: var(--space-sm) var(--space-xs);
         min-height: var(--touch-target-min);
     }
 
-    .mobile-list-toolbar__selection {
-        flex: 0 0 8.5rem;
-        justify-content: center;
+    /* The toggle has one width in both states, so it needs no reserved width, and it shares the toolbar line. */
+    .mobile-list-toolbar > .mobile-select-toggle {
+        flex: none;
+        margin-bottom: 0;
     }
 
     .mobile-list-toolbar__sorting {
@@ -20,6 +21,19 @@
         gap: var(--space-xs);
         min-width: 0;
         margin-left: auto;
+    }
+
+    .mobile-list-toolbar__controls {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        margin-left: auto;
+        min-width: 0;
+    }
+
+    .mobile-list-toolbar__controls .mobile-list-toolbar__filter-actions,
+    .mobile-list-toolbar__controls .mobile-list-toolbar__sorting {
+        margin-left: 0;
     }
 
     .mobile-list-toolbar__filter-actions {

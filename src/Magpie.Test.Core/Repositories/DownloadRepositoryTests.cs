@@ -34,6 +34,7 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class DownloadRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IDownloadRepository _subject = null!;
     private ITransactionManager _transactionManager = null!;
     private List<MagpieEvent> _publishedEvents = null!;
@@ -41,15 +42,32 @@ public sealed class DownloadRepositoryTests
     private Guid _userId;
     private Guid _downloadClientId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var user = new User
         {
@@ -434,7 +452,7 @@ public sealed class DownloadRepositoryTests
             Level = "episode",
             Slug = "episode-1",
             Name = "Episode 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var release = new Release
@@ -500,7 +518,7 @@ public sealed class DownloadRepositoryTests
             Level = "episode",
             Slug = "episode-1",
             Name = "Episode 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var release = new Release
@@ -564,7 +582,7 @@ public sealed class DownloadRepositoryTests
             Level = "episode",
             Slug = "episode-a",
             Name = "Episode A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = now
         };
         var hierarchyItemB = new ContentHierarchyItem
@@ -574,7 +592,7 @@ public sealed class DownloadRepositoryTests
             Level = "episode",
             Slug = "episode-b",
             Name = "Episode B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = now
         };
         var hierarchyItemC = new ContentHierarchyItem
@@ -584,7 +602,7 @@ public sealed class DownloadRepositoryTests
             Level = "episode",
             Slug = "episode-c",
             Name = "Episode C",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = now
         };
         var releaseA = new Release
@@ -983,7 +1001,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = $"Item-{Guid.NewGuid():N}",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -1602,7 +1620,7 @@ public sealed class DownloadRepositoryTests
             Level = "episode",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Episode",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = now
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -1667,6 +1685,7 @@ public sealed class DownloadRepositoryTests
     [Test]
     [TestCase(DownloadStatus.Cancelled)]
     [TestCase(DownloadStatus.Imported)]
+    [TestCase(DownloadStatus.Failed)]
     public async Task MarkFailedAsync_ReturnsFalseAndKeepsStatus_WhenDownloadIsTerminal(DownloadStatus status)
     {
         // Arrange
@@ -1816,7 +1835,7 @@ public sealed class DownloadRepositoryTests
             Level = "root",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Breaking Bad",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(parent);
@@ -1829,7 +1848,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Episode 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -1925,7 +1944,7 @@ public sealed class DownloadRepositoryTests
             Level = "season",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Season 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(season);
@@ -1939,7 +1958,7 @@ public sealed class DownloadRepositoryTests
             Level = "episode",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Episode 1",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(episode);
@@ -2040,7 +2059,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Better Call Saul",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -2144,7 +2163,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Poster Type A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -2225,7 +2244,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "No Poster",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -2326,7 +2345,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Detail Poster",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -2408,7 +2427,7 @@ public sealed class DownloadRepositoryTests
                 Level = "level",
                 Slug = Guid.NewGuid().ToString("N"),
                 Name = name,
-                Monitoring = true,
+                Monitoring = MonitoringMode.Monitored,
                 CreatedAt = DateTime.UtcNow
             };
             _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -2567,7 +2586,7 @@ public sealed class DownloadRepositoryTests
                 Level = "level",
                 Slug = Guid.NewGuid().ToString("N"),
                 Name = name,
-                Monitoring = true,
+                Monitoring = MonitoringMode.Monitored,
                 CreatedAt = DateTime.UtcNow
             };
             _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -2662,7 +2681,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = "Dune",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -2958,7 +2977,7 @@ public sealed class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task ListFailedByReleaseIdentitiesAsync_ReturnsExactFailedIdentityMatches_WhenIdentitiesAreProvided()
+    public async Task ListByReleaseAsync_ReturnsExactMatches_WhenIdentitiesAreProvided()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -3004,59 +3023,21 @@ public sealed class DownloadRepositoryTests
         await _subject.CreateAsync(crossPaired, _userId).ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListFailedByReleaseIdentitiesAsync(
+        var result = await _subject.ListByReleaseAsync(
             [
                 new ReleaseIdentityKey { Authority = "hash", Value = "recent" },
                 new ReleaseIdentityKey { Authority = "guid", Value = "aged" },
                 new ReleaseIdentityKey { Authority = "provider", Value = "no-failed-at" }
-            ],
-            null,
-            default).ConfigureAwait(false);
+            ]).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Select(d => d.Id), Is.EquivalentTo([recentFailed.Id, agedFailed.Id, noFailedAt.Id]));
     }
 
-    [Test]
-    public async Task ListFailedByReleaseIdentitiesAsync_ExcludesImportedAndCancelledRows_WhenKeysMatch()
-    {
-        // Arrange
-        var now = DateTime.UtcNow;
-        var imported = new Download
-        {
-            DownloadClientId = _downloadClientId,
-            ExternalId = "taint-imported",
-            Title = "Imported",
-            Status = DownloadStatus.Imported,
-            DateCompleted = now.AddDays(-1),
-            ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "hash", Value = "imported" } }
-        };
-        var cancelled = new Download
-        {
-            DownloadClientId = _downloadClientId,
-            ExternalId = "taint-cancelled",
-            Title = "Cancelled",
-            Status = DownloadStatus.Cancelled,
-            ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "hash", Value = "cancelled" } }
-        };
-        await _subject.CreateAsync(imported, _userId).ConfigureAwait(false);
-        await _subject.CreateAsync(cancelled, _userId).ConfigureAwait(false);
-
-        // Act
-        var result = await _subject.ListFailedByReleaseIdentitiesAsync(
-            [
-                new ReleaseIdentityKey { Authority = "hash", Value = "imported" },
-                new ReleaseIdentityKey { Authority = "hash", Value = "cancelled" }
-            ],
-            null,
-            default).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(result, Is.Empty);
-    }
-
-    [Test]
-    public async Task ListCleanupCandidatesAsync_ReturnsUnstampedTerminalRows_WhenRemovalTimestampsDiffer()
+    [TestCase(DownloadStatus.Failed)]
+    [TestCase(DownloadStatus.Faulted)]
+    public async Task ListCleanupCandidatesAsync_ReturnsUnstampedTerminalRows_WhenRemovalTimestampsDiffer(
+        DownloadStatus failedStatus)
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -3065,7 +3046,7 @@ public sealed class DownloadRepositoryTests
             DownloadClientId = _downloadClientId,
             ExternalId = "cleanup-failed",
             Title = "Failed",
-            Status = DownloadStatus.Failed,
+            Status = failedStatus,
             FailedAt = now.AddDays(-1)
         };
         var imported = new Download
@@ -3244,8 +3225,10 @@ public sealed class DownloadRepositoryTests
         }
     }
 
-    [Test]
-    public async Task DeleteClearedFailedDownloadsAsync_DeletesOnlyAgedFailures_WhenAgeAndStatusVary()
+    [TestCase(DownloadStatus.Failed)]
+    [TestCase(DownloadStatus.Faulted)]
+    public async Task DeleteClearedFailedDownloadsAsync_DeletesOnlyAgedFailures_WhenAgeAndStatusVary(
+        DownloadStatus agedStatus)
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -3254,7 +3237,7 @@ public sealed class DownloadRepositoryTests
             DownloadClientId = _downloadClientId,
             ExternalId = "aged-failed",
             Title = "AgedFailed",
-            Status = DownloadStatus.Failed,
+            Status = agedStatus,
             FailureReason = DownloadFailureReason.ImportFailed,
             FailedAt = now.AddDays(-31)
         };
@@ -3373,7 +3356,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = $"Item-{Guid.NewGuid():N}",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -3476,7 +3459,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = $"Item-{Guid.NewGuid():N}",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -3617,6 +3600,73 @@ public sealed class DownloadRepositoryTests
             Assert.That(
                 downloads.Single(download => download.Id == other.Id).Status,
                 Is.EqualTo(DownloadStatus.Downloading));
+        }
+    }
+
+    [TestCase(ImportCollisionMode.Fail)]
+    [TestCase(ImportCollisionMode.Skip)]
+    [TestCase(ImportCollisionMode.Replace)]
+    [TestCase(null)]
+    public async Task MarkImportingAsync_PreservesPolicy_WhenRecoveryHistoryIsAbsent(ImportCollisionMode? mode)
+    {
+        // Arrange
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "policy",
+            Title = "Policy",
+            Status = DownloadStatus.Downloaded,
+            ImportCollisionMode = ImportCollisionMode.Replace
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var started = await _subject.MarkImportingAsync(download.Id, DateTime.UtcNow, _userId, mode,
+            CancellationToken.None).ConfigureAwait(false);
+        var repeated = await _subject.MarkImportingAsync(download.Id, DateTime.UtcNow, _userId,
+            ImportCollisionMode.Fail, CancellationToken.None).ConfigureAwait(false);
+        var stored = await _subject.GetByIdAsync(download.Id, CancellationToken.None).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(started, Is.True);
+            Assert.That(repeated, Is.False);
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Importing));
+            Assert.That(stored.ImportCollisionMode, Is.EqualTo(mode));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.Zero);
+        }
+    }
+
+    [TestCase(DownloadStatus.Importing, true)]
+    [TestCase(DownloadStatus.Imported, false)]
+    [TestCase(DownloadStatus.Cancelled, false)]
+    public async Task SetImportCollisionModeAsync_PreservesRecoveryChoice_WhenImportIsResumed(
+        DownloadStatus status, bool expected)
+    {
+        // Arrange
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "policy",
+            Title = "Policy",
+            Status = status
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var updated = await _subject.SetImportCollisionModeAsync(download.Id, ImportCollisionMode.Replace,
+            CancellationToken.None).ConfigureAwait(false);
+        var stored = await _subject.GetByIdAsync(download.Id, CancellationToken.None).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(updated, Is.EqualTo(expected));
+            Assert.That(stored!.ImportCollisionMode, Is.EqualTo(expected ? ImportCollisionMode.Replace : null));
+            Assert.That(stored.Status, Is.EqualTo(status));
         }
     }
 
@@ -3848,11 +3898,11 @@ public sealed class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task ListImportedByContentHierarchyItemAsync_ReturnsMatchingImports_WhenInsideTheWindow()
+    public async Task ListByReleaseAsync_LoadsTheScopes_WhenTheKeyMatchesAfterTrimming()
     {
         // Arrange
-        var now = DateTime.UtcNow;
-        var container = new MetadataContainer { CreatedAt = now };
+        var completed = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var container = new MetadataContainer { CreatedAt = completed };
         _context.MetadataContainers.Add(container);
         await _context.SaveChangesAsync().ConfigureAwait(false);
         var episode = new ContentHierarchyItem
@@ -3860,51 +3910,42 @@ public sealed class DownloadRepositoryTests
             MetadataContainerId = container.Id,
             ContentType = "tv",
             Level = "episode",
-            Slug = Guid.NewGuid().ToString("N"),
+            Slug = "episode-1",
             Name = "Episode 1",
-            CreatedAt = now
+            CreatedAt = completed
         };
         _context.ContentHierarchyItems.Add(episode);
-        var within = new Download
+        var download = new Download
         {
             DownloadClientId = _downloadClientId,
-            ExternalId = "within",
-            Title = "pack within window",
+            ExternalId = "imported",
+            Title = "earlier import",
             Status = DownloadStatus.Imported,
-            DateCompleted = now,
-            CreatedAt = now,
-            ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "pack-key" } }
+            DateCompleted = completed,
+            CreatedAt = completed,
+            ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "imported-key" } }
         };
-        var stale = new Download
-        {
-            DownloadClientId = _downloadClientId,
-            ExternalId = "stale",
-            Title = "pack before window",
-            Status = DownloadStatus.Imported,
-            DateCompleted = now.AddHours(-48),
-            CreatedAt = now.AddHours(-48)
-        };
-        _context.Downloads.AddRange(within, stale);
+        _context.Downloads.Add(download);
         await _context.SaveChangesAsync().ConfigureAwait(false);
-        _context.DownloadScopes.AddRange(
-            new DownloadScope { DownloadId = within.Id, ContentHierarchyItemId = episode.Id },
-            new DownloadScope { DownloadId = stale.Id, ContentHierarchyItemId = episode.Id });
+        _context.DownloadScopes.Add(
+            new DownloadScope
+            {
+                DownloadId = download.Id,
+                ContentHierarchyItemId = episode.Id
+            });
         await _context.SaveChangesAsync().ConfigureAwait(false);
         _context.ChangeTracker.Clear();
 
         // Act
         var downloads = await _subject
-            .ListImportedByContentHierarchyItemAsync(episode.Id, now.AddHours(-12))
+            .ListByReleaseAsync([new ReleaseIdentityKey { Authority = " provider ", Value = "imported-key" }])
             .ConfigureAwait(false);
 
         // Assert
-        var identity = downloads[0].ReleaseIdentityKeys.Single();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(downloads.Select(download => download.Id), Is.EqualTo([within.Id]));
-            Assert.That(downloads[0].ReleaseIdentityKeys, Has.Count.EqualTo(1));
-            Assert.That(identity.Authority, Is.EqualTo("provider"));
-            Assert.That(identity.Value, Is.EqualTo("pack-key"));
+            Assert.That(downloads.Select(d => d.Id), Is.EqualTo([download.Id]));
+            Assert.That(downloads[0].Scope.Select(scope => scope.ContentHierarchyItemId), Is.EqualTo([episode.Id]));
         }
     }
 
@@ -3922,7 +3963,7 @@ public sealed class DownloadRepositoryTests
             Level = "level",
             Slug = Guid.NewGuid().ToString("N"),
             Name = $"Item-{Guid.NewGuid():N}",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(hierarchyItem);
@@ -4175,7 +4216,7 @@ public sealed class DownloadRepositoryTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task ListCandidatesAsync_ReportsNullSettings_WhenSettingsCannotBeRead(bool stuck)
+    public async Task ListCandidatesAsync_Throws_WhenSettingsCannotBeRead(bool stuck)
     {
         // Arrange
         _context.Downloads.Add(new Download
@@ -4191,15 +4232,17 @@ public sealed class DownloadRepositoryTests
             .Throws(new InvalidOperationException("Unreadable settings."));
 
         // Act
-        var settings = stuck
-            ? (await _subject.ListStuckCandidatesAsync(new DateTime(2026, 2, 1), new DateTime(2026, 2, 1))
-                .ConfigureAwait(false)).Single().Settings
-            : (await _subject.ListCleanupCandidatesAsync().ConfigureAwait(false)).Single().Settings;
+        var exception = stuck
+            ? Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await _subject.ListStuckCandidatesAsync(new DateTime(2026, 2, 1), new DateTime(2026, 2, 1))
+                    .ConfigureAwait(false))
+            : Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await _subject.ListCleanupCandidatesAsync().ConfigureAwait(false));
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(settings, Is.Null);
+            Assert.That(exception, Has.Message.EqualTo("Unreadable settings."));
             Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
         }
     }
@@ -4248,6 +4291,166 @@ public sealed class DownloadRepositoryTests
             Assert.That(await _context.ContentItems.AsNoTracking().Select(c => c.ActiveAcquisitionStatus)
                 .SingleAsync().ConfigureAwait(false), Is.EqualTo(DownloadStatus.Downloaded));
             Assert.That(_publishedEvents, Is.Empty);
+        }
+    }
+
+    [TestCase(DownloadFailureReason.DownloadStuck, DownloadStatus.Faulted)]
+    [TestCase(DownloadFailureReason.DownloadErrored, DownloadStatus.Faulted)]
+    [TestCase(DownloadFailureReason.AmbiguousDispatchFailure, DownloadStatus.Faulted)]
+    [TestCase(DownloadFailureReason.ImportFailed, DownloadStatus.Faulted)]
+    [TestCase(DownloadFailureReason.NoUsableContent, DownloadStatus.Failed)]
+    [TestCase(DownloadFailureReason.BlockedFileType, DownloadStatus.Failed)]
+    [TestCase(DownloadFailureReason.ClientRejected, DownloadStatus.Failed)]
+    public async Task MarkFailedAsync_StoresTheClassifiedStatusAndClearsTheActiveAcquisition_WhenTheDownloadFails(
+        DownloadFailureReason reason,
+        DownloadStatus expectedStatus)
+    {
+        // Arrange
+        var node = new ContentHierarchyItem
+        {
+            MetadataContainer = new(),
+            ContentType = "test",
+            Level = "item",
+            Slug = "classified",
+            Name = "Classified",
+            ContentItem = new() { ActiveAcquisitionStatus = DownloadStatus.Downloading }
+        };
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Classified",
+            ExternalId = "classified",
+            Status = DownloadStatus.Downloading
+        };
+        _context.ContentHierarchyItems.Add(node);
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.DownloadScopes.Add(new() { DownloadId = download.Id, ContentHierarchyItemId = node.Id });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var transitioned = await _subject.MarkFailedAsync(
+            download.Id,
+            reason,
+            "Failure",
+            "DownloadFailed",
+            "Failure",
+            DateTime.UtcNow,
+            _userId,
+            correlationId: null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(transitioned, Is.True);
+            Assert.That(await _context.Downloads.AsNoTracking().Select(d => d.Status).SingleAsync()
+                .ConfigureAwait(false), Is.EqualTo(expectedStatus));
+            Assert.That(await _context.ContentItems.AsNoTracking().Select(c => c.ActiveAcquisitionStatus)
+                .SingleAsync().ConfigureAwait(false), Is.Null);
+            Assert.That(_publishedEvents.Select(e => e.Name), Does.Contain("download.failed"));
+        }
+    }
+
+    [Test]
+    public async Task MarkStuckAsync_StoresFaulted_WhenTheDownloadMadeNoProgress()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Stuck",
+            ExternalId = "stuck",
+            Status = DownloadStatus.Stalled
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var transitioned = await _subject.MarkStuckAsync(
+            download.Id,
+            "Stuck",
+            now.AddHours(-1),
+            TimeSpan.FromMinutes(20),
+            now,
+            _userId,
+            correlationId: null).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.Downloads.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(transitioned, Is.True);
+            Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Faulted));
+            Assert.That(stored.FailureReason, Is.EqualTo(DownloadFailureReason.DownloadStuck));
+            Assert.That(_publishedEvents.Select(e => e.Name), Is.EqualTo(["download.failed"]));
+        }
+    }
+
+    [Test]
+    public async Task UpdateRefreshedStatusAsync_StoresFaulted_WhenTheClientReportsAnError()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Errored",
+            ExternalId = "errored",
+            Status = DownloadStatus.Downloading
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var applied = await _subject.UpdateRefreshedStatusAsync(
+            download.Id,
+            DownloadStatus.Failed,
+            "qBittorrent state: error",
+            outputPath: null,
+            dateCompleted: null,
+            progress: 0.5m,
+            lastProgressAt: now,
+            heldByPolicy: false,
+            failureReason: DownloadFailureReason.DownloadErrored,
+            failedAt: now,
+            now,
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.True);
+            Assert.That(await _context.Downloads.AsNoTracking().Select(d => d.Status).SingleAsync()
+                .ConfigureAwait(false), Is.EqualTo(DownloadStatus.Faulted));
+            Assert.That(_publishedEvents.Select(e => e.Name), Is.EqualTo(["download.failed"]));
+        }
+    }
+
+    [Test]
+    public async Task RetryAsync_CancelsTheRow_WhenDownloadIsFaulted()
+    {
+        // Arrange
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Faulted",
+            ExternalId = "faulted-retry",
+            Status = DownloadStatus.Faulted,
+            FailureReason = DownloadFailureReason.DownloadStuck
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.RetryAsync(download.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Outcome, Is.EqualTo(DownloadRetryOutcome.Retried));
+            Assert.That(await _context.Downloads.AsNoTracking().Select(d => d.Status).SingleAsync()
+                .ConfigureAwait(false), Is.EqualTo(DownloadStatus.Cancelled));
         }
     }
 }

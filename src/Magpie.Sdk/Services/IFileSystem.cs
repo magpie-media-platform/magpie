@@ -59,10 +59,60 @@ public interface IFileSystem
     long GetFileSize(string path);
 
     /// <summary>
+    /// Gets a stable file identity, or null when ownership cannot be checked.
+    /// </summary>
+    /// <param name="path">The file to inspect</param>
+    string? GetFileIdentity(string path) => null;
+
+    /// <summary>
+    /// Gets the file length and last-write version, or null when they cannot be read.
+    /// </summary>
+    /// <param name="path">The file path</param>
+    string? GetFileVersion(string path) => null;
+
+    /// <summary>
+    /// Locks file paths for import and content operations until the handle is disposed.
+    /// </summary>
+    /// <param name="paths">The source and destination paths to protect</param>
+    IDisposable AcquireImportPaths(IReadOnlyList<string> paths) =>
+        throw new NotSupportedException("Import destination locking is not supported.");
+
+    /// <summary>
+    /// Transfers a file to a new private path after its identity is stored.
+    /// </summary>
+    /// <param name="source">The completed source file</param>
+    /// <param name="destination">The new private destination</param>
+    /// <param name="mode">Whether to copy or move the source</param>
+    /// <param name="onCreated">The callback that stores ownership before bytes can be lost</param>
+    /// <param name="cancellationToken">The token that cancels the transfer</param>
+    Task TransferToOwnedPathAsync(string source, string destination, ImportMode mode,
+        Func<string, Task> onCreated, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Owned import transfers are not supported.");
+
+    /// <summary>
+    /// Reads file state and throws if the file is missing or inaccessible.
+    /// </summary>
+    /// <param name="path">The path of the file to inspect</param>
+    FileState ReadFileState(string path) => throw new NotSupportedException("File state inspection is not supported.");
+
+    /// <summary>
+    /// Reads capacity at the resolved path, or returns null when the check is unavailable.
+    /// </summary>
+    /// <param name="path">The destination or source path to inspect</param>
+    StorageCapacity? GetStorageCapacity(string path) => null;
+
+    /// <summary>
     /// Deletes a file.
     /// </summary>
     /// <param name="path">The path of the file to delete</param>
     void DeleteFile(string path);
+
+    /// <summary>
+    /// Deletes a directory only when it is empty.
+    /// </summary>
+    /// <param name="path">The path of the directory to delete</param>
+    void DeleteEmptyDirectory(string path) =>
+        throw new NotSupportedException("Directory deletion is not supported.");
 
     /// <summary>
     /// Lists the entries directly under a path.
@@ -193,7 +243,7 @@ public interface IFileSystem
     bool IsPathWithin(string root, string path);
 
     /// <summary>
-    /// Determines whether a path below a root contains a symbolic link or reparse point.
+    /// Determines whether the existing part of a path below a root contains a symbolic link or reparse point.
     /// </summary>
     /// <param name="root">The root path to exclude from the check</param>
     /// <param name="path">The path to check</param>

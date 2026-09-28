@@ -70,6 +70,53 @@ internal sealed class SubjectRepository(
             .AsSplitQuery();
     }
 
+    private static IQueryable<Image> ApplyImageUrlCriteria(
+        IQueryable<Image> query,
+        CriteriaSet<PropertyCriterion<string>> criteria)
+    {
+        if (criteria.And is null || !criteria.And.Any())
+        {
+            return query;
+        }
+
+        foreach (var criterion in criteria.And)
+        {
+            var uri = ParseAbsoluteUri(criterion.Value);
+            var uris = (criterion.Values ?? [])
+                .Where(v => v != null)
+                .Select(v => ParseAbsoluteUri(v)!)
+                .ToList();
+            query = criterion.Operator switch
+            {
+                CriteriaValueOperator.Equals => query.Where(i => uri != null && i.Url == uri),
+                CriteriaValueOperator.NotEquals => query.Where(i => uri == null || i.Url != uri),
+                CriteriaValueOperator.IsNull => query.Where(i => i.Url == null),
+                CriteriaValueOperator.IsNotNull => query.Where(i => i.Url != null),
+                CriteriaValueOperator.In => query.Where(i => uris.Contains(i.Url)),
+                CriteriaValueOperator.NotIn => query.Where(i => !uris.Contains(i.Url)),
+                var op => throw new ArgumentException(
+                    $"Operator {op} is not supported for image URL.", nameof(criteria))
+            };
+        }
+
+        return query;
+    }
+
+    private static Uri? ParseAbsoluteUri(string? value)
+    {
+        if (value == null)
+        {
+            return null;
+        }
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            throw new ArgumentException($"Image URL \"{value}\" must be an absolute URL.", nameof(value));
+        }
+
+        return uri;
+    }
+
     private IQueryable<Guid> ContentRelatedContainerIds()
     {
         return
@@ -116,6 +163,85 @@ internal sealed class SubjectRepository(
         catch (Exception ex)
         {
             logger.LogError(ex, "The subject repository failed to read subject {SubjectId}.", id);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Guid>> ListIdsByExternalIdentityAsync(
+        string kind,
+        IReadOnlyCollection<ExternalId> externalIds,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var identities = externalIds
+                .Where(id => !string.IsNullOrWhiteSpace(id.Source) && !string.IsNullOrWhiteSpace(id.Value))
+                .Select(id => (id.Source!.NormalizeExternalIdentifierName(),
+                    id.Value.NormalizeExternalIdentifierValue()))
+                .ToHashSet();
+            if (identities.Count == 0)
+            {
+                return [];
+            }
+
+            var rows =
+                from subject in context.Subjects.AsNoTracking()
+                join contribution in context.MetadataContributions.AsNoTracking()
+                    on subject.MetadataContainerId equals contribution.MetadataContainerId
+                join externalId in context.ExternalIds.AsNoTracking()
+                    on contribution.Id equals externalId.MetadataContributionId
+                where subject.Kind == kind && externalId.Source != null
+                select new { subject.Id, externalId.Source, externalId.Value };
+            var matches = new HashSet<Guid>();
+
+            // Identifier normalization includes GUID and numeric parsing, which SQL providers do not share.
+            await foreach (var row in rows.TagWith("Subject identity candidates").AsAsyncEnumerable()
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                if (!string.IsNullOrWhiteSpace(row.Source) && !string.IsNullOrWhiteSpace(row.Value) &&
+                    identities.Contains((row.Source.NormalizeExternalIdentifierName(),
+                        row.Value.NormalizeExternalIdentifierValue())))
+                {
+                    matches.Add(row.Id);
+                }
+            }
+
+            return [.. matches];
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The subject repository failed to match external identities for kind {SubjectKind}.",
+                kind);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Subject>> ListIdentityDetailsAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var subjects = new List<Subject>();
+            foreach (var batch in ids.Distinct().Chunk(ParameterBatchSize))
+            {
+                subjects.AddRange(await context.Subjects.AsNoTracking()
+                    .Where(subject => batch.Contains(subject.Id))
+                    .Include(subject => subject.MetadataContainer)
+                    .ThenInclude(container => container!.Contributions)
+                    .ThenInclude(contribution => contribution.ExternalIds)
+                    .AsSplitQuery()
+                    .ToListAsync(cancellationToken)
+                    .ConfigureAwait(false));
+            }
+
+            return subjects;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The subject repository failed to read subject identity details.");
             throw;
         }
     }
@@ -645,6 +771,7 @@ internal sealed class SubjectRepository(
             .ApplyCriteriaSet(criterion.Language, nameof(Image.Language))
             .ApplyCriteriaSet(criterion.Width, nameof(Image.Width))
             .ApplyCriteriaSet(criterion.Height, nameof(Image.Height));
+        images = ApplyImageUrlCriteria(images, criterion.Url);
         return ContainerIdsThroughContributions(images, i => i.MetadataContributionId);
     }
 

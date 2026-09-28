@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -32,6 +33,7 @@ internal sealed class ReleaseEvaluationService(
     IContentTypeRegistry contentTypeRegistry,
     IEnumerable<IContentFactProvider> contentFactProviders,
     TimeProvider timeProvider,
+    IFileSystem fileSystem,
     ILogger<ReleaseEvaluationService> logger) : IReleaseEvaluationService
 {
     private readonly Dictionary<Guid, Guid?> _qualityTierListIdsByContentHierarchyItem = [];
@@ -61,6 +63,14 @@ internal sealed class ReleaseEvaluationService(
 
         return isHigherTier || isSameTierProperUpgrade;
     }
+
+    internal static async Task<Release> ResolveDownloadReleaseAsync(
+        IReleaseRepository releaseRepository,
+        Download download,
+        CancellationToken cancellationToken) =>
+        (download.ReleaseId is { } releaseId
+            ? await releaseRepository.GetByIdAsync(releaseId, cancellationToken).ConfigureAwait(false)
+            : null) ?? new Release { Title = download.Title, Protocol = string.Empty };
 
     private static bool IsSameGroup(string? left, string? right) =>
         !string.IsNullOrWhiteSpace(left) &&
@@ -292,22 +302,100 @@ internal sealed class ReleaseEvaluationService(
         int? currentFileQualityRank = null;
         string? currentFileGroup = null;
         ReleaseRevision? currentFileRevision = null;
-        if (qualityTierList is not null)
+        var currentItem = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        var level = currentItem is null
+            ? null
+            : contentTypeRegistry.GetDefinitionFor(currentItem.ContentType)?.LevelDefinitions
+                .FirstOrDefault(candidate => candidate.Slug == currentItem.Level);
+        var primaryFiles = new List<MediaFile>();
+        foreach (var file in (currentItem?.ContentItem?.MediaFiles ?? [])
+            .OrderBy(file => file.FilePath, StringComparer.Ordinal))
+        {
+            if (level is not null && (level.AcceptedFileTypes.Count > 0
+                ? await fileSystem.MatchesAnyFileTypeAsync(
+                    file.FilePath, level.AcceptedFileTypes, cancellationToken).ConfigureAwait(false)
+                : !await fileSystem.MatchesAnyFileTypeAsync(
+                    file.FilePath, level.AcceptedSidecarTypes, cancellationToken).ConfigureAwait(false)))
+            {
+                primaryFiles.Add(file);
+            }
+        }
+
+        if (currentItem?.ContentItem is { MediaReconciledAt: not null } mediaState)
+        {
+            currentFileQualityRank = mediaState.CurrentFileQualityRank;
+            foreach (var file in currentFileQualityRank is null || qualityTierList is null ? [] : primaryFiles)
+            {
+                var (score, title) = await ScoreFileAsync(file, qualityTierList!, cancellationToken)
+                    .ConfigureAwait(false);
+                if (score.MatchedRankOrdinal != currentFileQualityRank)
+                {
+                    continue;
+                }
+
+                var parsedTitle = new ParsedReleaseTitle(title);
+                if (currentFileRevision is not { } priorRevision ||
+                    parsedTitle.Revision.Version > priorRevision.Version)
+                {
+                    currentFileGroup = parsedTitle.Group;
+                    currentFileRevision = parsedTitle.Revision;
+                }
+            }
+        }
+
+        var linkedDownloadIds = primaryFiles
+            .Where(file => file.DownloadId is not null)
+            .Select(file => file.DownloadId!.Value)
+            .Distinct()
+            .ToList();
+        if (currentFileQualityRank is null && qualityTierList is not null && linkedDownloadIds.Count > 0)
+        {
+            foreach (var downloadId in linkedDownloadIds)
+            {
+                var download = await downloadRepository.GetByIdAsync(downloadId, cancellationToken)
+                    .ConfigureAwait(false);
+                var release = download is null
+                    ? null
+                    : await ResolveDownloadReleaseAsync(releaseRepository, download, cancellationToken)
+                        .ConfigureAwait(false);
+                int? rank = null;
+                try
+                {
+                    rank = release is null ? null : Score(release, qualityTierList, null).MatchedRankOrdinal;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Imported release {ReleaseId} scoring failed for current-quality basis",
+                        release!.Id);
+                }
+
+                if (release is null || rank is null || rank >= currentFileQualityRank)
+                {
+                    continue;
+                }
+
+                var parsedTitle = new ParsedReleaseTitle(release.Title);
+                currentFileQualityRank = rank;
+                currentFileGroup = parsedTitle.Group;
+                currentFileRevision = parsedTitle.Revision;
+            }
+        }
+        else if (currentItem?.ContentItem is not { MediaReconciledAt: not null } && qualityTierList is not null)
         {
             var contentDownloads = await downloadRepository.QueryAllAsync(
                 new DownloadQuery { ContentItemId = contentHierarchyItemId },
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            var importedReleaseId = (
+            var importedDownload = (
                 from download in contentDownloads
                 where download.Status == DownloadStatus.Imported
-                where download.ReleaseId is not null
                 orderby download.CreatedAt descending
-                select download.ReleaseId).FirstOrDefault();
+                select download).FirstOrDefault();
 
-            var importedRelease = importedReleaseId is null
+            var importedRelease = importedDownload is null
                 ? null
-                : await releaseRepository.GetByIdAsync(importedReleaseId.Value, cancellationToken)
+                : await ResolveDownloadReleaseAsync(releaseRepository, importedDownload, cancellationToken)
                     .ConfigureAwait(false);
             if (importedRelease is not null)
             {
@@ -725,6 +813,84 @@ internal sealed class ReleaseEvaluationService(
         return Score(release, list, currentQualityOrdinal);
     }
 
+    /// <inheritdoc />
+    public async Task<ReleaseAssessment?> ScoreFileForContentAsync(
+        MediaFile mediaFile,
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default)
+    {
+        var listId = await ResolveQualityTierListIdForContentAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        var list = listId is { } id
+            ? await GetQualityTierListAsync(id, cancellationToken).ConfigureAwait(false)
+            : null;
+        return list is null
+            ? null
+            : (await ScoreFileAsync(mediaFile, list, cancellationToken).ConfigureAwait(false)).Score;
+    }
+
+    private async Task<(ReleaseAssessment Score, string Title)> ScoreFileAsync(
+        MediaFile mediaFile,
+        QualityTierList list,
+        CancellationToken cancellationToken)
+    {
+        var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Title"] = Path.GetFileName(mediaFile.FilePath),
+            ["Size"] = mediaFile.FileSize.ToString(CultureInfo.InvariantCulture),
+        };
+        if (mediaFile.MediaInfo is { } info)
+        {
+            if (info.Container is { } container)
+            {
+                properties["Container"] = container;
+            }
+
+            if (info.BitRate is { } bitRate)
+            {
+                properties["BitRate"] = bitRate.ToString(CultureInfo.InvariantCulture);
+            }
+
+            var languages = info.Tracks.Select(track => track.Language)
+                .OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            properties["Language"] = string.Join(",", languages);
+            foreach (var language in languages)
+            {
+                properties[$"Language.{language}"] = "true";
+            }
+
+            var video = info.Tracks
+                .FirstOrDefault(track => track.Type.Equals("Video", StringComparison.OrdinalIgnoreCase));
+            if (video?.Height is { } height)
+            {
+                properties["Height"] = height.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (video?.Width is { } width)
+            {
+                properties["Width"] = width.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (video?.Codec is { } codec)
+            {
+                properties["VideoCodec"] = codec;
+            }
+        }
+
+        var score = Score(properties, list, currentQualityOrdinal: null);
+        var download = score.MatchedRankOrdinal is null && score.IsExcluded != true &&
+            mediaFile.DownloadId is { } downloadId
+            ? await downloadRepository.GetByIdAsync(downloadId, cancellationToken).ConfigureAwait(false)
+            : null;
+        var release = download is null
+            ? null
+            : await ResolveDownloadReleaseAsync(releaseRepository, download, cancellationToken).ConfigureAwait(false);
+        var imported = release is null ? null : Score(release, list, currentQualityOrdinal: null);
+        return imported?.MatchedRankOrdinal is null
+            ? (score, Path.GetFileNameWithoutExtension(mediaFile.FilePath))
+            : (imported, release!.Title);
+    }
+
     private Guid? ResolveLeaf(
         Release release,
         IReadOnlyList<ReleaseEvaluationContext> contexts,
@@ -978,7 +1144,14 @@ internal sealed class ReleaseEvaluationService(
 
     private ReleaseAssessment Score(Release release, QualityTierList list, int? currentQualityOrdinal)
     {
-        var properties = BuildPropertyBag(release);
+        return Score(BuildPropertyBag(release), list, currentQualityOrdinal);
+    }
+
+    private ReleaseAssessment Score(
+        IReadOnlyDictionary<string, string> properties,
+        QualityTierList list,
+        int? currentQualityOrdinal)
+    {
         var listRules = list.Rules ?? [];
         var listExclude = FirstMatchingRule(listRules, RuleKind.Exclude, properties);
         if (listExclude is not null)

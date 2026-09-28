@@ -111,6 +111,30 @@ internal sealed class UserRepository(
         }
     }
 
+    /// <inheritdoc />
+    public async Task LockAuthorizationAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (context.Database.CurrentTransaction is null)
+            {
+                throw new InvalidOperationException("An account authorization lock requires a transaction.");
+            }
+
+            await context.Users
+                .Where(user => user.Id == userId || (user.Role == Role.Admin && user.Enabled))
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(user => user.ModifiedAt, user => user.ModifiedAt),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The user repository failed to lock authorization for user {UserId}.", userId);
+            throw;
+        }
+    }
+
     public async Task<User> CreateAsync(User model, Guid? createdByUserId, CancellationToken cancellationToken)
     {
         try
@@ -315,7 +339,7 @@ internal sealed class UserRepository(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
-                    var model = await context.Users
+                    var model = await context.Users.AsNoTracking()
                         .FirstOrDefaultAsync(u => u.Id == patch.Id, cancellationToken)
                         .ConfigureAwait(false);
 
@@ -324,20 +348,14 @@ internal sealed class UserRepository(
                         return false;
                     }
 
-                    if (patch.Enabled is not null)
-                    {
-                        model.Enabled = patch.Enabled.Value;
-                    }
-
-                    if (patch.Role is not null)
-                    {
-                        model.Role = patch.Role.Value;
-                    }
-
-                    model.ModifiedAt = now;
-                    model.ModifiedByUserId = modifiedByUserId;
-
-                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    var updated = await context.Users.Where(user => user.Id == patch.Id)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(user => user.Enabled, user => patch.Enabled == null
+                                ? user.Enabled : patch.Enabled.Value)
+                            .SetProperty(user => user.Role, user => patch.Role == null ? user.Role : patch.Role.Value)
+                            .SetProperty(user => user.ModifiedAt, now)
+                            .SetProperty(user => user.ModifiedByUserId, modifiedByUserId), cancellationToken)
+                        .ConfigureAwait(false);
                     if (updated > 0)
                     {
                         await auditRecordRepository.CreateAsync(

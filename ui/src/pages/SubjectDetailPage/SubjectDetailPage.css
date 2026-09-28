@@ -124,6 +124,10 @@
         flex-wrap: wrap;
         align-items: center;
         gap: var(--space-sm);
+
+        @media (max-width: 639px) {
+            display: none;
+        }
     }
 
     .subject-detail-page__title {
@@ -133,6 +137,10 @@
         color: var(--text-primary);
         line-height: 1.2;
         overflow-wrap: break-word;
+    }
+
+    .subject-detail-page__biography {
+        white-space: pre-line;
     }
 
     .subject-detail-page__bio {

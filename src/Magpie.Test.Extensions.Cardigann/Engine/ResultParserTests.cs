@@ -213,6 +213,51 @@ public sealed class ResultParserTests
         }
     }
 
+    [TestCase("VPG66AJDIVTYTK6N54ASGRLHRGV433Y")]
+    [TestCase("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")]
+    public void ParseJson_LeavesIdentityEmpty_WhenTheInfoHashHasNoValidEncoding(string infoHash)
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "$";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title"] = new() { Selector = "title" },
+            ["infohash"] = new() { Selector = "infohash" },
+        };
+
+        // Act
+        var releases = _parser.ParseJson(
+            $$"""[{"title":"Cool Movie","infohash":"{{infoHash}}"}]""",
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?>());
+
+        // Assert
+        Assert.That(releases.Single().IdentityKeys, Is.Empty);
+    }
+
+    [Test]
+    public void ApplyResolvedDownload_CapturesTheV1HexIdentityKey_WhenTheMagnetIsHybrid()
+    {
+        // Arrange
+        var release = new Release { Protocol = "torrent", Title = "Cool Movie 2020 1080p" };
+        var resolved = new Uri(
+            "magnet:?xt=urn:btih:VPG66AJDIVTYTK6N54ASGRLHRGV433YB" +
+            "&xt=urn:btmh:12200123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef&dn=cool");
+
+        // Act
+        _parser.ApplyResolvedDownload(release, resolved);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(release.IdentityKeys, Has.Count.EqualTo(1));
+            Assert.That(release.IdentityKeys.Single().Authority, Is.EqualTo("btih"));
+            Assert.That(release.IdentityKeys.Single().Value, Is.EqualTo(Btih));
+        }
+    }
+
     [Test]
     public void ApplyResolvedDownload_UsesSameExternalId_WhenMagnetQueryChanges()
     {
@@ -265,6 +310,38 @@ public sealed class ResultParserTests
         {
             Assert.That(releases, Has.Count.EqualTo(1));
             Assert.That(releases[0].ExternalId, Is.EqualTo(Btih));
+            Assert.That(releases[0].IdentityKeys, Has.Count.EqualTo(1));
+            Assert.That(releases[0].IdentityKeys.Single().Authority, Is.EqualTo("btih"));
+            Assert.That(releases[0].IdentityKeys.Single().Value, Is.EqualTo(Btih));
+        }
+    }
+
+    [TestCase("abcdef0123456789abcdef0123456789abcdef01")]
+    [TestCase("ABCDEF0123456789ABCDEF0123456789ABCDEF01")]
+    [TestCase("VPG66AJDIVTYTK6N54ASGRLHRGV433YB")]
+    [TestCase("vpg66ajdivtytk6n54asgrlhrgv433yb")]
+    public void ParseJson_CapturesHexIdentityKey_WhenTheInfoHashIsHexOrBase32(string infoHash)
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "$";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title"] = new() { Selector = "title" },
+            ["infohash"] = new() { Selector = "infohash" },
+        };
+
+        // Act
+        var releases = _parser.ParseJson(
+            $$"""[{"title":"Cool Movie","infohash":"{{infoHash}}"}]""",
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?>());
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
             Assert.That(releases[0].IdentityKeys, Has.Count.EqualTo(1));
             Assert.That(releases[0].IdentityKeys.Single().Authority, Is.EqualTo("btih"));
             Assert.That(releases[0].IdentityKeys.Single().Value, Is.EqualTo(Btih));

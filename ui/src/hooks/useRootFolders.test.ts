@@ -25,6 +25,7 @@ const mockApiFolders: ApiRootFolder[] = [
         isDefault: true,
         defaultMonitoring: true,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         defaults: { movie: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-01T00:00:00Z',
     },
@@ -36,6 +37,7 @@ const mockApiFolders: ApiRootFolder[] = [
         isDefault: true,
         defaultMonitoring: true,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         defaults: { series: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-02T00:00:00Z',
     },
@@ -47,6 +49,7 @@ const mockApiFolders: ApiRootFolder[] = [
         isDefault: false,
         defaultMonitoring: true,
         upgradeFileHandling: 'Replace',
+        autoImport: false,
         defaults: { album: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-03T00:00:00Z',
         modifiedAt: '2024-01-10T00:00:00Z',
@@ -161,6 +164,7 @@ describe('useRootFolders', () => {
                 isDefault: false,
                 defaultMonitoring: true,
                 upgradeFileHandling: 'Replace',
+                autoImport: false,
                 defaults: { book: { qualityTierListId: 'quality-default' } },
                 createdAt: '2024-01-04T00:00:00Z',
             });
@@ -180,6 +184,7 @@ describe('useRootFolders', () => {
                     contentType: 'ct-books',
                     defaultMonitoring: true,
                     upgradeFileHandling: 'Replace',
+                    autoImport: false,
                     defaults: { book: { qualityTierListId: 'quality-default' } },
                 });
             });
@@ -190,6 +195,7 @@ describe('useRootFolders', () => {
                 contentType: 'ct-books',
                 defaultMonitoring: true,
                 upgradeFileHandling: 'Replace',
+                autoImport: false,
                 defaults: { book: { qualityTierListId: 'quality-default' } },
             });
         });
@@ -218,6 +224,7 @@ describe('useRootFolders', () => {
                     contentType: 'ct-books',
                     defaultMonitoring: true,
                     upgradeFileHandling: 'Replace',
+                    autoImport: false,
                     defaults: { book: { qualityTierListId: 'quality-default' } },
                 });
             });
@@ -235,6 +242,7 @@ describe('useRootFolders', () => {
                     isDefault: false,
                     defaultMonitoring: true,
                     upgradeFileHandling: 'Replace',
+                    autoImport: false,
                     defaults: { book: { qualityTierListId: 'quality-default' } },
                     createdAt: '2024-01-04T00:00:00Z',
                 });

@@ -180,7 +180,7 @@ export const routes: RouteObject[] = [
             {
                 path: '/library/add',
                 element: (
-                    <RoleGuard minRole={Role.Manager}>
+                    <RoleGuard permission="content.add">
                         <LibraryAddPage />
                     </RoleGuard>
                 ),

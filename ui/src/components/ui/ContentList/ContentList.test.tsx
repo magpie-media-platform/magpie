@@ -12,10 +12,13 @@ import {
     type ContentHeaderFilters,
     type ContentHeaderFilterHandlers,
 } from './ContentList';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 function render(ui: React.ReactElement) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+    return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>, {
+        wrapper: TooltipProvider,
+    });
 }
 
 const mockItems: ContentItem[] = [
@@ -25,8 +28,8 @@ const mockItems: ContentItem[] = [
         posterUrl: 'https://example.com/poster1.jpg',
         contentType: 'tv',
         levelLabel: 'Episode',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2008,
         dateAdded: '2024-01-15T10:00:00Z',
@@ -37,8 +40,8 @@ const mockItems: ContentItem[] = [
         posterUrl: 'https://example.com/poster2.jpg',
         contentType: 'movie',
         levelLabel: 'Movie',
-        monitoring: false,
-        effectiveMonitoring: false,
+        monitoring: 'Unmonitored',
+        effectiveMonitoring: 'Unmonitored',
         fulfillment: 'missing',
         year: 2024,
         dateAdded: '2024-06-01T12:00:00Z',
@@ -48,8 +51,8 @@ const mockItems: ContentItem[] = [
         title: 'The Office',
         contentType: 'tv',
         levelLabel: 'Episode',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'upgradable',
         year: 2005,
         dateAdded: '2023-03-01T08:00:00Z',
@@ -60,8 +63,8 @@ const mockItems: ContentItem[] = [
         posterUrl: 'https://example.com/poster4.jpg',
         contentType: 'movie',
         levelLabel: 'Movie',
-        monitoring: false,
-        effectiveMonitoring: false,
+        monitoring: null,
+        effectiveMonitoring: 'Unmonitored',
         fulfillment: 'fulfilledExternally',
         year: 2023,
     },
@@ -103,6 +106,23 @@ describe('ContentList', () => {
         expect(screen.getByText('Dune: Part Two')).toBeInTheDocument();
         expect(screen.getByText('The Office')).toBeInTheDocument();
         expect(screen.getByText('Poor Things')).toBeInTheDocument();
+    });
+
+    it('shows known zero media totals and unavailable totals distinctly', () => {
+        render(
+            <ContentList
+                items={[
+                    { ...mockItems[0], primaryMediaSize: 0, primaryMediaFileCount: 0 },
+                    { ...mockItems[1], primaryMediaSize: undefined, primaryMediaFileCount: undefined },
+                ]}
+            />,
+        );
+
+        const known = screen.getByText('Breaking Bad').closest('tr')!;
+        const unknown = screen.getByText('Dune: Part Two').closest('tr')!;
+        expect(within(known).getByText('0 B')).toBeInTheDocument();
+        expect(within(known).getByText('0')).toBeInTheDocument();
+        expect(within(unknown).getAllByText('—').length).toBeGreaterThanOrEqual(2);
     });
 
     it('resolves a nested title in the desktop content table', async () => {
@@ -149,18 +169,55 @@ describe('ContentList', () => {
         expect(movieBadges).toHaveLength(2);
     });
 
-    it('renders fulfillment status badges for monitored items', () => {
+    it('renders fulfillment status badges independently from monitoring', () => {
+        // Arrange
+        // Act
         render(<ContentList items={mockItems} />);
 
+        // Assert
         expect(within(screen.getByText('Breaking Bad').closest('tr')!).getByText('Fulfilled')).toBeInTheDocument();
         expect(within(screen.getByText('The Office').closest('tr')!).getByText('Upgradable')).toBeInTheDocument();
+        expect(within(screen.getByText('Dune: Part Two').closest('tr')!).getByText('Missing')).toBeInTheDocument();
+        expect(within(screen.getByText('Poor Things').closest('tr')!).getByText('External')).toBeInTheDocument();
+        expect(
+            within(screen.getByText('Dune: Part Two').closest('tr')!).getByLabelText('Unmonitored'),
+        ).toBeInTheDocument();
+        expect(
+            within(screen.getByText('Poor Things').closest('tr')!).getByLabelText('Unmonitored (inherited)'),
+        ).toBeInTheDocument();
     });
 
-    it('renders no fulfillment badge for an excluded item', () => {
-        render(<ContentList items={mockItems} />);
+    it('distinguishes fulfilled monitored content from fulfilled unmonitored content', () => {
+        // Arrange
+        // Act
+        render(
+            <ContentList
+                items={[
+                    {
+                        id: 'fulfilled-monitored',
+                        title: 'Fulfilled Monitored',
+                        monitoring: 'Monitored',
+                        effectiveMonitoring: 'Monitored',
+                        fulfillment: 'fulfilled',
+                    },
+                    {
+                        id: 'fulfilled-unmonitored',
+                        title: 'Fulfilled Unmonitored',
+                        monitoring: 'Unmonitored',
+                        effectiveMonitoring: 'Unmonitored',
+                        fulfillment: 'fulfilled',
+                    },
+                ]}
+            />,
+        );
 
-        expect(screen.queryByText('Missing')).not.toBeInTheDocument();
-        expect(screen.queryByText('External')).not.toBeInTheDocument();
+        // Assert
+        const monitoredRow = screen.getByText('Fulfilled Monitored').closest('tr')!;
+        const unmonitoredRow = screen.getByText('Fulfilled Unmonitored').closest('tr')!;
+        expect(within(monitoredRow).getByLabelText('Monitored')).toBeInTheDocument();
+        expect(within(monitoredRow).getByText('Fulfilled')).toBeInTheDocument();
+        expect(within(unmonitoredRow).getByLabelText('Unmonitored')).toBeInTheDocument();
+        expect(within(unmonitoredRow).getByText('Fulfilled')).toBeInTheDocument();
     });
 
     it('shows the in-flight acquisition as a second pill beside the fulfillment pill', () => {
@@ -172,8 +229,8 @@ describe('ContentList', () => {
                         title: 'Downloading Movie',
                         contentType: 'movie',
                         levelLabel: 'Movie',
-                        monitoring: true,
-                        effectiveMonitoring: true,
+                        monitoring: 'Monitored',
+                        effectiveMonitoring: 'Monitored',
                         fulfillment: 'missing',
                         acquisitionStatus: 'downloading',
                     },
@@ -202,8 +259,8 @@ describe('ContentList', () => {
                     {
                         id: 'one',
                         title: 'Settled Movie',
-                        monitoring: true,
-                        effectiveMonitoring: true,
+                        monitoring: 'Monitored',
+                        effectiveMonitoring: 'Monitored',
                         fulfillment: 'fulfilled',
                     },
                 ]}
@@ -216,20 +273,23 @@ describe('ContentList', () => {
     });
 
     it('renders monitoring as a labelled eye glyph instead of a named badge', () => {
+        // Arrange
+        // Act
         render(<ContentList items={mockItems} />);
 
+        // Assert
         const monitored = screen.getAllByLabelText('Monitored');
-        const notMonitored = screen.getAllByLabelText('Not monitored');
+        const unmonitored = screen.getAllByLabelText(/Unmonitored/);
 
         expect(monitored).toHaveLength(2);
-        expect(notMonitored).toHaveLength(2);
+        expect(unmonitored).toHaveLength(2);
 
         const monitoredEye = monitored[0].closest('.content-list__monitor-eye');
-        const notMonitoredEye = notMonitored[0].closest('.content-list__monitor-eye');
+        const unmonitoredEye = unmonitored[0].closest('.content-list__monitor-eye');
         expect(monitoredEye).toHaveAttribute('data-monitoring', 'true');
-        expect(notMonitoredEye).toHaveAttribute('data-monitoring', 'false');
+        expect(unmonitoredEye).toHaveAttribute('data-monitoring', 'false');
         expect(monitoredEye).toHaveClass('content-list__monitor-eye--on');
-        expect(notMonitoredEye).not.toHaveClass('content-list__monitor-eye--on');
+        expect(unmonitoredEye).not.toHaveClass('content-list__monitor-eye--on');
     });
 
     describe('poster column', () => {
@@ -245,8 +305,8 @@ describe('ContentList', () => {
                 {
                     id: 'no-poster',
                     title: 'No Poster Show',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ];
@@ -334,8 +394,8 @@ describe('ContentList', () => {
                 id: String(i),
                 title: `Item ${i}`,
                 kind: 'movie' as const,
-                monitoring: true,
-                effectiveMonitoring: true,
+                monitoring: 'Monitored',
+                effectiveMonitoring: 'Monitored',
                 fulfillment: 'fulfilled' as const,
             }));
 
@@ -365,7 +425,8 @@ describe('ContentList', () => {
         it('poster images have alt text', () => {
             render(<ContentList items={mockItems} />);
 
-            const images = screen.getAllByRole('img');
+            const images = screen.getAllByRole('img').filter((element) => element.tagName === 'IMG');
+            expect(images.length).toBeGreaterThan(0);
             images.forEach((img) => {
                 expect(img).toHaveAttribute('alt');
                 expect(img.getAttribute('alt')).toMatch(/artwork/i);
@@ -656,8 +717,8 @@ describe('ContentList', () => {
                 {
                     id: 'pub-1',
                     title: 'Dated Item',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                     publishDate: '2008-01-20T00:00:00Z',
                 },
@@ -673,8 +734,8 @@ describe('ContentList', () => {
                 {
                     id: 'no-pub',
                     title: 'Undated Item',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
             ];

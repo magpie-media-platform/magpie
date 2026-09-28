@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,6 +21,45 @@ internal sealed class MockHierarchyMetadataAdvancedSearcher : IContentHierarchyM
     public string ProviderType => MockHierarchyMetadataProviderType.Primary;
 
     public IEnumerable<string> SupportedContentTypes => ["*"];
+
+    /// <inheritdoc />
+    public async Task<MetadataSearchBatch> ContinueSearchAsync(
+        string contentType,
+        ContentHierarchyItemCriteria query,
+        int maxResults,
+        string defaultLanguagePreference,
+        object? continuation,
+        CancellationToken cancellationToken = default)
+    {
+        var fingerprint = JsonSerializer.Serialize(new { contentType, query, defaultLanguagePreference });
+        if (continuation is not null &&
+            (continuation is not SearchCheckpoint previous || previous.Fingerprint != fingerprint))
+        {
+            throw new MetadataSearchContinuationException("The fixture checkpoint does not match this search.");
+        }
+
+        var offset = (continuation as SearchCheckpoint)?.Offset ?? 0;
+        if (maxResults == 0)
+        {
+            return new MetadataSearchBatch { Continuation = continuation };
+        }
+
+        var result = await AdvancedSearchAsync(contentType, query, maxResults, defaultLanguagePreference,
+            cancellationToken).ConfigureAwait(false);
+        return new MetadataSearchBatch
+        {
+            Page = result with
+            {
+                Matches = [.. result.Matches.Skip(offset).Take(maxResults)],
+                PageInfo = new ProviderSearchPageInfo
+                {
+                    RequestedPage = 1,
+                    HasMore = result.Matches.Count > offset + maxResults
+                }
+            },
+            Continuation = new SearchCheckpoint(fingerprint, offset + maxResults)
+        };
+    }
 
     public async Task<IEnumerable<MetadataSearchCandidate>> SearchAsync(
         ContentHierarchyLevelDefinition levelDefinition,
@@ -117,4 +158,6 @@ internal sealed class MockHierarchyMetadataAdvancedSearcher : IContentHierarchyM
 
         return response;
     }
+
+    private sealed record SearchCheckpoint(string Fingerprint, int Offset);
 }

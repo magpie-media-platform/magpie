@@ -18,6 +18,74 @@ namespace Magpie.Abstractions.Content;
 public interface IContentFileService
 {
     /// <summary>
+    /// Corrects a file association and preserves the file and its media information.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The current hierarchy owner</param>
+    /// <param name="mediaFileId">The file to correct</param>
+    /// <param name="request">The selected destination and expected file path</param>
+    /// <param name="actingUserId">The user who corrects the association</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> ReassignAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        ReassignContentFileRequest request,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks whether a root folder has an explicit rename mask.
+    /// </summary>
+    /// <param name="rootFolderId">The root folder to check</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> HasRenameMaskAsync(Guid rootFolderId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the registered rename tokens and previews a rename mask with example or content values.
+    /// </summary>
+    /// <param name="request">The content type or selected content and the mask to preview</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<RenameTokenReference> GetRenameTokenReferenceAsync(
+        RenameTokenRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Previews an unassociated file against a read-only import lineage.
+    /// </summary>
+    /// <param name="lineage">The proposed content lineage from leaf to root</param>
+    /// <param name="filePath">The existing file to associate</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <param name="otherPlannedFiles">The other selected primary files for this content owner</param>
+    Task<FileRenamePreview> PreviewImportRenameMaskAsync(
+        IReadOnlyList<ContentHierarchyItem> lineage,
+        string filePath,
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<FileRenameEntry>? otherPlannedFiles = null);
+
+    /// <summary>
+    /// Previews explicit masks for selected files or descendant files without changing storage.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The selected content parent or owner</param>
+    /// <param name="selection">The file selection</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<FileRenamePreview> PreviewRenameMaskAsync(
+        Guid contentHierarchyItemId,
+        FileRenameSelection selection,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Applies the valid entries of a previously displayed explicit rename preview.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The selected content parent or owner</param>
+    /// <param name="preview">The displayed preview</param>
+    /// <param name="userId">The user that requests the move</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<FileRenamePreview> ExecuteRenameMaskAsync(
+        Guid contentHierarchyItemId,
+        FileRenamePreview preview,
+        Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the configured root and initial path for the content file browser.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
@@ -133,6 +201,19 @@ public interface IContentFileService
     Task<ContentRename> PreviewRenameAsync(
         Guid contentHierarchyItemId,
         FileInfo original,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Plans a rename for a file with known media info, without a change on disk.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the leaf content item that owns the file</param>
+    /// <param name="original">The file at its current path</param>
+    /// <param name="mediaInfo">The media info of the file for the rename tokens, or null when it is not known</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<ContentRename> PreviewRenameAsync(
+        Guid contentHierarchyItemId,
+        FileInfo original,
+        MediaInfo? mediaInfo,
         CancellationToken cancellationToken = default);
 
     /// <summary>

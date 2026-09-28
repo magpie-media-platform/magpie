@@ -24,6 +24,7 @@ export const HISTORY_DOWNLOAD_STATUSES: DownloadStatusValue[] = [
     'Importing',
     'Imported',
     'Failed',
+    'Faulted',
     'Cancelled',
 ];
 

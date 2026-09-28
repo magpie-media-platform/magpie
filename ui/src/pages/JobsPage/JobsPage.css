@@ -125,6 +125,13 @@
         flex-wrap: wrap;
     }
 
+    @media (max-width: 639px) {
+        .jobs-page__section-header,
+        .jobs-page__executions-toolbar > :is([data-action='run-job'], :has([data-action='run-job'])) {
+            display: none;
+        }
+    }
+
     .jobs-page__trigger-desktop-actions {
         display: flex;
         gap: var(--space-sm);

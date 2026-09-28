@@ -81,6 +81,18 @@ describe('AdminShell', () => {
 
         expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true');
     });
+
+    it('offers library search on administration pages', () => {
+        renderWithRouter(
+            <AdminShell>
+                <AdminShellHeader>
+                    <AdminHeader />
+                </AdminShellHeader>
+            </AdminShell>,
+        );
+
+        expect(screen.getByRole('button', { name: 'Search library' })).toBeInTheDocument();
+    });
 });
 
 describe('AdminSidebar', () => {

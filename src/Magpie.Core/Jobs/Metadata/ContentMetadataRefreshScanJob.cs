@@ -36,7 +36,6 @@ internal sealed class ContentMetadataRefreshScanJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Requeue,
-        Timeout = TimeSpan.FromMinutes(5),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters = [],

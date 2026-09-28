@@ -785,7 +785,7 @@ public sealed class ContentServiceTests
         Assert.That(result, Is.True);
         transactionManager.Verify(manager => manager.ExecuteWithTransactionAsync(
             It.IsAny<Func<CancellationToken, Task<bool>>>(),
-            It.IsAny<CancellationToken>()), Times.Exactly(2));
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -971,7 +971,7 @@ public sealed class ContentServiceTests
                 result!.Value.CreatedHierarchyItemIds,
                 Is.EquivalentTo(createdChildren.Select(item => item.Id)));
             Assert.That(createdChildren, Has.Count.EqualTo(3));
-            Assert.That(createdChildren.All(item => item.Monitoring == false), Is.True);
+            Assert.That(createdChildren.All(item => item.Monitoring == MonitoringMode.Unmonitored), Is.True);
             Assert.That(createdChildren.Any(item => item.Level == "show" && item.ParentId == null), Is.True);
             var season = createdChildren.Single(item => item.Level == "season");
             Assert.That(season.Name, Is.EqualTo("Season 1"));
@@ -1174,156 +1174,37 @@ public sealed class ContentServiceTests
     }
 
     [Test]
-    public async Task MaterializeFulfillmentStatusAsync_LocksTheLineageRoot_WhenMaterializingFulfillment()
+    public async Task MaterializeFulfillmentStatusAsync_ReconcilesStoredMedia_WhenRequested()
     {
         // Arrange
-        var rootId = Guid.NewGuid();
         var leafId = Guid.NewGuid();
-        var inTransaction = false;
-        var lineageLocked = false;
-        var unlockedReads = 0;
-        var unlockedWrites = 0;
-        var root = new ContentHierarchyItem
-        {
-            Id = rootId,
-            ContentType = "movies",
-            Level = "collection",
-            Slug = "root",
-            Name = "Root"
-        };
         var leaf = new ContentHierarchyItem
         {
             Id = leafId,
-            ParentId = rootId,
             ContentType = "movies",
             Level = "movie",
             Slug = "leaf",
             Name = "Leaf"
         };
-        var rootItem = new ContentItem
-        {
-            Id = Guid.NewGuid(),
-            ContentHierarchyItemId = rootId,
-            Fulfillment = FulfillmentStatus.Missing
-        };
-        var leafItem = new ContentItem
-        {
-            Id = Guid.NewGuid(),
-            ContentHierarchyItemId = leafId,
-            Fulfillment = FulfillmentStatus.Fulfilled
-        };
-        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
-        hierarchyItems.Setup(repository => repository.GetLineageAsync(leafId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync([leaf, root]);
-        hierarchyItems.Setup(repository => repository.LockAsync(rootId, It.IsAny<CancellationToken>()))
-            .Callback(() =>
-            {
-                Assert.That(inTransaction, Is.True);
-                lineageLocked = true;
-            })
-            .Returns(Task.CompletedTask);
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() =>
-            {
-                if (!lineageLocked || !inTransaction)
-                {
-                    unlockedReads++;
-                }
-
-                return new PagedList<ContentHierarchyItem> { Items = [leaf], TotalItems = 1 };
-            });
-        hierarchyItems.Setup(repository => repository.GetByIdAsync(leafId, It.IsAny<CancellationToken>()))
+        var hierarchy = new Mock<IContentHierarchyItemRepository>();
+        hierarchy.Setup(repository => repository.GetByIdAsync(leafId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(leaf);
-        var contentRepository = new Mock<IContentRepository> { CallBase = true };
-        contentRepository.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentItemQuery>(),
-                It.IsAny<PagingParameter>(),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((ContentItemQuery query, PagingParameter _, SortParameter? _, CancellationToken _) =>
-            {
-                if (!lineageLocked || !inTransaction)
-                {
-                    unlockedReads++;
-                }
-
-                var matched = new List<ContentItem>();
-                foreach (var item in new[] { rootItem, leafItem })
-                {
-                    if (query.ContentHierarchyItemId == item.ContentHierarchyItemId ||
-                        query.ContentHierarchyItemIds?.Contains(item.ContentHierarchyItemId) == true)
-                    {
-                        matched.Add(item);
-                    }
-                }
-
-                return new PagedList<ContentItem> { Items = matched, TotalItems = matched.Count };
-            });
-        contentRepository.Setup(repository => repository.UpdateAsync(
-                It.IsAny<ContentItem>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() =>
-            {
-                if (!lineageLocked || !inTransaction)
-                {
-                    unlockedWrites++;
-                }
-
-                return true;
-            });
-        var transactionManager = new Mock<ITransactionManager>();
-        transactionManager.Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()))
-            .Returns(async (Func<CancellationToken, Task<bool>> operation, CancellationToken token) =>
-            {
-                inTransaction = true;
-                try
-                {
-                    return await operation(token).ConfigureAwait(false);
-                }
-                finally
-                {
-                    inTransaction = false;
-                }
-            });
-        transactionManager.Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task> operation, CancellationToken token) => operation(token));
+        var content = new Mock<IContentRepository>();
         var subject = new ContentService(
-            hierarchyItems.Object,
-            contentRepository.Object,
-            Mock.Of<IAuditRecordRepository>(),
-            Mock.Of<IRootFolderRepository>(),
-            Mock.Of<IQualityTierListRepository>(),
-            Mock.Of<IMetadataContainerRepository>(),
-            [],
-            Mock.Of<IDownloadRepository>(),
-            Mock.Of<IDownloadClientRepository>(),
-            [],
-            transactionManager.Object,
-            Mock.Of<IContentTypeRegistry>(),
-            Mock.Of<IContentFileService>(),
-            TimeProvider.System,
-            NullLogger<ContentService>.Instance);
+            hierarchy.Object, content.Object, Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IRootFolderRepository>(), Mock.Of<IQualityTierListRepository>(),
+            Mock.Of<IMetadataContainerRepository>(), [], Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(), [], Mock.Of<ITransactionManager>(),
+            Mock.Of<IContentTypeRegistry>(), Mock.Of<IContentFileService>(),
+            TimeProvider.System, NullLogger<ContentService>.Instance);
 
         // Act
         var result = await subject.MaterializeFulfillmentStatusAsync(leafId, null).ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Is.Not.Null);
-            Assert.That(unlockedReads, Is.EqualTo(0));
-            Assert.That(unlockedWrites, Is.EqualTo(0));
-            Assert.That(rootItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Fulfilled));
-            hierarchyItems.Verify(
-                repository => repository.LockAsync(rootId, It.IsAny<CancellationToken>()), Times.Once);
-            contentRepository.Verify(
-                repository => repository.UpdateAsync(rootItem, null, It.IsAny<CancellationToken>()), Times.Once);
-        }
+        Assert.That(result, Is.Not.Null);
+        content.Verify(repository => repository.ReconcileMediaStateAsync(
+            leafId, null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestCaseSource(nameof(UnrepresentableFilters))]

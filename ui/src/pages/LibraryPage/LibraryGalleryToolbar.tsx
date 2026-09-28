@@ -1,8 +1,8 @@
 import { forwardRef, type ComponentPropsWithoutRef } from 'react';
-import { CheckSquareIcon, SortAscendingIcon, SortDescendingIcon, XIcon } from '@phosphor-icons/react';
+import { SortAscendingIcon, SortDescendingIcon } from '@phosphor-icons/react';
 import type { SortingState } from '@tanstack/react-table';
 
-import { Button } from '@/components/ui/Button';
+import { SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/Select';
 import type { MobileListSelectionControl, MobileListSortOption } from '@/components/ui/MobileListToolbar';
 import { useListSorting } from '@/hooks/ui/useListSorting';
@@ -37,20 +37,12 @@ export const LibraryGalleryToolbar = forwardRef<HTMLDivElement, LibraryGalleryTo
             <div ref={ref} className={classes} data-component="library-gallery-toolbar" {...props}>
                 <div className="library-gallery-toolbar__group">
                     {selection && (
-                        <Button
-                            variant="default"
-                            size="sm"
-                            onClick={selection.onToggle}
+                        <SelectModeToggle
+                            active={selection.active}
+                            onToggle={selection.onToggle}
                             disabled={selection.disabled}
-                            data-action={selection.active ? 'exit-select-mode' : 'enter-select-mode'}
-                        >
-                            {selection.active ? (
-                                <XIcon weight="bold" aria-hidden="true" />
-                            ) : (
-                                <CheckSquareIcon weight="bold" aria-hidden="true" />
-                            )}
-                            {selection.active ? 'Stop selecting' : 'Select'}
-                        </Button>
+                            mobileOnly={false}
+                        />
                     )}
                     {selection?.active && (
                         <span className="library-gallery-toolbar__count" data-testid="library-gallery-selection-count">

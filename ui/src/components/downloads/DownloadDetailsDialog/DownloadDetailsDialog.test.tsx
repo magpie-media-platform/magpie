@@ -81,6 +81,29 @@ describe('DownloadDetailsDialog release link', () => {
 });
 
 describe('DownloadDetailsDialog failure fields', () => {
+    it('wraps a capacity status reason without changing truncated identity fields', async () => {
+        const statusReason =
+            'Waiting for destination capacity: insufficient free space. Required: 1394 bytes. Available: 100 bytes.';
+
+        render(
+            <DownloadDetailsDialog
+                {...defaultProps}
+                download={makeDownload({
+                    status: 'Importing',
+                    statusReason,
+                })}
+            />,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        expect(document.querySelector('[data-detail="Status reason"]')).toHaveClass('details-panel__value--multiline');
+        expect(document.querySelector('[data-detail="Title"]')).not.toHaveClass('details-panel__value--multiline');
+        expect(document.querySelector('[data-detail="Status reason"]')).toHaveTextContent(statusReason);
+    });
+
     it('does not show a failed timestamp while the current status is Downloading', async () => {
         render(
             <DownloadDetailsDialog

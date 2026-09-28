@@ -19,6 +19,11 @@ public interface IIndexerIntegration
     string ProviderType { get; }
 
     /// <summary>
+    /// The display name of the provider.
+    /// </summary>
+    string DisplayName => ProviderType;
+
+    /// <summary>
     /// The schema of the indexer settings.
     /// </summary>
     IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; }

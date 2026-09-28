@@ -341,7 +341,23 @@
         }
       }
 
+      reportUnsavedChanges() {
+        const dirty = this.loaded && this.changed();
+        if (dirty === this.reportedDirty) {
+          return;
+        }
+        this.reportedDirty = dirty;
+        this.dispatchEvent(
+          new CustomEvent("magpie-unsaved-changes", {
+            bubbles: true,
+            composed: true,
+            detail: { dirty },
+          }),
+        );
+      }
+
       updateState() {
+        this.reportUnsavedChanges();
         const button = this.shadowRoot.querySelector('button[type="submit"]');
         if (button) {
           button.disabled = this.saving || !canEdit(this) || !this.changed();
@@ -356,6 +372,7 @@
       }
 
       render() {
+        this.reportUnsavedChanges();
         if (!isVisible(this)) {
           this.shadowRoot.replaceChildren();
           return;

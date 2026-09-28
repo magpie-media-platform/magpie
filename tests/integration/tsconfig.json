@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["specs/**/*.ts", "helpers/**/*.ts", "playwright.config.ts"]
+  "include": ["specs/**/*.ts", "helpers/**/*.ts", "playwright.config.ts", "live-updates/**/*.ts", "live-updates.config.ts", "content-filters/**/*.ts", "content-filters.config.ts", "auth-renewal/**/*.ts", "auth-renewal.config.ts"]
 }

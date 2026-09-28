@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,6 +19,31 @@ public interface ILibraryImportCandidateRepository :
     IQueryRepository<LibraryImportCandidate, LibraryImportCandidateQuery>,
     IBulkPatchRepository<Guid, LibraryImportCandidate, LibraryImportCandidateQuery, LibraryImportCandidatePatch>
 {
+    /// <summary>
+    /// Saves automatic match resolution only while the candidate waits for matching.
+    /// </summary>
+    /// <param name="model">The resolved candidate</param>
+    /// <param name="modifiedByUserId">The id of the user that starts resolution</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>True when the resolution was saved</returns>
+    Task<bool> TryResolveMatchAsync(
+        LibraryImportCandidate model,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reclaims an old import candidate only when no queued or active import execution owns it.
+    /// </summary>
+    /// <param name="candidateId">The id of the import candidate</param>
+    /// <param name="inactivityCutoff">The latest candidate activity time eligible for recovery</param>
+    /// <param name="userId">The id of the user that starts recovery</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> TryReclaimInactiveImportAsync(
+        Guid candidateId,
+        DateTime inactivityCutoff,
+        Guid? userId,
+        CancellationToken cancellationToken);
+
     /// <summary>
     /// Queries the candidate groups, one page of groups at a time.
     /// </summary>
@@ -43,9 +69,10 @@ public interface ILibraryImportCandidateRepository :
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Deletes every import candidate of a root folder.
+    /// Deletes the import candidates of a root folder that no import owns and that the user did not reject.
     /// </summary>
     /// <param name="rootFolderId">The id of the root folder that owns the candidates</param>
+    /// <param name="candidateIds">The ids of the candidates to delete, or <c>null</c> to delete all of them</param>
     /// <param name="deletedByUserId">
     /// The id of the user that deletes the records, or <c>null</c> when no user started it.
     /// </param>
@@ -53,6 +80,7 @@ public interface ILibraryImportCandidateRepository :
     /// <returns>The number of records that the delete removed</returns>
     Task<int> DeleteByRootFolderAsync(
         Guid rootFolderId,
+        IReadOnlyCollection<Guid>? candidateIds,
         Guid? deletedByUserId,
         CancellationToken cancellationToken);
 
@@ -84,10 +112,50 @@ public interface ILibraryImportCandidateRepository :
     /// Returns a queued or importing candidate to the pending state.
     /// </summary>
     /// <param name="candidateId">The id of the import candidate</param>
+    /// <param name="note">The note that states why the candidate returns to the pending state, or <c>null</c></param>
     /// <param name="userId">The id of the user that started the import, or <c>null</c> when no user did</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns><see langword="true"/> when the candidate returns to the pending state</returns>
     Task<bool> TryResetImportAsync(
+        Guid candidateId,
+        string? note,
+        Guid? userId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Rejects a candidate that no import owns, and removes its matches and its library target.
+    /// </summary>
+    /// <param name="candidateId">The id of the import candidate</param>
+    /// <param name="userId">The id of the user that rejects the candidate, or <c>null</c> when no user did</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns><see langword="true"/> when the candidate moves to <see cref="LibraryImportCandidateStatus.Rejected"/></returns>
+    Task<bool> TryRejectAsync(
+        Guid candidateId,
+        Guid? userId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Saves the existing library item of a pending or failed candidate with one match.
+    /// </summary>
+    /// <param name="candidateId">The id of the import candidate</param>
+    /// <param name="contentHierarchyItemId">The id of the existing library item, or <c>null</c> when there is none</param>
+    /// <param name="userId">The id of the user that starts the operation, or <c>null</c> when no user did</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns><see langword="true"/> when the target was saved</returns>
+    Task<bool> TryUpdateTargetAsync(
+        Guid candidateId,
+        Guid? contentHierarchyItemId,
+        Guid? userId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns a rejected candidate to <see cref="LibraryImportCandidateStatus.MatchingPending"/>.
+    /// </summary>
+    /// <param name="candidateId">The id of the import candidate</param>
+    /// <param name="userId">The id of the user that restores the candidate, or <c>null</c> when no user did</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns><see langword="true"/> when the candidate moves</returns>
+    Task<bool> TryRestoreAsync(
         Guid candidateId,
         Guid? userId,
         CancellationToken cancellationToken);

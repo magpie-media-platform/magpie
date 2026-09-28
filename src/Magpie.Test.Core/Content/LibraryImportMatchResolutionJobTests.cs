@@ -13,6 +13,7 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Import;
 using Magpie.Models.Jobs;
 using Magpie.Models.MetadataSearch;
 using Magpie.Models.Paging;
@@ -52,6 +53,9 @@ public sealed class LibraryImportMatchResolutionJobTests
     private Mock<ILibraryImportCandidateRepository> _candidates = null!;
     private Mock<IJobManager> _jobManager = null!;
     private FakeTimeProvider _timeProvider = null!;
+    private RootFolder _rootFolder = null!;
+    private Guid? _libraryTargetId;
+    private Mock<ILibraryImportService> _libraryImport = null!;
     private IJob _resolutionJob = null!;
 
     public static IEnumerable<TestCaseData> MatchCases()
@@ -185,7 +189,7 @@ public sealed class LibraryImportMatchResolutionJobTests
                     ExternalId = "1018",
                     ContentType = "type-a",
                     Title = "Solaris",
-                    ReleaseDate = null
+                    ReleaseDate = new DateTime(1972, 1, 1, 0, 0, 0, DateTimeKind.Utc)
                 },
                 new() {
                     ProviderType = "provider-a",
@@ -193,7 +197,24 @@ public sealed class LibraryImportMatchResolutionJobTests
                     ExternalId = "8413",
                     ContentType = "type-a",
                     Title = "Solaris",
-                    ReleaseDate = null
+                    ReleaseDate = new DateTime(2002, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                }
+            },
+            Array.Empty<string>(),
+            "2 results have similar scores. Select a result manually.");
+        yield return new TestCaseData(
+            "/media/movies/Star.Wars.mkv",
+            "Star Wars",
+            null,
+            new MetadataSearchCandidate[]
+            {
+                new() {
+                    ProviderType = "provider-a", ExternalIdSource = "provider-a.type-a", ExternalId = "11",
+                    ContentType = "type-a", Title = "Star Wars IX"
+                },
+                new() {
+                    ProviderType = "provider-a", ExternalIdSource = "provider-a.type-a", ExternalId = "12",
+                    ContentType = "type-a", Title = "Star Wars IV"
                 }
             },
             Array.Empty<string>(),
@@ -249,6 +270,59 @@ public sealed class LibraryImportMatchResolutionJobTests
             },
             new[] { "458723" },
             null);
+        yield return new TestCaseData(
+            "/media/movies/Indiana.Jones.and.the.Temple.of.Doom.1984.mkv",
+            "Indiana Jones and the Temple of Doom",
+            1984,
+            new MetadataSearchCandidate[]
+            {
+                new() {
+                    ProviderType = "tmdb", ExternalIdSource = "tmdb.movie", ExternalId = "649923",
+                    ContentType = "type-a", Title = "The Making of Indiana Jones and the Temple of Doom",
+                    Year = 1984
+                },
+                new() {
+                    ProviderType = "tmdb", ExternalIdSource = "tmdb.movie", ExternalId = "87",
+                    ContentType = "type-a", Title = "Indiana Jones and the Temple of Doom", Year = 1984
+                }
+            },
+            new[] { "87" },
+            null);
+        yield return new TestCaseData(
+            "/media/movies/Indiana.Jones.and.the.Dial.of.Destiny.2023.mkv",
+            "Indiana Jones and the Dial of Destiny",
+            2023,
+            new MetadataSearchCandidate[]
+            {
+                new() {
+                    ProviderType = "tmdb", ExternalIdSource = "tmdb.movie", ExternalId = "1168918",
+                    ContentType = "type-a", Title = "The Making of Indiana Jones and the Dial of Destiny",
+                    Year = 2023
+                },
+                new() {
+                    ProviderType = "tmdb", ExternalIdSource = "tmdb.movie", ExternalId = "335977",
+                    ContentType = "type-a", Title = "Indiana Jones and the Dial of Destiny", Year = 2023
+                }
+            },
+            new[] { "335977" },
+            null);
+        yield return new TestCaseData(
+            "/media/movies/Indiana.Jones.and.the.Temple.of.Doom.mkv",
+            "Indiana Jones and the Temple of Doom",
+            null,
+            new MetadataSearchCandidate[]
+            {
+                new() {
+                    ProviderType = "tmdb", ExternalIdSource = "tmdb.movie", ExternalId = "649923",
+                    ContentType = "type-a", Title = "The Making of Indiana Jones and the Temple of Doom"
+                },
+                new() {
+                    ProviderType = "tmdb", ExternalIdSource = "tmdb.movie", ExternalId = "87",
+                    ContentType = "type-a", Title = "Indiana Jones & the Temple of Doom"
+                }
+            },
+            new[] { "87" },
+            null);
     }
 
     [SetUp]
@@ -262,6 +336,9 @@ public sealed class LibraryImportMatchResolutionJobTests
         _transactions.Setup(manager => manager.ExecuteWithTransactionAsync(
                 It.IsAny<Func<CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()))
             .Returns((Func<CancellationToken, Task<bool>> operation, CancellationToken token) => operation(token));
+        _transactions.Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<int>>>(), It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<int>> operation, CancellationToken token) => operation(token));
 
         _timeProvider = new FakeTimeProvider(
             new DateTimeOffset(new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc), TimeSpan.Zero));
@@ -358,7 +435,7 @@ public sealed class LibraryImportMatchResolutionJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new PagedList<LibraryImportCandidate> { TotalItems = _remainingAfterBatch });
         _candidates
-            .Setup(r => r.UpdateAsync(
+            .Setup(r => r.TryResolveMatchAsync(
                 It.IsAny<LibraryImportCandidate>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .Callback((LibraryImportCandidate model, Guid? _, CancellationToken _) => _updatedCandidates.Add(model))
             .ReturnsAsync(true);
@@ -375,8 +452,33 @@ public sealed class LibraryImportMatchResolutionJobTests
         var contentTypes = new Mock<IContentTypeRegistry>();
         contentTypes.Setup(registry => registry.FindProviderFor("type-a")).Returns(definitionProvider.Object);
 
+        _rootFolder = new RootFolder
+        {
+            Id = _candidate.RootFolderId,
+            Name = "Movies",
+            Path = "/media/movies",
+            ContentType = "type-a"
+        };
+        var rootFolders = new Mock<IRootFolderRepository>();
+        rootFolders.Setup(r => r.GetByIdAsync(_candidate.RootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => _rootFolder);
+        _libraryTargetId = null;
+        _libraryImport = new Mock<ILibraryImportService>();
+        _libraryImport
+            .Setup(s => s.ResolveLibraryTargetAsync(It.IsAny<LibraryImportCandidate>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => _libraryTargetId);
+        _libraryImport
+            .Setup(s => s.AssociateMissingFilesAsync(
+                It.IsAny<IReadOnlyCollection<LibraryImportCandidate>>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LibraryImportSubmissionResult { Queued = [], Skipped = [] });
+
         _resolutionJob = new LibraryImportMatchResolutionJob(
             _candidates.Object,
+            rootFolders.Object,
+            _libraryImport.Object,
             _auditRecords.Object,
             _transactions.Object,
             contentTypes.Object,
@@ -461,7 +563,7 @@ public sealed class LibraryImportMatchResolutionJobTests
         _candidates
             .Setup(r => r.MarkMatchingFailedAsync(
                 It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
+            .ThrowsAsync(new InvalidOperationException("The failure status could not be saved."));
         _candidate.FilePath = "/media/movies/Inception.2010.mkv";
         _pendingBatch = [_candidate];
         _remainingAfterBatch = 1;
@@ -571,11 +673,65 @@ public sealed class LibraryImportMatchResolutionJobTests
                     It.IsAny<CancellationToken>()),
                 Times.Never);
             Assert.That(_candidate.Status, Is.EqualTo(LibraryImportCandidateStatus.MatchingPending));
-            Assert.That(_updatedCandidates, Is.Empty);
+            Assert.That(_updatedCandidates, Is.EqualTo([_candidate]));
+            Assert.That(_candidate.Notes, Is.EqualTo(
+                "Matching will retry because the metadata search did not complete: " +
+                "provider-a could not finish the search. Try again."));
             _jobManager.Verify(manager => manager.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(request => request.IsSuccessor &&
                     request.NotBeforeAt == new DateTime(2026, 5, 20, 12, 1, 0, DateTimeKind.Utc)),
                 It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsTheNotes_WhenTheSameReasonRepeats()
+    {
+        // Arrange
+        _searchWarnings = ["provider-a could not finish the search. Try again."];
+        _candidate.FilePath = "/media/Example/Example.mkv";
+        _candidate.Notes = "Matching will retry because the metadata search did not complete: " +
+            "provider-a could not finish the search. Try again.";
+        _pendingBatch = [_candidate];
+        _remainingAfterBatch = 1;
+
+        // Act
+        await _resolutionJob.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(_updatedCandidates, Is.Empty);
+    }
+
+    [TestCase(null)]
+    [TestCase("/media/Example")]
+    public async Task ExecuteAsync_LeavesAManualMatchAlone_WhenTheUserMatchedTheFileDuringTheRetry(string? layoutKey)
+    {
+        // Arrange
+        _candidate.FilePath = "/media/Example/Example.mkv";
+        _candidate.LayoutKey = layoutKey;
+        _pendingBatch = [_candidate];
+        _remainingAfterBatch = 0;
+        _searchResponse = (_, _) => [new MetadataSearchCandidate
+        {
+            ProviderType = "provider-a", ContentType = "type-a", Level = "type-a",
+            ExternalIdSource = "provider-a", ExternalId = "example", Title = "Example"
+        }];
+        _candidates
+            .Setup(r => r.TryResolveMatchAsync(
+                It.IsAny<LibraryImportCandidate>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        // Act
+        await _resolutionJob.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record => record.Operation == "FileMatched"),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _jobManager.Verify(manager => manager.ExecuteAsync(
+                It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         }
     }
 
@@ -639,7 +795,7 @@ public sealed class LibraryImportMatchResolutionJobTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_updatedCandidates, Has.Count.EqualTo(1));
+            Assert.That(_updatedCandidates, Has.Count.EqualTo(2));
             Assert.That(_candidate.Status, Is.EqualTo(LibraryImportCandidateStatus.Pending));
             Assert.That(_candidate.Matches.Single().ExternalId, Is.EqualTo("example"));
             Assert.That(_candidate.Notes, Is.Null);
@@ -801,6 +957,16 @@ public sealed class LibraryImportMatchResolutionJobTests
                 {
                     ProviderType = "provider-a",
                     ExternalIdSource = "provider-a.type-a",
+                    ExternalId = "recap",
+                    ContentType = "type-a",
+                    Title = "Grouped Show Recap",
+                    Year = 1999,
+                    Level = "type-a"
+                },
+                new MetadataSearchCandidate
+                {
+                    ProviderType = "provider-a",
+                    ExternalIdSource = "provider-a.type-a",
                     ExternalId = "42",
                     ContentType = "type-a",
                     Title = "Grouped Show",
@@ -826,6 +992,82 @@ public sealed class LibraryImportMatchResolutionJobTests
                 service => service.SearchAsync(
                     "Grouped Show", It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
                 Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_PrefersExactShow_WhenRootTitleIncludesReleaseYear()
+    {
+        // Arrange
+        _parse = _ => new SignalBagBuilder()
+            .AddValue(ParsedFileSignalKeys.Title, "Pilot")
+            .AddValue(ParsedFileSignalKeys.TitleToken, "Pilot")
+            .AddValue(ParsedFileSignalKeys.RootTitle, "Fear the Walking Dead 2015")
+            .AddValue(ParsedFileSignalKeys.Year, 2015)
+            .Build();
+        _searchResponse = (_, _) =>
+        [
+            new MetadataSearchCandidate
+            {
+                ProviderType = "provider-a", ExternalIdSource = "provider-a.type-a", ExternalId = "recap",
+                ContentType = "type-a", Title = "Fear the Walking Dead Recap", Year = 2015
+            },
+            new MetadataSearchCandidate
+            {
+                ProviderType = "provider-a", ExternalIdSource = "provider-a.type-a", ExternalId = "exact",
+                ContentType = "type-a", Title = "Fear the Walking Dead", Year = 2015
+            }
+        ];
+        _candidate.FilePath = "/media/tv/Fear the Walking Dead 2015/S01E01.mkv";
+        _pendingBatch = [_candidate];
+
+        // Act
+        await _resolutionJob.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        var row = _updatedCandidates.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(row.Matches.Select(match => match.ExternalId), Is.EqualTo(["exact"]));
+            Assert.That(row.Notes, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_PreservesNumericTitle_WhenReleaseYearDiffers()
+    {
+        // Arrange
+        _parse = _ => new SignalBagBuilder()
+            .AddValue(ParsedFileSignalKeys.Title, "Blade Runner 2049")
+            .AddValue(ParsedFileSignalKeys.TitleToken, "Blade Runner 2049")
+            .AddValue(ParsedFileSignalKeys.RootTitle, "Blade Runner 2049")
+            .AddValue(ParsedFileSignalKeys.Year, 2017)
+            .Build();
+        _searchResponse = (_, _) =>
+        [
+            new MetadataSearchCandidate
+            {
+                ProviderType = "provider-a", ExternalIdSource = "provider-a.type-a", ExternalId = "original",
+                ContentType = "type-a", Title = "Blade Runner", Year = 1982
+            },
+            new MetadataSearchCandidate
+            {
+                ProviderType = "provider-a", ExternalIdSource = "provider-a.type-a", ExternalId = "2049",
+                ContentType = "type-a", Title = "Blade Runner 2049", Year = 2017
+            }
+        ];
+        _candidate.FilePath = "/media/movies/Blade Runner 2049 (2017).mkv";
+        _pendingBatch = [_candidate];
+
+        // Act
+        await _resolutionJob.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        var row = _updatedCandidates.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(row.Matches.Select(match => match.ExternalId), Is.EqualTo(["2049"]));
+            Assert.That(row.Notes, Is.Null);
         }
     }
 
@@ -943,12 +1185,12 @@ public sealed class LibraryImportMatchResolutionJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_StopsBeforeSecondCandidate_WhenBudgetNearlyExhaustedAfterFirst()
+    public async Task ExecuteAsync_ProcessesBothCandidates_WhenFirstExceedsFormerJobLimit()
     {
         // Arrange
         _searchResponse = (query, _) =>
         {
-            _timeProvider.Advance(TimeSpan.FromSeconds(15));
+            _timeProvider.Advance(TimeSpan.FromHours(5));
             return
             [
                 new MetadataSearchCandidate
@@ -971,33 +1213,30 @@ public sealed class LibraryImportMatchResolutionJobTests
         };
         var first = _candidate;
         _pendingBatch = [first, second];
-        _remainingAfterBatch = 1;
+        _remainingAfterBatch = 0;
 
         // Act
         await _resolutionJob
-            .ExecuteAsync(_jobContext with
-            {
-                Deadline = _timeProvider.GetUtcNow() + TimeSpan.FromSeconds(190)
-            })
+            .ExecuteAsync(_jobContext)
             .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_updatedCandidates, Has.Count.EqualTo(1));
+            Assert.That(_updatedCandidates, Has.Count.EqualTo(2));
             Assert.That(_updatedCandidates[0].FilePath, Is.EqualTo(first.FilePath));
-            Assert.That(second.Status, Is.EqualTo(LibraryImportCandidateStatus.MatchingPending));
+            Assert.That(_updatedCandidates[1].FilePath, Is.EqualTo(second.FilePath));
             _jobManager.Verify(
                 m => m.ExecuteAsync(
                     It.Is<JobEnqueueRequest>(request =>
                         request.JobType == "LibraryImportMatchResolution"),
                     It.IsAny<CancellationToken>()),
-                Times.Once);
+                Times.Never);
         }
     }
 
     [Test]
-    public async Task ExecuteAsync_ProcessesWholeBatch_WhenBudgetIsAmple()
+    public async Task ExecuteAsync_ProcessesWholeBatch_WhenCandidatesResolve()
     {
         // Arrange
         _searchResponse = (query, _) =>
@@ -1029,10 +1268,7 @@ public sealed class LibraryImportMatchResolutionJobTests
 
         // Act
         await _resolutionJob
-            .ExecuteAsync(_jobContext with
-            {
-                Deadline = _timeProvider.GetUtcNow() + TimeSpan.FromMinutes(10)
-            })
+            .ExecuteAsync(_jobContext)
             .ConfigureAwait(false);
 
         // Assert
@@ -1047,7 +1283,7 @@ public sealed class LibraryImportMatchResolutionJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_DoesNotRequeue_WhenBudgetExhaustedButNoUnresolvedCandidatesRemain()
+    public async Task ExecuteAsync_DoesNotRequeue_WhenLongBatchHasNoUnresolvedCandidates()
     {
         // Arrange
         _searchResponse = (query, _) =>
@@ -1081,10 +1317,7 @@ public sealed class LibraryImportMatchResolutionJobTests
 
         // Act
         await _resolutionJob
-            .ExecuteAsync(_jobContext with
-            {
-                Deadline = _timeProvider.GetUtcNow() + TimeSpan.FromSeconds(70)
-            })
+            .ExecuteAsync(_jobContext)
             .ConfigureAwait(false);
 
         // Assert
@@ -1119,6 +1352,107 @@ public sealed class LibraryImportMatchResolutionJobTests
             _auditRecords.Verify(repository => repository.CreateAsync(
                 It.Is<AuditRecord>(record => record.Operation == "FileErrored"),
                 It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [TestCase(true, true, 1)]
+    [TestCase(false, true, 0)]
+    [TestCase(true, false, 0)]
+    public async Task ExecuteAsync_OffersAConfidentMatchForAutomaticAssociation_OnlyWhenAutoImportIsOnAndItHasATarget(
+        bool autoImport, bool libraryHasItem, int expectedAssociations)
+    {
+        // Arrange
+        var targetId = Guid.NewGuid();
+        _rootFolder.AutoImport = autoImport;
+        _libraryTargetId = libraryHasItem ? targetId : null;
+        _parse = _ => new SignalBagBuilder()
+                .AddValue(ParsedFileSignalKeys.Title, "Inception")
+                .AddValue(ParsedFileSignalKeys.TitleToken, "Inception")
+                .Build();
+        _searchResponse = (_, _) =>
+        [
+            new()
+            {
+                ProviderType = "provider-a",
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "27205",
+                ContentType = "type-a",
+                Title = "Inception"
+            }
+        ];
+        _candidate.FilePath = "/media/movies/Inception.mkv";
+        _pendingBatch = [_candidate];
+
+        // Act
+        await _resolutionJob.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        var row = _updatedCandidates.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(row.Matches.Select(match => match.ExternalId), Is.EqualTo(["27205"]));
+            Assert.That(row.ContentHierarchyItemId, Is.EqualTo(libraryHasItem ? targetId : null));
+            _libraryImport.Verify(
+                s => s.AssociateMissingFilesAsync(
+                    It.Is<IReadOnlyCollection<LibraryImportCandidate>>(candidates =>
+                        candidates.Select(candidate => candidate.Id).SequenceEqual(new[] { _candidate.Id })),
+                    _userId,
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedAssociations));
+        }
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task ExecuteAsync_KeepsAnAmbiguousMatchPending_WhenResultsTie(bool autoImport)
+    {
+        // Arrange
+        _rootFolder.AutoImport = autoImport;
+        _libraryTargetId = Guid.NewGuid();
+        _parse = _ => new SignalBagBuilder()
+                .AddValue(ParsedFileSignalKeys.Title, "Inception")
+                .AddValue(ParsedFileSignalKeys.TitleToken, "Inception")
+                .Build();
+        _searchResponse = (_, _) =>
+        [
+            new()
+            {
+                ProviderType = "provider-a",
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "27205",
+                ContentType = "type-a",
+                Title = "Inception"
+            },
+            new()
+            {
+                ProviderType = "provider-a",
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "99999",
+                ContentType = "type-a",
+                Title = "Inception"
+            }
+        ];
+        _candidate.FilePath = "/media/movies/Inception.mkv";
+        _pendingBatch = [_candidate];
+
+        // Act
+        await _resolutionJob.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        var row = _updatedCandidates.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(row.Status, Is.EqualTo(LibraryImportCandidateStatus.Pending));
+            Assert.That(row.Matches, Is.Empty);
+            Assert.That(row.ContentHierarchyItemId, Is.Null);
+            _libraryImport.Verify(
+                s => s.AssociateMissingFilesAsync(
+                    It.IsAny<IReadOnlyCollection<LibraryImportCandidate>>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
         }
     }
 }

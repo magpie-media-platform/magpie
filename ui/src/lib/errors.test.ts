@@ -248,6 +248,13 @@ describe('candidateSearchErrorMessage', () => {
         [createApiError(400, 'Bad query', { message: 'Expected a value.', position: 3 }), 'Expected a value.'],
         [createApiError(400, 'Unknown search field.'), 'Unknown search field.'],
         [createApiError(500, 'Internal details'), 'Search failed. Please try again.'],
+        [
+            createApiError(503, 'The provider is busy. Try again later.', {
+                status: 503,
+                detail: 'The provider is busy. Try again later.',
+            }),
+            'The provider is busy. Try again later.',
+        ],
         [new Error('Connection lost'), 'Search failed. Please try again.'],
     ])('SearchError_ReturnsSafeMessage_WhenSearchFails %s', (error, expected) => {
         // Act

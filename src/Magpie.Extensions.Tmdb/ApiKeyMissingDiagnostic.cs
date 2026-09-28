@@ -35,10 +35,9 @@ internal sealed class ApiKeyMissingDiagnostic(ISettingsResolver resolver) : IDia
                 Severity = DiagnosticFindingSeverity.Warning,
                 Title = "TMDb API key is not configured",
                 Detail =
-                    "The TMDb metadata provider has no API key, so movie and TV metadata lookups return " +
-                    "nothing until one is supplied. Set the key in the TMDb extension settings (settings " +
-                    $"group {Settings.GroupName}, key {Settings.ApiKeyKey}) or via the " +
-                    $"{SettingsResolver.EnvApiKeyVariable} environment variable.",
+                    $"The TMDb metadata provider has no API key in settings group {Settings.GroupName}, key " +
+                    $"{Settings.ApiKeyKey}, or in the {SettingsResolver.EnvApiKeyVariable} environment variable, " +
+                    "so movie and TV metadata lookups return nothing.",
                 AffectedEntity = $"Extension:{extensionId}",
             },
         ];

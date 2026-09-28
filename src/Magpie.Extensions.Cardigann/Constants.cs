@@ -5,6 +5,7 @@ namespace Magpie.Extensions.Cardigann;
 internal static class Constants
 {
     internal const string ProviderTypeName = "cardigann";
+    internal const string DisplayName = "Cardigann";
     internal const string GitUrlSettingKey = "gitUrl";
     internal const string BranchSettingKey = "branch";
     internal const string DefinitionsPathSettingKey = "definitionsPath";

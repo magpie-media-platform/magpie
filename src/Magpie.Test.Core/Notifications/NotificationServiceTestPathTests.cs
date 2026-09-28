@@ -5,10 +5,12 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core;
 using Magpie.Core.Notifications;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Sdk.Notifications;
 using Magpie.Sdk.Services;
 
@@ -29,6 +31,7 @@ public sealed class NotificationServiceTestPathTests
 
     private Mock<INotificationProvider> _provider = null!;
     private Mock<INotificationRuleRepository> _rules = null!;
+    private Mock<ISettingsService> _settingsService = null!;
     private ConcurrentQueue<(NotificationRule Rule, MagpieEvent MagpieEvent)> _sent = null!;
     private bool _providerThrows;
     private INotificationService _subject = null!;
@@ -53,9 +56,18 @@ public sealed class NotificationServiceTestPathTests
                 _providerThrows
                     ? Task.FromException(new InvalidOperationException("provider configured to throw"))
                     : Task.CompletedTask);
+        _settingsService = new Mock<ISettingsService>();
+        _settingsService
+            .Setup(service => service.ValidateAsync(
+                It.IsAny<IReadOnlyList<SettingSchemaDefinition>>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<object>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new IntegrationSettingsValidationResult { IsValid = true });
         _subject = new NotificationService(
             _rules.Object,
             [_provider.Object],
+            _settingsService.Object,
             NullLogger<NotificationService>.Instance);
     }
 
@@ -391,6 +403,62 @@ public sealed class NotificationServiceTestPathTests
             Assert.That(sent.MagpieEvent.Context["rule.name"], Is.EqualTo("test rule"));
             Assert.That(sent.MagpieEvent.Context["test"], Is.EqualTo("true"));
         }
+    }
+
+    [Test]
+    public async Task TestAsync_ReportsTheReasonWithoutSending_WhenTheSettingsAreInvalid()
+    {
+        // Arrange
+        _settingsService
+            .Setup(service => service.ValidateAsync(
+                It.IsAny<IReadOnlyList<SettingSchemaDefinition>>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<object>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new IntegrationSettingsValidationResult
+            {
+                IsValid = false,
+                Issues = [new("url", "URL is required.")]
+            });
+        _rules
+            .Setup(repository => repository.GetByIdAsync(new Guid(RuleId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NotificationRule
+            {
+                Id = new Guid(RuleId),
+                Name = "blank webhook",
+                ProviderType = "webhook",
+                Settings = [],
+                Enabled = false
+            });
+
+        // Act
+        var result = await _subject.TestAsync(new Guid(RuleId), new Guid(CallerUserId), true).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.Success, Is.False);
+            Assert.That(result.Message, Does.StartWith("The test was not sent:").And.Contains("URL"));
+            Assert.That(_sent, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task TestSettingsAsync_ReportsASendRatherThanDelivery_WhenTheProviderAcceptsTheEvent()
+    {
+        // Arrange
+        var rule = new NotificationRuleCreate
+        {
+            Name = "test rule",
+            ProviderType = "webhook",
+            Settings = new Dictionary<string, string> { ["url"] = "https://example.test/hook" }
+        };
+
+        // Act
+        var result = await _subject.TestSettingsAsync(rule, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Message, Is.EqualTo("Test notification sent to the provider."));
     }
 
     [Test]

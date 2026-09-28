@@ -66,6 +66,17 @@ public interface IReleaseEvaluationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Scores current file for its content item.
+    /// </summary>
+    /// <param name="mediaFile">The current media file and its extracted information</param>
+    /// <param name="contentHierarchyItemId">The hierarchy item that owns the quality tier list</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<ReleaseAssessment?> ScoreFileForContentAsync(
+        MediaFile mediaFile,
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Assesses a release against a content hierarchy item.
     /// </summary>
     /// <param name="release">The release to assess</param>

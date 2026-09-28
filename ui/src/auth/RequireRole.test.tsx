@@ -63,6 +63,21 @@ describe('RequireRole', () => {
         expect(screen.getByText('Not authorized')).toBeInTheDocument();
     });
 
+    it.each([
+        [Role.Viewer, false],
+        [Role.Requester, true],
+    ])('gates children on a permission for role %s', (role, shown) => {
+        render(
+            <AuthProvider initialUser={{ id: '1', username: 'user', role }}>
+                <RequireRole permission="content.add">
+                    <span>Protected content</span>
+                </RequireRole>
+            </AuthProvider>,
+        );
+
+        expect(screen.queryByText('Protected content') !== null).toBe(shown);
+    });
+
     it('renders nothing when user is not authenticated', () => {
         render(
             <AuthProvider>

@@ -18,6 +18,7 @@ using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
 using Magpie.Sdk.Caching;
+using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging;
 
@@ -32,6 +33,8 @@ internal sealed class QueryExecutor(
     private sealed class ExecutionState
     {
         private int _nodes;
+
+        internal QueryProgress? Progress { get; init; }
 
         public List<string> Warnings { get; } = [];
 
@@ -1005,9 +1008,10 @@ internal sealed class QueryExecutor(
     {
         using var activity = Telemetry.Source.StartActivity(ExecuteSpanName);
         var stopwatch = Stopwatch.StartNew();
-        var execution = new ExecutionState { Query = activity };
+        var execution = new ExecutionState { Query = activity, Progress = plan.Progress };
         DescribePlan(activity, plan);
-        if (plan.Root.State != PlanNodeState.Ready || plan.Advanced && plan.MaxResults <= 0)
+        if (plan.Root.State != PlanNodeState.Ready ||
+            plan.Advanced && plan.MaxResults <= 0 && plan.Progress is null)
         {
             execution.Exhausted = true;
             Complete(activity, plan, execution, stopwatch, surviving: 0, hasMore: false, TerminalEmpty);
@@ -1046,6 +1050,13 @@ internal sealed class QueryExecutor(
         execution.FetchOffset = rootIsDirect ? (int)requestedOffset : 0;
         execution.SingleFetch = rootIsDirect && !batchMaximumResults;
         execution.ExactClass = rootIsDirect && !plan.Advanced;
+        if (plan.Progress is not null)
+        {
+            execution.FetchLimit = ScanBatchSize;
+            execution.FetchOffset = plan.Progress.Offset;
+            execution.SingleFetch = false;
+        }
+
         var remainingSkip = rootIsDirect || plan.Advanced ? 0L : requestedOffset;
         var demand = plan.Advanced
             ? maximumProbe
@@ -1054,6 +1065,21 @@ internal sealed class QueryExecutor(
         try
         {
             var context = await settingsResolver.GetRequestContextAsync(cancellationToken).ConfigureAwait(false);
+            if (plan.Progress is { } progress)
+            {
+                if (progress.Configuration is not null && progress.Configuration != context.UserAgent)
+                {
+                    throw new MetadataSearchContinuationException(
+                        "Open Library configuration changed. Start a new search.");
+                }
+
+                progress.Configuration = context.UserAgent;
+                if (progress.ValidateOnly)
+                {
+                    return Empty(plan);
+                }
+            }
+
             await foreach (var hit in ExecuteNodeAsync(
                 plan.Root,
                 context,
@@ -1083,11 +1109,14 @@ internal sealed class QueryExecutor(
         {
             logger.LogWarning(ex, "Open Library search execution failed");
             execution.Failed = true;
-            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
         }
 
         var hasMore = hits.Count > desired ||
             execution.UpstreamHasMore ||
+            execution.HydrationFailed ||
             execution.Failed && !execution.Exhausted;
         if (hits.Count > desired)
         {
@@ -1207,7 +1236,9 @@ internal sealed class QueryExecutor(
         }
         catch (Exception ex)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             throw;
         }
         finally
@@ -1258,14 +1289,14 @@ internal sealed class QueryExecutor(
 
         using var activity = Telemetry.Source.StartActivity(FetchSpanName);
         activity?.SetTag("magpie.query.node.id", execution.NextNodeId());
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = execution.Progress?.Seen ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var survivorScan = node.PagingMode == FetchPagingMode.SurvivorScan;
         var fetchLimit = survivorScan
             ? pageSizeHint is > 0
                 ? (int)Math.Min(ScanBatchSize, pageSizeHint.Value)
                 : ScanBatchSize
             : execution.FetchLimit;
-        var offset = survivorScan ? 0 : execution.FetchOffset;
+        var offset = execution.Progress?.Offset ?? (survivorScan ? 0 : execution.FetchOffset);
         var singleFetch = !survivorScan && execution.SingleFetch;
         var emitted = 0L;
         var rowsIn = 0L;
@@ -1274,6 +1305,12 @@ internal sealed class QueryExecutor(
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (execution.Progress?.Exhausted == true)
+                {
+                    execution.Exhausted = true;
+                    yield break;
+                }
+
                 var request = Build(node, fetchLimit, offset);
                 var page = await LoadSourcePageAsync(
                     request,
@@ -1291,15 +1328,28 @@ internal sealed class QueryExecutor(
                     page.NumFoundExact && nextOffset >= page.NumFound;
                 execution.UpstreamHasMore = !exhausted;
                 execution.Exhausted = exhausted;
-                foreach (var hit in page.Hits)
+                var consumed = execution.Progress?.Consumed ?? 0;
+                for (var index = consumed; index < page.Hits.Count; index++)
                 {
-                    if (!seen.Add(hit.WorkOlid))
+                    var hit = page.Hits[index];
+                    if (seen.Contains(hit.WorkOlid))
                     {
+                        if (execution.Progress is { } duplicateProgress)
+                        {
+                            duplicateProgress.Consumed = index + 1;
+                        }
+
                         continue;
                     }
 
                     emitted++;
                     yield return hit;
+                    seen.Add(hit.WorkOlid);
+                    if (execution.Progress is { } progress)
+                    {
+                        progress.Consumed = index + 1;
+                    }
+
                     if (demand is { } maximum && emitted >= maximum)
                     {
                         yield break;
@@ -1308,6 +1358,11 @@ internal sealed class QueryExecutor(
 
                 if (exhausted || singleFetch)
                 {
+                    if (execution.Progress is { } progress)
+                    {
+                        progress.Exhausted = exhausted;
+                    }
+
                     yield break;
                 }
 
@@ -1323,6 +1378,11 @@ internal sealed class QueryExecutor(
                 }
 
                 offset = (int)nextOffset;
+                if (execution.Progress is { } nextProgress)
+                {
+                    nextProgress.Offset = offset;
+                    nextProgress.Consumed = 0;
+                }
             }
         }
         finally
@@ -1386,6 +1446,11 @@ internal sealed class QueryExecutor(
                         rejections,
                         cancellationToken).ConfigureAwait(false))
                 {
+                    if (execution.Progress is not null && execution.HydrationFailed)
+                    {
+                        yield break;
+                    }
+
                     continue;
                 }
 
@@ -1473,7 +1538,9 @@ internal sealed class QueryExecutor(
         }
         catch (Exception ex)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             throw;
         }
         finally
@@ -1572,7 +1639,9 @@ internal sealed class QueryExecutor(
         }
         catch (Exception ex)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             throw;
         }
         finally
@@ -1594,15 +1663,22 @@ internal sealed class QueryExecutor(
         var cacheHit = true;
         try
         {
+            if (execution.Progress is not null)
+            {
+                cacheHit = false;
+                var response = await client.GetJsonAsync<SearchResponseDto>(request, context, cancellationToken)
+                    .ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("Open Library returned no search response.");
+                return response.ToSourcePage();
+            }
+
             var page = await (exactClass ? _pageCache : _advancedPageCache).GetOrAddAsync(
                 request.CacheKey,
                 async operationToken =>
                 {
                     cacheHit = false;
-                    var response = await client.GetJsonAsync<SearchResponseDto>(
-                        request,
-                        context,
-                        operationToken).ConfigureAwait(false)
+                    var response = await client.GetJsonAsync<SearchResponseDto>(request, context, operationToken)
+                        .ConfigureAwait(false)
                         ?? throw new InvalidOperationException("Open Library returned no search response.");
                     return response.ToSourcePage();
                 },
@@ -1612,7 +1688,9 @@ internal sealed class QueryExecutor(
         }
         catch (Exception ex)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             throw;
         }
         finally

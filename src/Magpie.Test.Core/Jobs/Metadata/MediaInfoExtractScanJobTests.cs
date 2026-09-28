@@ -118,7 +118,6 @@ public sealed class MediaInfoExtractScanJobTests
             Assert.That(spec.Parameters[0].Required, Is.False);
             Assert.That(spec.Parameters[1].Name, Is.EqualTo("maxAgeHours"));
             Assert.That(spec.Parameters[1].DefaultValue, Is.EqualTo("24"));
-            Assert.That(spec.Timeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
             Assert.That(spec.FailurePolicy, Is.EqualTo(JobFailurePolicy.Requeue));
         }
     }
@@ -411,6 +410,42 @@ public sealed class MediaInfoExtractScanJobTests
                     It.IsAny<CancellationToken>()),
                 Times.Once);
         }
+    }
+
+    [TestCase("content.imported", "True")]
+    [TestCase("download.imported", "False")]
+    [TestCase("content.updated", "False")]
+    public async Task ExecuteAsync_KeepsStoredMediaInfoOnlyForImports_WhenAnEventSuppliesATarget(
+        string eventName,
+        string expectedRequireMissing)
+    {
+        // Arrange
+        _mediaFileRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<MediaFileQuery>(query => query.ContentHierarchyItemId == _targetHierarchyItemId),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile>
+            {
+                Items =
+                [
+                    new MediaFile
+                    {
+                        Id = Guid.NewGuid(),
+                        FileKind = "video",
+                        FilePath = "/media/event-target.mkv",
+                        MediaInfo = new() { Container = "matroska" }
+                    }
+                ]
+            });
+        var jobContext = _eventContext with { Event = _downloadImportedEvent with { Name = eventName } };
+
+        // Act
+        await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(_queuedJobs.Single().Parameters!["requireMissingMediaInfo"], Is.EqualTo(expectedRequireMissing));
     }
 
     [Test]

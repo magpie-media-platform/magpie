@@ -1,6 +1,6 @@
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { PlusIcon, SlidersHorizontalIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { FunnelIcon, PlusIcon, SlidersHorizontalIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { useAuth, Role } from '@/auth';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
@@ -137,11 +137,6 @@ export function TierListDetailPage() {
         setEditingTier(null);
         setFormOpen(true);
     }, []);
-
-    const addTierActions: QuickAction[] = useMemo(
-        () => [{ id: 'add-tier', label: 'Add Tier', icon: <PlusIcon weight="bold" />, onClick: handleAddTier }],
-        [handleAddTier],
-    );
 
     const handleEditTier = useCallback(
         (tierId: string) => {
@@ -420,6 +415,19 @@ export function TierListDetailPage() {
         setListRulesOpen(true);
     }, [tierList?.criteria, tierList?.exclusions, tierList?.sourceRules]);
 
+    const tierListActions: QuickAction[] = useMemo(
+        () => [
+            { id: 'add-tier', label: 'Add Tier', icon: <PlusIcon weight="bold" />, onClick: handleAddTier },
+            {
+                id: 'list-rules',
+                label: 'Criteria + Exclusions',
+                icon: <FunnelIcon weight="bold" />,
+                onClick: handleOpenListRules,
+            },
+        ],
+        [handleAddTier, handleOpenListRules],
+    );
+
     const listCriteriaDirty = useFormDirty(listCriteriaDraft, cleanListCriteriaRef.current, normalizeCriteria);
     const listExclusionsDirty = useFormDirty(listExclusionsDraft, cleanListExclusionsRef.current, normalizeExclusions);
     const listRulesDirty = listCriteriaDirty || listExclusionsDirty;
@@ -667,7 +675,7 @@ export function TierListDetailPage() {
                 />
             </PullToRefresh>
 
-            {canManage && <QuickActionsButton actions={addTierActions} title="Add Tier" />}
+            {canManage && <QuickActionsButton actions={tierListActions} title="Tier List Actions" />}
 
             <TierForm
                 open={formOpen}

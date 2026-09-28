@@ -2,6 +2,7 @@ import { InlineEditRow } from '@/components/ui/InlineEditRow';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { useEffectiveQualityTierList, useSetQualityTierList } from '@/hooks/useContent';
+import { useLookupError } from '@/hooks/useLookupError';
 import { useQualityTierLists } from '@/hooks/useQualityTierLists';
 
 interface QualityTierControlProps {
@@ -22,7 +23,9 @@ export function QualityTierControl({
     canEdit = true,
 }: QualityTierControlProps) {
     const { toast } = useToast();
-    const { data: effective, isLoading } = useEffectiveQualityTierList(contentHierarchyItemId);
+    const effectiveQuery = useEffectiveQualityTierList(contentHierarchyItemId);
+    const { data: effective, isLoading, isFetching, refetch } = effectiveQuery;
+    const lookupError = useLookupError(effectiveQuery);
     const selectedTierListId = effective?.ownQualityTierListId ?? '';
     const { tierLists, isLoading: tierListsLoading } = useQualityTierLists(
         contentType ? { contentType, level } : undefined,
@@ -61,11 +64,13 @@ export function QualityTierControl({
         }
     };
 
-    const value = isLoading
-        ? 'Resolving quality...'
-        : effective?.qualityTierListName
-          ? effective.qualityTierListName
-          : 'No quality';
+    const value = lookupError
+        ? 'Quality could not be loaded'
+        : isLoading
+          ? 'Resolving quality...'
+          : effective?.qualityTierListName
+            ? effective.qualityTierListName
+            : 'No quality';
 
     return (
         <InlineEditRow
@@ -74,6 +79,10 @@ export function QualityTierControl({
             canEdit={canEdit}
             editAriaLabel="Edit quality"
             triggerTestId="quality-tier-control__trigger"
+            error={lookupError}
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+            retryAriaLabel="Retry loading quality"
             readValue={
                 <span className="quality-tier-control__value" data-testid="quality-tier-control__label">
                     {value}

@@ -1,16 +1,23 @@
-import { useProviderCatalog } from '@/hooks/useProviderCatalog';
+import { useCallback } from 'react';
+
+import { selectProviderChoices, useProviderCatalog, type ProviderDescriptor } from '@/hooks/useProviderCatalog';
 
 interface ProviderTypesResult {
     types: string[];
+    labels: Record<string, string>;
     isLoading: boolean;
     isError: boolean;
 }
 
 function useIntegrationProviderTypes(kind: string): ProviderTypesResult {
-    const query = useProviderCatalog((providers) =>
-        providers.filter((provider) => provider.kind === kind).map((provider) => provider.providerType),
-    );
-    return { types: query.data ?? [], isLoading: query.isLoading, isError: query.isError };
+    const select = useCallback((providers: ProviderDescriptor[]) => selectProviderChoices(providers, kind), [kind]);
+    const query = useProviderCatalog(select);
+    return {
+        types: query.data?.types ?? [],
+        labels: query.data?.labels ?? {},
+        isLoading: query.isLoading,
+        isError: query.isError,
+    };
 }
 
 export function useDownloadClientProviderTypes(): ProviderTypesResult {

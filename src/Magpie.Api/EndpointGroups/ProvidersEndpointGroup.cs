@@ -36,30 +36,35 @@ internal sealed class ProvidersEndpointGroup : IApiEndpointGroup
         {
             Kind = "indexer",
             ProviderType = provider.ProviderType,
+            DisplayName = provider.DisplayName,
             Schema = provider.SettingsSchema
         })
             .Concat(downloadClients.Select(provider => new ProviderDescriptor
             {
                 Kind = "downloadClient",
                 ProviderType = provider.ProviderType,
+                DisplayName = provider.DisplayName,
                 Schema = provider.SettingsSchema
             }))
             .Concat(mediaServers.Select(provider => new ProviderDescriptor
             {
                 Kind = "mediaServer",
                 ProviderType = provider.ProviderType,
+                DisplayName = provider.DisplayName,
                 Schema = provider.SettingsSchema
             }))
             .Concat(notifications.Select(provider => new ProviderDescriptor
             {
                 Kind = "notification",
                 ProviderType = provider.ProviderType,
+                DisplayName = provider.DisplayName,
                 Schema = provider.SettingsSchema
             }))
             .Concat(indexerFeeds.Select(provider => new ProviderDescriptor
             {
                 Kind = "indexerFeed",
                 ProviderType = provider.ProviderType,
+                DisplayName = provider.DisplayName,
                 Schema = provider.SettingsSchema
             }))
             .OrderBy(provider => provider.Kind)

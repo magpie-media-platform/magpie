@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -19,10 +18,6 @@ internal sealed class MusicContentTypeDefinitionProvider :
     IPathResolutionContentTypeDefinitionProvider,
     IReleaseMatchContentTypeDefinitionProvider
 {
-    private static readonly Regex SamplePattern = new(
-        @"(?:^|[._-])sample(?:$|[._-])|\[sample\]",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
     private static readonly Regex TrackPattern = new(
         @"(?<![A-Za-z0-9])(?:track|trk|t)[\s._-]*0*(?<track>\d{1,3})(?![A-Za-z0-9])",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -65,6 +60,8 @@ internal sealed class MusicContentTypeDefinitionProvider :
                     new() { Key = "trackCount", DisplayName = "Tracks", DataType = DataType.Number },
                     new() { Key = "format", DisplayName = "Format" }
                 ],
+                AcceptedFileTypes = ["audio/*"],
+                AcceptedSidecarTypes = [".cue", ".log", ".m3u"],
                 IsAcquirable = true,
                 Subfolder = string.Empty,
                 OrdinalKind = OrdinalKind.Name
@@ -154,17 +151,27 @@ internal sealed class MusicContentTypeDefinitionProvider :
         }
 
         var trackMatch = TrackPattern.Match(release.Title);
-        if (target.Item.Level == TrackSlug &&
-            target.Item.Ordinal is { } targetTrack &&
-            trackMatch.Success &&
+        int? releaseTrack = trackMatch.Success &&
             int.TryParse(
                 trackMatch.Groups["track"].Value,
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
-                out var releaseTrack) &&
-            releaseTrack != targetTrack)
+                out var parsedTrack)
+            ? parsedTrack
+            : null;
+        if (target.Item.Level == TrackSlug &&
+            target.Item.Ordinal is { } targetTrack &&
+            releaseTrack is { } numberedTrack &&
+            numberedTrack != targetTrack)
         {
             return ReleaseMatchResult.NoMatch;
+        }
+
+        if (target.Item.Level == TrackSlug &&
+            TitleOf(target, target.Item) is null &&
+            (releaseTrack is null || releaseTrack != target.Item.Ordinal))
+        {
+            return ReleaseMatchResult.Indeterminate;
         }
 
         var normalizedRelease = " " + release.Title.NormalizeMediaFilename() + " ";
@@ -200,10 +207,8 @@ internal sealed class MusicContentTypeDefinitionProvider :
         };
         var requiredTitles = (
             from item in requiredItems
-            let title = target.Metadata.TryGetValue(item.Id, out var metadata)
-                ? metadata.Title
-                : item.Name
-            where !string.IsNullOrWhiteSpace(title)
+            let title = TitleOf(target, item)
+            where title is not null
             select title.NormalizeMediaFilename()).ToArray();
         if (!requiredTitles.Any())
         {
@@ -217,10 +222,21 @@ internal sealed class MusicContentTypeDefinitionProvider :
             : ReleaseMatchResult.NoMatch;
     }
 
+    private static string? TitleOf(ContentTarget target, ContentHierarchyItem item)
+    {
+        var title = target.Metadata.TryGetValue(item.Id, out var metadata) ? metadata.Title : null;
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            return title.Trim();
+        }
+
+        return string.IsNullOrWhiteSpace(item.Name) ? null : item.Name.Trim();
+    }
+
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? Parse(string filePath, out string? levelSlug)
     {
         levelSlug = null;
-        if (SamplePattern.IsMatch(Path.GetFileNameWithoutExtension(filePath)))
+        if (ReleaseFiles.IsSample(filePath))
         {
             return null;
         }

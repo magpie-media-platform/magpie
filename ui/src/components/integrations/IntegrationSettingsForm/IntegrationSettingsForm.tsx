@@ -105,17 +105,19 @@ export function IntegrationSettingsForm({
             })}
 
             {formIssues.length > 0 && (
-                <ul
-                    className="integration-settings-form__form-issues"
-                    data-field="integration-settings-form-issues"
-                    role="alert"
-                >
-                    {formIssues.map((issue, index) => (
-                        <li key={index} className="integration-settings-form__error">
-                            {issue.message}
-                        </li>
-                    ))}
-                </ul>
+                <div role="alert">
+                    <ul
+                        className="integration-settings-form__form-issues"
+                        data-field="integration-settings-form-issues"
+                        role="list"
+                    >
+                        {formIssues.map((issue, index) => (
+                            <li key={index} className="integration-settings-form__error">
+                                {issue.message}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
             )}
         </div>
     );

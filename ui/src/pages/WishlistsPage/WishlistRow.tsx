@@ -63,7 +63,7 @@ export function WishlistRow({
 
     const MonitoringIcon = wishlist.monitoring === null ? TreeViewIcon : wishlist.monitoring ? EyeIcon : EyeSlashIcon;
     const monitoringLabel =
-        wishlist.monitoring === null ? 'Inherit' : wishlist.monitoring ? 'Monitored' : 'Not monitored';
+        wishlist.monitoring === null ? 'Inherit' : wishlist.monitoring ? 'Monitored' : 'Unmonitored';
 
     const [isLocking, setIsLocking] = useState(false);
     const handleToggleLock = async () => {

@@ -6,6 +6,7 @@ import type { CalendarEvent } from '@/types/calendar';
 
 import { CalendarPage } from './CalendarPage';
 import { getMonthDays, getWeekStart } from './calendarUtils';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
@@ -84,6 +85,7 @@ describe('CalendarPage fetch range timezone handling', () => {
                     <MemoryRouter initialEntries={['/calendar?view=day&date=2025-06-15']}>
                         <CalendarPage />
                     </MemoryRouter>,
+                    { wrapper: TooltipProvider },
                 );
 
                 expect(lastFetchRange()).toEqual({ startDate: '2025-06-15', endDate: '2025-06-15' });
@@ -94,6 +96,7 @@ describe('CalendarPage fetch range timezone handling', () => {
                     <MemoryRouter initialEntries={['/calendar?view=month&date=2025-06-15']}>
                         <CalendarPage />
                     </MemoryRouter>,
+                    { wrapper: TooltipProvider },
                 );
 
                 const monthDays = getMonthDays(2025, 5);
@@ -107,6 +110,7 @@ describe('CalendarPage fetch range timezone handling', () => {
                     <MemoryRouter initialEntries={['/calendar?view=week&date=2025-06-15']}>
                         <CalendarPage />
                     </MemoryRouter>,
+                    { wrapper: TooltipProvider },
                 );
 
                 const weekStart = getWeekStart(new Date(2025, 5, 15));
@@ -126,6 +130,7 @@ describe('CalendarPage fetch range timezone handling', () => {
             <MemoryRouter initialEntries={['/calendar?view=month&date=2025-06-15']}>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const range = lastFetchRange();
@@ -145,8 +150,8 @@ describe('CalendarPage fetch range timezone handling', () => {
                     contentType: 'movies',
                     level: 'movie',
                     fulfillment: 'missing',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                 },
             ];
         });
@@ -156,6 +161,7 @@ describe('CalendarPage fetch range timezone handling', () => {
                 <MemoryRouter initialEntries={['/calendar?view=month&date=2026-07-20']}>
                     <CalendarPage />
                 </MemoryRouter>,
+                { wrapper: TooltipProvider },
             );
 
             const july20 = document.querySelector<HTMLElement>(
@@ -175,6 +181,7 @@ describe('CalendarPage fetch range timezone handling', () => {
                 <MemoryRouter initialEntries={['/calendar?view=week&date=2026-07-20']}>
                     <CalendarPage />
                 </MemoryRouter>,
+                { wrapper: TooltipProvider },
             );
 
             const july20 = document.querySelector<HTMLElement>('[data-component="week-view"] [data-date="2026-07-20"]');
@@ -190,6 +197,7 @@ describe('CalendarPage fetch range timezone handling', () => {
                 <MemoryRouter initialEntries={['/calendar?view=day&date=2026-07-20']}>
                     <CalendarPage />
                 </MemoryRouter>,
+                { wrapper: TooltipProvider },
             );
 
             expect(screen.getByText('July 20 release')).toBeInTheDocument();
@@ -208,6 +216,7 @@ describe('CalendarPage fetch range timezone handling', () => {
                 <MemoryRouter initialEntries={['/calendar?view=list']}>
                     <CalendarPage />
                 </MemoryRouter>,
+                { wrapper: TooltipProvider },
             );
 
             const expectedLabel = releaseDate.toLocaleDateString(undefined, {

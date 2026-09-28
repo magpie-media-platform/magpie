@@ -1,5 +1,7 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading;
+using System.Threading.Tasks;
 
 using Magpie.Models;
 using Magpie.Sdk.Jobs;
@@ -24,4 +26,10 @@ public interface IJobExecutionScope : IAsyncDisposable
     /// <param name="spec">The specification of the job to run</param>
     /// <param name="handler">The registered handler, set only when the method returns true</param>
     bool TryGetHandler(JobSpec spec, [MaybeNullWhen(false)] out IJob handler);
+
+    /// <summary>
+    /// Waits for the scope's pending progress reports to finish.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the wait</param>
+    Task FlushProgressAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 }

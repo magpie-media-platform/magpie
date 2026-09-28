@@ -160,41 +160,31 @@
         color: var(--text-muted);
     }
 
+    .upcoming-content-widget__item-statuses {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-xs);
+        margin-top: var(--space-2xs);
+    }
+
+    .upcoming-content-widget__item-monitoring {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-2xs);
+        color: var(--text-muted);
+        font-size: var(--text-xs);
+        font-weight: var(--weight-medium);
+    }
+
+    .upcoming-content-widget__item-monitoring--active {
+        color: var(--status-healthy);
+    }
+
     .upcoming-content-widget__item-meta > .upcoming-content-widget__item-kind::after {
         content: '\00b7';
         margin-left: var(--space-sm);
         color: var(--text-muted);
-    }
-
-    .upcoming-content-widget__item-indicator {
-        position: absolute;
-        right: var(--space-lg);
-        top: 50%;
-        transform: translateY(-50%);
-        width: 8px;
-        height: 8px;
-        border-radius: var(--radius-full);
-        flex-shrink: 0;
-    }
-
-    .upcoming-content-widget__item--missing .upcoming-content-widget__item-indicator {
-        background-color: var(--fulfillment-missing);
-    }
-
-    .upcoming-content-widget__item--upgradable .upcoming-content-widget__item-indicator {
-        background-color: var(--fulfillment-upgradable);
-    }
-
-    .upcoming-content-widget__item--fulfilled .upcoming-content-widget__item-indicator {
-        background-color: var(--fulfillment-fulfilled);
-    }
-
-    .upcoming-content-widget__item--fulfilledExternally .upcoming-content-widget__item-indicator {
-        background-color: var(--fulfillment-external);
-    }
-
-    .upcoming-content-widget__item--partial .upcoming-content-widget__item-indicator {
-        background-color: var(--fulfillment-partial);
     }
 
     .upcoming-content-widget__empty {

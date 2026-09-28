@@ -9,6 +9,7 @@ import {
     type ApiContentHierarchyItem,
     type ApiContentStats,
     type FulfillmentStatus,
+    type MonitoringMode,
 } from '@/types/content';
 import { normalizeHealthStatus } from '@/types/healthStatus';
 import type { PagedList } from '@/types/paging';
@@ -50,7 +51,7 @@ export interface ActiveDownload {
 export interface RecentJob {
     id: string;
     name: string;
-    status: 'completed' | 'running' | 'failed';
+    status: 'completed' | 'running' | 'failed' | 'cancelled';
     duration?: string;
     timestamp: string;
 }
@@ -70,8 +71,8 @@ export interface RecentContentItem {
     title: string;
     addedAt: string;
     fulfillment: FulfillmentStatus;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: MonitoringMode | null;
+    effectiveMonitoring: MonitoringMode;
 }
 
 export type { ApiContentItemWithMetadata as ApiContentItemWithDate };
@@ -90,6 +91,8 @@ export interface UpcomingContentItem {
     level: string;
     levelLabel?: string;
     fulfillment: FulfillmentStatus;
+    monitoring: MonitoringMode | null;
+    effectiveMonitoring: MonitoringMode;
 }
 
 function accumulateStatus(counts: HealthCounts, status: string | null | undefined): void {
@@ -143,6 +146,7 @@ export function mapDownloadState(status: DownloadStatus): 'downloading' | 'queue
         case 'Stalled':
             return 'stalled';
         case 'Failed':
+        case 'Faulted':
         case 'Downloaded':
         case 'Importing':
         case 'Imported':
@@ -174,7 +178,7 @@ export function mapActiveDownloads(downloads: ApiDownload[], limit: number): Act
         }));
 }
 
-export function mapJobStatus(status: JobExecutionStatus): 'completed' | 'running' | 'failed' {
+export function mapJobStatus(status: JobExecutionStatus): RecentJob['status'] {
     switch (status) {
         case 'Completed':
             return 'completed';
@@ -182,8 +186,9 @@ export function mapJobStatus(status: JobExecutionStatus): 'completed' | 'running
         case 'Queued':
         case 'CancellationRequested':
             return 'running';
-        case 'Failed':
         case 'Cancelled':
+            return 'cancelled';
+        case 'Failed':
         default:
             return 'failed';
     }
@@ -250,6 +255,8 @@ export function mapUpcomingContent(items: ApiContentItemWithMetadata[]): Upcomin
             level: fields.level,
             levelLabel: fields.levelLabel,
             fulfillment: fields.fulfillment,
+            monitoring: item.monitoring,
+            effectiveMonitoring: item.effectiveMonitoring,
         });
     }
     return result;

@@ -55,10 +55,8 @@ internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
                 Severity = DiagnosticFindingSeverity.Warning,
                 Title = "FFprobe binary not found",
                 Detail =
-                    "Magpie cannot find ffprobe, so it cannot read media information from imported files. " +
-                    "FFmpeg must be installed, with ffprobe beside Magpie or on PATH. " +
-                    "On Windows, FFmpeg's bin folder must be on the system PATH. " +
-                    "Magpie must be restarted after PATH changes.",
+                    "Magpie cannot find ffprobe in its base directory, the current directory or PATH, so it " +
+                    "cannot read media information from imported files.",
             },
         ]);
     }

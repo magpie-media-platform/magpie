@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Paging;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
@@ -22,6 +25,7 @@ public sealed class ReleaseDownloadItemJobTests
     private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
 
     private Mock<IReleaseService> _releaseService = null!;
+    private Mock<IDownloadRepository> _downloads = null!;
     private Guid _userId;
     private Guid _releaseId;
     private Guid _grabTargetId;
@@ -30,13 +34,16 @@ public sealed class ReleaseDownloadItemJobTests
     public void SetUp()
     {
         _releaseService = new Mock<IReleaseService>();
+        _downloads = new Mock<IDownloadRepository> { CallBase = true };
+        _downloads.Setup(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+            It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>());
         _releaseService
             .Setup(s => s.AcquireAsync(
                 It.IsAny<Guid>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<IProgressReporter?>(),
-                It.IsAny<bool>(),
                 It.IsAny<bool>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
@@ -45,6 +52,60 @@ public sealed class ReleaseDownloadItemJobTests
         _userId = Guid.NewGuid();
         _releaseId = Guid.NewGuid();
         _grabTargetId = Guid.NewGuid();
+    }
+
+    [TestCase(DownloadStatus.Imported)]
+    [TestCase(DownloadStatus.Importing)]
+    [TestCase(DownloadStatus.Cancelled)]
+    [TestCase(DownloadStatus.Downloading)]
+    public async Task ExecuteAsync_SkipsDelayedCapacityRetry_WhenAnotherAcquisitionHasTakenPlace(DownloadStatus status)
+    {
+        // Arrange
+        _downloads.Setup(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+            It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [new Download
+                {
+                    Title = "Film", ExternalId = "acquired", Status = status,
+                    CreatedAt = new DateTime(2026, 9, 22, 12, 1, 0, DateTimeKind.Utc)
+                }]
+            });
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _downloads.Object, _progressReporter);
+        var context = new JobContext(Guid.NewGuid(), null, null, _userId, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["releaseId"] = _releaseId.ToString("D"),
+                ["contentHierarchyItemId"] = _grabTargetId.ToString("D"),
+                ["capacityDeferredAt"] = "2026-09-22T12:00:00.0000000Z"
+            }, null);
+
+        // Act
+        await subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _releaseService.VerifyNoOtherCalls();
+    }
+
+    [Test]
+    public async Task ExecuteAsync_RechecksCapacity_WhenDeferredAcquisitionHasNotStarted()
+    {
+        // Arrange
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _downloads.Object, _progressReporter);
+        var context = new JobContext(Guid.NewGuid(), null, null, _userId, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["releaseId"] = _releaseId.ToString("D"),
+                ["contentHierarchyItemId"] = _grabTargetId.ToString("D"),
+                ["capacityDeferredAt"] = "2026-09-22T12:00:00.0000000Z"
+            }, null);
+
+        // Act
+        await subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _releaseService.Verify(service => service.AcquireAsync(_releaseId, _userId, null,
+            _progressReporter, false, _grabTargetId, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -62,7 +123,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["contentHierarchyItemId"] = _grabTargetId.ToString()
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _downloads.Object, _progressReporter);
 
         // Act
         async Task Act() => await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -87,7 +148,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["contentHierarchyItemId"] = _grabTargetId.ToString()
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _downloads.Object, _progressReporter);
 
         // Act
         async Task Act() => await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -111,7 +172,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["releaseId"] = _releaseId.ToString()
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _downloads.Object, _progressReporter);
 
         // Act
         async Task Act() => await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -136,7 +197,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["contentHierarchyItemId"] = "not-a-guid"
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _downloads.Object, _progressReporter);
 
         // Act
         async Task Act() => await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -146,7 +207,7 @@ public sealed class ReleaseDownloadItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_DelegatesToReleaseService_WhenContextAndFlagsAreProvided()
+    public async Task ExecuteAsync_DelegatesToReleaseServiceAndIgnoresRetiredParameters_WhenContextAndFlagsAreProvided()
     {
         // Arrange
         var executionId = Guid.NewGuid();
@@ -162,11 +223,11 @@ public sealed class ReleaseDownloadItemJobTests
                 ["releaseId"] = _releaseId.ToString(),
                 ["contentHierarchyItemId"] = _grabTargetId.ToString(),
                 ["suspectLastResort"] = "true",
-                ["ignoreFailedTaint"] = "true"
+                ["interactive"] = "true"
             },
             Event: null,
             CorrelationId: correlationId);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _downloads.Object, _progressReporter);
 
         // Act
         await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -178,7 +239,6 @@ public sealed class ReleaseDownloadItemJobTests
                 _userId,
                 correlationId,
                 It.IsAny<IProgressReporter?>(),
-                true,
                 true,
                 _grabTargetId,
                 It.IsAny<CancellationToken>()),
@@ -201,7 +261,7 @@ public sealed class ReleaseDownloadItemJobTests
                 ["contentHierarchyItemId"] = _grabTargetId.ToString()
             },
             Event: null);
-        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _progressReporter);
+        var subject = new ReleaseDownloadItemJob(_releaseService.Object, _downloads.Object, _progressReporter);
 
         // Act
         await subject.ExecuteAsync(context).ConfigureAwait(false);
@@ -213,7 +273,6 @@ public sealed class ReleaseDownloadItemJobTests
                 _userId,
                 It.IsAny<Guid?>(),
                 It.IsAny<IProgressReporter?>(),
-                false,
                 false,
                 _grabTargetId,
                 It.IsAny<CancellationToken>()),

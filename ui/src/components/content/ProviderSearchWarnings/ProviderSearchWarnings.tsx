@@ -28,7 +28,7 @@ export function ProviderSearchWarnings({ warnings, hasResults, className, ...pro
             data-component="provider-search-warnings"
             {...props}
         >
-            <ul className="provider-search-warnings__list">
+            <ul className="provider-search-warnings__list" role="list">
                 {distinct.map((warning) => (
                     <li key={warning} className="provider-search-warnings__item">
                         {warning}

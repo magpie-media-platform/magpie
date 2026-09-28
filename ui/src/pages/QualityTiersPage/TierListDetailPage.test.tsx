@@ -1434,6 +1434,25 @@ describe('TierListDetailPage list criteria and exclusions', () => {
         expect(screen.queryByLabelText(/kind/i)).not.toBeInTheDocument();
     });
 
+    it('opens the criteria sheet from the Tier List Actions sheet and closes the actions sheet', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: 'Tier List Actions' }));
+        const actions = await screen.findByRole('dialog', { name: 'Tier List Actions' });
+        expect(
+            within(within(actions).getByRole('group', { name: 'Quick actions' }))
+                .getAllByRole('button')
+                .map((action) => action.textContent),
+        ).toEqual(['Add Tier', 'Criteria + Exclusions']);
+        await user.click(within(actions).getByRole('button', { name: 'Criteria + Exclusions' }));
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="list-rules-form"]')).toBeInTheDocument();
+        });
+        expect(screen.queryByRole('dialog', { name: 'Tier List Actions' })).not.toBeInTheDocument();
+    });
+
     it('closes without warning when only a blank exclusion was inserted', async () => {
         const user = userEvent.setup();
         await renderAndWaitForData(Role.Manager);

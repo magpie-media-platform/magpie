@@ -21,6 +21,11 @@ public interface IDownloadClientIntegration
     string ProviderType { get; }
 
     /// <summary>
+    /// The display name of the provider.
+    /// </summary>
+    string DisplayName => ProviderType;
+
+    /// <summary>
     /// The download protocols that the client supports.
     /// </summary>
     IEnumerable<string> SupportedProtocols { get; }
@@ -37,6 +42,9 @@ public interface IDownloadClientIntegration
     /// <param name="settings">The settings of the configured provider</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The added download.</returns>
+    /// <exception cref="ReleasePayloadRejectedException">
+    /// The release payload was rejected before anything was sent to the client
+    /// </exception>
     Task<DownloadInfo> DownloadReleaseAsync(
         Release release,
         IReadOnlyDictionary<string, string> settings,
@@ -76,6 +84,9 @@ public interface IDownloadClientIntegration
     /// <param name="settings">The settings of the configured provider</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The added download.</returns>
+    /// <exception cref="ReleasePayloadRejectedException">
+    /// The release payload was rejected before anything was sent to the client
+    /// </exception>
     Task<DownloadInfo> DownloadReleaseAsync(
         Release release,
         ReleaseGrabContext context,

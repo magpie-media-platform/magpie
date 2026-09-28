@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Models;
@@ -19,6 +20,7 @@ using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -44,9 +46,8 @@ public sealed class DownloadServiceTests
     {
         _downloadRepository = new Mock<IDownloadRepository> { CallBase = true };
         _downloadRepository
-            .Setup(r => r.ListFailedByReleaseIdentitiesAsync(
+            .Setup(r => r.ListByReleaseAsync(
                 It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
-                It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
@@ -203,6 +204,114 @@ public sealed class DownloadServiceTests
                     It.IsAny<CancellationToken>()),
                 Times.Once);
         }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task GrabAsync_ReturnsARejection_WhenTheIntegrationRejectsThePayloadBeforeDispatch(bool transient)
+    {
+        // Arrange
+        _integration
+            .Setup(i => i.DownloadReleaseAsync(
+                It.IsAny<Release>(),
+                It.IsAny<ReleaseGrabContext>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ReleasePayloadRejectedException(
+                "The indexer returned an HTML page instead of a .torrent file (HTTP 200, text/html). " +
+                "Check the indexer's login.",
+                transient));
+        var service = new DownloadService(
+            [_integration.Object],
+            Mock.Of<IDownloadClientRepository>(),
+            _downloadRepository.Object,
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            TimeProvider.System,
+            NullLogger<DownloadService>.Instance);
+        var release = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Login page release",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            ObservedAt = DateTime.UtcNow
+        };
+        var source = new DownloadClient
+        {
+            Id = Guid.NewGuid(),
+            Name = "Test client",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Healthy,
+            Settings = new Dictionary<string, string> { ["host"] = "localhost" },
+            CreatedAt = DateTime.UtcNow
+        };
+
+        // Act
+        var result = await service.GrabAsync(release, source, source.Settings).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.AlreadyTainted, Is.False);
+            Assert.That(result.Transient, Is.EqualTo(transient));
+            Assert.That(result.DownloadInfo, Is.Null);
+            Assert.That(result.ErrorMessage, Is.EqualTo(
+                "The indexer returned an HTML page instead of a .torrent file (HTTP 200, text/html). " +
+                "Check the indexer's login."));
+        }
+    }
+
+    [Test]
+    public void GrabAsync_Propagates_WhenTheIntegrationFailsForAnotherReason()
+    {
+        // Arrange
+        _integration
+            .Setup(i => i.DownloadReleaseAsync(
+                It.IsAny<Release>(),
+                It.IsAny<ReleaseGrabContext>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The client rejected the add."));
+        var service = new DownloadService(
+            [_integration.Object],
+            Mock.Of<IDownloadClientRepository>(),
+            _downloadRepository.Object,
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            TimeProvider.System,
+            NullLogger<DownloadService>.Instance);
+        var release = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dispatched release",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            ObservedAt = DateTime.UtcNow
+        };
+        var source = new DownloadClient
+        {
+            Id = Guid.NewGuid(),
+            Name = "Test client",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Healthy,
+            Settings = new Dictionary<string, string> { ["host"] = "localhost" },
+            CreatedAt = DateTime.UtcNow
+        };
+
+        // Act
+        var exception = Assert.CatchAsync<InvalidOperationException>(
+            () => service.GrabAsync(release, source, source.Settings));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("The client rejected the add."));
     }
 
     [Test]
@@ -544,9 +653,8 @@ public sealed class DownloadServiceTests
             CreatedAt = DateTime.UtcNow
         };
         _downloadRepository
-            .Setup(r => r.ListFailedByReleaseIdentitiesAsync(
+            .Setup(r => r.ListByReleaseAsync(
                 It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
-                source.Id,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([
                 new Download
@@ -584,10 +692,9 @@ public sealed class DownloadServiceTests
             Assert.That(result.ErrorMessage, Is.EqualTo("Release tainted by prior Failed grab"));
             Assert.That(result.DownloadInfo, Is.Null);
             _downloadRepository.Verify(
-                r => r.ListFailedByReleaseIdentitiesAsync(
+                r => r.ListByReleaseAsync(
                     It.Is<IReadOnlyCollection<ReleaseIdentityKey>>(k =>
                         k.Count == 1 && k.Single().Value == release.ExternalId),
-                    source.Id,
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             _integration.Verify(
@@ -597,6 +704,71 @@ public sealed class DownloadServiceTests
                     It.IsAny<IReadOnlyDictionary<string, string>>(),
                     It.IsAny<CancellationToken>()),
                 Times.Never);
+        }
+    }
+
+    [TestCase(DownloadStatus.Faulted, true)]
+    [TestCase(DownloadStatus.Failed, false)]
+    public async Task GrabAsync_Proceeds_WhenNoFailedDownloadOnThisClientMatches(
+        DownloadStatus status,
+        bool onThisClient)
+    {
+        // Arrange
+        var release = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Faulted release",
+            ExternalId = "faulted-release",
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            ObservedAt = DateTime.UtcNow,
+            IdentityKeys = { new ReleaseIdentityKey { Authority = "test.release", Value = "faulted-release" } }
+        };
+        var source = new DownloadClient
+        {
+            Id = Guid.NewGuid(),
+            Name = "Test client",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Healthy,
+            Settings = new Dictionary<string, string> { ["host"] = "localhost" },
+            CreatedAt = DateTime.UtcNow
+        };
+        _downloadRepository
+            .Setup(r => r.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new Download
+                {
+                    Id = Guid.NewGuid(),
+                    ReleaseId = release.Id,
+                    DownloadClientId = onThisClient ? source.Id : Guid.Parse("3c9e8f7a-2b1d-4e6f-9a8b-7c6d5e4f3a2b"),
+                    ExternalId = "ext-faulted",
+                    Title = "Faulted row",
+                    Status = status,
+                    FailureReason = DownloadFailureReason.DownloadStuck
+                }
+            ]);
+        var service = new DownloadService(
+            [_integration.Object],
+            Mock.Of<IDownloadClientRepository>(),
+            _downloadRepository.Object,
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            TimeProvider.System,
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        var result = await service.GrabAsync(release, source, source.Settings).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Success, Is.True);
+            Assert.That(result.AlreadyTainted, Is.False);
+            Assert.That(result.DownloadInfo?.ExternalId, Is.EqualTo("default"));
         }
     }
 
@@ -631,9 +803,8 @@ public sealed class DownloadServiceTests
             CreatedAt = DateTime.UtcNow
         };
         _downloadRepository
-            .Setup(r => r.ListFailedByReleaseIdentitiesAsync(
+            .Setup(r => r.ListByReleaseAsync(
                 It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
-                It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([
                 new Download
@@ -666,7 +837,7 @@ public sealed class DownloadServiceTests
 
         // Act
         var result = await service
-            .GrabAsync(release, source, source.Settings, ignoreFailedTaint: true, cancellationToken: default)
+            .GrabAsync(release, source, source.Settings, interactive: true, cancellationToken: default)
             .ConfigureAwait(false);
 
         // Assert
@@ -676,9 +847,8 @@ public sealed class DownloadServiceTests
             Assert.That(result.AlreadyTainted, Is.False);
             Assert.That(result.DownloadInfo!.ExternalId, Is.EqualTo("ext-manual"));
             _downloadRepository.Verify(
-                r => r.ListFailedByReleaseIdentitiesAsync(
+                r => r.ListByReleaseAsync(
                     It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
-                    It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Never);
             _integration.Verify(
@@ -1010,6 +1180,151 @@ public sealed class DownloadServiceTests
         Assert.That(
             observedLastProgressAt,
             Is.Not.EqualTo(new DateTime(2026, 8, 5, 11, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public async Task ApplyRefreshedClientStateAsync_KeepsLastProgressAt_WhenRoundedProgressIsUnchanged()
+    {
+        // Arrange
+        var download = new Download
+        {
+            Id = Guid.Parse("88888888-8888-8888-8888-888888888881"),
+            ReleaseId = Guid.Parse("88888888-8888-8888-8888-888888888882"),
+            DownloadClientId = Guid.Parse("88888888-8888-8888-8888-888888888883"),
+            ExternalId = "ext-stalled",
+            Title = "Stalled item",
+            Status = DownloadStatus.Stalled,
+            Progress = 45.68m,
+            LastProgressAt = new DateTime(2026, 8, 5, 11, 0, 0, DateTimeKind.Utc),
+            CreatedAt = new DateTime(2026, 8, 5, 10, 0, 0, DateTimeKind.Utc)
+        };
+        var info = new DownloadInfo
+        {
+            ExternalId = "ext-stalled",
+            Status = DownloadStatus.Stalled,
+            ProgressPercent = 45.678m
+        };
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task> operation, CancellationToken token) => operation(token));
+        var service = new DownloadService(
+            [_integration.Object],
+            Mock.Of<IDownloadClientRepository>(),
+            _downloadRepository.Object,
+            Mock.Of<IJobManager>(),
+            transactionManager.Object,
+            new FakeTimeProvider(new DateTimeOffset(2026, 8, 5, 12, 0, 0, TimeSpan.Zero)),
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        await service.ApplyRefreshedClientStateAsync(download, info, null, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        _downloadRepository.Verify(
+            r => r.UpdateRefreshedStatusAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<DownloadStatus>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<bool>(),
+                It.IsAny<DownloadFailureReason?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public async Task ApplyRefreshedClientStateAsync_StoresRoundedProgressAndStampsLastProgressAt_WhenProgressAdvances()
+    {
+        // Arrange
+        var download = new Download
+        {
+            Id = Guid.Parse("99999999-9999-9999-9999-999999999991"),
+            ReleaseId = Guid.Parse("99999999-9999-9999-9999-999999999992"),
+            DownloadClientId = Guid.Parse("99999999-9999-9999-9999-999999999993"),
+            ExternalId = "ext-advancing",
+            Title = "Advancing item",
+            Status = DownloadStatus.Downloading,
+            Progress = 45.68m,
+            LastProgressAt = new DateTime(2026, 8, 5, 11, 0, 0, DateTimeKind.Utc),
+            CreatedAt = new DateTime(2026, 8, 5, 10, 0, 0, DateTimeKind.Utc)
+        };
+        var info = new DownloadInfo
+        {
+            ExternalId = "ext-advancing",
+            Status = DownloadStatus.Downloading,
+            ProgressPercent = 45.704m
+        };
+        decimal? observedProgress = null;
+        DateTime? observedLastProgressAt = null;
+        _downloadRepository
+            .Setup(r => r.UpdateRefreshedStatusAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<DownloadStatus>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<bool>(),
+                It.IsAny<DownloadFailureReason?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((
+                Guid _,
+                DownloadStatus _,
+                string? _,
+                string? _,
+                DateTime? _,
+                decimal? progress,
+                DateTime? lastProgressAt,
+                bool _,
+                DownloadFailureReason? _,
+                DateTime? _,
+                DateTime _,
+                Guid? _,
+                CancellationToken _) =>
+            {
+                observedProgress = progress;
+                observedLastProgressAt = lastProgressAt;
+            })
+            .ReturnsAsync(true);
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task> operation, CancellationToken token) => operation(token));
+        var service = new DownloadService(
+            [_integration.Object],
+            Mock.Of<IDownloadClientRepository>(),
+            _downloadRepository.Object,
+            Mock.Of<IJobManager>(),
+            transactionManager.Object,
+            new FakeTimeProvider(new DateTimeOffset(2026, 8, 5, 12, 0, 0, TimeSpan.Zero)),
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        await service.ApplyRefreshedClientStateAsync(download, info, null, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(observedProgress, Is.EqualTo(45.70m));
+            Assert.That(observedLastProgressAt, Is.EqualTo(new DateTime(2026, 8, 5, 12, 0, 0, DateTimeKind.Utc)));
+        }
     }
 
     [Test]
@@ -1570,6 +1885,36 @@ public sealed class DownloadServiceTests
         {
             Assert.That(_refreshedDownloadId, Is.EqualTo(new Guid("65bf4f33-77dc-4ae7-a4b9-9d89012df7b6")));
             Assert.That(_refreshedStatus, Is.EqualTo(DownloadStatus.Downloaded));
+        }
+    }
+
+    [Test]
+    public async Task TryApplyVerifiedClientStateAsync_ReturnsFalse_WhenRoundedStalledProgressIsUnchanged()
+    {
+        // Arrange
+        var candidate = _candidate with
+        {
+            Status = DownloadStatus.Stalled,
+            Progress = 45.68m,
+            LastProgressAt = new DateTime(2026, 8, 5, 10, 0, 0, DateTimeKind.Utc)
+        };
+        var info = new DownloadInfo
+        {
+            ExternalId = "external-download",
+            Status = DownloadStatus.Stalled,
+            ProgressPercent = 45.678m
+        };
+
+        // Act
+        var applied = await _subject
+            .TryApplyVerifiedClientStateAsync(candidate, info, _now, _now, null, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.False);
+            Assert.That(_refreshedDownloadId, Is.Null);
         }
     }
 

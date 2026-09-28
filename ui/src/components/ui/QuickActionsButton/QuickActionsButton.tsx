@@ -1,4 +1,4 @@
-import { forwardRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import { forwardRef, useId, useState, type ComponentPropsWithoutRef, type ReactNode, type Ref } from 'react';
 import { DotsThreeVerticalIcon } from '@phosphor-icons/react';
 
 import { Button } from '../Button';
@@ -17,6 +17,9 @@ export interface QuickAction {
 
     disabled?: boolean;
 
+    /** A short note shown under the label in the sheet, for example why the action is disabled. */
+    description?: string;
+
     variant?: 'default' | 'primary' | 'destructive';
 }
 
@@ -26,11 +29,18 @@ export interface QuickActionsButtonProps extends Omit<ComponentPropsWithoutRef<'
     title?: string;
 
     visible?: boolean;
+
+    /** Receives the trigger button, so a dialog opened from the sheet can return focus to it. */
+    triggerRef?: Ref<HTMLElement>;
+
+    /** Extra content shown in the sheet below the actions, for example extension-provided controls. */
+    sheetContent?: ReactNode;
 }
 
 export const QuickActionsButton = forwardRef<HTMLDivElement, QuickActionsButtonProps>(
-    ({ actions, title = 'Quick Actions', visible = true, className, ...props }, ref) => {
+    ({ actions, title = 'Quick Actions', visible = true, triggerRef, sheetContent, className, ...props }, ref) => {
         const [open, setOpen] = useState(false);
+        const descriptionIdPrefix = useId();
 
         const handleActionClick = (action: QuickAction) => {
             if (action.disabled) return;
@@ -38,17 +48,18 @@ export const QuickActionsButton = forwardRef<HTMLDivElement, QuickActionsButtonP
             setOpen(false);
         };
 
-        if (!visible || actions.length === 0) {
+        if (!visible || (actions.length === 0 && !sheetContent)) {
             return null;
         }
 
         const classes = ['quick-actions-button', className].filter(Boolean).join(' ');
 
-        if (actions.length === 1) {
+        if (actions.length === 1 && !sheetContent) {
             const action = actions[0];
             return (
                 <div ref={ref} className={classes} {...props}>
                     <Button
+                        ref={triggerRef}
                         variant="primary"
                         size="lg"
                         className="quick-actions-button__fab"
@@ -68,6 +79,7 @@ export const QuickActionsButton = forwardRef<HTMLDivElement, QuickActionsButtonP
                 <Sheet open={open} onOpenChange={setOpen}>
                     <SheetTrigger asChild>
                         <Button
+                            ref={triggerRef}
                             variant="primary"
                             size="lg"
                             className="quick-actions-button__fab"
@@ -91,14 +103,29 @@ export const QuickActionsButton = forwardRef<HTMLDivElement, QuickActionsButtonP
                                     disabled={action.disabled}
                                     data-action={action.id}
                                     data-variant={action.variant || 'default'}
+                                    aria-describedby={
+                                        action.description ? `${descriptionIdPrefix}-${action.id}` : undefined
+                                    }
                                 >
                                     <span className="quick-actions-button__action-icon" aria-hidden="true">
                                         {action.icon}
                                     </span>
-                                    <span className="quick-actions-button__action-label">{action.label}</span>
+                                    <span className="quick-actions-button__action-label">
+                                        {action.label}
+                                        {action.description && (
+                                            <span
+                                                id={`${descriptionIdPrefix}-${action.id}`}
+                                                className="quick-actions-button__action-description"
+                                                aria-hidden="true"
+                                            >
+                                                {action.description}
+                                            </span>
+                                        )}
+                                    </span>
                                 </button>
                             ))}
                         </div>
+                        {sheetContent && <div className="quick-actions-button__sheet-extra">{sheetContent}</div>}
                     </SheetContent>
                 </Sheet>
             </div>

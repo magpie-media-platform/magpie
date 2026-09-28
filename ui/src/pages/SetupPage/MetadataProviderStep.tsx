@@ -60,7 +60,7 @@ export function MetadataProviderStep({ onAdvance }: MetadataProviderStepProps): 
             {!isLoading && !unauthenticated && extensionGroups.length > 0 && (
                 <div className="setup-page__metadata-groups">
                     {extensionGroups.map((group) => (
-                        <MetadataGroupCard key={group.id} group={group} />
+                        <MetadataGroupCard key={groupKey(group)} group={group} />
                     ))}
                 </div>
             )}
@@ -93,6 +93,11 @@ export function MetadataProviderStep({ onAdvance }: MetadataProviderStepProps): 
 }
 
 MetadataProviderStep.displayName = 'MetadataProviderStep';
+
+// The settings-group response identifies a group by its extension and name; it carries no id.
+function groupKey(group: ApiSettingsGroup): string {
+    return `${group.extensionId ?? 'system'}-${group.name}`.replace(/[^A-Za-z0-9_-]/g, '-');
+}
 
 interface MetadataGroupCardProps {
     group: ApiSettingsGroup;
@@ -147,7 +152,7 @@ function MetadataGroupCard({ group }: MetadataGroupCardProps): ReactNode {
                 onChange={handleChange}
                 secretsConfigured={secretsConfigured}
                 extensionId={group.extensionId ?? null}
-                idPrefix={`metadata-${group.id}`}
+                idPrefix={`metadata-${groupKey(group)}`}
                 disabled={update.isUpdating}
             />
             <Button

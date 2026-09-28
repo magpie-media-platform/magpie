@@ -5,6 +5,9 @@ using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -36,6 +39,8 @@ internal sealed class CardigannIndexerIntegration(
     private const int DetailFetchConcurrencyLimit = 4;
 
     public string ProviderType => definition.Id;
+
+    public string DisplayName => string.IsNullOrWhiteSpace(definition.Name) ? definition.Id : definition.Name;
 
     public IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; } =
         definition.Settings.ToSettingSchemaDefinitions(definition.Links);
@@ -152,6 +157,8 @@ internal sealed class CardigannIndexerIntegration(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        using var solverScope = new SolverRequestScope(request.IsInteractive
+            ? SolverRequestKind.Interactive : SolverRequestKind.Background);
 
         if (ResolveNativeCategories(request.Categories) is null)
         {
@@ -211,15 +218,11 @@ internal sealed class CardigannIndexerIntegration(
             var requestBody = method == HttpMethod.Post ? BuildRequestParameters(path, variables) : null;
             if (tracedActivity is not null)
             {
-                var redactedVariables = RedactSecretVariables(variables);
                 tracedMethods.Add(method.Method);
-                tracedTargets.Add(
-                    (method == HttpMethod.Post
-                        ? BuildRequestUri(baseUri, path, redactedVariables, includeParameters: false)
-                        : BuildRequestUri(baseUri, path, redactedVariables)).PathAndQuery);
-                if (method == HttpMethod.Post)
+                tracedTargets.Add(requestUri.PathAndQuery);
+                if (requestBody is not null)
                 {
-                    tracedBodies.Add(BuildRequestParameters(path, redactedVariables));
+                    tracedBodies.Add(requestBody);
                 }
             }
 
@@ -255,18 +258,6 @@ internal sealed class CardigannIndexerIntegration(
         }
 
         return results;
-    }
-
-    private static IReadOnlyDictionary<string, object?> RedactSecretVariables(
-        IReadOnlyDictionary<string, object?> variables)
-    {
-        var redacted = new Dictionary<string, object?>(variables);
-        foreach (var key in variables.Keys.Where(key => key.StartsWith(".Config.", StringComparison.Ordinal)))
-        {
-            redacted[key] = "[REDACTED]";
-        }
-
-        return redacted;
     }
 
     private static HttpMethod ResolveSearchMethod(string? method, IReadOnlyDictionary<string, object?> variables)
@@ -463,17 +454,18 @@ internal sealed class CardigannIndexerIntegration(
         IReadOnlyDictionary<string, string> settings,
         CancellationToken cancellationToken = default)
     {
+        using var solverScope = new SolverRequestScope(SolverRequestKind.ConnectionTest);
         var baseUri = ResolveBaseUri(settings);
-
-        if (definition.Login is not null)
-        {
-            return await TestLoginAsync(baseUri, settings, cancellationToken).ConfigureAwait(false);
-        }
 
         try
         {
+            if (definition.Login is not null)
+            {
+                return await TestLoginAsync(baseUri, settings, cancellationToken).ConfigureAwait(false);
+            }
+
             using var response = await sessions.SendAsync(
-                SessionKey(baseUri),
+                SessionKey(baseUri, settings),
                 baseUri,
                 HttpMethod.Get,
                 baseUri,
@@ -503,6 +495,24 @@ internal sealed class CardigannIndexerIntegration(
                 FailureKind = cloudflareHint is null
                     ? ResolveFailureKind(response.StatusCode)
                     : ConfigurationFailureKind.Fatal
+            };
+        }
+        catch (SolverBusyException)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "The challenge solver is busy.",
+                FailureKind = ConfigurationFailureKind.Transient
+            };
+        }
+        catch (UpstreamThrottledException)
+        {
+            return new ConfigurationTestResult
+            {
+                Success = false,
+                Message = "The tracker is throttled.",
+                FailureKind = ConfigurationFailureKind.Transient
             };
         }
         catch (HttpRequestException ex)
@@ -548,7 +558,7 @@ internal sealed class CardigannIndexerIntegration(
             }
 
             using var response = await sessions.SendAsync(
-                SessionKey(baseUri),
+                SessionKey(baseUri, settings),
                 baseUri,
                 method,
                 requestUri,
@@ -572,7 +582,7 @@ internal sealed class CardigannIndexerIntegration(
                 logger.LogDebug(
                     "Cardigann {Tracker} response shows a logged-out session. Cardigann will log in again",
                     definition.Id);
-                sessions.InvalidateSession(SessionKey(baseUri));
+                sessions.InvalidateSession(SessionKey(baseUri, settings));
                 continue;
             }
 
@@ -594,7 +604,26 @@ internal sealed class CardigannIndexerIntegration(
                 : string.Format(CultureInfo.InvariantCulture, DefaultUserAgentTemplate, definition.Id);
     }
 
-    private string SessionKey(Uri baseUri) => definition.Id + "@" + baseUri.GetLeftPart(UriPartial.Authority);
+    private string SessionKey(Uri baseUri, IReadOnlyDictionary<string, string> settings)
+    {
+        var variables = BuildLoginVariables(settings);
+        var credentials = variables.Where(pair =>
+                definition.Settings.Any(setting => pair.Key == ".Config." + setting.Name &&
+                    setting.Type is "password" or "cookie") ||
+                pair.Key.Contains("username", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("cookie", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("apikey", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("api_key", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("passkey", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("token", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .ToArray();
+        var identity = credentials.Length == 0 ? string.Empty
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(credentials))));
+        return definition.Id + "@" + baseUri.GetLeftPart(UriPartial.Authority) +
+            (identity.Length == 0 ? string.Empty : "#" + identity);
+    }
 
     private async Task<CardigannLoginOutcome?> EnsureLoginAsync(
         Uri baseUri,
@@ -615,7 +644,7 @@ internal sealed class CardigannIndexerIntegration(
 
         var outcome = await sessions
             .EnsureLoggedInAsync(
-                SessionKey(baseUri),
+                SessionKey(baseUri, settings),
                 login,
                 baseUri,
                 variables,

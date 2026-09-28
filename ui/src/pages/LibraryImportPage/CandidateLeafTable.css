@@ -12,19 +12,22 @@
         min-width: 0;
     }
 
+    .candidate-leaf-table__file-cell--silenced {
+        opacity: 0.6;
+    }
+
     .candidate-leaf-table__parsed-title {
         font-weight: var(--weight-medium);
         color: var(--text-primary);
+        overflow-wrap: anywhere;
     }
 
     .candidate-leaf-table__file-path {
         min-width: 0;
-        overflow: hidden;
         font-family: var(--font-mono);
         font-size: var(--text-sm);
         color: var(--text-secondary);
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
     }
 
     .candidate-leaf-table__candidate-year {

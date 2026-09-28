@@ -66,15 +66,33 @@ internal sealed class QueryTelemetryTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             })
         ];
+        var client = new Mock<IWikidataClient>();
+        client.Setup(value => value.ExecuteSparqlAsync(
+                It.IsAny<SparqlRequest>(),
+                It.IsAny<RequestContext>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((SparqlRequest _, RequestContext requestContext, CancellationToken _) =>
+                requestContext.UpstreamRequestObserver?.Invoke())
+            .ReturnsAsync(rows);
         var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
             It.IsAny<CancellationToken>(),
             It.IsAny<Action<SearchCacheProvenance>?>()))
-            .ReturnsAsync(new SearchCacheResult(rows, SearchCacheProvenance.Remote));
+            .Returns(async (
+                string _,
+                Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>> factory,
+                CancellationToken token,
+                Action<SearchCacheProvenance>? provenance) =>
+            {
+                provenance?.Invoke(SearchCacheProvenance.Remote);
+                return new SearchCacheResult(
+                    await factory(token).ConfigureAwait(false),
+                    SearchCacheProvenance.Remote);
+            });
         IQueryExecutor subject = new QueryExecutor(
-            new Mock<IWikidataClient>(MockBehavior.Strict).Object,
+            client.Object,
             cache.Object,
             NullLogger<QueryExecutor>.Instance);
         var plan = new QueryPlan
@@ -113,7 +131,7 @@ internal sealed class QueryTelemetryTests
             activity.RootId == root.RootId);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(execute.GetTagItem("magpie.query.rows_fetched"), Is.EqualTo(2));
+            Assert.That(execute.GetTagItem("magpie.query.candidate_window_rows_fetched"), Is.EqualTo(2));
             Assert.That(execute.GetTagItem("magpie.query.rows_surviving"), Is.EqualTo(1));
             Assert.That(execute.GetTagItem("magpie.query.request_count"), Is.EqualTo(1));
             Assert.That(execute.GetTagItem("magpie.query.has_more"), Is.EqualTo(false));
@@ -121,6 +139,95 @@ internal sealed class QueryTelemetryTests
             Assert.That(execute.GetTagItem("magpie.query.fingerprint"), Has.Length.EqualTo(64));
             Assert.That(execute.Status, Is.EqualTo(ActivityStatusCode.Unset));
         }
+    }
+
+    [Test]
+    public async Task SearchAsync_ReportsEveryUpstreamRequest_WhenEntitySearchPages()
+    {
+        // Arrange
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+        var client = new Mock<IWikidataClient>();
+        client.Setup(value => value.SearchEntitiesAsync(
+                "The Mat",
+                It.IsAny<RequestContext>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((string _, RequestContext requestContext, CancellationToken _) =>
+            {
+                requestContext.UpstreamRequestObserver?.Invoke();
+                requestContext.UpstreamRequestObserver?.Invoke();
+            })
+            .ReturnsAsync(["Q83495"]);
+        client.Setup(value => value.ExecuteSparqlAsync(
+                It.IsAny<SparqlRequest>(),
+                It.IsAny<RequestContext>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((SparqlRequest _, RequestContext requestContext, CancellationToken _) =>
+                requestContext.UpstreamRequestObserver?.Invoke())
+            .ReturnsAsync([]);
+        var cache = new Mock<IQueryCoordinator>();
+        cache.Setup(value => value.GetEntitySearchAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<CancellationToken, Task<IReadOnlyList<string>>>>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<Action<SearchCacheProvenance>?>()))
+            .Returns(async (
+                string _,
+                Func<CancellationToken, Task<IReadOnlyList<string>>> factory,
+                CancellationToken token,
+                Action<SearchCacheProvenance>? provenance) =>
+            {
+                provenance?.Invoke(SearchCacheProvenance.Remote);
+                return await factory(token).ConfigureAwait(false);
+            });
+        cache.Setup(value => value.GetSearchAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<Action<SearchCacheProvenance>?>()))
+            .Returns(async (
+                string _,
+                Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>> factory,
+                CancellationToken token,
+                Action<SearchCacheProvenance>? provenance) =>
+            {
+                provenance?.Invoke(SearchCacheProvenance.Remote);
+                return new SearchCacheResult(
+                    await factory(token).ConfigureAwait(false),
+                    SearchCacheProvenance.Remote);
+            });
+        IQueryExecutor subject = new QueryExecutor(client.Object, cache.Object, NullLogger<QueryExecutor>.Instance);
+        var plan = new QueryPlan
+        {
+            EntityKind = EntityKind.Movie,
+            Strategy = QueryStrategy.TitleSearch,
+            Filters =
+            [
+                new QueryFilter
+                {
+                    Kind = QueryFilterKind.Title,
+                    Operator = CriteriaValueOperator.StartsWithString,
+                    Values = ["The Mat"]
+                }
+            ],
+            Warnings = [],
+            Page = 1,
+            UsesLocalPaging = true
+        };
+        using var root = new Activity("test").Start();
+
+        // Act
+        await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
+
+        // Assert
+        var execute = _activities.Single(activity =>
+            activity.OperationName == "wikidata.query.execute" &&
+            activity.RootId == root.RootId);
+        Assert.That(execute.GetTagItem("magpie.query.request_count"), Is.EqualTo(3));
     }
 
     [Test]
@@ -341,6 +448,8 @@ internal sealed class QueryTelemetryTests
             It.IsAny<SparqlRequest>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>()))
+            .Callback((SparqlRequest _, RequestContext requestContext, CancellationToken _) =>
+                requestContext.UpstreamRequestObserver?.Invoke())
             .ThrowsAsync(rateLimited);
         var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
@@ -386,13 +495,13 @@ internal sealed class QueryTelemetryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(execute.GetTagItem("magpie.query.terminal_reason"), Is.EqualTo("rate_limited"));
-            Assert.That(execute.GetTagItem("magpie.query.rows_fetched"), Is.EqualTo(0));
+            Assert.That(execute.GetTagItem("magpie.query.candidate_window_rows_fetched"), Is.EqualTo(0));
             Assert.That(execute.GetTagItem("magpie.query.rows_surviving"), Is.EqualTo(0));
             Assert.That(execute.GetTagItem("magpie.query.request_count"), Is.EqualTo(1));
             Assert.That(execute.Status, Is.EqualTo(ActivityStatusCode.Error));
             Assert.That(execute.StatusDescription, Is.EqualTo("rate_limited"));
             Assert.That(request.Status, Is.EqualTo(ActivityStatusCode.Error));
-            Assert.That(request.StatusDescription, Is.EqualTo("HttpRequestException"));
+            Assert.That(request.StatusDescription, Is.EqualTo("Wikidata request remained rate limited."));
         }
     }
 
@@ -477,6 +586,8 @@ internal sealed class QueryTelemetryTests
             It.IsAny<SparqlRequest>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>()))
+            .Callback((SparqlRequest _, RequestContext requestContext, CancellationToken _) =>
+                requestContext.UpstreamRequestObserver?.Invoke())
             .ReturnsAsync([]);
         var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(

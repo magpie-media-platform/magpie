@@ -254,7 +254,8 @@ describe('WishlistDiscoveredList', () => {
         expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
     });
 
-    it('uses the same standard filters and URL-backed query for compact cards at tablet width', async () => {
+    it('FilterCompactCards_UpdatesUrl_WhenStatusIsApplied', async () => {
+        // Arrange
         installMatchMedia(900);
         const user = userEvent.setup();
         render(
@@ -263,23 +264,22 @@ describe('WishlistDiscoveredList', () => {
             </TestWrapper>,
         );
 
-        const mobileFilters = screen.getByRole('group', { name: 'Discovered list filters' });
         expect(await screen.findByTestId('wishlist-discovered__mobile-list')).toBeInTheDocument();
         expect(screen.queryByTestId('wishlist-discovered-table')).not.toBeInTheDocument();
         expect(document.querySelector('.wishlist-discovered__controls')).not.toBeInTheDocument();
         expect(document.querySelector('[data-component="in-library-toggle"]')).not.toBeInTheDocument();
 
-        await user.click(within(mobileFilters).getByRole('button', { name: 'Filter by Status' }));
-        await user.click(await screen.findByRole('menuitemradio', { name: 'Missing' }));
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Filters, 0 active' }));
+        await user.selectOptions(await screen.findByRole('combobox', { name: 'Status' }), 'Missing');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
 
+        // Assert
         await waitFor(() => {
             const latest = mockApiGet.mock.calls.at(-1)?.[0] as string;
             expect(latest).toContain('status=Missing');
         });
-        expect(within(mobileFilters).getByRole('button', { name: 'Status filtered, edit filter' })).toHaveAttribute(
-            'aria-pressed',
-            'true',
-        );
+        expect(screen.getByRole('button', { name: 'Filters, 1 active' })).toBeInTheDocument();
     });
 
     it('defaults to publishDate-descending in the query params', async () => {

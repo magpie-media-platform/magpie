@@ -429,7 +429,7 @@ namespace Magpie.Data.SqlServer.Migrations
                 column: "ReleaseSourceId",
                 principalTable: "indexer_releaseSource",
                 principalColumn: "Id",
-                onDelete: ReferentialAction.SetNull);
+                onDelete: ReferentialAction.NoAction);
         }
     }
 }

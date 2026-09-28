@@ -5,12 +5,14 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.Tmdb.Mapping;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
+using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging;
 
@@ -66,6 +68,42 @@ internal sealed class QueryExecutor(
             }
 
             var state = new ExecutionState();
+            if (context.Progress is { } progress)
+            {
+                await EnsurePrerequisitesAsync(plan.Root, plan, context, state, warnings, cancellationToken)
+                    .ConfigureAwait(false);
+                if (state.SubjectSet.HadRemoteFailure)
+                {
+                    warnings.Add("TMDb could not resolve every search source. More results may remain.");
+                    return LogicalResult([], warnings, plan.RequestedPage);
+                }
+
+                var resolved = JsonSerializer.Serialize(new
+                {
+                    Groups = state.SubjectSet.Groups.Select(group => new
+                    {
+                        group.BindingKey,
+                        group.Excluded,
+                        group.Subjects,
+                        group.Incomplete,
+                        group.IncompleteRoles
+                    }),
+                    Genres = state.GenreIds.OrderBy(pair => pair.Key)
+                });
+                if (progress.ResolvedSources is not null && progress.ResolvedSources != resolved)
+                {
+                    throw new MetadataSearchContinuationException("TMDb resolved sources changed. Start a new search.");
+                }
+
+                progress.ResolvedSources = resolved;
+                ValidateContinuationSources(plan.Root, context, state);
+            }
+
+            if (context.ValidateOnly)
+            {
+                return LogicalResult([], warnings, plan.RequestedPage);
+            }
+
             return await ExecuteNodeAsync(
                 plan.Root,
                 plan,
@@ -75,6 +113,14 @@ internal sealed class QueryExecutor(
                 cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (MetadataSearchContinuationException)
+        {
+            throw;
+        }
+        catch (Magpie.Models.UpstreamThrottledException)
         {
             throw;
         }
@@ -260,7 +306,8 @@ internal sealed class QueryExecutor(
                 .Distinct()],
             AppliedDurationFilters = [.. first.AppliedDurationFilters.Concat(second.AppliedDurationFilters).Distinct()],
             AppliedGenreFilters = [.. first.AppliedGenreFilters.Concat(second.AppliedGenreFilters).Distinct()],
-            AppliedSubjectGroups = [.. first.AppliedSubjectGroups.Concat(second.AppliedSubjectGroups).Distinct()],
+            AppliedSubjectGroups = [.. first.AppliedSubjectGroups.Concat(second.AppliedSubjectGroups)
+                .Distinct(ResolvedSubjectGroupComparer.Instance)],
             AppliedElementFilters = [.. first.AppliedElementFilters.Concat(second.AppliedElementFilters).Distinct()]
         };
     }
@@ -443,7 +490,9 @@ internal sealed class QueryExecutor(
         IReadOnlyList<ResolvedSubjectGroup> originalGroups)
     {
         var applied = sourceGroups.Select((group, index) => (group, index))
-            .Where(item => request.AppliedSubjectGroups.Contains(item.group))
+            .Where(item => request.AppliedSubjectGroups.Contains(
+                item.group,
+                ResolvedSubjectGroupComparer.Instance))
             .Select(item => originalGroups[item.index])
             .ToHashSet();
         return request with { AppliedSubjectGroups = applied };
@@ -473,7 +522,7 @@ internal sealed class QueryExecutor(
 
         foreach (var group in subjects)
         {
-            if (applied?.AppliedSubjectGroups.Contains(group) == true)
+            if (applied?.AppliedSubjectGroups.Contains(group, ResolvedSubjectGroupComparer.Instance) == true)
             {
                 continue;
             }
@@ -500,7 +549,7 @@ internal sealed class QueryExecutor(
 
     private bool NeedsSubjectDetails(ResolvedSubjectGroup group, SearchHit hit)
     {
-        if (hit.AppliedCriteria?.AppliedSubjectGroups.Contains(group) == true)
+        if (hit.AppliedCriteria?.AppliedSubjectGroups.Contains(group, ResolvedSubjectGroupComparer.Instance) == true)
         {
             return false;
         }
@@ -1170,6 +1219,10 @@ internal sealed class QueryExecutor(
         {
             throw;
         }
+        catch (Magpie.Models.UpstreamThrottledException)
+        {
+            throw;
+        }
         catch (Exception)
         {
             return [new SubjectResolution
@@ -1228,6 +1281,10 @@ internal sealed class QueryExecutor(
             };
         }
         catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Magpie.Models.UpstreamThrottledException)
         {
             throw;
         }
@@ -1367,6 +1424,11 @@ internal sealed class QueryExecutor(
                     plan.RequestedPage);
             case IntersectPlanNode intersect:
                 {
+                    if (context.Progress?.PendingIntersections.TryGetValue(intersect.Id, out var pending) == true)
+                    {
+                        return LogicalResult(ConsumePendingAsync(pending), warnings, plan.RequestedPage);
+                    }
+
                     context.Telemetry?.TryVisitNode(intersect.Id);
                     using var intersectActivity = Telemetry.Source.StartChild(
                         "tmdb.query.node.intersect",
@@ -1376,6 +1438,19 @@ internal sealed class QueryExecutor(
                     var childResults = new List<IReadOnlyList<SearchHit>>(intersect.Children.Count);
                     foreach (var childNode in intersect.Children)
                     {
+                        var values = context.Progress?.Evaluation.GetValueOrDefault(childNode.Id) ?? [];
+                        if (context.Progress?.CompleteEvaluations.Contains(childNode.Id) == true)
+                        {
+                            childResults.Add(values);
+                            continue;
+                        }
+
+                        if (context.Progress is { } evaluationProgress)
+                        {
+                            evaluationProgress.Evaluation[childNode.Id] = values;
+                        }
+
+                        var warningCount = warnings.Count;
                         var child = await ExecuteNodeAsync(
                             childNode,
                             plan,
@@ -1383,8 +1458,22 @@ internal sealed class QueryExecutor(
                             state,
                             warnings,
                             cancellationToken).ConfigureAwait(false);
-                        childResults.Add(await MaterializeAsync(child.Hits, int.MaxValue, cancellationToken)
-                            .ConfigureAwait(false));
+                        var identities = values.Select(hit => (hit.Route, hit.Id)).ToHashSet();
+                        await foreach (var hit in child.Hits.WithCancellation(cancellationToken).ConfigureAwait(false))
+                        {
+                            if (identities.Add((hit.Route, hit.Id)))
+                            {
+                                values.Add(hit);
+                            }
+                        }
+
+                        if (context.Progress is not null && warnings.Count > warningCount)
+                        {
+                            return LogicalResult([], warnings, plan.RequestedPage);
+                        }
+
+                        context.Progress?.CompleteEvaluations.Add(childNode.Id);
+                        childResults.Add(values);
                     }
 
                     var hits = childResults.Count == 0
@@ -1393,6 +1482,12 @@ internal sealed class QueryExecutor(
                             childResults[0].ToList(),
                             (current, next) => IntersectHits(current, next));
                     intersectActivity?.SetTag("magpie.query.rows_out", hits.Count);
+                    if (context.Progress is { } progress)
+                    {
+                        progress.PendingIntersections[intersect.Id] = hits;
+                        return LogicalResult(ConsumePendingAsync(hits), warnings, plan.RequestedPage);
+                    }
+
                     return LogicalResult(hits, warnings, plan.RequestedPage);
                 }
             case CoalescePlanNode coalesce:
@@ -1605,7 +1700,7 @@ internal sealed class QueryExecutor(
             : new Action<string>(predicate => rejections[predicate] = rejections.GetValueOrDefault(predicate) + 1);
         var rowsIn = 0;
         var rowsOut = 0;
-        var desiredRows = DesiredRows(filter);
+        var desiredRows = context.Progress is null ? DesiredRows(filter) : int.MaxValue;
         var filterContext = context with { PlanNodeId = filter.Id };
         try
         {
@@ -1887,7 +1982,7 @@ internal sealed class QueryExecutor(
             source.Subjects,
             fetch.RequestedPage,
             source.GenreSelections);
-        if (!fetch.RequiresLogicalStream &&
+        if (context.Progress is null && !fetch.RequiresLogicalStream &&
             !fetch.IsIntersectionBranch &&
             sources.Count == 1 &&
             SelectDiscoverMode(fetch, discover, source.Subjects) == DiscoverMode.Direct)
@@ -2023,6 +2118,17 @@ internal sealed class QueryExecutor(
         List<string> warnings,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (context.Progress is not null)
+        {
+            await foreach (var hit in ContinueScanAsync(
+                fetch, context, genreIds, subjects, discover, warnings, cancellationToken).ConfigureAwait(false))
+            {
+                yield return hit;
+            }
+
+            yield break;
+        }
+
         var branchSourceKind = fetch.BranchScopedScan
             ? string.Format(
                 CultureInfo.InvariantCulture,
@@ -2130,6 +2236,168 @@ internal sealed class QueryExecutor(
         {
             state.Gate.Release();
         }
+    }
+
+    private async IAsyncEnumerable<SearchHit> ConsumePendingAsync(List<SearchHit> pending)
+    {
+        await Task.CompletedTask.ConfigureAwait(false);
+        while (pending.Count > 0)
+        {
+            yield return pending[0];
+            pending.RemoveAt(0);
+        }
+    }
+
+    private async IAsyncEnumerable<SearchHit> ContinueScanAsync(
+        FetchPlanNode fetch,
+        RequestContext context,
+        IReadOnlyDictionary<string, int> genreIds,
+        IReadOnlyList<ResolvedSubjectGroup> subjects,
+        bool discover,
+        List<string> warnings,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var progress = context.Progress!;
+        if (!progress.Sources.TryGetValue(fetch.Id, out var state))
+        {
+            state = new SourceProgress();
+            progress.Sources.Add(fetch.Id, state);
+        }
+
+        var searchTerms = discover ? [] : SearchTerms(fetch);
+        var sources = discover ? DiscoverSources(fetch, subjects, genreIds) : [];
+        var sourceCount = discover ? sources.Count : searchTerms.Count;
+        var signature = ContinuedSourceSignature(fetch, context, genreIds, subjects, discover);
+        if (state.Signature is not null && state.Signature != signature)
+        {
+            throw new MetadataSearchContinuationException(
+                "TMDb source order or identities changed. Start a new search.");
+        }
+
+        state.Signature = signature;
+        while (!state.Exhausted)
+        {
+            if (state.Page > QueryLimits.MaximumPage)
+            {
+                warnings.Add(QueryLimits.PageLimitWarning);
+                yield break;
+            }
+
+            var batches = new List<IReadOnlyList<SearchHit>>();
+            var hasMore = false;
+            var ended = new HashSet<int>(state.ExhaustedSources);
+            for (var index = 0; index < sourceCount; index++)
+            {
+                if (state.ExhaustedSources.Contains(index))
+                {
+                    batches.Add([]);
+                    if (state.Consumed == index)
+                    {
+                        state.Consumed++;
+                    }
+
+                    continue;
+                }
+
+                var applied = discover
+                    ? BuildDiscover(fetch, context.Language, genreIds, sources[index].Subjects, state.Page,
+                        sources[index].GenreSelections)
+                    : null;
+                if (applied is not null)
+                {
+                    applied = NormalizeAppliedSubjectGroups(applied, sources[index].Subjects, subjects);
+                }
+
+                var request = applied?.Request ?? BuildSearch(fetch, context.Language, state.Page, searchTerms[index]);
+                var remote = await FetchPageAsync(fetch.Route, context, request, cancellationToken)
+                    .ConfigureAwait(false);
+                hasMore |= state.Page < remote.TotalPages;
+                if (state.Page >= remote.TotalPages)
+                {
+                    ended.Add(index);
+                }
+
+                batches.Add([.. remote.Hits.Select(hit => AttachAppliedSubjects(hit, applied) with
+                {
+                    AppliedCriteria = applied
+                })]);
+                if (state.Consumed == index)
+                {
+                    var first = batches[index].FirstOrDefault();
+                    if (first is not null && !state.Seen.Contains(first.Id))
+                    {
+                        yield return first;
+                        state.Seen.Add(first.Id);
+                    }
+
+                    state.Consumed++;
+                }
+            }
+
+            var round = batches.Select(batch => batch.FirstOrDefault()).Concat(InterleaveHits(batches)).ToArray();
+            while (state.Consumed < round.Length)
+            {
+                var hit = round[state.Consumed];
+                if (hit is not null && !state.Seen.Contains(hit.Id))
+                {
+                    yield return hit;
+                    state.Seen.Add(hit.Id);
+                }
+
+                state.Consumed++;
+            }
+
+            if (!hasMore)
+            {
+                state.Exhausted = true;
+                yield break;
+            }
+
+            if (state.Page >= QueryLimits.MaximumPage)
+            {
+                warnings.Add(QueryLimits.PageLimitWarning);
+                yield break;
+            }
+
+            state.Page++;
+            state.Consumed = 0;
+            state.ExhaustedSources = ended;
+        }
+    }
+
+    private void ValidateContinuationSources(PlanNode node, RequestContext context, ExecutionState execution)
+    {
+        if (node is FetchPlanNode fetch && context.Progress!.Sources.TryGetValue(fetch.Id, out var source))
+        {
+            var signature = ContinuedSourceSignature(fetch, context, execution.GenreIds,
+                execution.SubjectSet.Groups, fetch.AnchorKind == QueryAnchorKind.Discover);
+            if (source.Signature != signature)
+            {
+                throw new MetadataSearchContinuationException(
+                    "TMDb source order or identities changed. Start a new search.");
+            }
+        }
+
+        foreach (var child in node.Children())
+        {
+            ValidateContinuationSources(child, context, execution);
+        }
+    }
+
+    private string ContinuedSourceSignature(
+        FetchPlanNode fetch,
+        RequestContext context,
+        IReadOnlyDictionary<string, int> genreIds,
+        IReadOnlyList<ResolvedSubjectGroup> subjects,
+        bool discover)
+    {
+        var terms = discover ? [] : SearchTerms(fetch);
+        var sources = discover ? DiscoverSources(fetch, subjects, genreIds) : [];
+        var count = discover ? sources.Count : terms.Count;
+        return JsonSerializer.Serialize(Enumerable.Range(0, count).Select(index => discover
+            ? BuildDiscover(fetch, context.Language, genreIds, sources[index].Subjects, 1,
+                sources[index].GenreSelections).Request.CacheKey
+            : BuildSearch(fetch, context.Language, 1, terms[index]).CacheKey));
     }
 
     private bool AdvanceSearchSource(QueryScanState state, int sourceCount)
@@ -2433,7 +2701,9 @@ internal sealed class QueryExecutor(
             fetch.DurationFilters.All(request.AppliedDurationFilters.Contains) &&
             fetch.GenreFilters.All(request.AppliedGenreFilters.Contains) &&
             fetch.ElementFilters.All(request.AppliedElementFilters.Contains) &&
-            subjects.All(request.AppliedSubjectGroups.Contains) &&
+            subjects.All(group => request.AppliedSubjectGroups.Contains(
+                group,
+                ResolvedSubjectGroupComparer.Instance)) &&
             fetch.ContentIdFilters.Count == 0;
         return fullyApplied ? DiscoverMode.Direct : DiscoverMode.Scan;
     }

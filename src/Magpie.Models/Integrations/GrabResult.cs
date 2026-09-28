@@ -21,6 +21,11 @@ public sealed record GrabResult
     public bool ClientUnreachable { get; set; }
 
     /// <summary>
+    /// Whether the grab failed for a reason that can go away, so a later grab of the release can succeed.
+    /// </summary>
+    public bool Transient { get; set; }
+
+    /// <summary>
     /// The error message, when present.
     /// </summary>
     public string? ErrorMessage { get; set; }

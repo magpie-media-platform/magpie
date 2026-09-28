@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Core.Jobs;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -35,6 +36,55 @@ internal sealed class LibraryImportCandidateRepository(
     private const int BulkPageSize = 1_000;
 
     private readonly TimeProvider _time = timeProvider;
+
+    /// <inheritdoc />
+    public async Task<bool> TryReclaimInactiveImportAsync(
+        Guid candidateId,
+        DateTime inactivityCutoff,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(async ct =>
+            {
+                var locked = await context.LibraryImportCandidates
+                    .Where(candidate => candidate.Id == candidateId &&
+                        (candidate.Status == LibraryImportCandidateStatus.Queued ||
+                            candidate.Status == LibraryImportCandidateStatus.Importing) &&
+                        (candidate.ModifiedAt ?? candidate.CreatedAt) <= inactivityCutoff)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(candidate => candidate.ModifiedAt,
+                        candidate => candidate.ModifiedAt), ct).ConfigureAwait(false);
+                if (locked == 0)
+                {
+                    return false;
+                }
+
+                var executions = await context.JobExecutions.AsNoTracking()
+                    .Where(execution => execution.JobType == MagpieJobs.Types.RootFolderContentImportItem &&
+                        (execution.Status == JobExecutionStatus.Queued ||
+                            execution.Status == JobExecutionStatus.Running ||
+                            execution.Status == JobExecutionStatus.CancellationRequested))
+                    .Select(execution => execution.Parameters).ToListAsync(ct).ConfigureAwait(false);
+                if (executions.Any(parameters =>
+                    parameters.TryGetValue(MagpieJobs.Parameters.CandidateId, out var rawId) &&
+                    Guid.TryParse(rawId, out var id) && id == candidateId))
+                {
+                    return false;
+                }
+
+                return await MarkImportFailedAsync(candidateId,
+                    "The inactive import has no queued or active execution. The file can be rescanned.",
+                    userId, ct).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The library import repository failed to recover candidate {CandidateId}.",
+                candidateId);
+            throw;
+        }
+    }
 
     private static string ResolveGroupKey(LibraryImportCandidate candidate)
     {
@@ -126,6 +176,15 @@ internal sealed class LibraryImportCandidateRepository(
             matches = query.HasMatches.Value
                 ? matches.Where(m => m.MatchCount > 0)
                 : matches.Where(m => m.MatchCount == 0);
+        }
+
+        if (query.ContentHierarchyItemIds is not null)
+        {
+            var targetIds = query.ContentHierarchyItemIds as Guid[] ?? [.. query.ContentHierarchyItemIds];
+
+            // One collection parameter keeps a large subtree under the SQL Server parameter limit.
+            matches = matches.Where(m => m.ContentHierarchyItemId != null &&
+                EF.Parameter(targetIds).Contains(m.ContentHierarchyItemId.Value));
         }
 
         if (query.ExcludeIds is { Count: > 0 })
@@ -325,13 +384,17 @@ internal sealed class LibraryImportCandidateRepository(
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<bool> TryResetImportAsync(Guid candidateId, Guid? userId, CancellationToken cancellationToken)
+    public async Task<bool> TryResetImportAsync(
+        Guid candidateId,
+        string? note,
+        Guid? userId,
+        CancellationToken cancellationToken)
     {
         return await TransitionStatusAsync(
             candidateId,
             [LibraryImportCandidateStatus.Queued, LibraryImportCandidateStatus.Importing],
             LibraryImportCandidateStatus.Pending,
-            note: null,
+            note,
             userId,
             cancellationToken).ConfigureAwait(false);
     }
@@ -362,6 +425,111 @@ internal sealed class LibraryImportCandidateRepository(
             [LibraryImportCandidateStatus.Queued, LibraryImportCandidateStatus.Importing],
             LibraryImportCandidateStatus.Failed,
             reason,
+            userId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryRejectAsync(Guid candidateId, Guid? userId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            var candidate = await context.LibraryImportCandidates.AsNoTracking()
+                .FirstOrDefaultAsync(m => m.Id == candidateId, cancellationToken).ConfigureAwait(false);
+            if (candidate is null)
+            {
+                return false;
+            }
+
+            var groupKey = ResolveGroupKey(candidate with { Matches = [] });
+            List<LibraryImportMatch> noMatches = [];
+            var affected = await context.LibraryImportCandidates
+                .Where(m => m.Id == candidateId &&
+                    (m.Status == LibraryImportCandidateStatus.Pending ||
+                        m.Status == LibraryImportCandidateStatus.Failed ||
+                        m.Status == LibraryImportCandidateStatus.MatchingPending))
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(m => m.Status, LibraryImportCandidateStatus.Rejected)
+                        .SetProperty(m => m.Matches, noMatches)
+                        .SetProperty(m => m.MatchCount, 0)
+                        .SetProperty(m => m.ContentHierarchyItemId, (Guid?)null)
+                        .SetProperty(m => m.GroupKey, groupKey)
+                        .SetProperty(m => m.Notes, "The user rejected the matches of this file.")
+                        .SetProperty(m => m.ModifiedAt, now)
+                        .SetProperty(m => m.ModifiedByUserId, userId),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (affected > 0)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(candidateId),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return affected > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The library import repository failed to reject library import candidate " +
+                "{LibraryImportCandidateId}.", candidateId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryUpdateTargetAsync(
+        Guid candidateId,
+        Guid? contentHierarchyItemId,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            var affected = await context.LibraryImportCandidates
+                .Where(m => m.Id == candidateId && m.MatchCount == 1 &&
+                    (m.Status == LibraryImportCandidateStatus.Pending ||
+                        m.Status == LibraryImportCandidateStatus.Failed))
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(m => m.ContentHierarchyItemId, contentHierarchyItemId)
+                        .SetProperty(m => m.ModifiedAt, now)
+                        .SetProperty(m => m.ModifiedByUserId, userId),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (affected > 0)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(candidateId),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return affected > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The library import repository failed to save the target of library import " +
+                "candidate {LibraryImportCandidateId}.", candidateId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryRestoreAsync(Guid candidateId, Guid? userId, CancellationToken cancellationToken)
+    {
+        return await TransitionStatusAsync(
+            candidateId,
+            [LibraryImportCandidateStatus.Rejected],
+            LibraryImportCandidateStatus.MatchingPending,
+            note: null,
             userId,
             cancellationToken).ConfigureAwait(false);
     }
@@ -414,6 +582,7 @@ internal sealed class LibraryImportCandidateRepository(
 
     public async Task<int> DeleteByRootFolderAsync(
         Guid rootFolderId,
+        IReadOnlyCollection<Guid>? candidateIds,
         Guid? deletedByUserId,
         CancellationToken cancellationToken)
     {
@@ -424,10 +593,18 @@ internal sealed class LibraryImportCandidateRepository(
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
 
-                    var deleted = await context.LibraryImportCandidates
+                    var candidates = context.LibraryImportCandidates
                         .Where(m => m.RootFolderId == rootFolderId &&
                             m.Status != LibraryImportCandidateStatus.Queued &&
-                            m.Status != LibraryImportCandidateStatus.Importing)
+                            m.Status != LibraryImportCandidateStatus.Importing &&
+                            m.Status != LibraryImportCandidateStatus.Rejected);
+                    if (candidateIds is not null)
+                    {
+                        var ids = candidateIds as Guid[] ?? [.. candidateIds];
+                        candidates = candidates.Where(m => EF.Parameter(ids).Contains(m.Id));
+                    }
+
+                    var deleted = await candidates
                         .ExecuteDeleteAsync(cancellationToken)
                         .ConfigureAwait(false);
 
@@ -507,9 +684,24 @@ internal sealed class LibraryImportCandidateRepository(
         }
     }
 
-    public async Task<bool> UpdateAsync(
+    /// <inheritdoc />
+    public Task<bool> TryResolveMatchAsync(
         LibraryImportCandidate model,
         Guid? modifiedByUserId,
+        CancellationToken cancellationToken) =>
+        UpdateAsync(model, modifiedByUserId, LibraryImportCandidateStatus.MatchingPending, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> UpdateAsync(
+        LibraryImportCandidate model,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken) =>
+        UpdateAsync(model, modifiedByUserId, null, cancellationToken);
+
+    private async Task<bool> UpdateAsync(
+        LibraryImportCandidate model,
+        Guid? modifiedByUserId,
+        LibraryImportCandidateStatus? expectedStatus,
         CancellationToken cancellationToken)
     {
         try
@@ -521,7 +713,7 @@ internal sealed class LibraryImportCandidateRepository(
                     model.GroupKey = ResolveGroupKey(model);
 
                     var affected = await context.LibraryImportCandidates
-                        .Where(m => m.Id == model.Id)
+                        .Where(m => m.Id == model.Id && (expectedStatus == null || m.Status == expectedStatus))
                         .ExecuteUpdateAsync(
                             s => s
                                 .SetProperty(m => m.RootFolderId, model.RootFolderId)
@@ -532,6 +724,7 @@ internal sealed class LibraryImportCandidateRepository(
                                 .SetProperty(m => m.ParsedSignals, model.ParsedSignals)
                                 .SetProperty(m => m.Matches, model.Matches)
                                 .SetProperty(m => m.MatchCount, model.Matches.Count)
+                                .SetProperty(m => m.ContentHierarchyItemId, model.ContentHierarchyItemId)
                                 .SetProperty(m => m.LayoutKey, model.LayoutKey)
                                 .SetProperty(m => m.GroupKey, model.GroupKey)
                                 .SetProperty(m => m.Notes, model.Notes)
@@ -640,11 +833,15 @@ internal sealed class LibraryImportCandidateRepository(
                     {
                         var groupIds = group.Select(candidate => candidate.Id).ToArray();
                         affected += await context.LibraryImportCandidates
-                            .Where(m => groupIds.Contains(m.Id))
+                            .Where(m => groupIds.Contains(m.Id) && m.Status != LibraryImportCandidateStatus.Rejected)
                             .ExecuteUpdateAsync(
                                 s => s
                                     .SetProperty(m => m.Matches, matches)
                                     .SetProperty(m => m.MatchCount, matches.Count)
+                                    .SetProperty(m => m.ContentHierarchyItemId, (Guid?)null)
+                                    .SetProperty(m => m.Status, m =>
+                                        m.Status == LibraryImportCandidateStatus.MatchingPending
+                                        ? LibraryImportCandidateStatus.Pending : m.Status)
                                     .SetProperty(m => m.GroupKey, group.Key)
                                     .SetProperty(m => m.ModifiedAt, now)
                                     .SetProperty(m => m.ModifiedByUserId, modifiedByUserId),

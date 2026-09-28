@@ -1,9 +1,11 @@
-import { useId, type ReactNode } from 'react';
+import { useId, type ReactNode, type RefObject } from 'react';
 import { TrashIcon } from '@phosphor-icons/react';
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../Dialog';
 import { Button, type ButtonVariant } from '../Button';
 import { Switch } from '../Switch';
+
+import { returnFocusOnClose } from '@/lib/returnFocus';
 
 import './DeleteConfirmDialog.css';
 
@@ -41,6 +43,12 @@ export interface DeleteConfirmDialogProps {
     confirmBusyLabel?: string;
 
     confirmIcon?: ReactNode;
+
+    /** Where focus goes when the dialog closes. Without it, the dialog keeps its default focus behaviour. */
+    returnFocusRef?: RefObject<HTMLElement | null>;
+
+    /** Where focus goes when the control in returnFocusRef is gone. */
+    fallbackFocusRef?: RefObject<HTMLElement | null>;
 }
 
 export function DeleteConfirmDialog({
@@ -57,6 +65,8 @@ export function DeleteConfirmDialog({
     confirmLabel = 'Delete',
     confirmBusyLabel = 'Deleting...',
     confirmIcon,
+    returnFocusRef,
+    fallbackFocusRef,
 }: DeleteConfirmDialogProps) {
     const toggleId = useId();
     return (
@@ -66,7 +76,11 @@ export function DeleteConfirmDialog({
                 if (!isOpen) onCancel();
             }}
         >
-            <DialogContent size="alert" data-component="delete-confirm-dialog">
+            <DialogContent
+                size="alert"
+                data-component="delete-confirm-dialog"
+                onCloseAutoFocus={returnFocusOnClose(returnFocusRef, fallbackFocusRef)}
+            >
                 <DialogHeader>
                     <DialogTitle>{title ?? `Delete ${itemType}`}</DialogTitle>
                     <DialogDescription>

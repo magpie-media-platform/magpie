@@ -9,7 +9,7 @@ interface ImportMonitoringSelectProps {
 const OPTIONS: { value: LibraryImportMonitoringMode; label: string }[] = [
     { value: 'Inherit', label: 'Inherit' },
     { value: 'Monitored', label: 'Monitored' },
-    { value: 'Unmonitored', label: 'Not monitored' },
+    { value: 'Unmonitored', label: 'Unmonitored' },
     { value: 'Future', label: 'Future only' },
 ];
 

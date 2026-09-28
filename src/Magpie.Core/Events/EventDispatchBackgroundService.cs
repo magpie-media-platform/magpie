@@ -761,26 +761,29 @@ internal sealed class EventDispatchBackgroundService(
                 ParameterValueReferences = [contentHierarchyItemId.ToString("D", CultureInfo.InvariantCulture)],
             },
             cancellationToken: cancellationToken).ConfigureAwait(false);
-        var executionIds = executions
-            .Where(execution =>
-                execution.ExecutionMode == JobExecutionMode.Queue &&
-                (execution.EventTriggerId is not null ||
-                    execution.ScheduleTriggerId is not null ||
-                    execution.ParentExecutionId is not null) &&
-                !IsForcedReleaseSearch(execution.ExecutionMode, execution.Parameters) &&
-                execution.Parameters.TryGetValue(
-                    MagpieJobs.Parameters.ContentHierarchyItemId,
-                    out var rawId) &&
-                Guid.TryParse(rawId, out var targetId) &&
-                targetId == contentHierarchyItemId)
-            .Select(execution => execution.Id)
+        var automaticSearches = executions
+            .Where(execution => IsAutomaticUnforcedSearchFor(execution, contentHierarchyItemId))
             .ToList();
 
-        foreach (var executionId in executionIds)
+        foreach (var search in automaticSearches)
         {
+            var executionId = search.Id;
             try
             {
-                await jobManager.RequestCancellationAsync(executionId, cancellationToken).ConfigureAwait(false);
+                if (!await CancelAsync(search, jobManager, jobExecutionRepository, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    var current = await jobExecutionRepository.GetByIdAsync(executionId, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is not null && IsAutomaticUnforcedSearchFor(current, contentHierarchyItemId))
+                    {
+                        await CancelAsync(
+                            current,
+                            jobManager,
+                            jobExecutionRepository,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -796,26 +799,44 @@ internal sealed class EventDispatchBackgroundService(
         }
     }
 
+    private async Task<bool> CancelAsync(
+        JobExecution search,
+        IJobManager jobManager,
+        IJobExecutionRepository jobExecutionRepository,
+        CancellationToken cancellationToken) =>
+        search.Status switch
+        {
+            JobExecutionStatus.Queued => await jobExecutionRepository
+                .CancelAsync(search, cancellationToken)
+                .ConfigureAwait(false) is not null,
+            JobExecutionStatus.Running => await jobManager
+                .CancelAsync(search.Id, cancellationToken)
+                .ConfigureAwait(false),
+            _ => true
+        };
+
+    private bool IsAutomaticUnforcedSearchFor(JobExecution execution, Guid contentHierarchyItemId) =>
+        execution.JobType == MagpieJobs.Types.ReleaseSearchItem &&
+        execution.ExecutionMode == JobExecutionMode.Queue &&
+        (execution.EventTriggerId is not null ||
+            execution.ScheduleTriggerId is not null ||
+            execution.ParentExecutionId is not null) &&
+        TargetsUnforcedSearch(execution.Parameters, contentHierarchyItemId);
+
     private bool IsUnforcedReleaseSearchFor(JobEnqueueRequest request, Guid contentHierarchyItemId)
     {
         return request.JobType == MagpieJobs.Types.ReleaseSearchItem &&
-            !IsForcedReleaseSearch(request.Mode, request.Parameters) &&
-            request.Parameters is not null &&
-            request.Parameters.TryGetValue(MagpieJobs.Parameters.ContentHierarchyItemId, out var rawId) &&
-            Guid.TryParse(rawId, out var targetId) &&
-            targetId == contentHierarchyItemId;
+            TargetsUnforcedSearch(request.Parameters, contentHierarchyItemId);
     }
 
-    private bool IsForcedReleaseSearch(
-        JobExecutionMode executionMode,
-        IReadOnlyDictionary<string, string>? parameters)
-    {
-        return executionMode == JobExecutionMode.Immediate ||
-            (parameters is not null &&
-                parameters.TryGetValue(MagpieJobs.Parameters.Force, out var rawForce) &&
-                bool.TryParse(rawForce, out var force) &&
-                force);
-    }
+    private bool TargetsUnforcedSearch(
+        IReadOnlyDictionary<string, string>? parameters,
+        Guid contentHierarchyItemId) =>
+        parameters is not null &&
+        !MagpieJobs.Parameters.IsForced(parameters) &&
+        parameters.TryGetValue(MagpieJobs.Parameters.ContentHierarchyItemId, out var rawId) &&
+        Guid.TryParse(rawId, out var targetId) &&
+        targetId == contentHierarchyItemId;
 
     private async Task<List<JobEnqueueRequest>> CollectFailedDownloadRetryRequestsAsync(
         MagpieEvent magpieEvent,

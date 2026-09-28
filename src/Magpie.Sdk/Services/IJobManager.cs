@@ -91,11 +91,12 @@ public interface IJobManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Requests job cancellation.
+    /// Cancels a job execution.
     /// </summary>
-    /// <param name="executionId">The execution id</param>
+    /// <param name="executionId">The id of the job execution</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<bool> RequestCancellationAsync(Guid executionId, CancellationToken cancellationToken = default);
+    /// <returns>Whether the job execution was cancelled</returns>
+    Task<bool> CancelAsync(Guid executionId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists registered job specifications.
@@ -140,13 +141,13 @@ public interface IJobManager
     /// <param name="triggerId">The trigger id</param>
     /// <param name="patch">The fields to change</param>
     /// <param name="callerUserId">The caller id</param>
-    /// <param name="callerIsAdmin">Whether the caller is an administrator</param>
+    /// <param name="callerRole">The caller role</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<bool> PatchScheduleTriggerAsync(
         Guid triggerId,
         ScheduleTriggerPatch patch,
         Guid callerUserId,
-        bool callerIsAdmin,
+        Role callerRole,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -154,12 +155,12 @@ public interface IJobManager
     /// </summary>
     /// <param name="triggerId">The trigger id</param>
     /// <param name="callerUserId">The caller id</param>
-    /// <param name="callerIsAdmin">Whether the caller is an administrator</param>
+    /// <param name="callerRole">The caller role</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<bool> DeleteScheduleTriggerAsync(
         Guid triggerId,
         Guid callerUserId,
-        bool callerIsAdmin,
+        Role callerRole,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -203,13 +204,13 @@ public interface IJobManager
     /// <param name="triggerId">The trigger id</param>
     /// <param name="patch">The fields to change</param>
     /// <param name="callerUserId">The caller id</param>
-    /// <param name="callerIsAdmin">Whether the caller is an administrator</param>
+    /// <param name="callerRole">The caller role</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<bool> PatchEventTriggerAsync(
         Guid triggerId,
         EventTriggerPatch patch,
         Guid callerUserId,
-        bool callerIsAdmin,
+        Role callerRole,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -217,11 +218,11 @@ public interface IJobManager
     /// </summary>
     /// <param name="triggerId">The trigger id</param>
     /// <param name="callerUserId">The caller id</param>
-    /// <param name="callerIsAdmin">Whether the caller is an administrator</param>
+    /// <param name="callerRole">The caller role</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<bool> DeleteEventTriggerAsync(
         Guid triggerId,
         Guid callerUserId,
-        bool callerIsAdmin,
+        Role callerRole,
         CancellationToken cancellationToken = default);
 }

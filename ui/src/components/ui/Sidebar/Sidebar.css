@@ -21,6 +21,7 @@
     }
 
     .sidebar-content {
+        position: relative;
         flex: 1;
         overflow: hidden auto;
         padding: var(--space-sm);

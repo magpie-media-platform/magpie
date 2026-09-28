@@ -116,6 +116,13 @@
         overflow-wrap: normal;
     }
 
+    .details-panel--dialog .details-panel__value--multiline {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+    }
+
     .details-panel--facts {
         padding: var(--space-lg);
         background-color: var(--bg-secondary);

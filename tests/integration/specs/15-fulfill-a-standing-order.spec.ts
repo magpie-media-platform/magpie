@@ -62,8 +62,8 @@ interface JobExecution {
 interface ContentItem {
     id: string;
     name: string;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
     rootFolderId?: string | null;
     effectiveRootFolderId: string;
     pendingMetadataRefresh: boolean;
@@ -309,7 +309,7 @@ test.describe.serial('Journey 15: a standing order', () => {
                     rootFolderId: movieRoot.id,
                     effectiveRootFolderId: movieRoot.id,
                     monitoring: null,
-                    effectiveMonitoring: true,
+                    effectiveMonitoring: 'Monitored',
                 });
             });
 
@@ -630,7 +630,7 @@ test.describe.serial('Journey 15: a standing order', () => {
                     rootFolderId: movieRoot.id,
                     effectiveRootFolderId: movieRoot.id,
                     monitoring: null,
-                    effectiveMonitoring: true,
+                    effectiveMonitoring: 'Monitored',
                     contentItem: { fulfillment: 'Upgradable' },
                 });
                 expect(

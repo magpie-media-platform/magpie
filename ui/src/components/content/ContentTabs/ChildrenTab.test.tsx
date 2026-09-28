@@ -44,8 +44,8 @@ describe('ChildrenTab controlled sorting stability', () => {
             id: 'child-1',
             title: 'Season 1',
             number: 1,
-            monitoring: true,
-            effectiveMonitoring: true,
+            monitoring: 'Monitored',
+            effectiveMonitoring: 'Monitored',
             fulfillment: 'fulfilled',
         },
     ];
@@ -72,6 +72,26 @@ describe('ChildrenTab controlled sorting stability', () => {
         // Assert
         expect(screen.queryByAltText('Season 1 artwork')).not.toBeInTheDocument();
         expect(document.querySelector('.children-tab__poster--placeholder')).toBeInTheDocument();
+    });
+
+    it('uses a singular primary-media file label in the card layout', () => {
+        // Arrange
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+
+        // Act
+        render(
+            <TooltipProvider>
+                <MemoryRouter>
+                    <ChildrenTab
+                        items={[{ ...items[0], primaryMediaFileCount: 1, primaryMediaSize: 1024 }]}
+                        parentId="content-1"
+                    />
+                </MemoryRouter>
+            </TooltipProvider>,
+        );
+
+        // Assert
+        expect(screen.getByText('Media: 1 file · 1 KB')).toBeInTheDocument();
     });
 
     it('keeps Number-sort controlled sorting referentially stable across re-renders', () => {
@@ -108,13 +128,31 @@ describe('ChildrenTab card-layout pagination', () => {
         id: `child-${index + 1}`,
         title: `Episode ${index + 1}`,
         number: index + 1,
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled' as const,
     }));
 
     beforeEach(() => {
         vi.stubGlobal('matchMedia', createMatchMedia(390));
+    });
+
+    it('Pagination_ShowsExactResultCount_WhenChildrenUseCardLayout', () => {
+        // Arrange
+        render(
+            <TooltipProvider>
+                <MemoryRouter>
+                    <ChildrenTab items={manyItems} parentId="content-1" />
+                </MemoryRouter>
+            </TooltipProvider>,
+        );
+
+        // Act
+        const pager = screen.getByRole('navigation', { name: 'Pagination' });
+
+        // Assert
+        expect(pager).toHaveTextContent('Page 1 of 2');
+        expect(pager).toHaveTextContent('51 results');
     });
 
     it('pages the card list and reaches children beyond the first page', async () => {

@@ -11,6 +11,11 @@ namespace Magpie.Data.SqlServer.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql("""
+                IF EXISTS (SELECT 1 FROM content_hierarchyItem WHERE Monitoring NOT IN (0, 1, 2))
+                    THROW 50000, 'Cannot migrate an unknown legacy Monitoring value.', 1;
+                """);
+
             migrationBuilder.DropForeignKey(
                 name: "FK_indexer_release_content_item_ContentItemId",
                 table: "indexer_release");
@@ -410,13 +415,27 @@ namespace Magpie.Data.SqlServer.Migrations
                 type: "int",
                 nullable: true);
 
+            migrationBuilder.AlterColumn<int>(
+                name: "Monitoring",
+                table: "content_hierarchyItem",
+                type: "int",
+                nullable: true,
+                oldClrType: typeof(int),
+                oldType: "int");
+
+            migrationBuilder.Sql("""
+                UPDATE content_hierarchyItem
+                SET Monitoring = CASE Monitoring WHEN 1 THEN 1 WHEN 2 THEN 0 ELSE NULL END;
+                """);
+
             migrationBuilder.AlterColumn<bool>(
                 name: "Monitoring",
                 table: "content_hierarchyItem",
                 type: "bit",
                 nullable: true,
                 oldClrType: typeof(int),
-                oldType: "int");
+                oldType: "int",
+                oldNullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "AlignmentKey",
@@ -1054,7 +1073,7 @@ namespace Magpie.Data.SqlServer.Migrations
                 column: "ReleaseSourceId",
                 principalTable: "indexer_releaseSource",
                 principalColumn: "Id",
-                onDelete: ReferentialAction.SetNull);
+                onDelete: ReferentialAction.NoAction);
 
             migrationBuilder.AddForeignKey(
                 name: "FK_metadata_externalId_indexer_release_ReleaseId",
@@ -1514,10 +1533,24 @@ namespace Magpie.Data.SqlServer.Migrations
                 name: "Monitoring",
                 table: "content_hierarchyItem",
                 type: "int",
-                nullable: false,
-                defaultValue: 0,
+                nullable: true,
                 oldClrType: typeof(bool),
                 oldType: "bit",
+                oldNullable: true);
+
+            migrationBuilder.Sql("""
+                UPDATE content_hierarchyItem
+                SET Monitoring = CASE Monitoring WHEN 1 THEN 1 WHEN 0 THEN 2 ELSE 0 END;
+                """);
+
+            migrationBuilder.AlterColumn<int>(
+                name: "Monitoring",
+                table: "content_hierarchyItem",
+                type: "int",
+                nullable: false,
+                defaultValue: 0,
+                oldClrType: typeof(int),
+                oldType: "int",
                 oldNullable: true);
 
             migrationBuilder.InsertData(

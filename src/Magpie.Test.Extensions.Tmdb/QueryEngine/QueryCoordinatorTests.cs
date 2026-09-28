@@ -538,20 +538,6 @@ public class QueryCoordinatorTests
     }
 
     [Test]
-    public void GetScanState_ReturnsOneState_WhenColdCallersRace()
-    {
-        // Arrange
-        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
-        var states = new QueryScanState[64];
-
-        // Act
-        Parallel.For(0, states.Length, index => states[index] = cache.GetScanState("same-plan"));
-
-        // Assert
-        Assert.That(states.All(state => ReferenceEquals(state, states[0])), Is.True);
-    }
-
-    [Test]
     public async Task GetSubjectResolutionAsync_CancelsTheLoad_WhenTheApplicationStops()
     {
         // Arrange

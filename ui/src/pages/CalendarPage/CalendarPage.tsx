@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
+import { useOpenLocalContentPreview } from '@/components/content/LocalContentPreview';
 import {
     CalendarBlankIcon,
     CaretLeftIcon,
@@ -45,7 +46,7 @@ import './CalendarPage.css';
 
 export function CalendarPage() {
     useDocumentTitle('Calendar');
-    const navigate = useNavigate();
+    const openPreview = useOpenLocalContentPreview();
     const [searchParams, setSearchParams] = useSearchParams();
     const [urlState, updateParams] = useUrlFilterState({
         view: DEFAULT_CALENDAR_VIEW,
@@ -165,9 +166,9 @@ export function CalendarPage() {
 
     const handleEventClick = useCallback(
         (event: CalendarEvent) => {
-            void navigate(`/library/${event.contentId}`);
+            openPreview(event.contentId);
         },
-        [navigate],
+        [openPreview],
     );
 
     const handleDayClick = useCallback(

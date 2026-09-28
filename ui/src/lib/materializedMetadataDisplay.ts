@@ -65,7 +65,11 @@ export function buildMaterializedDetailRows(
         const definition = definitions.get(fieldName.toLowerCase());
         const value = nonEmptyMetadataText(metadata[key] as string | null | undefined);
         if (definition && value) {
-            rows.push({ key, label: definition.displayName?.trim() || fallbackLabel, value: formatShortDate(value) });
+            rows.push({
+                key,
+                label: definition.displayName?.trim() || fallbackLabel,
+                value: formatShortDate(value, 'Unknown'),
+            });
         }
     };
 

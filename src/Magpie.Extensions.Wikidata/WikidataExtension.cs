@@ -33,9 +33,11 @@ public sealed class WikidataExtension : IExtension
     public void RegisterServices(IServiceCollection services)
     {
         services.AddHttpClient(WikidataClient.HttpClientName)
+            .AddUpstreamCooldown(followRedirects: true)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                AllowAutoRedirect = false
             });
 
         services.AddSingleton<IWikidataClient, WikidataClient>();

@@ -6,8 +6,8 @@ import { integrationEnvironment } from './environment';
 import { until } from './wait';
 
 interface MonitoredItem {
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
 }
 
 interface ObservedRequest {
@@ -99,8 +99,8 @@ export async function expectScopedEventRefresh(
             observed.filter((request) => request.at >= openedAt && predicate(request.url));
 
         // The host emits both events in this order, so the visible refresh proves the unrelated event arrived first.
-        await api.patch(`/api/content/${unrelatedId}`, { monitoring: { value: !unrelated.effectiveMonitoring } });
-        await api.patch(`/api/content/${visibleId}`, { monitoring: { value: !visible.effectiveMonitoring } });
+        await api.patch(`/api/content/${unrelatedId}`, { monitoring: { value: unrelated.effectiveMonitoring === 'Unmonitored' ? 'Monitored' : 'Unmonitored' } });
+        await api.patch(`/api/content/${visibleId}`, { monitoring: { value: visible.effectiveMonitoring === 'Unmonitored' ? 'Monitored' : 'Unmonitored' } });
         await until(
             'the visible record to refresh after its event',
             async () => since((url) => url === `/api/content/${visibleId}`).length || undefined,

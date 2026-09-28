@@ -166,6 +166,12 @@
         margin-right: var(--space-xs);
     }
 
+    @media (max-width: 639px) {
+        .users-page__user-actions[data-selection-mode='false'] [data-action='add-user'] {
+            display: none;
+        }
+    }
+
     .users-page__toggle-label {
         font-size: var(--text-xs);
         color: var(--text-muted);
@@ -182,7 +188,6 @@
             margin-bottom: var(--space-md);
         }
 
-        .users-page__user-actions,
         .users-page__tab-content .list-toolbar__filters-action [data-action='add-api-key'] {
             display: none;
         }

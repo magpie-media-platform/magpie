@@ -1,13 +1,14 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { EyeIcon, EyeSlashIcon, ImageBrokenIcon } from '@phosphor-icons/react';
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { EyeIcon, EyeSlashIcon, FlagCheckeredIcon, ImageBrokenIcon } from '@phosphor-icons/react';
 
-import { Badge } from '@/components/ui/Badge';
+import { Badge, type BadgeSize } from '@/components/ui/Badge';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
+import { Tooltip } from '@/components/ui/Tooltip';
+import { useLongPress } from '@/hooks/ui/useLongPress';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { isUnrecognizedContentLevel, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
-import { resolveEffectiveMonitoring } from '@/lib/monitoring';
 import { getFulfillmentBadge } from '@/types/content';
-import type { FulfillmentStatus } from '@/types';
+import type { FulfillmentStatus, MonitoringMode } from '@/types';
 
 const brokenImageGlyph = <ImageBrokenIcon weight="thin" />;
 
@@ -79,16 +80,25 @@ export function ContentTypeBadge({ level, levelLabel, contentType }: ContentType
 }
 
 export interface ContentMonitoringIndicatorProps {
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: MonitoringMode | null;
+    effectiveMonitoring: MonitoringMode;
     className: string;
     activeClassName?: string;
     inactiveClassName?: string;
+    /** Shows the state as text next to the icon. Compact lists leave it out and show the icon only. */
     labelClassName?: string;
-    inactiveLabel?: string;
     dataMonitoring?: string;
 }
 
+/** Returns the full monitoring state as text, for example "Monitored (inherited)". */
+export function monitoringStateLabel(monitoring: MonitoringMode | null, effectiveMonitoring: MonitoringMode) {
+    return monitoring === null ? `${effectiveMonitoring} (inherited)` : effectiveMonitoring;
+}
+
+/**
+ * Shows the monitoring state as an icon: an eye, a struck-through eye, or a checkered flag for Shotgun. A tooltip and
+ * the accessible name give the full state. A long press opens the tooltip on touch devices, which have no hover.
+ */
 export function ContentMonitoringIndicator({
     monitoring,
     effectiveMonitoring,
@@ -96,38 +106,65 @@ export function ContentMonitoringIndicator({
     activeClassName,
     inactiveClassName,
     labelClassName,
-    inactiveLabel = 'Not monitored',
     dataMonitoring,
 }: ContentMonitoringIndicatorProps) {
-    const { monitored: isMonitored, inherited } = resolveEffectiveMonitoring(monitoring, effectiveMonitoring);
-    const baseLabel = isMonitored ? 'Monitored' : inactiveLabel;
-    const label = inherited ? `${baseLabel} (inherited)` : baseLabel;
-    const Icon = isMonitored ? EyeIcon : EyeSlashIcon;
+    const [open, setOpen] = useState(false);
+    const longPress = useLongPress({ onLongPress: () => setOpen(true) });
+    const isMonitored = effectiveMonitoring !== 'Unmonitored';
+    const isShotgun = effectiveMonitoring === 'Shotgun';
+    const label = monitoringStateLabel(monitoring, effectiveMonitoring);
+    const Icon = !isMonitored ? EyeSlashIcon : isShotgun ? FlagCheckeredIcon : EyeIcon;
     const classes = [className, isMonitored ? activeClassName : inactiveClassName].filter(Boolean).join(' ');
-    const textLabel = isMonitored ? 'Monitored' : 'Not monitored';
 
     return (
-        <span className={classes} title={label} data-monitoring={dataMonitoring}>
-            <Icon weight={isMonitored ? 'fill' : 'regular'} aria-label={label} />
-            {labelClassName && <span className={labelClassName}>{textLabel}</span>}
-        </span>
+        <Tooltip content={label} open={open} onOpenChange={setOpen}>
+            <span
+                className={classes}
+                role="img"
+                aria-label={label}
+                data-monitoring={dataMonitoring}
+                data-shotgun={isShotgun ? 'true' : undefined}
+                {...longPress.handlers}
+                onPointerDown={(event) => {
+                    // A press on the icon opens its tooltip; it does not start a long press on the card around it.
+                    event.stopPropagation();
+                    longPress.handlers.onPointerDown(event);
+                }}
+                onClick={(event: MouseEvent) => {
+                    longPress.consumeClick(event);
+                }}
+                // A long press opens the tooltip, not the browser menu or the link preview.
+                onContextMenu={(event) => event.preventDefault()}
+                style={{ WebkitTouchCallout: 'none', userSelect: 'none' }}
+            >
+                <Icon weight={isMonitored ? 'fill' : 'regular'} aria-hidden="true" />
+                {labelClassName && (
+                    <span className={labelClassName} aria-hidden="true">
+                        {label}
+                    </span>
+                )}
+            </span>
+        </Tooltip>
     );
 }
 
 interface ContentFulfillmentBadgeProps {
     fulfillment: FulfillmentStatus;
-    effectiveMonitoring: boolean;
+    importPending?: boolean;
+    size?: BadgeSize;
+    className?: string;
 }
 
-export function ContentFulfillmentBadge({ fulfillment, effectiveMonitoring }: ContentFulfillmentBadgeProps) {
-    if (!effectiveMonitoring) {
-        return null;
-    }
-
-    const badge = getFulfillmentBadge(fulfillment);
+export function ContentFulfillmentBadge({
+    fulfillment,
+    importPending,
+    size = 'sm',
+    className,
+}: ContentFulfillmentBadgeProps) {
+    const badge = getFulfillmentBadge(fulfillment, importPending);
 
     return (
-        <Badge variant={badge.variant} size="sm" dot>
+        <Badge variant={badge.variant} size={size} className={className} dot>
             {badge.label}
         </Badge>
     );

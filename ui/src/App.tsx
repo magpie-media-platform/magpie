@@ -61,10 +61,14 @@ import { CommandPalette } from './components/ui/CommandPalette';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { SkipLink } from './components/ui/SkipLink';
 import { ContentLineageProvider } from './components/content/ContentLineageTitle';
+import { LocalContentPreviewProvider } from './components/content/LocalContentPreview';
+import { LibraryQuickSearch } from './components/content/LibraryQuickSearch';
+import { ContentOriginProvider } from './hooks/useContentOrigin';
 import { ExtensionProvider } from './extensions';
 import { queryClient } from '@/lib/queryClient';
 import { isAdminRoute, useIsActive } from '@/lib/routes';
 import { Logo } from './components/ui/Logo';
+import { LiveUpdateStatus } from './components/ui/LiveUpdateStatus/LiveUpdateStatus';
 
 function AppHeader() {
     const { toggleSidebar, sidebarOpen, sidebarCollapsed } = useAppShell();
@@ -80,12 +84,14 @@ function AppHeader() {
                         <span>Magpie</span>
                     </Link>
                 }
+                status={<LiveUpdateStatus />}
                 onSidebarToggle={toggleSidebar}
                 sidebarOpen={sidebarExpanded}
                 leftSlot={<HeaderLeftSlot />}
                 rightSlot={<HeaderRightSlot />}
                 actions={
                     <>
+                        <LibraryQuickSearch />
                         <AdminLink />
                         <UserMenu />
                     </>
@@ -174,7 +180,7 @@ const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppS
                             );
                         })}
                     </SidebarSubMenu>
-                    <RequireRole min={Role.Manager}>
+                    <RequireRole permission="content.add">
                         <SidebarItem
                             to="/library/add"
                             icon={<BinocularsIcon weight="duotone" />}
@@ -275,12 +281,14 @@ function AppBottomNav() {
                 label="Library"
                 active={isLibraryActive}
             />
-            <BottomNavItem
-                to="/library/add"
-                icon={<BinocularsIcon weight="duotone" />}
-                label="Add content"
-                active={isAddContentActive}
-            />
+            <RequireRole permission="content.add">
+                <BottomNavItem
+                    to="/library/add"
+                    icon={<BinocularsIcon weight="duotone" />}
+                    label="Add content"
+                    active={isAddContentActive}
+                />
+            </RequireRole>
             <BottomNavItem
                 to="/downloads"
                 icon={<DownloadSimpleIcon weight="duotone" />}
@@ -333,7 +341,11 @@ function RouteOutlet() {
             fallback={({ resetErrorBoundary }) => <RouteErrorState onRetry={resetErrorBoundary} />}
         >
             <Suspense fallback={<RouteLoadingState />}>
-                <Outlet />
+                <ContentOriginProvider>
+                    <LocalContentPreviewProvider>
+                        <Outlet />
+                    </LocalContentPreviewProvider>
+                </ContentOriginProvider>
             </Suspense>
         </ErrorBoundary>
     );
@@ -349,7 +361,7 @@ function SetupRedirectGate({ children }: { children: ReactNode }) {
     const location = useLocation();
     const { data, isLoading, isError } = useSetupStatus();
 
-    if (isLoading) {
+    if (isLoading && location.pathname !== '/setup') {
         return <RouteLoadingState />;
     }
 
@@ -424,7 +436,7 @@ function AppLayout() {
 
 function AuthAwareExtensionProvider({ children }: { children: ReactNode }) {
     const { user } = useAuth();
-    useGlobalEventStreamConnection(user !== null);
+    useGlobalEventStreamConnection(user !== null, user?.id);
     return (
         <ExtensionProvider
             userId={user?.id ?? null}

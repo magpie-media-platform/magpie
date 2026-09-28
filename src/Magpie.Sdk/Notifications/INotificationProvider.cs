@@ -18,6 +18,11 @@ public interface INotificationProvider
     string ProviderType { get; }
 
     /// <summary>
+    /// The display name of the provider.
+    /// </summary>
+    string DisplayName => ProviderType;
+
+    /// <summary>
     /// The provider's settings schema.
     /// </summary>
     IReadOnlyList<SettingSchemaDefinition> SettingsSchema { get; }

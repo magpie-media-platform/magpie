@@ -477,6 +477,7 @@ export function FeedsManagement() {
                         className="indexers-table__pager"
                         page={currentPage}
                         pageCount={pageCount}
+                        totalItems={feeds.length}
                         onFirst={() => setPage(1)}
                         onPrevious={() => setPage(Math.max(1, currentPage - 1))}
                         onNext={() => setPage(Math.min(pageCount, currentPage + 1))}

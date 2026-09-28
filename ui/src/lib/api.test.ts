@@ -11,13 +11,42 @@ import {
     isApiError,
     AUTH_FAILURE_EVENT,
     ApiError,
+    renewAccessToken,
 } from './api';
 import { clearAuthStorage, tokenExpirationStorage, tokenStorage } from './tokenStorage';
+
+vi.mock('./authSessionLock', () => ({
+    withAuthSessionLock: (_scope: string, action: (signal: AbortSignal) => Promise<unknown>) =>
+        action(new AbortController().signal),
+}));
 
 describe('session failure on a 401', () => {
     afterEach(() => {
         vi.restoreAllMocks();
         clearAuthStorage();
+    });
+    it('uses the recovered cookie to renew an access token that expired during the interruption', async () => {
+        tokenStorage.set('before-interruption');
+        const fetch = vi
+            .spyOn(globalThis, 'fetch')
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        accessToken: 'committed-but-expired',
+                        accessTokenExpiresAt: '2000-01-01T00:00:00Z',
+                    }),
+                    { headers: { 'Content-Type': 'application/json' } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ accessToken: 'current', accessTokenExpiresAt: '2099-01-01T00:00:00Z' }), {
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+            );
+        await expect(renewAccessToken()).resolves.toBe('current');
+        expect(new Headers(fetch.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer before-interruption');
+        expect(new Headers(fetch.mock.calls[1][1]?.headers).get('Authorization')).toBe('Bearer committed-but-expired');
+        expect(tokenStorage.get()).toBe('current');
     });
     it('reports session failure when refresh fails', async () => {
         tokenStorage.set('expired-token');
@@ -31,11 +60,13 @@ describe('session failure on a 401', () => {
                 }),
             );
         const dispatch = vi.spyOn(window, 'dispatchEvent');
-        await expect(apiFetch('/upstream', { baseUrl: '/custom-api' })).rejects.toMatchObject({ status: 401 });
+        await expect(apiFetch('/upstream')).rejects.toMatchObject({ status: 401 });
         expect(fetch).toHaveBeenCalledTimes(2);
-        expect(fetch.mock.calls[1][0]).toBe('/custom-api/auth/refresh');
-        expect(dispatch).toHaveBeenCalledOnce();
-        expect(dispatch.mock.calls[0][0].type).toBe('magpie:auth:failure');
+        expect(fetch.mock.calls[1][0]).toBe('/api/auth/refresh');
+        expect(dispatch.mock.calls.map(([event]) => event.type)).toEqual([
+            'magpie:auth-storage',
+            'magpie:auth:failure',
+        ]);
         expect(tokenStorage.get()).toBeNull();
     });
 });
@@ -689,8 +720,8 @@ describe('apiFetch 401 refresh behavior', () => {
         ).rejects.toMatchObject({ status: 401 });
 
         expect(mockFetch).toHaveBeenCalledTimes(1);
-        expect(eventHandler).toHaveBeenCalled();
-        expect(tokenExpirationStorage.get()).toBeNull();
+        expect(eventHandler).not.toHaveBeenCalled();
+        expect(tokenExpirationStorage.get()).not.toBeNull();
 
         window.removeEventListener(AUTH_FAILURE_EVENT, eventHandler);
     });
@@ -711,8 +742,8 @@ describe('apiFetch 401 refresh behavior', () => {
         ).rejects.toMatchObject({ status: 401 });
 
         expect(mockFetch).toHaveBeenCalledTimes(1);
-        expect(eventHandler).toHaveBeenCalledTimes(1);
-        expect(tokenExpirationStorage.get()).toBeNull();
+        expect(eventHandler).not.toHaveBeenCalled();
+        expect(tokenExpirationStorage.get()).not.toBeNull();
 
         window.removeEventListener(AUTH_FAILURE_EVENT, eventHandler);
     });

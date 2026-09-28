@@ -400,21 +400,24 @@ namespace Magpie.Data.PostgreSQL.Migrations
                 type: "integer",
                 nullable: true);
 
-            migrationBuilder.AlterColumn<bool>(
-                name: "Monitoring",
-                table: "content_hierarchyItem",
-                type: "boolean",
-                nullable: true,
-                oldClrType: typeof(int),
-                oldType: "integer");
+            // The old values mean inherit (0), monitor (1), and exclude (2).
+            migrationBuilder.Sql("""
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM "content_hierarchyItem" WHERE "Monitoring" NOT IN (0, 1, 2)) THEN
+                        RAISE EXCEPTION 'Cannot convert an unknown Monitoring value.';
+                    END IF;
+                END $$;
+                ALTER TABLE "content_hierarchyItem" ALTER COLUMN "Monitoring" DROP DEFAULT;
+                ALTER TABLE "content_hierarchyItem" ALTER COLUMN "Monitoring" DROP NOT NULL;
+                ALTER TABLE "content_hierarchyItem" ALTER COLUMN "Monitoring" TYPE boolean
+                    USING CASE "Monitoring" WHEN 1 THEN TRUE WHEN 2 THEN FALSE ELSE NULL END;
+                """);
 
-            migrationBuilder.AlterColumn<string>(
-                name: "LanguagePreferences",
-                table: "content_hierarchyItem",
-                type: "text",
-                nullable: false,
-                oldClrType: typeof(List<string>),
-                oldType: "text[]");
+            migrationBuilder.Sql("""
+                ALTER TABLE "content_hierarchyItem" ALTER COLUMN "LanguagePreferences" TYPE text
+                    USING to_json("LanguagePreferences")::text;
+                """);
 
             migrationBuilder.AddColumn<string>(
                 name: "AlignmentKey",
@@ -1499,23 +1502,23 @@ namespace Magpie.Data.PostgreSQL.Migrations
                 type: "uuid",
                 nullable: true);
 
-            migrationBuilder.AlterColumn<int>(
-                name: "Monitoring",
-                table: "content_hierarchyItem",
-                type: "integer",
-                nullable: false,
-                defaultValue: 0,
-                oldClrType: typeof(bool),
-                oldType: "boolean",
-                oldNullable: true);
+            migrationBuilder.Sql("""
+                ALTER TABLE "content_hierarchyItem" ALTER COLUMN "Monitoring" TYPE integer
+                    USING CASE "Monitoring" WHEN TRUE THEN 1 WHEN FALSE THEN 2 ELSE 0 END;
+                ALTER TABLE "content_hierarchyItem" ALTER COLUMN "Monitoring" SET DEFAULT 0;
+                ALTER TABLE "content_hierarchyItem" ALTER COLUMN "Monitoring" SET NOT NULL;
+                """);
 
-            migrationBuilder.AlterColumn<List<string>>(
-                name: "LanguagePreferences",
-                table: "content_hierarchyItem",
-                type: "text[]",
-                nullable: false,
-                oldClrType: typeof(string),
-                oldType: "text");
+            migrationBuilder.Sql("""
+                CREATE FUNCTION pg_temp.magpie_legacy_languages(value text) RETURNS text[]
+                LANGUAGE SQL IMMUTABLE AS $function$
+                    SELECT ARRAY(SELECT item FROM jsonb_array_elements_text(value::jsonb)
+                        WITH ORDINALITY AS elements(item, position) ORDER BY position);
+                $function$;
+                ALTER TABLE "content_hierarchyItem" ALTER COLUMN "LanguagePreferences" TYPE text[]
+                    USING pg_temp.magpie_legacy_languages("LanguagePreferences");
+                DROP FUNCTION pg_temp.magpie_legacy_languages(text);
+                """);
 
             migrationBuilder.InsertData(
                 table: "auth_user",

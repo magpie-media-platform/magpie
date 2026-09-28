@@ -39,6 +39,7 @@ export function parseContentFilterSelectionValue(value: string): ContentFilterSe
 export function buildContentFilterOptions(
     contentTypes: LibraryTypeDefinition[],
     restrictToContentType?: string,
+    includeAllLevels = false,
 ): ContentFilterOption[] {
     const scoped = restrictToContentType
         ? contentTypes.filter((contentType) => contentType.slug === restrictToContentType)
@@ -50,10 +51,12 @@ export function buildContentFilterOptions(
             value: contentFilterSelectionValue(broadSelection),
             label: contentType.name,
         };
-        const rootLevels = contentType.levels.filter((level) => level.parentSlug === null);
+        const rootLevels = includeAllLevels
+            ? contentType.levels
+            : contentType.levels.filter((level) => level.parentSlug === null);
 
         const rootLevelOptions =
-            rootLevels.length > 1
+            includeAllLevels || rootLevels.length > 1
                 ? rootLevels.map((level): ContentFilterOption => {
                       const selection = { contentType: contentType.slug, level: level.slug };
                       return {

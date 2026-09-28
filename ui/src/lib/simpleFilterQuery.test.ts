@@ -3,6 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { buildQuery, escapeQueryString, EMPTY_FIELDS, isSimpleQuery, parseQuery } from './simpleFilterQuery';
 
 describe('simpleFilterQuery', () => {
+    it('round trips fulfillment with the existing scalar and year controls', () => {
+        const query =
+            'monitoring != Unmonitored and fulfillment = Missing and title contains "Movie" and publishDate = "2020"';
+        const parsed = parseQuery(query, 'content');
+        expect(parsed?.fulfillment).toBe('Missing');
+        expect(buildQuery(parsed!, 'content')).toBe(query);
+    });
+
+    it('keeps multiple constraints on the same field in advanced mode', () => {
+        expect(parseQuery('title contains "Movie" and title contains "Alpha"', 'content')).toBeNull();
+        expect(parseQuery('fulfillment = Missing and fulfillment = Partial', 'content')).toBeNull();
+    });
+
     describe('escapeQueryString', () => {
         it('escapes backslashes and double quotes', () => {
             expect(escapeQueryString('a\\b"c')).toBe('a\\\\b\\"c');
@@ -162,9 +175,32 @@ describe('simpleFilterQuery', () => {
     });
 
     describe('isSimpleQuery', () => {
+        it.each([
+            'level = "" and monitoring != Unmonitored',
+            'contentType = "" and fulfillment = Missing',
+            'tag has "" and fulfillment = Missing',
+            'genre has "" and fulfillment = Missing',
+            'title contains "" and title contains "Film"',
+            'kind = "person" and fulfillment = Missing',
+            'mediaFiles has (fileKind = "Video" and fileSize > 1000) and fulfillment = Missing',
+        ])('keeps conditions that the content controls cannot represent in advanced mode: %s', (query) => {
+            expect(parseQuery(query, 'content')).toBeNull();
+            expect(isSimpleQuery(query, 'content')).toBe(false);
+        });
+
+        it.each([
+            'Relationships has (Name contains "Alice" and Name contains "Bob") and fulfillment = Missing',
+            'Relationships has (Name contains "" and Subject contains "Bob")',
+            'Relationships has (Type = "studio" and Type = "person")',
+            'Relationships has (Type = "" and Type = "person")',
+        ])('keeps repeated relationship fields in advanced mode: %s', (query) => {
+            expect(parseQuery(query, 'content')).toBeNull();
+            expect(isSimpleQuery(query, 'content')).toBe(false);
+        });
+
         it('treats empty and supported queries as simple', () => {
             expect(isSimpleQuery('', 'content')).toBe(true);
-            expect(isSimpleQuery('contentType = "movie" and monitoring = true', 'content')).toBe(true);
+            expect(isSimpleQuery('contentType = "movie" and monitoring != Unmonitored', 'content')).toBe(true);
         });
 
         it('rejects unsupported queries', () => {

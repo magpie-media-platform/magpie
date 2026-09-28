@@ -13,13 +13,14 @@ import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 import { useBulkRun } from '@/hooks/useBulkRun';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { Badge } from '@/components/ui/Badge';
-import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
+import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
 import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
+import { ListFilterToolbar, type ListFilterField } from '@/components/ui/ListFilterToolbar';
 import { MultiSelectColumnFilter, encodeMultiValue, decodeMultiValue } from '@/components/ui/MultiSelectColumnFilter';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Pager } from '@/components/ui/Pager';
@@ -81,6 +82,13 @@ const PAGE_SIZE = 25;
 const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
 
 const SORT_KEYS = ['name', 'provider', 'owner', 'enabled', 'modified'] as const;
+const SORT_OPTIONS = [
+    { id: 'name', label: 'Name' },
+    { id: 'provider', label: 'Provider' },
+    { id: 'owner', label: 'Owner' },
+    { id: 'enabled', label: 'Enabled' },
+    { id: 'modified', label: 'Modified' },
+];
 
 const DEFAULT_FILTERS = { provider: '', enabled: '' };
 
@@ -111,6 +119,7 @@ export function NotificationsPage() {
     } = useNotificationRules();
     const {
         providers,
+        providerLabels,
         isLoading: isProvidersLoading,
         error: providersError,
         refetch: refetchProviders,
@@ -262,12 +271,20 @@ export function NotificationsPage() {
         async (rule: NotificationRule) => {
             setTestingId(rule.id);
             try {
-                await testRule(rule.id);
-                toast({
-                    title: 'Test Dispatched',
-                    description: `Sent a synthetic event through "${rule.name}".`,
-                    variant: 'success',
-                });
+                const result = await testRule(rule.id);
+                toast(
+                    result.success
+                        ? {
+                              title: 'Test Sent',
+                              description: `Magpie sent a test event through "${rule.name}". Check the destination to confirm it arrived.`,
+                              variant: 'success',
+                          }
+                        : {
+                              title: 'Test Failed',
+                              description: `Failed to test "${rule.name}": ${result.message || 'The provider did not give a reason.'}`,
+                              variant: 'error',
+                          },
+                );
             } catch (error) {
                 toast({
                     title: 'Test Failed',
@@ -512,6 +529,16 @@ export function NotificationsPage() {
     );
 
     const hasActiveFilters = provider.length > 0 || enabled !== '';
+    const filterFields: ListFilterField[] = [
+        {
+            id: 'provider',
+            label: 'Provider',
+            kind: 'multi',
+            value: provider,
+            options: providerOptions.map((value) => ({ value, label: value })),
+        },
+        { id: 'enabled', label: 'Enabled', kind: 'facet', value: enabled, options: enabledOptions },
+    ];
 
     const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
     const currentPage = Math.min(page, pageCount);
@@ -601,7 +628,19 @@ export function NotificationsPage() {
                     </Button>
                 </BulkActionsToolbar>
 
-                <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+                <ListFilterToolbar
+                    fields={filterFields}
+                    onCommit={(values) =>
+                        setFilters({
+                            provider: encodeMultiValue(values.provider as string[]),
+                            enabled: values.enabled as string,
+                        })
+                    }
+                    sorting={sorting}
+                    sortOptions={SORT_OPTIONS}
+                    onSortingChange={setSorting}
+                    selection={{ active: selection.selectionMode, onToggle: selection.toggleSelectionMode }}
+                />
 
                 <div className="notifications-table" data-area="rules">
                     <DataTable<NotificationRuleRow>
@@ -633,6 +672,7 @@ export function NotificationsPage() {
                             className="notifications-table__pager"
                             page={currentPage}
                             pageCount={pageCount}
+                            totalItems={filteredRows.length}
                             onFirst={() => setPage(1)}
                             onPrevious={() => setPage(Math.max(1, currentPage - 1))}
                             onNext={() => setPage(Math.min(pageCount, currentPage + 1))}
@@ -649,6 +689,7 @@ export function NotificationsPage() {
                 onOpenChange={handleFormOpenChange}
                 initialValues={initialFormValues}
                 providers={providers}
+                providerLabels={providerLabels}
                 isProvidersLoading={isProvidersLoading}
                 providersError={providersError}
                 onRetryProviders={() => void refetchProviders()}

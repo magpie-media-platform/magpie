@@ -128,7 +128,7 @@ export function SubjectPicker({ value, onChange, error }: SubjectPickerProps) {
                             Selected: {selectedExistingName}
                         </p>
                     )}
-                    <ul className="metadata-inspector__subject-results" aria-label="Subjects">
+                    <ul className="metadata-inspector__subject-results" aria-label="Subjects" role="list">
                         {isLoading ? (
                             <li className="metadata-inspector__empty">Loading...</li>
                         ) : matches.length === 0 ? (

@@ -122,11 +122,13 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
         {
             RecordOutcome(activity, stopwatch, "analysis_failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             _logger.LogWarning(
                 ex,
                 "FFprobe failed to analyze the file {FilePath}.",
                 filePath);
-            return null;
+            throw;
         }
 
         cancellationToken.ThrowIfCancellationRequested();

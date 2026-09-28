@@ -128,7 +128,7 @@ internal sealed class ApiGeneratedCommand : Command
         var data = parseResult.GetValue(_dataOption);
         if (!string.IsNullOrWhiteSpace(json) && !string.IsNullOrWhiteSpace(data))
         {
-            throw new InvalidOperationException("Use either --json or --data, not both.");
+            throw new InvalidOperationException("Both --json and --data were supplied.");
         }
 
         if (!string.IsNullOrWhiteSpace(json))

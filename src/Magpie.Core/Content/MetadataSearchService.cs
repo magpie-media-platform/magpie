@@ -15,7 +15,6 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
-using Magpie.Models.Paging;
 using Magpie.QueryLanguage;
 using Magpie.Sdk.Caching;
 using Magpie.Sdk.Content;
@@ -49,15 +48,9 @@ internal sealed class MetadataSearchService(
 
     private const int PageFillRounds = 4;
 
-    private static readonly TimeSpan ProviderSearchTimeout = TimeSpan.FromSeconds(45);
-
-    private static readonly TimeSpan ProviderSearchFreshness = TimeSpan.FromSeconds(15);
-
     private static readonly TimeSpan PageMemoRetention = TimeSpan.FromHours(12);
 
     private static readonly TimeSpan HydrationRetention = TimeSpan.FromMinutes(15);
-
-    private const int MaximumPage = 400;
 
     private const int ProviderFailureThreshold = 3;
 
@@ -81,15 +74,6 @@ internal sealed class MetadataSearchService(
             MaximumEntries = 10_000,
         });
 
-    private readonly ICache _searchCache = cacheFactory.GetOrCreate(
-        "metadata-search",
-        () => new CachePolicy
-        {
-            Freshness = ProviderSearchFreshness,
-            Retention = ProviderSearchFreshness,
-            MaximumEntries = 100_000,
-        });
-
     private readonly ICache _pageMemoCache = cacheFactory.GetOrCreate(
         "metadata-search-pages",
         () => new CachePolicy
@@ -108,10 +92,20 @@ internal sealed class MetadataSearchService(
         Unverifiable
     }
 
+    /// <inheritdoc />
+    public Task<ProviderMetadataCandidateSearchResult> SearchCandidatesAsync(
+        ContentFilterCriteria criteria,
+        string? contentType,
+        int page,
+        CancellationToken cancellationToken = default) =>
+        SearchCandidatesAsync(criteria, contentType, page, null, cancellationToken);
+
+    /// <inheritdoc />
     public async Task<ProviderMetadataCandidateSearchResult> SearchCandidatesAsync(
         ContentFilterCriteria criteria,
         string? contentType,
         int page,
+        string? continuation,
         CancellationToken cancellationToken = default)
     {
         using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.search");
@@ -124,7 +118,8 @@ internal sealed class MetadataSearchService(
 
         try
         {
-            return await SearchCandidatesCoreAsync(criteria, contentType, page, activity, cancellationToken)
+            return await SearchCandidatesCoreAsync(
+                criteria, contentType, page, continuation, activity, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -137,9 +132,31 @@ internal sealed class MetadataSearchService(
         ContentFilterCriteria criteria,
         string? contentType,
         int page,
+        string? continuation,
         Activity? activity,
         CancellationToken cancellationToken)
     {
+        if (continuation is null && page > 1)
+        {
+            throw new MetadataSearchContinuationException("Start a new search at page one.");
+        }
+
+        var requestIdentity = JsonSerializer.Serialize(new { criteria, contentType });
+        SearchCheckpoint? previous = null;
+        if (continuation is not null)
+        {
+            if (!_pageMemoCache.TryGet(continuation, out previous) || previous is null)
+            {
+                throw new MetadataSearchContinuationException(
+                    "The search checkpoint expired or is invalid. Start a new search.");
+            }
+
+            if (previous.RequestIdentity != requestIdentity || previous.Page != page)
+            {
+                throw new MetadataSearchContinuationException("The search checkpoint does not match this request.");
+            }
+        }
+
         var resolvedContentTypes = !string.IsNullOrWhiteSpace(contentType)
             ? (IReadOnlyList<string>)[contentType.Trim()]
             : ResolveContentTypes(criteria);
@@ -162,6 +179,12 @@ internal sealed class MetadataSearchService(
                 select d.Slug).Distinct(StringComparer.OrdinalIgnoreCase)];
             if (contentTypes.Count == 0)
             {
+                if (previous is not null)
+                {
+                    throw new MetadataSearchContinuationException(
+                        "The content type registry changed. Start a new search.");
+                }
+
                 logger.LogInformation(
                     "The metadata service skipped the provider candidate search because no content types " +
                     "are registered");
@@ -181,7 +204,7 @@ internal sealed class MetadataSearchService(
         const string defaultLanguagePreference = "";
         var requestedPage = Math.Max(1, page);
         activity?.SetTag("magpie.search.requested_page", requestedPage);
-        var existingLibraryItems = new Dictionary<(string, string), Guid>();
+        var existingLibraryItems = new Dictionary<(string, string, string, string), Guid>();
         var validQueries = new List<(string ContentType, ContentHierarchyItemCriteria Query)>();
         var rejectedQueries = new List<(
             string ContentType,
@@ -238,19 +261,18 @@ internal sealed class MetadataSearchService(
             where SupportsContentType(provider.SupportedContentTypes, validQuery.ContentType)
             select new ProviderSearchInvocation(validQuery.ContentType, provider, validQuery.Query))
         {
-            if (IsProviderDispatchable(_providerHealthCache, logger, candidate.ContentType, candidate.Provider))
-            {
-                invocations.Add(candidate);
-                continue;
-            }
-
-            AddWarning(ProviderSkippedWarning(candidate.Provider), warningsSeen, warnings);
+            invocations.Add(candidate);
         }
 
         var providersQueried = invocations.Count;
         activity?.SetTag("magpie.search.providers_queried", providersQueried);
         if (providersQueried == 0)
         {
+            if (previous is not null)
+            {
+                throw new MetadataSearchContinuationException("The search providers changed. Start a new search.");
+            }
+
             if (validQueries.Count > 0)
             {
                 logger.LogInformation(
@@ -261,97 +283,62 @@ internal sealed class MetadataSearchService(
             return ProviderMetadataCandidateSearchResult.Empty with { Warnings = warnings };
         }
 
-        if (requestedPage > MaximumPage)
+        var fingerprint = JsonSerializer.Serialize(new
         {
-            return new ProviderMetadataCandidateSearchResult
+            Criteria = criteria,
+            ContentType = contentType,
+            Providers = invocations.Select(invocation => new
             {
-                Matches = [],
-                PageItemCount = 0,
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = requestedPage, HasMore = false },
-                Warnings = warnings
-            };
-        }
-
-        var memoKey = JsonSerializer.Serialize(new
-        {
-            Service = nameof(MetadataSearchService),
-            Kind = "pages",
-            Queries = validQueries.Select(query => new
-            {
-                query.ContentType,
-                Query = JsonSerializer.Serialize(query.Query)
+                invocation.Provider.ProviderType,
+                Implementation = invocation.Provider.GetType().AssemblyQualifiedName,
+                invocation.ContentType,
+                invocation.Query
             }),
-            Providers = invocations.Select(invocation =>
-                invocation.Provider.ProviderType + ":" + invocation.ContentType),
             Language = defaultLanguagePreference
         });
-        var pages = _pageMemoCache.TryGet<Dictionary<int, PageMemo>>(memoKey, out var shared) && shared is not null
-            ? new Dictionary<int, PageMemo>(shared)
-            : new Dictionary<int, PageMemo>();
-        var delivered = new HashSet<(string, string)>();
-        var failed = new HashSet<ProviderSearchInvocation>();
-        var window = 0;
-        var exhausted = false;
-        for (var earlier = 1; earlier < requestedPage && !exhausted; earlier++)
+        SearchCheckpoint checkpoint;
+        if (continuation is null)
         {
-            if (!pages.TryGetValue(earlier, out var earlierPage))
+            if (requestedPage != 1)
             {
-                var fill = await FillPageAsync(
-                    invocations,
-                    failed,
-                    Math.Max(earlier * ProviderSearchPageSize, window),
-                    delivered,
-                    prepared,
-                    defaultLanguagePreference,
-                    existingLibraryItems,
-                    warningsSeen,
-                    warnings,
-                    cancellationToken).ConfigureAwait(false);
-                earlierPage = new PageMemo(
-                    [.. fill.Rows.SelectMany(ExternalIdPairs).Select(NormalizedExternalId)],
-                    fill.Window,
-                    fill.HasMore);
-                if (!fill.Degraded)
-                {
-                    pages[earlier] = earlierPage;
-                }
+                throw new MetadataSearchContinuationException("Start a new search at page one.");
             }
 
-            delivered.UnionWith(earlierPage.Ids);
-            window = earlierPage.Window;
-            exhausted = !earlierPage.HasMore;
+            checkpoint = new SearchCheckpoint(fingerprint, requestIdentity, 1, [], [.. invocations.Select(_ =>
+                new ProviderProgress(null, false, []))]);
+            continuation = Guid.NewGuid().ToString("N");
+            _pageMemoCache.Set(continuation, checkpoint);
         }
-
-        var current = exhausted
-            ? new PageFill([], window, false, 0, false)
-            : await FillPageAsync(
-                invocations,
-                failed,
-                Math.Max(requestedPage * ProviderSearchPageSize, window),
-                delivered,
-                prepared,
-                defaultLanguagePreference,
-                existingLibraryItems,
-                warningsSeen,
-                warnings,
-                cancellationToken).ConfigureAwait(false);
-
-        if (!exhausted && !current.Degraded)
+        else
         {
-            pages[requestedPage] = new PageMemo(
-                [.. current.Rows.SelectMany(ExternalIdPairs).Select(NormalizedExternalId)],
-                current.Window,
-                current.HasMore);
+            checkpoint = previous!;
+            if (checkpoint.Fingerprint != fingerprint || checkpoint.Page != requestedPage)
+            {
+                throw new MetadataSearchContinuationException("The search checkpoint does not match this request.");
+            }
         }
 
-        _pageMemoCache.Set(memoKey, pages);
+        var current = await ReadPageAsync(
+            checkpoint,
+            invocations,
+            prepared,
+            defaultLanguagePreference,
+            existingLibraryItems,
+            warningsSeen,
+            warnings,
+            cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var nextContinuation = current.HasMore ? Guid.NewGuid().ToString("N") : null;
+        if (nextContinuation is not null)
+        {
+            _pageMemoCache.Set(nextContinuation, current.Next);
+        }
+
         var pageWindow = current.Rows;
         var pageMatches = RankByTitleQuery(prepared.TitleQuery, [pageWindow]).ToList();
         var matches = pageMatches.Select(candidate =>
         {
-            var key = (
-                candidate.ExternalIdSource.ToLowerInvariant(),
-                candidate.ExternalId.ToLowerInvariant());
+            var key = CandidateLibraryIdentity(candidate);
             var inLibrary = existingLibraryItems.TryGetValue(key, out var existingContentHierarchyItemId);
             return new MetadataSearchMatch
             {
@@ -371,6 +358,8 @@ internal sealed class MetadataSearchService(
 
         return new ProviderMetadataCandidateSearchResult
         {
+            Continuation = continuation,
+            NextContinuation = nextContinuation,
             Matches = matches,
             PageItemCount = pageMatches.Count,
             PageInfo = new ProviderSearchPageInfo
@@ -434,22 +423,23 @@ internal sealed class MetadataSearchService(
         IEnumerable<MetadataSearchCandidate> results;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             results = await searcher
                 .SearchAsync(level, query, defaultLanguagePreference: string.Empty, page, cancellationToken)
-                .WaitAsync(ProviderSearchTimeout, timeProvider, cancellationToken)
+                .WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (TimeoutException)
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
         {
             logger.LogWarning(
-                "Metadata provider {Provider} did not answer the search for {Query} in {Timeout}",
+                ex,
+                "An operation timed out while metadata provider {Provider} searched for {Query}",
                 searcher.ProviderType,
-                query,
-                ProviderSearchTimeout);
+                query);
             return ([], ProviderSearchTimedOutWarning(searcher.ProviderType));
         }
         catch (Exception ex)
@@ -467,148 +457,129 @@ internal sealed class MetadataSearchService(
             : item)], null);
     }
 
-    private async Task<PageFill> FillPageAsync(
+    private async Task<ContinuedPage> ReadPageAsync(
+        SearchCheckpoint checkpoint,
         IReadOnlyList<ProviderSearchInvocation> invocations,
-        HashSet<ProviderSearchInvocation> failed,
-        int maximumResults,
-        HashSet<(string, string)> delivered,
         PreparedSearch prepared,
-        string defaultLanguagePreference,
-        Dictionary<(string, string), Guid> existingLibraryItems,
+        string language,
+        Dictionary<(string, string, string, string), Guid> existingLibraryItems,
         HashSet<string> warningsSeen,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
-        var seen = new HashSet<(string, string)>();
-        var groups = new List<IReadOnlyList<MetadataSearchCandidate>>();
-        var mergedCount = 0;
-        var providerSearchTruncated = false;
-        var rankedTruncated = false;
-        var rankedMergedCount = 0;
-        var undelivered = new List<MetadataSearchCandidate>();
-        var lastAnsweredGroups = new Dictionary<ProviderSearchInvocation,
-            (IReadOnlyList<MetadataSearchCandidate> Candidates, bool HasMore)>();
-        for (var round = 0; ; round++)
+        var progress = checkpoint.Providers.ToArray();
+        var retained = progress.SelectMany(item => item.Pending).ToArray();
+        foreach (var existing in await FindExistingCandidatesAsync(retained, cancellationToken).ConfigureAwait(false))
         {
-            groups.Clear();
-            mergedCount = 0;
-            providerSearchTruncated = false;
-            var searches = invocations
-                .Where(invocation => !failed.Contains(invocation))
-                .Select(invocation => SearchProviderAsync(
+            existingLibraryItems[existing.Key] = existing.Value;
+        }
+
+        var failed = new HashSet<int>();
+        var validationIndexes = Enumerable.Range(0, progress.Length)
+            .Where(index => progress[index].Continuation is not null).ToArray();
+        var validations = await Task.WhenAll(validationIndexes.Select(index => SearchProviderAsync(
+            logger, invocations[index], 0, language, progress[index].Continuation,
+            _providerHealthCache, recordHealth: false, cancellationToken))).ConfigureAwait(false);
+        for (var index = 0; index < validations.Length; index++)
+        {
+            var validation = validations[index];
+            AddWarning(validation.Warning, warningsSeen, warnings);
+            foreach (var warning in validation.Result?.Page.Warnings ?? [])
+            {
+                AddWarning(ProviderWarning(validation.Invocation.Provider.ProviderType, warning),
+                    warningsSeen, warnings);
+            }
+
+            if (validation.Warning is not null || validation.Result?.Page.Warnings.Count > 0)
+            {
+                failed.Add(validationIndexes[index]);
+            }
+        }
+
+        List<MetadataSearchCandidate> rows = [];
+        for (var round = 0; round < PageFillRounds; round++)
+        {
+            var indexes = Enumerable.Range(0, progress.Length)
+                .Where(index => !progress[index].Exhausted &&
+                    progress[index].Pending.Count < ProviderSearchPageSize &&
+                    !failed.Contains(index))
+                .ToArray();
+            var results = await Task.WhenAll(indexes.Select(index => SearchProviderAsync(
                 logger,
-                timeProvider,
-                invocation,
-                maximumResults,
-                defaultLanguagePreference,
-                _searchCache,
+                invocations[index],
+                ProviderSearchPageSize,
+                language,
+                progress[index].Continuation,
                 _providerHealthCache,
                 recordHealth: round == 0,
-                cancellationToken));
-            var providerResults = await Task.WhenAll(searches).ConfigureAwait(false);
-
-            foreach (var execution in providerResults)
+                cancellationToken))).ConfigureAwait(false);
+            for (var resultIndex = 0; resultIndex < results.Length; resultIndex++)
             {
-                if (execution.Warning is not null || execution.Result is not { Supported: true })
+                var index = indexes[resultIndex];
+                var execution = results[resultIndex];
+                if (execution.Warning is not null || execution.Result is null)
                 {
                     AddWarning(execution.Warning, warningsSeen, warnings);
-                    if (execution.Warning is not null)
-                    {
-                        failed.Add(execution.Invocation);
-                    }
-
-                    if (lastAnsweredGroups.TryGetValue(execution.Invocation, out var answeredGroup))
-                    {
-                        groups.Add(answeredGroup.Candidates);
-                        mergedCount += answeredGroup.Candidates.Count;
-                        providerSearchTruncated |= answeredGroup.HasMore;
-                    }
-
+                    failed.Add(index);
                     continue;
                 }
 
-                var result = execution.Result;
-                providerSearchTruncated |= result.PageInfo.HasMore;
-                var provider = execution.Invocation.Provider;
-                if (result.Warnings is not null)
+                var batch = execution.Result;
+                var result = batch.Page;
+                foreach (var warning in result.Warnings)
                 {
-                    foreach (var warning in result.Warnings)
-                    {
-                        if (warning is null || string.IsNullOrWhiteSpace(warning))
-                        {
-                            continue;
-                        }
-
-                        logger.LogWarning(
-                            "Metadata provider {Provider} reported search diagnostic {Diagnostic}",
-                            provider.ProviderType,
-                            warning);
-                        AddWarning(
-                            ProviderWarning(provider.ProviderType, warning),
-                            warningsSeen,
-                            warnings);
-                    }
+                    AddWarning(ProviderWarning(invocations[index].Provider.ProviderType, warning),
+                        warningsSeen, warnings);
                 }
 
-                var candidates = await PrepareCandidatesAsync(
-                    provider,
+                var preparation = await PrepareCandidatesAsync(
+                    invocations[index].Provider,
                     result.Matches,
                     prepared,
-                    defaultLanguagePreference,
+                    language,
                     existingLibraryItems,
                     cancellationToken).ConfigureAwait(false);
-                var guarded = FilterCandidatesAgainstCriteria(candidates, prepared.Criteria);
-                var group = new List<MetadataSearchCandidate>(guarded.Count);
-                seen.Clear();
-                foreach (var candidate in guarded)
+                foreach (var warning in preparation.Warnings)
                 {
-                    if (HasIdentity(candidate) && seen.Add(IdentityKey(candidate)))
-                    {
-                        group.Add(candidate);
-                    }
+                    AddWarning(warning, warningsSeen, warnings);
                 }
 
-                groups.Add(group);
-                mergedCount += group.Count;
-                lastAnsweredGroups[execution.Invocation] = (group, result.PageInfo.HasMore);
+                var accepted = FilterCandidatesAgainstCriteria(preparation.Candidates, prepared.Criteria);
+                var hydrationFailed = preparation.Warnings.Count > 0;
+                progress[index] = new ProviderProgress(
+                    hydrationFailed ? progress[index].Continuation : batch.Continuation,
+                    !hydrationFailed && (!result.Supported || !result.PageInfo.HasMore && result.Warnings.Count == 0),
+                    [.. progress[index].Pending.Concat(accepted).Where(HasIdentity)]);
+                if (result.Warnings.Count > 0 || hydrationFailed)
+                {
+                    failed.Add(index);
+                }
             }
 
-            var ranked = DeduplicateAcrossProviders(groups).SelectMany(group => group).ToList();
-            var undeliveredRound = ranked
-                .Where(candidate => !ExternalIdPairs(candidate).Select(NormalizedExternalId).Any(delivered.Contains))
-                .ToList();
-            if (undeliveredRound.Count < undelivered.Count)
-            {
-                providerSearchTruncated = rankedTruncated;
-                break;
-            }
-
-            undelivered = undeliveredRound;
-            rankedTruncated = providerSearchTruncated;
-            rankedMergedCount = mergedCount;
-
-            if (providerResults.Any(execution => execution.Warning is not null))
-            {
-                break;
-            }
-
-            if (undelivered.Count >= ProviderSearchPageSize ||
-                !providerSearchTruncated ||
-                round == PageFillRounds ||
-                maximumResults > int.MaxValue - ProviderSearchPageSize)
+            rows = [.. DeduplicateAcrossProviders([.. progress.Select(item => item.Pending)])
+                .SelectMany(group => group)
+                .Where(candidate => !CandidateDeliveredIdentities(candidate)
+                    .Any(checkpoint.Delivered.Contains))];
+            if (rows.Count >= ProviderSearchPageSize ||
+                indexes.Length == 0 ||
+                progress.All(item => item.Exhausted))
             {
                 break;
             }
-
-            maximumResults += ProviderSearchPageSize;
         }
 
-        return new PageFill(
-            [.. undelivered.Take(ProviderSearchPageSize)],
-            maximumResults,
-            providerSearchTruncated || undelivered.Count > ProviderSearchPageSize,
-            rankedMergedCount,
-            failed.Count > 0);
+        var page = rows.Take(ProviderSearchPageSize).ToArray();
+        var delivered = new HashSet<(string, string, string, string)>(checkpoint.Delivered);
+        delivered.UnionWith(page.SelectMany(CandidateDeliveredIdentities));
+        var remaining = progress.Select(item => item with
+        {
+            Pending = [.. item.Pending.Where(candidate =>
+                !CandidateDeliveredIdentities(candidate).Any(delivered.Contains))]
+        }).ToArray();
+        var hasMore = failed.Count > 0 || remaining.Any(item => !item.Exhausted || item.Pending.Count > 0);
+        return new ContinuedPage(page, hasMore, rows.Count,
+            new SearchCheckpoint(checkpoint.Fingerprint, checkpoint.RequestIdentity, checkpoint.Page + 1,
+                delivered, remaining));
     }
 
     public async Task<ContentPreview?> PreviewByExternalIdAsync(
@@ -766,49 +737,38 @@ internal sealed class MetadataSearchService(
 
     private static async Task<ProviderSearchExecution> SearchProviderAsync(
         ILogger<MetadataSearchService> logger,
-        TimeProvider timeProvider,
         ProviderSearchInvocation invocation,
         int maximumResults,
         string defaultLanguagePreference,
-        ICache cache,
+        object? continuation,
         ICache providerHealthCache,
         bool recordHealth,
         CancellationToken cancellationToken)
     {
-        var cacheKey = new
-        {
-            Service = nameof(MetadataSearchService),
-            Kind = "search",
-            ProviderType = invocation.Provider.ProviderType,
-            invocation.ContentType,
-            Query = JsonSerializer.Serialize(invocation.Query),
-            MaximumResults = maximumResults,
-            Language = defaultLanguagePreference
-        };
-
         using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.provider_search");
         activity?.SetTag("magpie.provider.type", invocation.Provider.ProviderType);
         activity?.SetTag("magpie.content_type", invocation.ContentType);
 
         try
         {
-            var result = await cache.GetOrAddAsync(
-                JsonSerializer.Serialize(cacheKey),
-                async token =>
-                {
-                    return await invocation.Provider.AdvancedSearchAsync(
-                        invocation.ContentType,
-                        invocation.Query,
-                        maximumResults,
-                        defaultLanguagePreference,
-                        token)
-                        .WaitAsync(ProviderSearchTimeout, timeProvider, token)
-                        .ConfigureAwait(false);
-                },
-                cancellationToken).ConfigureAwait(false);
-            activity?.SetTag("magpie.result.supported", result?.Supported);
-            activity?.SetTag("magpie.result.match_count", result?.Matches.Count);
-            activity?.SetTag("magpie.result.has_more", result?.PageInfo.HasMore);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsProviderDispatchable(providerHealthCache, logger, invocation.ContentType, invocation.Provider))
+            {
+                return new ProviderSearchExecution(invocation, null, ProviderSkippedWarning(invocation.Provider));
+            }
+
+            var result = await invocation.Provider.ContinueSearchAsync(
+                invocation.ContentType,
+                invocation.Query,
+                maximumResults,
+                defaultLanguagePreference,
+                continuation,
+                cancellationToken)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            activity?.SetTag("magpie.result.supported", result.Page.Supported);
+            activity?.SetTag("magpie.result.match_count", result.Page.Matches.Count);
+            activity?.SetTag("magpie.result.has_more", result.Page.PageInfo.HasMore);
 
             if (recordHealth)
             {
@@ -821,14 +781,25 @@ internal sealed class MetadataSearchService(
         {
             throw;
         }
-        catch (TimeoutException)
+        catch (MetadataSearchContinuationException)
+        {
+            throw;
+        }
+        catch (UpstreamThrottledException ex)
+        {
+            activity?.SetTag("magpie.result.incomplete", true);
+            return new ProviderSearchExecution(invocation, null,
+                $"{NormalizedProvider(invocation.Provider.ProviderType)} is throttled until {ex.RetryAt:O}. " +
+                "The search is incomplete.");
+        }
+        catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
         {
             activity?.SetStatus(ActivityStatusCode.Error, "timeout");
             logger.LogWarning(
-                "Metadata provider {Provider} did not answer the search for {ContentType} in {Timeout}",
+                exception,
+                "An operation timed out while metadata provider {Provider} searched for {ContentType}",
                 invocation.Provider.ProviderType,
-                invocation.ContentType,
-                ProviderSearchTimeout);
+                invocation.ContentType);
             if (recordHealth)
             {
                 RecordProviderFailure(providerHealthCache, invocation.ContentType, invocation.Provider);
@@ -842,6 +813,8 @@ internal sealed class MetadataSearchService(
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             logger.LogWarning(
                 ex,
                 "Metadata provider {Provider} failed to search for {ContentType}",
@@ -941,10 +914,10 @@ internal sealed class MetadataSearchService(
     }
 
     private static string ProviderSearchFailedWarning(string? providerType) =>
-        $"{NormalizedProvider(providerType)} could not finish the search. Try again.";
+        $"{NormalizedProvider(providerType)} could not finish the search.";
 
     private static string ProviderSearchTimedOutWarning(string? providerType) =>
-        $"{NormalizedProvider(providerType)} did not answer the search in time. Try again.";
+        $"{NormalizedProvider(providerType)} did not answer the search in time.";
 
     private static string ProviderWarning(string? providerType, string warning) =>
         $"{NormalizedProvider(providerType)}: {warning}";
@@ -1023,59 +996,8 @@ internal sealed class MetadataSearchService(
             MatchesString(level.Slug, criterion) == MatchOutcome.Matched))];
     }
 
-    private static IReadOnlyList<IReadOnlyList<MetadataSearchCandidate>> DeduplicateAcrossProviders(
-        IReadOnlyList<IReadOnlyList<MetadataSearchCandidate>> groups)
-    {
-        var deduped = new List<List<MetadataSearchCandidate>>(groups.Count);
-        var survivorGroupIndex = new List<int>();
-        var survivorItemIndex = new List<int>();
-        foreach (var group in groups)
-        {
-            var kept = new List<MetadataSearchCandidate>(group.Count);
-            deduped.Add(kept);
-            var groupIndex = deduped.Count - 1;
-            foreach (var candidate in group)
-            {
-                var survivorIndex = -1;
-                for (var i = 0; i < survivorGroupIndex.Count; i++)
-                {
-                    if (IsSameItem(deduped[survivorGroupIndex[i]][survivorItemIndex[i]], candidate))
-                    {
-                        survivorIndex = i;
-                        break;
-                    }
-                }
-
-                if (survivorIndex < 0)
-                {
-                    kept.Add(candidate);
-                    survivorGroupIndex.Add(groupIndex);
-                    survivorItemIndex.Add(kept.Count - 1);
-                    continue;
-                }
-
-                var survivorGroup = survivorGroupIndex[survivorIndex];
-                var survivorItem = survivorItemIndex[survivorIndex];
-                deduped[survivorGroup][survivorItem] =
-                    MergeExternalIds(deduped[survivorGroup][survivorItem], candidate);
-            }
-        }
-
-        return deduped;
-    }
-
     private static (string, string) IdentityKey(MetadataSearchCandidate candidate) =>
         (candidate.ExternalIdSource.ToLowerInvariant(), candidate.ExternalId.ToLowerInvariant());
-
-    private static bool IsSameItem(MetadataSearchCandidate a, MetadataSearchCandidate b)
-    {
-        if (!string.Equals(a.Level, b.Level, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return SharesExternalId(a, b) || SameTitleAndYear(a, b);
-    }
 
     private static bool SharesExternalId(MetadataSearchCandidate a, MetadataSearchCandidate b)
     {
@@ -1907,17 +1829,71 @@ internal sealed class MetadataSearchService(
         return SelectPrimaryImage([seed])?.Url.AbsoluteUri;
     }
 
-    private async Task<IReadOnlyList<MetadataSearchCandidate>> PrepareCandidatesAsync(
+    private IReadOnlyList<IReadOnlyList<MetadataSearchCandidate>> DeduplicateAcrossProviders(
+        IReadOnlyList<IReadOnlyList<MetadataSearchCandidate>> groups)
+    {
+        var deduped = new List<List<MetadataSearchCandidate>>(groups.Count);
+        var survivorGroupIndex = new List<int>();
+        var survivorItemIndex = new List<int>();
+        foreach (var group in groups)
+        {
+            var kept = new List<MetadataSearchCandidate>(group.Count);
+            deduped.Add(kept);
+            var groupIndex = deduped.Count - 1;
+            foreach (var candidate in group)
+            {
+                var survivorIndex = -1;
+                for (var i = 0; i < survivorGroupIndex.Count; i++)
+                {
+                    if (IsSameItem(deduped[survivorGroupIndex[i]][survivorItemIndex[i]], candidate))
+                    {
+                        survivorIndex = i;
+                        break;
+                    }
+                }
+
+                if (survivorIndex < 0)
+                {
+                    kept.Add(candidate);
+                    survivorGroupIndex.Add(groupIndex);
+                    survivorItemIndex.Add(kept.Count - 1);
+                    continue;
+                }
+
+                var survivorGroup = survivorGroupIndex[survivorIndex];
+                var survivorItem = survivorItemIndex[survivorIndex];
+                deduped[survivorGroup][survivorItem] =
+                    MergeExternalIds(deduped[survivorGroup][survivorItem], candidate);
+            }
+        }
+
+        return deduped;
+    }
+
+    private bool IsSameItem(MetadataSearchCandidate a, MetadataSearchCandidate b)
+    {
+        var aIdentity = CandidateLibraryIdentity(a);
+        var bIdentity = CandidateLibraryIdentity(b);
+        if (aIdentity.Item1 != bIdentity.Item1 || aIdentity.Item2 != bIdentity.Item2)
+        {
+            return false;
+        }
+
+        return SharesExternalId(a, b) || SameTitleAndYear(a, b);
+    }
+
+    private async Task<(IReadOnlyList<MetadataSearchCandidate> Candidates, IReadOnlyList<string> Warnings)>
+        PrepareCandidatesAsync(
         IContentHierarchyMetadataAdvancedSearcher provider,
         IReadOnlyList<MetadataSearchCandidate> candidates,
         PreparedSearch prepared,
         string defaultLanguagePreference,
-        Dictionary<(string, string), Guid> existingLibraryItems,
+        Dictionary<(string, string, string, string), Guid> existingLibraryItems,
         CancellationToken cancellationToken)
     {
         if (candidates.Count == 0)
         {
-            return [];
+            return ([], []);
         }
 
         var existingCandidates = await FindExistingCandidatesAsync(candidates, cancellationToken)
@@ -1928,14 +1904,13 @@ internal sealed class MetadataSearchService(
         }
 
         var hydrated = new MetadataSearchCandidate?[candidates.Count];
+        var warnings = new string?[candidates.Count];
         await Task.WhenAll(
             Enumerable.Range(0, candidates.Count).Select(
             async index =>
             {
                 var candidate = candidates[index];
-                var candidateKey = (
-                    candidate.ExternalIdSource.ToLowerInvariant(),
-                    candidate.ExternalId.ToLowerInvariant());
+                var candidateKey = CandidateLibraryIdentity(candidate);
                 if (existingCandidates.ContainsKey(candidateKey))
                 {
                     hydrated[index] = candidate;
@@ -1962,6 +1937,7 @@ internal sealed class MetadataSearchService(
                     Kind = "hydrate",
                     ProviderType = provider.ProviderType,
                     candidate.ContentType,
+                    Level = candidateKey.Item2,
                     Source = candidate.ExternalIdSource,
                     candidate.ExternalId,
                     Language = defaultLanguagePreference
@@ -1980,24 +1956,21 @@ internal sealed class MetadataSearchService(
                         {
                             return await provider
                                 .HydrateAsync(candidate, defaultLanguagePreference, token)
-                                .WaitAsync(ProviderSearchTimeout, timeProvider, token)
+                                .WaitAsync(token)
                                 .ConfigureAwait(false);
                         },
                         cancellationToken).ConfigureAwait(false);
                 }
-                catch (TimeoutException)
-                {
-                    logger.LogWarning(
-                        "Metadata provider {Provider} did not hydrate {Source}={Value} in {Timeout}",
-                        provider.ProviderType,
-                        candidate.ExternalIdSource,
-                        candidate.ExternalId,
-                        ProviderSearchTimeout);
-                    hydratedCandidate = null;
-                }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw;
+                }
+                catch (UpstreamThrottledException ex)
+                {
+                    warnings[index] =
+                        $"{NormalizedProvider(provider.ProviderType)} is throttled until {ex.RetryAt:O}. " +
+                        "The search is incomplete.";
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -2007,7 +1980,10 @@ internal sealed class MetadataSearchService(
                         provider.ProviderType,
                         candidate.ExternalIdSource,
                         candidate.ExternalId);
-                    hydratedCandidate = null;
+                    warnings[index] =
+                        $"{NormalizedProvider(provider.ProviderType)} could not hydrate a search result. " +
+                        "The search is incomplete.";
+                    return;
                 }
 
                 hydrated[index] = hydratedCandidate is null
@@ -2020,100 +1996,76 @@ internal sealed class MetadataSearchService(
                     };
             })).ConfigureAwait(false);
 
-        return [.. hydrated.Where(candidate => candidate is not null).Select(candidate => candidate!)];
+        return ([.. hydrated.OfType<MetadataSearchCandidate>()], [.. warnings.OfType<string>().Distinct()]);
     }
 
-    private async Task<Dictionary<(string, string), Guid>> FindExistingCandidatesAsync(
+    private IEnumerable<(string, string, string, string)> CandidateDeliveredIdentities(
+        MetadataSearchCandidate candidate)
+    {
+        var identity = CandidateLibraryIdentity(candidate);
+        return ExternalIdPairs(candidate).Select(NormalizedExternalId)
+            .Select(pair => (identity.Item1, identity.Item2, pair.Item1, pair.Item2));
+    }
+
+    private (string, string, string, string) CandidateLibraryIdentity(MetadataSearchCandidate candidate)
+    {
+        var level = candidate.Level;
+        if (string.IsNullOrWhiteSpace(level))
+        {
+            var roots = contentTypeRegistry.GetRootLevels(candidate.ContentType);
+            level = roots.Count switch
+            {
+                0 => candidate.ContentType,
+                1 => roots[0].Slug,
+                _ => string.Empty
+            };
+        }
+
+        return (candidate.ContentType.ToLowerInvariant(), level.ToLowerInvariant(),
+            candidate.ExternalIdSource.ToLowerInvariant(), candidate.ExternalId.ToLowerInvariant());
+    }
+
+    private async Task<IReadOnlyDictionary<(string, string, string, string), Guid>> FindExistingCandidatesAsync(
         IReadOnlyList<MetadataSearchCandidate> candidates,
         CancellationToken cancellationToken)
     {
         if (candidates.Count == 0)
         {
-            return [];
+            return new Dictionary<(string, string, string, string), Guid>();
         }
 
-        var externalIds = candidates
-            .Select(c => (
-                Source: c.ExternalIdSource.ToLowerInvariant(),
-                Value: c.ExternalId.ToLowerInvariant()))
-            .Where(id => !string.IsNullOrWhiteSpace(id.Source) && !string.IsNullOrWhiteSpace(id.Value))
+        var identities = candidates
+            .Select(CandidateLibraryIdentity)
+            .Where(identity => !string.IsNullOrWhiteSpace(identity.Item2) &&
+                !string.IsNullOrWhiteSpace(identity.Item3) && !string.IsNullOrWhiteSpace(identity.Item4))
             .Distinct()
             .ToArray();
-        if (externalIds.Length == 0)
+        if (identities.Length == 0)
         {
-            return [];
+            return new Dictionary<(string, string, string, string), Guid>();
         }
 
-        var criteria = new ContentHierarchyItemCriteria
-        {
-            RootLevelOnly = true,
-            Metadata = new()
-            {
-                And =
-                [
-                    new MetadataCriteria
-                    {
-                        ExternalIds = new()
-                        {
-                            Some =
-                            [
-                                [.. externalIds.Select(id => new ExternalIdCriteria
-                                {
-                                    Source = new() { And = [new() { Value = id.Source }] },
-                                    Value = new() { And = [new() { Value = id.Value }] }
-                                })]
-                            ]
-                        }
-                    }
-                ]
-            }
-        };
-        var paging = new PagingParameter { PageNumber = 1, PageSize = externalIds.Length };
-        var existingItems = new List<ContentHierarchyItem>();
-        while (true)
-        {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                criteria,
-                paging,
-                sort: null,
-                cancellationToken)
-                .ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            existingItems.AddRange(pageItems);
-            if (pageItems.Count < paging.PageSize)
-            {
-                break;
-            }
-
-            paging = paging with { PageNumber = paging.PageNumber + 1 };
-        }
-
-        if (existingItems.Count == 0)
-        {
-            return [];
-        }
-
-        var existingCandidates = new Dictionary<(string, string), Guid>();
-        foreach (var item in existingItems)
-        {
-            foreach (var externalId in item.MetadataContainer?.Contributions.SelectMany(c => c.ExternalIds) ?? [])
-            {
-                var key = ((externalId.Source ?? string.Empty).ToLowerInvariant(), externalId.Value.ToLowerInvariant());
-                existingCandidates.TryAdd(key, item.Id);
-            }
-        }
-
-        return existingCandidates;
+        return await contentHierarchyItemRepository.FindByExternalIdentitiesAsync(identities, cancellationToken)
+            .ConfigureAwait(false);
     }
 
-    private sealed record PageMemo(HashSet<(string, string)> Ids, int Window, bool HasMore);
+    private sealed record SearchCheckpoint(
+        string Fingerprint,
+        string RequestIdentity,
+        int Page,
+        HashSet<(string, string, string, string)> Delivered,
+        IReadOnlyList<ProviderProgress> Providers);
 
-    private sealed record PageFill(
+    private sealed record ProviderProgress(
+        object? Continuation,
+        bool Exhausted,
+        IReadOnlyList<MetadataSearchCandidate> Pending);
+
+    private sealed record ContinuedPage(
         IReadOnlyList<MetadataSearchCandidate> Rows,
-        int Window,
         bool HasMore,
         int MergedCount,
-        bool Degraded);
+        SearchCheckpoint Next);
 
     private sealed record PreparedSearch(
         MetadataCriteria Criteria,
@@ -2126,6 +2078,6 @@ internal sealed class MetadataSearchService(
 
     private sealed record ProviderSearchExecution(
         ProviderSearchInvocation Invocation,
-        MetadataSearchPage? Result,
+        MetadataSearchBatch? Result,
         string? Warning);
 }

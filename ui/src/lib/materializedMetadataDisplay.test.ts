@@ -221,4 +221,18 @@ describe('buildMaterializedDetailRows', () => {
         // Assert
         expect(rows).toEqual([{ key: 'duration', label: 'Duration', value: expected }]);
     });
+
+    it('labels an unknown birth date Unknown, not Never', () => {
+        // Arrange
+        const metadata: MaterializedMetadata = { containerId: 'container-1', birthDate: '0001-01-01T00:00:00Z' };
+        const fields: LibraryStandardMetadataFieldDefinition[] = [
+            { key: 'BirthDate', field: 'BirthDate', displayName: 'Birth date', valueKind: 'date', editable: true },
+        ];
+
+        // Act
+        const rows = buildMaterializedDetailRows(metadata, fields, []);
+
+        // Assert
+        expect(rows).toEqual([{ key: 'birthDate', label: 'Birth date', value: 'Unknown' }]);
+    });
 });

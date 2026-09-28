@@ -6,9 +6,10 @@ export type LibraryImportCandidateStatus =
     | 'Invalidated'
     | 'Queued'
     | 'Importing'
-    | 'MatchingPending';
+    | 'MatchingPending'
+    | 'Rejected';
 
-interface LibraryImportMatch {
+export interface LibraryImportMatch {
     confidence: number;
 
     providerType: string;
@@ -49,6 +50,8 @@ export interface LibraryImportCandidate {
     matches: LibraryImportMatch[];
 
     matchCount: number;
+
+    contentHierarchyItemId?: string | null;
 
     notes?: string | null;
 

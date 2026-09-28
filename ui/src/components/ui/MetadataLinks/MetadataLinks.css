@@ -4,6 +4,15 @@
         flex-wrap: wrap;
         align-items: center;
         gap: var(--space-sm);
+        min-width: 0;
+    }
+
+    .metadata-links__list {
+        min-width: 0;
+
+        & > li {
+            min-width: 0;
+        }
     }
 
     .metadata-links__label {
@@ -14,6 +23,7 @@
 
     .metadata-links__link {
         display: inline-flex;
+        max-width: 100%;
         align-items: center;
         gap: var(--space-xs);
         padding: var(--space-xs) var(--space-sm);

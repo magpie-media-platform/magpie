@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -5,6 +8,24 @@ import { describe, expect, it, vi } from 'vitest';
 import { Header } from './Header';
 
 describe('Header', () => {
+    it('fits the phone header actions without horizontal overflow', () => {
+        // Arrange
+        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/Header/Header.css'), 'utf8');
+
+        // Act
+        const phone = css.slice(css.indexOf('@media (max-width: 767px)'));
+
+        // Assert
+        expect(phone).toMatch(/\.header__start,\s*\.header__end \{\s*gap: var\(--space-xs\);/);
+        expect(phone).toMatch(
+            /\.header__left-slot:has\(> \.slot:empty\),\s*\.header__right-slot:has\(> \.slot:empty\) \{\s*display: none;/,
+        );
+        expect(css).toMatch(
+            /@media \(max-width: 389px\) \{\s*\.header__brand svg,\s*\.header__brand \.logo \{\s*display: none;/,
+        );
+        expect(css).toMatch(/@media \(max-width: 359px\) \{\s*\.header__brand \{\s*display: none;/);
+    });
+
     it('renders as a header element', () => {
         render(<Header data-testid="header" />);
         const header = screen.getByTestId('header');

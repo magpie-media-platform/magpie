@@ -8,11 +8,26 @@ vi.mock('@/hooks/useEventStream', () => ({
     useEventStream: () => {},
 }));
 
+vi.mock('@/lib/api', () => ({
+    apiPost: vi.fn(async () => ({
+        tokens: [
+            {
+                name: 'studio',
+                family: 'Relationship',
+                description: 'The production studios, separated by spaces.',
+                example: 'Example Pictures Other Films',
+            },
+        ],
+        preview: { directory: 'Example Pictures Other Films', fileName: 'Example Title.mkv' },
+    })),
+}));
+
 vi.mock('@/hooks/useQualityTierLists', () => ({
     useQualityTierLists: () => ({ tierLists: [], isLoading: false }),
 }));
 
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import { apiPost } from '@/lib/api';
 
 import { RootFolderForm, type RootFolderFormValues } from './RootFolderForm';
 import type { LibraryTypeDefinition } from '@/types/library';
@@ -37,6 +52,7 @@ const notDefaultValues: RootFolderFormValues = {
     defaultMonitoring: null,
     renameTemplate: '',
     upgradeFileHandling: 'Replace',
+    autoImport: false,
     defaults: { movie: { qualityTierListId: 'tier-1' } },
 };
 
@@ -71,6 +87,7 @@ describe('RootFolderForm default folder choice', () => {
                     defaultMonitoring: null,
                     renameTemplate: '',
                     upgradeFileHandling: 'Replace',
+                    autoImport: false,
                     defaults: { root: { qualityTierListId: 'tier-1' }, leaf: { qualityTierListId: 'tier-1' } },
                 }}
                 contentTypes={[
@@ -165,5 +182,76 @@ describe('RootFolderForm default folder choice', () => {
 
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
         expect(onSubmit.mock.calls[0][0]).toMatchObject({ isDefault: false });
+    });
+
+    it('starts auto-import off for a new folder', () => {
+        renderForm(
+            <RootFolderForm
+                open
+                onOpenChange={() => {}}
+                contentTypes={contentTypes}
+                contentTypesWithFolders={[]}
+                qualityTierLists={qualityTierLists}
+                onSubmit={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByRole('switch', { name: 'Auto-import confident matches' })).not.toBeChecked();
+    });
+
+    it('submits auto-import when the user turns it on', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        renderForm(
+            <RootFolderForm
+                open
+                onOpenChange={() => {}}
+                initialValues={notDefaultValues}
+                contentTypes={contentTypes}
+                contentTypesWithFolders={['movies']}
+                qualityTierLists={qualityTierLists}
+                onSubmit={onSubmit}
+            />,
+        );
+
+        await user.click(screen.getByRole('switch', { name: 'Auto-import confident matches' }));
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0]).toMatchObject({ autoImport: true });
+    });
+});
+
+describe('RootFolderForm rename mask', () => {
+    it('previews the draft mask for the content type and inserts a token from the reference', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        renderForm(
+            <RootFolderForm
+                open
+                onOpenChange={() => {}}
+                initialValues={{ ...notDefaultValues, renameTemplate: '{Title}/' }}
+                contentTypes={contentTypes}
+                contentTypesWithFolders={['movies']}
+                qualityTierLists={qualityTierLists}
+                onSubmit={() => {}}
+            />,
+        );
+
+        // Act
+        await user.click(await screen.findByText('Available tokens'));
+        await user.click(screen.getByRole('button', { name: 'Insert {studio}' }));
+
+        // Assert
+        expect(screen.getByRole('textbox', { name: /Rename template/ })).toHaveValue('{Title}/{studio}');
+        expect(screen.getByText('Example Title.mkv')).toBeInTheDocument();
+        await waitFor(() =>
+            expect(apiPost).toHaveBeenLastCalledWith('/content/rename-tokens', {
+                contentType: 'movies',
+                contentHierarchyItemId: undefined,
+                mediaFileId: undefined,
+                template: '{Title}/{studio}',
+            }),
+        );
     });
 });

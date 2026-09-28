@@ -4,6 +4,10 @@ namespace Magpie.Extensions.Tmdb.QueryEngine;
 
 internal sealed record QueryRequest
 {
+    internal QueryProgress? Progress { get; init; }
+
+    internal bool ValidateOnly { get; init; }
+
     internal required ContentRoute Route { get; init; }
 
     internal required MetadataCriteria Criteria { get; init; }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ArrowClockwiseIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 
@@ -185,6 +185,39 @@ describe('QuickActionsButton', () => {
 
         const fab = screen.getByRole('button', { name: 'Quick Actions' });
         expect(fab).toBeInTheDocument();
+    });
+
+    it('opens a sheet with the extra content below the actions, even for a single action', async () => {
+        const user = userEvent.setup();
+        render(
+            <QuickActionsButton
+                actions={[mockActions[0]]}
+                title="Content Actions"
+                sheetContent={<button type="button">Extension action</button>}
+            />,
+        );
+
+        await user.click(screen.getByRole('button', { name: 'Content Actions' }));
+
+        const sheet = await screen.findByRole('dialog', { name: 'Content Actions' });
+        expect(within(sheet).getByRole('button', { name: 'Refresh Metadata' })).toBeInTheDocument();
+        expect(within(sheet).getByRole('button', { name: 'Extension action' })).toBeInTheDocument();
+    });
+
+    it('offers the sheet for extra content alone when there are no actions', async () => {
+        const user = userEvent.setup();
+        render(
+            <QuickActionsButton
+                actions={[]}
+                title="Content Actions"
+                sheetContent={<button type="button">Extension action</button>}
+            />,
+        );
+
+        await user.click(screen.getByRole('button', { name: 'Content Actions' }));
+
+        const sheet = await screen.findByRole('dialog', { name: 'Content Actions' });
+        expect(within(sheet).getByRole('button', { name: 'Extension action' })).toBeInTheDocument();
     });
 
     it('applies custom className to container', () => {

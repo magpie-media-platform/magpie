@@ -25,4 +25,9 @@
     <ProjectReference Include="..\Magpie.QueryLanguage\Magpie.QueryLanguage.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\ui\src\editor\item-operator-cases.json"
+                      LogicalName="item-operator-cases.json" />
+  </ItemGroup>
+
 </Project>

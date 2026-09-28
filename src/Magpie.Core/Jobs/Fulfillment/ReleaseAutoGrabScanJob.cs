@@ -38,7 +38,6 @@ internal sealed class ReleaseAutoGrabScanJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Requeue,
-        Timeout = TimeSpan.FromMinutes(10),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters =
@@ -48,7 +47,13 @@ internal sealed class ReleaseAutoGrabScanJob(
                 "Minimum hours before a content item is considered for auto-grab again. Use 0 for no cooldown.",
                 DataType.Number,
                 false,
-                MagpieJobs.ParameterValues.DefaultRetryCooldownHours.ToString(CultureInfo.InvariantCulture)),
+                MagpieJobs.ParameterValues.DefaultRetryCooldownHours.ToString(CultureInfo.InvariantCulture))
+            {
+                ValidateScheduleValue = (value, _, utcNow) =>
+                    int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hours) &&
+                    hours > utcNow.Ticks / TimeSpan.TicksPerHour
+                        ? "exceeds the supported date range." : null
+            },
             new(
                 MagpieJobs.Parameters.BackpressureThreshold,
                 "Maximum queued or running downstream ReleaseDownloadItem executions before the sweep skips.",
@@ -290,6 +295,7 @@ internal sealed class ReleaseAutoGrabScanJob(
                         LeafOnly = true,
                         EffectiveMonitoring = true,
                         HasSearchableTitle = true,
+                        ImportPending = false,
                         Fulfillment = new CriteriaSet<PropertyCriterion<FulfillmentStatus>>
                         {
                             And = [new PropertyCriterion<FulfillmentStatus>

@@ -1,8 +1,10 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
+import { AuthProvider as CatalogAuthProvider } from './AuthContext';
 import { RequireAuth, RoleGuard } from './RouteGuard';
 import { Role } from './types';
 
@@ -97,6 +99,10 @@ describe('RequireAuth', () => {
 });
 
 describe('RoleGuard', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it('renders children when user meets role requirement', () => {
         const user = { id: '1', username: 'admin', role: Role.Admin };
 
@@ -161,6 +167,53 @@ describe('RoleGuard', () => {
         );
 
         expect(screen.getByText('No access page')).toBeInTheDocument();
+    });
+
+    it.each([
+        [Role.Viewer, 'Forbidden page'],
+        [Role.Requester, 'Add content'],
+    ])('gates the route on a permission for role %s', (role, page) => {
+        renderWithRouter(
+            <AuthProvider initialUser={{ id: '1', username: 'user', role }}>
+                <Routes>
+                    <Route
+                        path="/"
+                        element={
+                            <RoleGuard permission="content.add">
+                                <span>Add content</span>
+                            </RoleGuard>
+                        }
+                    />
+                    <Route path="/forbidden" element={<span>Forbidden page</span>} />
+                </Routes>
+            </AuthProvider>,
+        );
+
+        expect(screen.getByText(page)).toBeInTheDocument();
+    });
+
+    it('renders loading state rather than redirecting while the permission catalog loads', () => {
+        vi.stubGlobal('fetch', () => new Promise(() => {}));
+
+        renderWithRouter(
+            <QueryClientProvider client={new QueryClient()}>
+                <CatalogAuthProvider initialUser={{ id: '1', username: 'user', role: Role.Requester }}>
+                    <Routes>
+                        <Route
+                            path="/"
+                            element={
+                                <RoleGuard permission="content.add">
+                                    <span>Add content</span>
+                                </RoleGuard>
+                            }
+                        />
+                        <Route path="/forbidden" element={<span>Forbidden page</span>} />
+                    </Routes>
+                </CatalogAuthProvider>
+            </QueryClientProvider>,
+        );
+
+        expect(screen.getByRole('status', { name: 'Loading page' })).toBeInTheDocument();
     });
 
     it('allows Manager when Manager role is required', () => {

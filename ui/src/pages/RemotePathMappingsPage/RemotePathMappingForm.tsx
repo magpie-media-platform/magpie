@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/Label';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
+import { focusFirstInvalidField } from '@/lib/focusFirstInvalidField';
 
 import './RemotePathMappingForm.css';
 
@@ -238,6 +239,7 @@ export function RemotePathMappingForm({
         (e: React.SubmitEvent) => {
             e.preventDefault();
             if (!validate()) {
+                focusFirstInvalidField(e.currentTarget);
                 return;
             }
             if (conflictState === 'stale') {

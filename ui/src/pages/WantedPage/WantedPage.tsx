@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { MagnifyingGlassIcon, TargetIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { useQuery } from '@tanstack/react-query';
 import { type ColumnDef, type RowSelectionState, type SortingState } from '@tanstack/react-table';
@@ -12,7 +13,19 @@ import { Badge } from '@/components/ui/Badge';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
 import { Button } from '@/components/ui/Button';
 import { selectColumn } from '@/components/ui/DataTable/selectColumn';
-import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
+import { ColumnHeaderFilter } from '@/components/ui/ColumnHeaderFilter';
+import { FilterBar } from '@/components/filters/FilterBar';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import {
+    buildContentFilterOptions,
+    contentFilterSelectionValue,
+    parseContentFilterSelectionValue,
+} from '@/lib/contentFilterOptions';
+import {
+    hasComplexContentFilter,
+    readContentFilterSelection,
+    setContentFilterSelection,
+} from '@/lib/contentColumnFilters';
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
@@ -30,9 +43,10 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useLibraryTypes, type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
-import { fetchWantedChildren, useWantedContent, wantedQueryKeys } from '@/hooks/useWantedContent';
+import { fetchWantedChildren, hasContentChildren, useWantedContent, wantedQueryKeys } from '@/hooks/useWantedContent';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
-import { formatShortDate } from '@/lib/dateFormatting';
+import { escapeQueryString } from '@/lib/simpleFilterQuery';
+import { formatPublishDate } from '@/lib/dateFormatting';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { getFulfillmentBadge } from '@/types/content';
 import type { ContentListItem, FulfillmentStatus } from '@/types';
@@ -78,7 +92,11 @@ function TitleCell({
 
     return (
         <div className="wanted-page__title-cell">
-            {linked ? (
+            {linked && !isContainerItem(item, contentTypes) ? (
+                <LocalContentLink contentId={item.id} className="wanted-page__title-link" data-content-id={item.id}>
+                    {content}
+                </LocalContentLink>
+            ) : linked ? (
                 <Link to={to} className="wanted-page__title-link" data-content-id={item.id}>
                     {content}
                 </Link>
@@ -125,7 +143,7 @@ function LastSearchedCell({ value }: { value?: string | null }) {
 }
 
 function PublishedCell({ value }: { value?: string }) {
-    return <span className="wanted-page__published">{formatShortDate(value, '--')}</span>;
+    return <span className="wanted-page__published">{formatPublishDate(value, '--')}</span>;
 }
 
 function isContainerItem(item: ContentListItem, contentTypes: LibraryTypeDefinition[]): boolean {
@@ -133,13 +151,7 @@ function isContainerItem(item: ContentListItem, contentTypes: LibraryTypeDefinit
     return contentType?.levels.some((level) => level.parentSlug === item.level) ?? false;
 }
 
-function MissingDescendantCount({
-    item,
-    contentTypes,
-}: {
-    item: ContentListItem;
-    contentTypes: LibraryTypeDefinition[];
-}) {
+function useContainerDescendants(item: ContentListItem, contentTypes: LibraryTypeDefinition[]) {
     const contentId = item.id;
     const containerLevels = contentTypes.flatMap((type) =>
         type.levels.flatMap((level) => (level.parentSlug ? [{ contentType: type.slug, level: level.parentSlug }] : [])),
@@ -159,16 +171,55 @@ function MissingDescendantCount({
         enabled: container,
         staleTime: 30_000,
     });
+    const childrenQuery = useQuery({
+        queryKey: wantedQueryKeys.hasChildren(contentId),
+        queryFn: () => hasContentChildren(contentId),
+        enabled: container && query.data === 0,
+        staleTime: 30_000,
+    });
 
-    if (!container || query.data === undefined || query.data === 0) {
+    return {
+        container,
+        missing: query.data,
+        hasChildren: query.data === 0 ? childrenQuery.data : undefined,
+    };
+}
+
+function MissingDescendantCount({
+    item,
+    contentTypes,
+}: {
+    item: ContentListItem;
+    contentTypes: LibraryTypeDefinition[];
+}) {
+    const { container, missing, hasChildren } = useContainerDescendants(item, contentTypes);
+
+    if (container && hasChildren === false) {
+        return <span className="wanted-page__descendant-count">No child items yet</span>;
+    }
+
+    if (!container || missing === undefined || missing === 0) {
         return null;
     }
 
     return (
         <span className="wanted-page__descendant-count">
-            {query.data} missing {query.data === 1 ? 'descendant' : 'descendants'}
+            {missing} missing {missing === 1 ? 'descendant' : 'descendants'}
         </span>
     );
+}
+
+function DescendantSearchGate({
+    item,
+    contentTypes,
+    children,
+}: {
+    item: ContentListItem;
+    contentTypes: LibraryTypeDefinition[];
+    children: ReactNode;
+}) {
+    const { container, missing } = useContainerDescendants(item, contentTypes);
+    return !container || (missing !== undefined && missing > 0) ? children : null;
 }
 
 function isActionableLeaf(item: ContentListItem, isContainer: boolean): boolean {
@@ -227,6 +278,36 @@ export function WantedPage() {
     const [searchParams] = useSearchParams();
     const usesCardLayout = useCardLayout();
     const parentId = searchParams.get('parentId') || undefined;
+    const { contentTypes, isLoading: areContentTypesLoading } = useLibraryTypes();
+    const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
+        defaultSort: DEFAULT_SORTING,
+        defaultFilters: { type: '', filter: '' },
+        sortKeys: SORT_KEYS,
+    });
+    const typeOptions = useMemo(() => buildContentFilterOptions(contentTypes, undefined, true), [contentTypes]);
+    const legacyType = typeOptions.find((option) =>
+        option.level
+            ? resolveContentTypeLabel({ contentType: option.contentType, level: option.level }, contentTypes) ===
+              filters.type
+            : option.label === filters.type,
+    );
+    const legacyQuery = filters.type
+        ? legacyType
+            ? setContentFilterSelection('', parseContentFilterSelectionValue(legacyType.value))
+            : `level = "${escapeQueryString(filters.type)}"`
+        : '';
+    const filterQuery = legacyQuery
+        ? [filters.filter.trim() ? `(${filters.filter})` : '', legacyQuery].filter(Boolean).join(' and ')
+        : filters.filter;
+    const debouncedFilter = useDebouncedValue(filterQuery, 300);
+    const selectionFilter = readContentFilterSelection(filterQuery);
+    const typeFilter = selectionFilter ? contentFilterSelectionValue(selectionFilter) : '';
+    const setFilterQuery = useCallback((filter: string) => setFilters({ filter, type: '' }), [setFilters]);
+    const setTypeFilter = useCallback(
+        (value: string) =>
+            setFilterQuery(setContentFilterSelection(filterQuery, parseContentFilterSelectionValue(value))),
+        [filterQuery, setFilterQuery],
+    );
     const {
         items,
         upgradeItems,
@@ -235,21 +316,18 @@ export function WantedPage() {
         isTruncated,
         totalItems,
         refetch,
-    } = useWantedContent(parentId);
+    } = useWantedContent(parentId, debouncedFilter);
     const { ancestors } = useContentAncestors(parentId);
-    const { contentTypes, isLoading: areContentTypesLoading } = useLibraryTypes();
+    const { data: parentHasChildren } = useQuery({
+        queryKey: wantedQueryKeys.hasChildren(parentId ?? ''),
+        queryFn: () => hasContentChildren(parentId ?? ''),
+        enabled: !!parentId && !isWantedLoading && items.length === 0 && upgradeItems.length === 0,
+        staleTime: 30_000,
+    });
     const isLoading = isWantedLoading || areContentTypesLoading;
     const searchMutation = useSearchContentReleases();
     const [isSearching, setIsSearching] = useState(false);
     const [mobileSelectionMode, setMobileSelectionMode] = useState(false);
-
-    const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
-        defaultSort: DEFAULT_SORTING,
-        defaultFilters: { type: '' },
-        sortKeys: SORT_KEYS,
-    });
-    const typeFilter = filters.type;
-    const setTypeFilter = useCallback((value: string) => setFilters({ type: value }), [setFilters]);
 
     const isContainer = useCallback((item: ContentListItem) => isContainerItem(item, contentTypes), [contentTypes]);
 
@@ -260,31 +338,15 @@ export function WantedPage() {
         return [...stagedItems, ...upgrades];
     }, [items, upgradeItems, isContainer]);
 
-    const typeOptions = useMemo<FacetOption[]>(() => {
-        const labels = new Set<string>();
-        for (const item of wantedItems) {
-            const label = typeLabel(item, contentTypes);
-            if (label) {
-                labels.add(label);
-            }
-        }
-        return [...labels].sort((a, b) => a.localeCompare(b)).map((label) => ({ value: label, label }));
-    }, [wantedItems, contentTypes]);
-
-    const filteredItems = useMemo(() => {
-        if (!typeFilter) {
-            return wantedItems;
-        }
-        return wantedItems.filter((item) => typeLabel(item, contentTypes) === typeFilter);
-    }, [wantedItems, contentTypes, typeFilter]);
+    const filteredItems = wantedItems;
 
     const sortedItems = useMemo(() => sortWantedItems(filteredItems, sorting), [filteredItems, sorting]);
 
-    const hasActiveFilters = typeFilter !== '';
+    const hasActiveFilters = filterQuery.trim().length > 0;
 
     const handleClearFilters = useCallback(() => {
-        setTypeFilter('');
-    }, [setTypeFilter]);
+        setFilterQuery('');
+    }, [setFilterQuery]);
 
     const pageCount = Math.max(1, Math.ceil(sortedItems.length / PAGE_SIZE));
     const currentPage = Math.min(page, pageCount);
@@ -312,7 +374,7 @@ export function WantedPage() {
     useEffect(() => {
         clearSelection();
         setMobileSelectionMode(false);
-    }, [clearSelection, parentId, typeFilter]);
+    }, [clearSelection, parentId, filterQuery]);
 
     const wantedUrl = useCallback(
         (scopeId?: string) => {
@@ -494,6 +556,10 @@ export function WantedPage() {
                         type="facet"
                         label="Type"
                         active={typeFilter !== ''}
+                        advanced={
+                            hasComplexContentFilter(filterQuery, 'contentType') ||
+                            hasComplexContentFilter(filterQuery, 'level')
+                        }
                         options={typeOptions}
                         value={typeFilter}
                         onChange={setTypeFilter}
@@ -570,13 +636,18 @@ export function WantedPage() {
                             Search Now
                         </Button>
                     );
+                    const action = (
+                        <DescendantSearchGate item={item} contentTypes={contentTypes}>
+                            {searchButton}
+                        </DescendantSearchGate>
+                    );
                     return container && item.acquisitionStatus ? (
                         <div className="wanted-page__parent-action">
                             <AcquisitionBadge status={item.acquisitionStatus} />
-                            {searchButton}
+                            {action}
                         </div>
                     ) : (
-                        searchButton
+                        action
                     );
                 },
             },
@@ -592,6 +663,7 @@ export function WantedPage() {
         selection,
         setTypeFilter,
         typeFilter,
+        filterQuery,
         typeOptions,
     ]);
 
@@ -600,11 +672,20 @@ export function WantedPage() {
     const emptyState = (
         <EmptyState
             icon={<TargetIcon weight="duotone" />}
-            title={parentId ? 'No wanted content under this item' : 'Nothing wanted right now'}
+            title={
+                parentHasChildren === false
+                    ? 'This item has no child items yet'
+                    : parentId
+                      ? 'No wanted content under this item'
+                      : 'Nothing wanted right now'
+            }
             description={
-                parentId
-                    ? 'This item has no monitored content that still needs to be acquired.'
-                    : 'Monitored content appears here when files are missing or a quality upgrade is available.'
+                parentHasChildren === false
+                    ? 'This item has no child items yet, so nothing under it can be searched. ' +
+                      'Refresh its metadata to load them.'
+                    : parentId
+                      ? 'This item has no monitored content that still needs to be acquired.'
+                      : 'Monitored content appears here when files are missing or a quality upgrade is available.'
             }
             action={
                 parentId ? (
@@ -653,6 +734,14 @@ export function WantedPage() {
                     rest.
                 </Alert>
             )}
+
+            <FilterBar
+                value={filterQuery}
+                onChange={setFilterQuery}
+                localContentPage
+                includeAllContentLevels
+                defaultExpanded
+            />
 
             {canSearch && !usesCardLayout && (
                 <BulkActionsToolbar
@@ -723,6 +812,7 @@ export function WantedPage() {
                                     className="wanted-page__pager"
                                     page={currentPage}
                                     pageCount={pageCount}
+                                    totalItems={filteredItems.length}
                                     onFirst={() => setPage(1)}
                                     onPrevious={() => setPage(currentPage - 1)}
                                     onNext={() => setPage(currentPage + 1)}
@@ -795,6 +885,7 @@ export function WantedPage() {
                                                     posterUrl={item.posterUrl}
                                                     posterAlt={`${item.title} artwork`}
                                                     posterTo={target}
+                                                    previewContentId={container ? undefined : item.id}
                                                     posterLinkLabel={`Open ${item.title}`}
                                                     title={
                                                         <TitleCell
@@ -808,26 +899,34 @@ export function WantedPage() {
                                                         canSearch &&
                                                         canSearchItem &&
                                                         (!item.acquisitionStatus || container) ? (
-                                                            <Button
-                                                                variant="secondary"
-                                                                size="sm"
-                                                                onClick={(event) => {
-                                                                    event.stopPropagation();
-                                                                    void handleSearchNow([item]);
-                                                                }}
-                                                                loading={isSearching}
-                                                                disabled={isSearching}
-                                                                aria-label={
-                                                                    container
-                                                                        ? `Search now for descendants of ${item.title}`
-                                                                        : `Search now for ${item.title}`
-                                                                }
-                                                                data-action="search-now"
-                                                                data-content-id={item.id}
+                                                            <DescendantSearchGate
+                                                                item={item}
+                                                                contentTypes={contentTypes}
                                                             >
-                                                                <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
-                                                                Search Now
-                                                            </Button>
+                                                                <Button
+                                                                    variant="secondary"
+                                                                    size="sm"
+                                                                    onClick={(event) => {
+                                                                        event.stopPropagation();
+                                                                        void handleSearchNow([item]);
+                                                                    }}
+                                                                    loading={isSearching}
+                                                                    disabled={isSearching}
+                                                                    aria-label={
+                                                                        container
+                                                                            ? `Search now for descendants of ${item.title}`
+                                                                            : `Search now for ${item.title}`
+                                                                    }
+                                                                    data-action="search-now"
+                                                                    data-content-id={item.id}
+                                                                >
+                                                                    <MagnifyingGlassIcon
+                                                                        weight="bold"
+                                                                        aria-hidden="true"
+                                                                    />
+                                                                    Search Now
+                                                                </Button>
+                                                            </DescendantSearchGate>
                                                         ) : undefined
                                                     }
                                                 >
@@ -836,7 +935,7 @@ export function WantedPage() {
                                                         <AcquisitionBadge status={item.acquisitionStatus} />
                                                     )}
                                                     <TypeCell item={item} contentTypes={contentTypes} />
-                                                    <span>Published: {formatShortDate(item.publishDate, '--')}</span>
+                                                    <span>Published: {formatPublishDate(item.publishDate, '--')}</span>
                                                     <span className="wanted-page__mobile-last-searched">
                                                         Last searched: {formatRelativeTime(item.lastSearched, 'Never')}
                                                     </span>
@@ -851,6 +950,7 @@ export function WantedPage() {
                                     className="wanted-page__pager"
                                     page={currentPage}
                                     pageCount={pageCount}
+                                    totalItems={filteredItems.length}
                                     onFirst={() => setPage(1)}
                                     onPrevious={() => setPage(currentPage - 1)}
                                     onNext={() => setPage(currentPage + 1)}

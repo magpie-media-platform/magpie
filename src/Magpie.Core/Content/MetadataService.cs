@@ -8,6 +8,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
@@ -128,7 +129,7 @@ internal sealed class MetadataService(
                         TopLevel = item.ParentId is null,
                         RootFolderId = item.RootFolderId,
                         QualityTierListId = item.QualityTierListId,
-                        Monitoring = item.EffectiveMonitoring,
+                        Monitoring = item.EffectiveMonitoring != MonitoringMode.Unmonitored,
                         MetadataSourceContainerId = item.MetadataContainerId
                     }.ToContext(),
                     default,

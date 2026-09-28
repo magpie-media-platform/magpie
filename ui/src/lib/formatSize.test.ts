@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatBackupSize, formatDiskSpaceSize, formatFileSize } from './formatSize';
+import { formatBackupSize, formatDiskSpaceSize, formatFileSize, formatPrimaryMediaSummary } from './formatSize';
 
 describe('formatFileSize', () => {
     it('returns 0 B for zero bytes', () => {
@@ -75,6 +75,21 @@ describe('formatBackupSize', () => {
         const exabyte = 1024 * 1024 * 1099511627776;
         const result = formatBackupSize(exabyte);
         expect(result).toContain('TB');
+    });
+});
+
+describe('formatPrimaryMediaSummary', () => {
+    it('uses the singular label for one file', () => {
+        expect(formatPrimaryMediaSummary(1, 1024)).toBe('1 file · 1 KB');
+    });
+
+    it('uses the plural label for zero and multiple files', () => {
+        expect(formatPrimaryMediaSummary(0, 0)).toBe('0 files · 0 B');
+        expect(formatPrimaryMediaSummary(2, 2048)).toBe('2 files · 2 KB');
+    });
+
+    it('keeps unavailable totals distinct from zero', () => {
+        expect(formatPrimaryMediaSummary()).toBe('— files · —');
     });
 });
 

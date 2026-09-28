@@ -254,6 +254,7 @@ export function ActivityTab({ contentHierarchyItemId }: ActivityTabProps): React
                     className="activity-tab__pager"
                     page={safePage}
                     pageCount={totalPages}
+                    totalItems={totalCount}
                     onFirst={() => setPage(1)}
                     onPrevious={() => setPage(Math.max(1, safePage - 1))}
                     onNext={() => setPage(Math.min(totalPages, safePage + 1))}

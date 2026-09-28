@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 
 using Magpie.Models.MetadataSearch;
 using Magpie.Sdk.Api;
+using Magpie.Sdk.Content;
 using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
@@ -34,7 +35,8 @@ internal sealed class ContentSearchEndpointGroup : IApiEndpointGroup
         string? query,
         string? contentType,
         int? page,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? continuation = null)
     {
         if (string.IsNullOrWhiteSpace(query))
         {
@@ -57,11 +59,18 @@ internal sealed class ContentSearchEndpointGroup : IApiEndpointGroup
                 });
         }
 
-        var result = await metadataSearchService
-            .SearchCandidatesAsync(parseResult.Value!, contentType, page ?? 1, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(result);
+        try
+        {
+            var result = await metadataSearchService
+                .SearchCandidatesAsync(parseResult.Value!, contentType, page ?? 1, continuation, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(result);
+        }
+        catch (MetadataSearchContinuationException exception)
+        {
+            return Results.Problem(detail: exception.Message, statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?> { ["code"] = "invalid_search_continuation" });
+        }
     }
 }
 

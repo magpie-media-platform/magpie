@@ -21,9 +21,11 @@ import {
 import { Shell, ShellHeader, ShellSidebar, ShellMain, ShellBottomNav, useShell, type ShellProps } from '../Shell';
 import { Sidebar, SidebarContent, SidebarGroup, SidebarItem, SidebarSeparator } from '../Sidebar';
 import { Header } from '../Header';
+import { LiveUpdateStatus } from '../LiveUpdateStatus/LiveUpdateStatus';
 import { UserMenu } from '../UserMenu';
 import { ExtensionAdminNavigation } from '../Slot';
 import { AdminLink } from '@/auth';
+import { LibraryQuickSearch } from '@/components/content/LibraryQuickSearch';
 import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 import { useIsActive } from '@/lib/routes';
 
@@ -87,14 +89,16 @@ function AdminHeader() {
             brand={
                 <Link to="/admin">
                     <GearIcon size={26} weight="duotone" aria-hidden="true" />
-                    <span>Admin</span>
+                    <span>Magpie</span>
                 </Link>
             }
+            status={<LiveUpdateStatus />}
             onSidebarToggle={toggleSidebar}
             sidebarOpen={sidebarExpanded}
             sidebarNavId="admin-navigation-menu"
             actions={
                 <>
+                    <LibraryQuickSearch />
                     <AdminLink />
                     <UserMenu />
                 </>

@@ -19,6 +19,7 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -34,15 +35,36 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IContentHierarchyItemRepository _subject = null!;
     private Guid _metadataContainerId;
+
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.UseSqlite(_template).Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
 
     [SetUp]
     public void SetUp()
     {
-        _context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        _context = new MagpieDbContext(options.UseSqlite(connection, contextOwnsConnection: true).Options);
         var metadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
         _context.MetadataContainers.Add(metadataContainer);
         _context.SaveChanges();
@@ -52,7 +74,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             _context, Mock.Of<IAuditRecordRepository>(), transactions,
             Mock.Of<IMetadataContainerRepository>(),
             Mock.Of<IContentTypeRegistry>(), Mock.Of<IEventBus>(),
-            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System);
+            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System, Mock.Of<IContentRepository>());
     }
 
     [TearDown]
@@ -108,7 +130,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(directorItem);
@@ -155,7 +177,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-b",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -279,7 +301,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "super-troopers",
             Name = "Super Troopers",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(scopedItem);
@@ -290,7 +312,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "night-shift",
             Name = "Night Shift",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -391,7 +413,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(directorItem);
@@ -438,7 +460,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-b",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -532,7 +554,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "delphine-content",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -579,7 +601,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "other-content",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -680,7 +702,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "sable-content",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -727,7 +749,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "other-content",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -835,7 +857,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "kerr-content",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -882,7 +904,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "other-content",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -1005,7 +1027,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "bob-content",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -1052,7 +1074,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "marlowe-content",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(kept);
@@ -1165,7 +1187,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "pinned-content",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -1218,7 +1240,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "other-content",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -1359,7 +1381,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "only-a",
             Name = "Only A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(onlyA);
@@ -1389,7 +1411,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "only-b",
             Name = "Only B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(onlyB);
@@ -1425,7 +1447,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "both",
             Name = "Both",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(both);
@@ -1577,7 +1599,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-b",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -1624,7 +1646,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(kept);
@@ -1716,7 +1738,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(personItem);
@@ -1763,7 +1785,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-b",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -1857,7 +1879,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(personItem);
@@ -1904,7 +1926,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-b",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -1966,7 +1988,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-e",
             Slug = "movie-content-target",
             Name = "Movie A Target",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(targetItem);
@@ -1994,7 +2016,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "movie-content",
             Name = "Movie A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(match);
@@ -2041,7 +2063,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -2135,7 +2157,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -2182,7 +2204,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-b",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(kept);
@@ -2274,7 +2296,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-a",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(relationshipItem1);
@@ -2321,7 +2343,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "item-b",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(publisherItem);
@@ -2415,7 +2437,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "materialized-content",
             Name = "Item A",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(materialized);
@@ -2453,7 +2475,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Level = "level-a",
             Slug = "bare-content",
             Name = "Item B",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(bare);

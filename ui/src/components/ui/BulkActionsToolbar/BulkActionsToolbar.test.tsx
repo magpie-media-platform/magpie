@@ -142,18 +142,18 @@ describe('BulkActionsToolbar', () => {
 });
 
 describe('SelectModeToggle', () => {
-    it('enters selection mode and names the exit once active', async () => {
+    it('keeps one name and shows selection mode as its pressed state', async () => {
         const onToggle = vi.fn();
         const user = userEvent.setup();
         const { rerender } = render(<SelectModeToggle active={false} onToggle={onToggle} />);
 
         expect(document.querySelector('[data-action="enter-select-mode"]')).toBeInTheDocument();
 
-        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByRole('button', { name: 'Select', pressed: false }));
         expect(onToggle).toHaveBeenCalledTimes(1);
 
         rerender(<SelectModeToggle active onToggle={onToggle} />);
-        expect(screen.getByRole('button', { name: 'Stop selecting' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
         expect(document.querySelector('[data-action="exit-select-mode"]')).toBeInTheDocument();
     });
 

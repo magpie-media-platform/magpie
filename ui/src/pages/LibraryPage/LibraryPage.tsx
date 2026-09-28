@@ -52,6 +52,9 @@ export function LibraryPage() {
                     <PageHeader
                         className="library-page__header"
                         title={pageTitle}
+                        description={
+                            library.allLevels ? 'Includes matching child items, not only top-level items.' : undefined
+                        }
                         icon={
                             <CdnPhosphorIcon
                                 name={pageIconName}
@@ -82,6 +85,10 @@ export function LibraryPage() {
 
                     <LibraryFilters
                         filterQuery={library.filterQuery}
+                        isRestoringFilter={library.isRestoringFilter}
+                        filterRestoreError={library.filterRestoreError}
+                        onRetrySavedFilter={library.retrySavedFilters}
+                        onClearFilters={library.handleClearSearchAndFilters}
                         onFilterQueryChange={library.handleFilterQueryChange}
                         showSaveControl={library.showSaveControl}
                         saveControlLabel={library.saveControlLabel}
@@ -118,36 +125,38 @@ export function LibraryPage() {
                         </BulkActionsToolbar>
                     )}
 
-                    <LibraryContentSection
-                        isLoading={library.isLoading}
-                        contentTypeValidationPending={library.contentTypeValidationPending}
-                        error={library.error}
-                        onRetry={() => library.refetch()}
-                        onEditFilter={() => library.setFilterBarExpanded(true)}
-                        contentItems={library.contentItems}
-                        totalItems={library.totalItems}
-                        onContentClick={library.handleContentClick}
-                        sorting={library.sorting}
-                        onSortingChange={library.handleSortingChange}
-                        pagination={library.pagination}
-                        onPaginationChange={library.handlePaginationChange}
-                        headerFilters={library.headerFilters}
-                        headerFilterHandlers={library.headerFilterHandlers}
-                        hasBulkActions={library.hasBulkActions}
-                        selection={library.selection}
-                        selectionMode={library.selectionMode}
-                        onEnterSelectionMode={library.enterSelectionMode}
-                        onExitSelectionMode={library.exitSelectionMode}
-                        onBeginCardSelection={library.beginCardSelection}
-                        hasActiveSearchOrFilter={library.hasActiveSearchOrFilter}
-                        pageCount={library.pageCount}
-                        currentPage={library.currentPage}
-                        goToPage={library.goToPage}
-                        canEditContent={library.canEditContent}
-                        addContentTo={library.addContentTo}
-                        onClearSearchAndFilters={library.handleClearSearchAndFilters}
-                        view={view}
-                    />
+                    {!library.filterRestoreError && (
+                        <LibraryContentSection
+                            isLoading={library.isLoading}
+                            contentTypeValidationPending={library.contentTypeValidationPending}
+                            error={library.error}
+                            onRetry={() => library.refetch()}
+                            onEditFilter={() => library.setFilterBarExpanded(true)}
+                            contentItems={library.contentItems}
+                            totalItems={library.totalItems}
+                            onContentClick={library.handleContentClick}
+                            sorting={library.sorting}
+                            onSortingChange={library.handleSortingChange}
+                            pagination={library.pagination}
+                            onPaginationChange={library.handlePaginationChange}
+                            headerFilters={library.headerFilters}
+                            headerFilterHandlers={library.headerFilterHandlers}
+                            hasBulkActions={library.hasBulkActions}
+                            selection={library.selection}
+                            selectionMode={library.selectionMode}
+                            onEnterSelectionMode={library.enterSelectionMode}
+                            onExitSelectionMode={library.exitSelectionMode}
+                            onBeginCardSelection={library.beginCardSelection}
+                            hasActiveSearchOrFilter={library.hasActiveSearchOrFilter}
+                            pageCount={library.pageCount}
+                            currentPage={library.currentPage}
+                            goToPage={library.goToPage}
+                            canAddContent={library.canAddContent}
+                            addContentTo={library.addContentTo}
+                            onClearSearchAndFilters={library.handleClearSearchAndFilters}
+                            view={view}
+                        />
+                    )}
                 </ContentListSlot>
             </PullToRefresh>
 
@@ -195,6 +204,7 @@ export function LibraryPage() {
                 isUpdatingFilter={library.isUpdatingFilter}
                 filterQuery={library.filterQuery}
                 saveFilterError={library.saveFilterError}
+                saveFilterQueryError={library.saveFilterQueryError}
                 existingFilterNames={library.savedContentFilters.map((f) => f.name)}
                 bulkDeleteConfirmOpen={library.bulkDeleteConfirmOpen}
                 onConfirmBulkDelete={library.handleConfirmBulkDelete}

@@ -36,7 +36,7 @@ itemAndExpr { itemTerm (kw_and itemTerm)* }
 
 itemTerm { ItemField | ItemGroup | ItemValue }
 
-ItemField { Identifier ItemOp Value }
+ItemField { Identifier ItemOp Value | Identifier NullOp }
 
 ItemGroup { "(" itemExpr ")" }
 

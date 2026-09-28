@@ -19,6 +19,7 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -35,6 +36,7 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ContentHierarchyItemRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IContentHierarchyItemRepository _subject = null!;
     private Guid _metadataContainerId;
     private Guid _userId;
@@ -43,12 +45,32 @@ public sealed class ContentHierarchyItemRepositoryTests
     private List<MagpieEvent> _publishedEvents = null!;
     private Mock<IContentTypeRegistry> _contentTypeRegistry = null!;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.UseSqlite(_template).Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
-        _context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        _context = new MagpieDbContext(options.UseSqlite(connection, contextOwnsConnection: true).Options);
         var user = new User
         {
             Username = "TestUser",
@@ -79,7 +101,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             _context, auditRecords, _transactionManager,
             Mock.Of<IMetadataContainerRepository>(),
             _contentTypeRegistry.Object, _eventBus.Object,
-            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System);
+            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System, Mock.Of<IContentRepository>());
     }
 
     [TearDown]
@@ -121,7 +143,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             Level = "level-a",
             Slug = "new-movie",
             Name = "New Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             Path = "/movies/new-movie",
             LanguagePreferences = ["en", "es"]
         };
@@ -138,7 +160,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             Assert.That(result, Has.Property(nameof(result.ContentType)).EqualTo("type-a"));
             Assert.That(result, Has.Property(nameof(result.CreatedByUserId)).EqualTo(_userId));
             Assert.That(result, Has.Property(nameof(result.CreatedAt)).Not.EqualTo(default(DateTime)));
-            Assert.That(result.EffectiveMonitoring, Is.True);
+            Assert.That(result.EffectiveMonitoring, Is.EqualTo(MonitoringMode.Monitored));
             Assert.That(result.EffectiveRootFolderId, Is.EqualTo(defaultRootFolder.Id));
             Assert.That(result.EffectiveQualityTierListId, Is.EqualTo(defaultQualityTierList.Id));
         }
@@ -198,7 +220,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             Level = "child",
             Slug = "ancestor-default",
             Name = "Ancestor default",
-            Monitoring = true
+            Monitoring = MonitoringMode.Monitored
         };
 
         // Act
@@ -244,7 +266,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             Level = "root",
             Slug = "missing-quality-default",
             Name = "Missing quality default",
-            Monitoring = true
+            Monitoring = MonitoringMode.Monitored
         };
 
         // Act
@@ -293,7 +315,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             Slug = "explicit-quality",
             Name = "Explicit quality",
             QualityTierListId = explicitTierList.Id,
-            Monitoring = true
+            Monitoring = MonitoringMode.Monitored
         };
 
         // Act
@@ -518,6 +540,71 @@ public sealed class ContentHierarchyItemRepositoryTests
     }
 
     [Test]
+    public async Task TryCreateAsync_Throws_WhenUnrelatedInsertFailureHasExistingSlug()
+    {
+        // Arrange
+        var rootFolder = new RootFolder
+        {
+            Id = Guid.NewGuid(),
+            Name = "Root A",
+            Path = "D:\\RootA",
+            ContentType = "type-a",
+            IsDefault = true,
+            Defaults = new()
+            {
+                ["level-a"] = new()
+            },
+            CreatedAt = DateTime.UtcNow
+        };
+        var winner = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "provider-a-existing",
+            Name = "Winner",
+            RootFolderId = rootFolder.Id,
+            EffectiveRootFolderId = rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.RootFolders.Add(rootFolder);
+        _context.ContentHierarchyItems.Add(winner);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        await _context.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER unrelated_hierarchy_insert_failure
+            BEFORE INSERT ON content_hierarchyItem
+            WHEN NEW.Name = 'Loser'
+            BEGIN
+                SELECT RAISE(ABORT, 'Unrelated insert failure.');
+            END;
+            """).ConfigureAwait(false);
+        var loser = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "provider-a-existing",
+            Name = "Loser",
+            RootFolderId = rootFolder.Id
+        };
+
+        // Act
+        var exception = Assert.ThrowsAsync<DbUpdateException>(
+            async () => await _subject.TryCreateAsync(loser, _userId).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception, Is.Not.Null);
+            Assert.That(exception!.InnerException, Has.Message.Contain("Unrelated insert failure."));
+            Assert.That(_context.Entry(loser).State, Is.EqualTo(EntityState.Detached));
+            Assert.That(_context.Entry(loser.MetadataContainer!).State, Is.EqualTo(EntityState.Detached));
+        }
+    }
+
+    [Test]
     public async Task TryCreateAsync_ThrowsAndRollsBack_WhenAuditCreateFails()
     {
         // Arrange
@@ -560,7 +647,8 @@ public sealed class ContentHierarchyItemRepositoryTests
             Mock.Of<IContentTypeRegistry>(),
             _eventBus.Object,
             NullLoggerFactory.Instance.CreateLogger<ContentHierarchyItemRepository>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            Mock.Of<IContentRepository>());
 
         // Act
         var exception = Assert.ThrowsAsync<DbUpdateException>(
@@ -639,7 +727,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             Level = "level-a",
             Slug = "audited-movie",
             Name = "Audited Movie",
-            Monitoring = true
+            Monitoring = MonitoringMode.Monitored
         };
 
         // Act
@@ -670,14 +758,14 @@ public sealed class ContentHierarchyItemRepositoryTests
             Level = "level-a",
             Slug = "original-movie",
             Name = "Original Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         item.Name = "Updated Movie";
-        item.Monitoring = false;
+        item.Monitoring = MonitoringMode.Unmonitored;
         item.Path = "/movies/updated-movie";
         item.Settings["content.path.origin"] = "Generated";
         item.Settings["visible"] = "value";
@@ -691,7 +779,7 @@ public sealed class ContentHierarchyItemRepositoryTests
         {
             Assert.That(result, Is.True);
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("Updated Movie"));
-            Assert.That(updated, Has.Property(nameof(updated.Monitoring)).EqualTo(false));
+            Assert.That(updated, Has.Property(nameof(updated.Monitoring)).EqualTo(MonitoringMode.Unmonitored));
             Assert.That(updated, Has.Property(nameof(updated.Path)).EqualTo("/movies/updated-movie"));
             Assert.That(updated!.Settings["content.path.origin"], Is.EqualTo("Generated"));
             Assert.That(
@@ -764,7 +852,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             Level = "level-a",
             Slug = "nonexistent-movie",
             Name = "Nonexistent Movie",
-            Monitoring = true
+            Monitoring = MonitoringMode.Monitored
         };
 
         // Act
@@ -785,7 +873,7 @@ public sealed class ContentHierarchyItemRepositoryTests
             Level = "level-a",
             Slug = "to-update-movie",
             Name = "To Update Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item);

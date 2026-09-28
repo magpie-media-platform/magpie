@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../Sheet';
 import { TagInput, type TagInputProps } from './TagInput';
 
 function ControlledTagInput({
@@ -86,6 +87,31 @@ describe('TagInput', () => {
         await user.click(option);
 
         expect(onChange).toHaveBeenLastCalledWith(['Documentary']);
+    });
+
+    it('closes only its suggestions on the first Escape inside a sheet, and the sheet on the second', async () => {
+        const user = userEvent.setup();
+        const onOpenChange = vi.fn();
+        render(
+            <Sheet open onOpenChange={onOpenChange}>
+                <SheetContent>
+                    <SheetTitle>Tier list</SheetTitle>
+                    <SheetDescription>Edit the tier list.</SheetDescription>
+                    <ControlledTagInput suggestions={['video/mp4']} allowCreate />
+                </SheetContent>
+            </Sheet>,
+        );
+
+        await user.type(input(), 'video');
+        expect(await screen.findByRole('listbox')).toBeInTheDocument();
+
+        await user.keyboard('{Escape}');
+        expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+        expect(onOpenChange).not.toHaveBeenCalled();
+        expect(input()).toHaveValue('video');
+
+        await user.keyboard('{Escape}');
+        expect(onOpenChange).toHaveBeenCalledWith(false);
     });
 
     it('closes the dropdown when the input is blurred', async () => {

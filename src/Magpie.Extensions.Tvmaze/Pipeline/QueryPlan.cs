@@ -8,6 +8,9 @@ namespace Magpie.Extensions.Tvmaze.Pipeline;
 internal sealed record QueryPlan
 {
     [JsonIgnore]
+    internal QueryProgress? Progress { get; init; }
+
+    [JsonIgnore]
     public ContentHierarchyItemCriteria Query { get; init; } = null!;
 
     [JsonIgnore]

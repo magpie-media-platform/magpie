@@ -147,6 +147,345 @@ public class QueryExecutorTests
         _subject = new QueryExecutor(_client.Object, _cache.Object, NullLogger<QueryExecutor>.Instance);
     }
 
+    [TestCase(1726, true)]
+    [TestCase(9999, false)]
+    public void Matches_Result_WhenAppliedSubjectGroupIsReconstructed(int resolvedSubjectId, bool expected)
+    {
+        // Arrange
+        var appliedGroup = new ResolvedSubjectGroup
+        {
+            BindingKey = "cast",
+            Excluded = false,
+            Subjects = [new ResolvedSubject(1726, "Performer", SubjectRole.Cast)]
+        };
+        var currentGroup = new ResolvedSubjectGroup
+        {
+            BindingKey = "cast",
+            Excluded = false,
+            Subjects = [new ResolvedSubject(resolvedSubjectId, "Performer", SubjectRole.Cast)]
+        };
+        var hit = new SearchHit
+        {
+            Route = ContentRoute.Movie,
+            Id = 1,
+            AppliedCriteria = new DiscoverRequest
+            {
+                Request = new Request
+                {
+                    Endpoint = "api",
+                    Path = "3/discover/movie",
+                    QueryParameters = [],
+                    CacheKey = "request",
+                    ResponseProfile = ResponseProfile.Query
+                },
+                AppliedTextFilters = [],
+                AppliedPublishDateFilters = [],
+                AppliedDurationFilters = [],
+                AppliedGenreFilters = [],
+                AppliedSubjectGroups = [appliedGroup]
+            }
+        };
+        var filter = new FilterPlanNode
+        {
+            Id = 2,
+            Precondition = PlanPrecondition.None,
+            Contributes = "filter",
+            Route = ContentRoute.Movie,
+            Child = new ResolvePlanNode
+            {
+                Id = 1,
+                Precondition = PlanPrecondition.None,
+                Contributes = "resolve",
+                Route = ContentRoute.Movie,
+                SubjectBindings = [],
+                GenreFilters = [],
+                ResolveImageBase = false
+            },
+            ResidualPredicates = [],
+            TextFilters = [],
+            PublishDateFilters = [],
+            DurationFilters = [],
+            GenreFilters = [],
+            SubjectBindings = [],
+            ContentIdFilters = [],
+            ElementFilters = [],
+            RequestedPage = 1
+        };
+
+        // Act
+        var result = hit.Matches(filter, _genres, [currentGroup], appliedCriteria: hit.AppliedCriteria);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_RequestsNoDetails_WhenAppliedSubjectGroupIsReconstructedAcrossPages()
+    {
+        // Arrange
+        _client.Setup(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
+            .ReturnsAsync((RequestContext _, Request request, CancellationToken _) =>
+            {
+                var page = int.Parse(
+                    request.QueryParameters.Single(pair => pair.Key == "page").Value,
+                    CultureInfo.InvariantCulture);
+                return new SearchEnvelopeDto<MovieSearchHitDto>
+                {
+                    Page = page,
+                    TotalPages = 2,
+                    TotalResults = 2,
+                    Results =
+                    [
+                        new MovieSearchHitDto
+                        {
+                            Id = page == 1 ? 1726 : 1727,
+                            Title = page == 1 ? "Iron Man" : "Iron Man 2",
+                        },
+                    ],
+                };
+            });
+        var bindings = new[]
+        {
+            new SubjectResolutionBinding(
+                "cast",
+                new SubjectFilter(
+                    false,
+                    [
+                        new SubjectAlternative(
+                            [SubjectRole.Cast],
+                            [[
+                                new SubjectIdentity("First performer", "tmdb", "100"),
+                                new SubjectIdentity("Second performer", "tmdb", "200")
+                            ]])
+                    ]))
+        };
+        var resolve = new ResolvePlanNode
+        {
+            Id = 1,
+            Precondition = PlanPrecondition.None,
+            Contributes = "resolve",
+            Route = ContentRoute.Movie,
+            SubjectBindings = bindings,
+            GenreFilters = [],
+            ResolveImageBase = false
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = PlanPrecondition.None,
+            Contributes = "fetch",
+            Route = ContentRoute.Movie,
+            AnchorKind = QueryAnchorKind.Discover,
+            SubjectBindings = bindings,
+            PushedFilters = [],
+            RequestedPage = 1,
+            Fingerprint = "reconstructed-subjects",
+            Resolve = resolve,
+            RequiresLogicalStream = true,
+            DiscoverParameters =
+            [
+                new DiscoverParameter
+                {
+                    Name = "with_cast",
+                    Combination = DiscoverCombination.Or,
+                    SubjectBindingKeys = ["cast"]
+                }
+            ]
+        };
+        var filter = new FilterPlanNode
+        {
+            Id = 3,
+            Precondition = PlanPrecondition.None,
+            Contributes = "filter",
+            Route = ContentRoute.Movie,
+            Child = fetch,
+            ResidualPredicates = [],
+            TextFilters = [],
+            PublishDateFilters = [],
+            DurationFilters = [],
+            GenreFilters = [],
+            SubjectBindings = bindings,
+            ContentIdFilters = [],
+            ElementFilters = [],
+            RequestedPage = 1,
+            MaximumResults = 1
+        };
+        var plan = new QueryPlan
+        {
+            Root = filter,
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 1,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "reconstructed-subject-plan"
+        };
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns(plan);
+        var settings = new Mock<ISettingsResolver>();
+        settings.Setup(value => value.AcquireContextAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Context);
+        var engine = new Magpie.Extensions.Tmdb.QueryEngine.QueryEngine(
+            settings.Object,
+            _subject,
+            _cache.Object,
+            _client.Object,
+            planner.Object,
+            NullLogger<Magpie.Extensions.Tmdb.QueryEngine.QueryEngine>.Instance);
+        var searcher = new ContentMetadataSearcher(
+            engine,
+            settings.Object,
+            _client.Object,
+            _cacheFactory,
+            _cache.Object,
+            NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("movie", new(), 1, "en-US", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("movie", new(), 1, "en-US", first.Continuation)
+            .ConfigureAwait(false);
+        var replay = await searcher.ContinueSearchAsync("movie", new(), 1, "en-US", first.Continuation)
+            .ConfigureAwait(false);
+        var independent = await searcher.ContinueSearchAsync("movie", new(), 1, "en-US", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches.Select(hit => hit.ExternalId), Is.EqualTo(["1726"]));
+            Assert.That(second.Page.Matches.Select(hit => hit.ExternalId), Is.EqualTo(["1727"]));
+            Assert.That(replay.Page.Matches.Select(hit => hit.ExternalId), Is.EqualTo(["1727"]));
+            Assert.That(independent.Page.Matches.Select(hit => hit.ExternalId), Is.EqualTo(["1726"]));
+            Assert.That(
+                _requests.Count(request => request.ResponseProfile == ResponseProfile.Query),
+                Is.EqualTo(6));
+            _client.Verify(client => client.GetAsync<MovieDetailDto>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _cache.Verify(cache => cache.GetCreditsAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Func<It.IsAnyType, CancellationToken, Task<CreditResponse>>>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_RequestsDetail_WhenAppliedSubjectGroupHasResidualDurationConstraint()
+    {
+        // Arrange
+        _client.Setup(client => client.GetAsync<MovieDetailDto>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
+            .ReturnsAsync(new MovieDetailDto { Id = 1726, Title = "Iron Man", Runtime = 126 });
+        var bindings = new[]
+        {
+            new SubjectResolutionBinding(
+                "cast",
+                new SubjectFilter(
+                    false,
+                    [
+                        new SubjectAlternative(
+                            [SubjectRole.Cast],
+                            [[new SubjectIdentity("Performer", "tmdb", "100")]])
+                    ]))
+        };
+        var resolve = new ResolvePlanNode
+        {
+            Id = 1,
+            Precondition = PlanPrecondition.None,
+            Contributes = "resolve",
+            Route = ContentRoute.Movie,
+            SubjectBindings = bindings,
+            GenreFilters = [],
+            ResolveImageBase = false
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = PlanPrecondition.None,
+            Contributes = "fetch",
+            Route = ContentRoute.Movie,
+            AnchorKind = QueryAnchorKind.Discover,
+            SubjectBindings = bindings,
+            PushedFilters = [],
+            RequestedPage = 1,
+            Fingerprint = "applied-subject-residual-duration",
+            Resolve = resolve,
+            RequiresLogicalStream = true,
+            DiscoverParameters =
+            [
+                new DiscoverParameter
+                {
+                    Name = "with_cast",
+                    Combination = DiscoverCombination.Or,
+                    SubjectBindingKeys = ["cast"]
+                }
+            ]
+        };
+        var filter = new FilterPlanNode
+        {
+            Id = 3,
+            Precondition = PlanPrecondition.None,
+            Contributes = "filter",
+            Route = ContentRoute.Movie,
+            Child = fetch,
+            ResidualPredicates = [],
+            TextFilters = [],
+            PublishDateFilters = [],
+            DurationFilters =
+            [
+                new DurationFilter(CriteriaValueOperator.Equals, false, [TimeSpan.FromMinutes(126)])
+            ],
+            GenreFilters = [],
+            SubjectBindings = bindings,
+            ContentIdFilters = [],
+            ElementFilters = [],
+            RequestedPage = 1,
+            MaximumResults = 25
+        };
+        var plan = new QueryPlan
+        {
+            Root = filter,
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "applied-subject-residual-duration-plan"
+        };
+
+        // Act
+        var execution = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([1726]));
+            _client.Verify(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _client.Verify(client => client.GetAsync<MovieDetailDto>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _cache.Verify(cache => cache.GetCreditsAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Func<It.IsAnyType, CancellationToken, Task<CreditResponse>>>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
     [Test]
     public async Task ExecuteAsync_ReturnsEmptyWithoutFetching_WhenRootIsAnEmptyUnion()
     {
@@ -1294,16 +1633,20 @@ public class QueryExecutorTests
             plan,
             new RequestContext { ApiKey = "key", Language = "en-US" },
             default).ConfigureAwait(false);
-        await execution.Hits.ToListAsync().ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
 
         // Assert
-        _client.Verify(
-            client => client.GetAsync<MovieDetailDto>(
-                It.IsAny<RequestContext>(),
-                It.Is<Request>(request =>
-                    request.CacheKey == "3/movie/550?language=en-US&append_to_response=credits"),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([550]));
+            _client.Verify(
+                client => client.GetAsync<MovieDetailDto>(
+                    It.IsAny<RequestContext>(),
+                    It.Is<Request>(request =>
+                        request.CacheKey == "3/movie/550?language=en-US&append_to_response=credits"),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 
     [TestCase("imdb", "imdb_id")]
@@ -1746,6 +2089,155 @@ public class QueryExecutorTests
 
         // Assert
         Assert.That(hits, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_ReplaysLastSourcePage_WhenApiPageCapEndsTheScan()
+    {
+        // Arrange
+        _client.Setup(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                It.IsAny<RequestContext>(), It.IsAny<Request>(), It.IsAny<CancellationToken>()))
+            .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
+            .ReturnsAsync((RequestContext _, Request request, CancellationToken _) =>
+                new SearchEnvelopeDto<MovieSearchHitDto>
+                {
+                    Page = int.Parse(request.QueryParameters.Single(pair => pair.Key == "page").Value,
+                        CultureInfo.InvariantCulture),
+                    TotalPages = 501,
+                    TotalResults = 10020,
+                    Results = []
+                });
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 1,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Search,
+                SubjectBindings = [],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch-1",
+                TextFilters = [new TextFilter(TextField.Title, CriteriaValueOperator.Equals, false, ["Title"])]
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns(plan);
+        var settings = new Mock<ISettingsResolver>();
+        settings.Setup(value => value.AcquireContextAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Context);
+        var engine = new Magpie.Extensions.Tmdb.QueryEngine.QueryEngine(settings.Object, _subject, _cache.Object,
+            _client.Object, planner.Object, NullLogger<Magpie.Extensions.Tmdb.QueryEngine.QueryEngine>.Instance);
+        var searcher = new ContentMetadataSearcher(engine, settings.Object, _client.Object, _cacheFactory,
+            _cache.Object, NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("movie", new(), 2, "en-US", null).ConfigureAwait(false);
+        var firstRequests = _requests.Count;
+        var second = await searcher.ContinueSearchAsync("movie", new(), 2, "en-US", first.Continuation)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches, Is.Empty);
+            Assert.That(first.Page.Warnings, Has.Some.Contains("500"));
+            Assert.That(first.Page.PageInfo.HasMore, Is.True);
+            Assert.That(second.Page.Warnings, Has.Some.Contains("500"));
+            Assert.That(second.Page.PageInfo.HasMore, Is.True);
+            Assert.That(firstRequests, Is.EqualTo(500));
+            Assert.That(_requests[firstRequests - 1].QueryParameters.Single(pair => pair.Key == "page").Value,
+                Is.EqualTo("500"));
+            Assert.That(_requests.Skip(firstRequests)
+                .Select(request => request.QueryParameters.Single(pair => pair.Key == "page").Value),
+                Is.EqualTo(["500"]));
+        }
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_ReplaysOnlyTheLastPage_WhenRequestsContinueRetryAndStartIndependently()
+    {
+        // Arrange
+        var pages = new Dictionary<string, IReadOnlyList<MovieSearchHitDto>>
+        {
+            ["1"] = [new() { Id = 10, Title = "Ten" }, new() { Id = 11, Title = "Eleven" }],
+            ["2"] = [new() { Id = 20, Title = "Twenty" }, new() { Id = 21, Title = "Twenty one" }],
+            ["3"] = [new() { Id = 30, Title = "Thirty" }, new() { Id = 31, Title = "Thirty one" }]
+        };
+        _client.Setup(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                It.IsAny<RequestContext>(), It.IsAny<Request>(), It.IsAny<CancellationToken>()))
+            .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
+            .ReturnsAsync((RequestContext _, Request request, CancellationToken _) =>
+                new SearchEnvelopeDto<MovieSearchHitDto>
+                {
+                    Page = int.Parse(request.QueryParameters.Single(pair => pair.Key == "page").Value,
+                        CultureInfo.InvariantCulture),
+                    TotalPages = 3,
+                    TotalResults = 6,
+                    Results = pages[request.QueryParameters.Single(pair => pair.Key == "page").Value]
+                });
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 1,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Search,
+                SubjectBindings = [],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch-1",
+                TextFilters = [new TextFilter(TextField.Title, CriteriaValueOperator.Equals, false, ["Title"])]
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns(plan);
+        var settings = new Mock<ISettingsResolver>();
+        settings.Setup(value => value.AcquireContextAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Context);
+        var engine = new Magpie.Extensions.Tmdb.QueryEngine.QueryEngine(settings.Object, _subject, _cache.Object,
+            _client.Object, planner.Object, NullLogger<Magpie.Extensions.Tmdb.QueryEngine.QueryEngine>.Instance);
+        var searcher = new ContentMetadataSearcher(engine, settings.Object, _client.Object, _cacheFactory,
+            _cache.Object, NullLogger<ContentMetadataSearcher>.Instance);
+        var criteria = new Magpie.Models.Data.ContentHierarchyItemCriteria();
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("movie", criteria, 2, "en-US", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("movie", criteria, 2, "en-US", first.Continuation)
+            .ConfigureAwait(false);
+        var third = await searcher.ContinueSearchAsync("movie", criteria, 2, "en-US", second.Continuation)
+            .ConfigureAwait(false);
+        var retry = await searcher.ContinueSearchAsync("movie", criteria, 2, "en-US", first.Continuation)
+            .ConfigureAwait(false);
+        var independent = await searcher.ContinueSearchAsync("movie", criteria, 2, "en-US", null).ConfigureAwait(false);
+        var end = await searcher.ContinueSearchAsync("movie", criteria, 2, "en-US", third.Continuation)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches.Select(candidate => candidate.ExternalId), Is.EqualTo(["10", "11"]));
+            Assert.That(second.Page.Matches.Select(candidate => candidate.ExternalId), Is.EqualTo(["20", "21"]));
+            Assert.That(third.Page.Matches.Select(candidate => candidate.ExternalId), Is.EqualTo(["30", "31"]));
+            Assert.That(retry.Page.Matches.Select(candidate => candidate.ExternalId), Is.EqualTo(["20", "21"]));
+            Assert.That(independent.Page.Matches.Select(candidate => candidate.ExternalId), Is.EqualTo(["10", "11"]));
+            Assert.That(end.Page.Matches, Is.Empty);
+            Assert.That(end.Page.PageInfo.HasMore, Is.False);
+            Assert.That(_requests.Select(request => request.QueryParameters.Single(pair => pair.Key == "page").Value),
+                Is.EqualTo(["1", "1", "2", "2", "3", "1", "2", "1", "3"]));
+        }
     }
 
     [Test]
@@ -3712,6 +4204,291 @@ public class QueryExecutorTests
                 secondHits.Select(hit => hit.Id).ToArray(),
                 Is.EqualTo([10, 20, 30, 11, 21, 31]));
             Assert.That(_requests, Has.Count.EqualTo(3));
+        }
+    }
+
+    [TestCase("count")]
+    [TestCase("order")]
+    [TestCase("identity")]
+    [TestCase("configuration")]
+    public async Task ContinueSearchAsync_RejectsChangedSources_WhenAnExistingCheckpointIsValidated(string change)
+    {
+        // Arrange
+        _genres["action"] = 28;
+        _genres["comedy"] = 35;
+        _genres["drama"] = 18;
+        var pages = new Dictionary<string, IReadOnlyList<MovieSearchHitDto>>(StringComparer.Ordinal)
+        {
+            ["28"] =
+            [
+                new MovieSearchHitDto { Id = 10, Title = "Alpha" },
+                new MovieSearchHitDto { Id = 11, Title = "Bravo" }
+            ],
+            ["35"] =
+            [
+                new MovieSearchHitDto { Id = 20, Title = "Charlie" },
+                new MovieSearchHitDto { Id = 21, Title = "Delta" }
+            ],
+            ["18"] =
+            [
+                new MovieSearchHitDto { Id = 30, Title = "Echo" },
+                new MovieSearchHitDto { Id = 31, Title = "Foxtrot" }
+            ]
+        };
+        _client.Setup(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
+            .ReturnsAsync((RequestContext _, Request request, CancellationToken _) =>
+                new SearchEnvelopeDto<MovieSearchHitDto>
+                {
+                    Page = 1,
+                    TotalPages = 1,
+                    TotalResults = 2,
+                    Results = pages[request.QueryParameters.Single(pair => pair.Key == "with_genres").Value]
+                });
+        var names = new List<string> { "action", "comedy", "drama" };
+        var genreFilter = new GenreFilter(
+            false,
+            [[new GenrePredicate(CriteriaValueOperator.In, false, names)]]);
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = PlanPrecondition.None,
+            Contributes = "fetch",
+            Route = ContentRoute.Movie,
+            AnchorKind = QueryAnchorKind.Discover,
+            SubjectBindings = [],
+            PushedFilters = [],
+            RequestedPage = 1,
+            Fingerprint = "fetch-2",
+            DiscoverParameters =
+            [
+                new DiscoverParameter
+                {
+                    Name = "with_genres",
+                    Combination = DiscoverCombination.And,
+                    GenreFilters = [genreFilter]
+                }
+            ],
+            Resolve = new ResolvePlanNode
+            {
+                Id = 1,
+                Precondition = PlanPrecondition.None,
+                Contributes = "resolve",
+                Route = ContentRoute.Movie,
+                SubjectBindings = [],
+                GenreFilters = [genreFilter],
+                ResolveImageBase = false
+            }
+        };
+        var filter = new FilterPlanNode
+        {
+            Id = 3,
+            Precondition = PlanPrecondition.None,
+            Contributes = "filter",
+            Route = ContentRoute.Movie,
+            Child = fetch,
+            ResidualPredicates = [],
+            TextFilters = [],
+            PublishDateFilters = [],
+            DurationFilters = [],
+            GenreFilters = [],
+            SubjectBindings = [],
+            ContentIdFilters = [],
+            ElementFilters = [],
+            RequestedPage = 1,
+            MaximumResults = 1
+        };
+        var plan = new QueryPlan
+        {
+            Root = filter,
+            Warnings = [],
+            RequestedPage = 1,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "continued-plan"
+        };
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns(plan);
+        var settings = new Mock<ISettingsResolver>();
+        settings.Setup(value => value.AcquireContextAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Context);
+        var engine = new Magpie.Extensions.Tmdb.QueryEngine.QueryEngine(settings.Object, _subject, _cache.Object,
+            _client.Object, planner.Object, NullLogger<Magpie.Extensions.Tmdb.QueryEngine.QueryEngine>.Instance);
+        var searcher = new ContentMetadataSearcher(engine, settings.Object, _client.Object, _cacheFactory,
+            _cache.Object, NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("movie", new(), 1, "en-US", null).ConfigureAwait(false);
+        switch (change)
+        {
+            case "count": names.Remove("drama"); break;
+            case "order":
+                _genres.Clear();
+                _genres["drama"] = 18;
+                _genres["comedy"] = 35;
+                _genres["action"] = 28;
+                break;
+            case "identity": _genres["action"] = 99; break;
+            case "configuration":
+                settings.Setup(value => value.AcquireContextAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(Context with { ApiKey = "another-key" });
+                break;
+        }
+
+        var exception = Assert.ThrowsAsync<Magpie.Sdk.Content.MetadataSearchContinuationException>(() =>
+            searcher.ContinueSearchAsync("movie", new(), 0, "en-US", first.Continuation));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception, Is.Not.Null);
+            Assert.That(_requests, Has.Count.EqualTo(1));
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ContinueSearchAsync_PreservesInterleaving_WhenASourceFailsOrAPageStopsMidRound(bool fail)
+    {
+        // Arrange
+        _genres["action"] = 28;
+        _genres["comedy"] = 35;
+        _genres["drama"] = 18;
+        var failSecond = fail;
+        var pages = new Dictionary<string, IReadOnlyList<MovieSearchHitDto>>(StringComparer.Ordinal)
+        {
+            ["28"] =
+            [
+                new MovieSearchHitDto { Id = 10, Title = "Alpha" },
+                new MovieSearchHitDto { Id = 11, Title = "Bravo" }
+            ],
+            ["35"] =
+            [
+                new MovieSearchHitDto { Id = 20, Title = "Charlie" },
+                new MovieSearchHitDto { Id = 21, Title = "Delta" }
+            ],
+            ["18"] =
+            [
+                new MovieSearchHitDto { Id = 30, Title = "Echo" },
+                new MovieSearchHitDto { Id = 31, Title = "Foxtrot" }
+            ]
+        };
+        _client.Setup(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
+            .ReturnsAsync((RequestContext _, Request request, CancellationToken _) =>
+            {
+                if (failSecond && request.QueryParameters.Single(pair => pair.Key == "with_genres").Value == "35")
+                {
+                    failSecond = false;
+                    throw new System.Net.Http.HttpRequestException("fixture failure");
+                }
+
+                return new SearchEnvelopeDto<MovieSearchHitDto>
+                {
+                    Page = 1,
+                    TotalPages = 1,
+                    TotalResults = 2,
+                    Results = pages[request.QueryParameters.Single(pair => pair.Key == "with_genres").Value]
+                };
+            });
+        var names = new List<string> { "action", "comedy", "drama" };
+        var genreFilter = new GenreFilter(
+            false,
+            [[new GenrePredicate(CriteriaValueOperator.In, false, names)]]);
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = PlanPrecondition.None,
+            Contributes = "fetch",
+            Route = ContentRoute.Movie,
+            AnchorKind = QueryAnchorKind.Discover,
+            SubjectBindings = [],
+            PushedFilters = [],
+            RequestedPage = 1,
+            Fingerprint = "fetch-2",
+            DiscoverParameters =
+            [
+                new DiscoverParameter
+                {
+                    Name = "with_genres",
+                    Combination = DiscoverCombination.And,
+                    GenreFilters = [genreFilter]
+                }
+            ],
+            Resolve = new ResolvePlanNode
+            {
+                Id = 1,
+                Precondition = PlanPrecondition.None,
+                Contributes = "resolve",
+                Route = ContentRoute.Movie,
+                SubjectBindings = [],
+                GenreFilters = [genreFilter],
+                ResolveImageBase = false
+            }
+        };
+        var filter = new FilterPlanNode
+        {
+            Id = 3,
+            Precondition = PlanPrecondition.None,
+            Contributes = "filter",
+            Route = ContentRoute.Movie,
+            Child = fetch,
+            ResidualPredicates = [],
+            TextFilters = [],
+            PublishDateFilters = [],
+            DurationFilters = [],
+            GenreFilters = [],
+            SubjectBindings = [],
+            ContentIdFilters = [],
+            ElementFilters = [],
+            RequestedPage = 1,
+            MaximumResults = 1
+        };
+        var plan = new QueryPlan
+        {
+            Root = filter,
+            Warnings = [],
+            RequestedPage = 1,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "continued-plan"
+        };
+        var planner = new Mock<IQueryPlanner>();
+        planner.Setup(value => value.Plan(It.IsAny<QueryRequest>())).Returns(plan);
+        var settings = new Mock<ISettingsResolver>();
+        settings.Setup(value => value.AcquireContextAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Context);
+        var engine = new Magpie.Extensions.Tmdb.QueryEngine.QueryEngine(settings.Object, _subject, _cache.Object,
+            _client.Object, planner.Object, NullLogger<Magpie.Extensions.Tmdb.QueryEngine.QueryEngine>.Instance);
+        var searcher = new ContentMetadataSearcher(engine, settings.Object, _client.Object, _cacheFactory,
+            _cache.Object, NullLogger<ContentMetadataSearcher>.Instance);
+
+        // Act
+        var first = await searcher.ContinueSearchAsync("movie", new(), 5, "en-US", null).ConfigureAwait(false);
+        var second = await searcher.ContinueSearchAsync("movie", new(), 10, "en-US", first.Continuation)
+            .ConfigureAwait(false);
+        var replay = await searcher.ContinueSearchAsync("movie", new(), 10, "en-US", first.Continuation)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Page.Matches.Select(value => value.ExternalId),
+                fail ? Is.EqualTo(["10"]) : Is.EqualTo(["10", "20", "30", "11", "21"]));
+            Assert.That(first.Page.Warnings.Count > 0, Is.EqualTo(fail));
+            Assert.That(second.Page.Matches.Select(value => value.ExternalId),
+                fail ? Is.EqualTo(["20", "30", "11", "21", "31"]) : Is.EqualTo(["31"]));
+            Assert.That(second.Page.PageInfo.HasMore, Is.False);
+            Assert.That(replay.Page.Matches.Select(value => value.ExternalId),
+                Is.EqualTo(second.Page.Matches.Select(value => value.ExternalId)));
+            Assert.That(_requests.Select(request =>
+                request.QueryParameters.Single(pair => pair.Key == "with_genres").Value),
+                fail ? Is.EqualTo(["28", "35", "28", "35", "18", "28", "35", "18"]) :
+                    Is.EqualTo(["28", "35", "18", "28", "35", "18", "28", "35", "18"]));
         }
     }
 }

@@ -14,6 +14,11 @@ internal sealed class VerifiedScan
     private readonly Queue<SearchHit> _pending = [];
     private readonly HashSet<string> _warnings = [];
 
+    internal VerifiedScan(int offset = 0)
+    {
+        NextOffset = offset;
+    }
+
     private int NextOffset { get; set; }
 
     private bool SourceExhausted { get; set; }

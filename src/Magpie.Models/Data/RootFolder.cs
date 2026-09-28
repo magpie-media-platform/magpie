@@ -61,6 +61,11 @@ public record RootFolder
     public UpgradeFileHandling UpgradeFileHandling { get; set; } = UpgradeFileHandling.Replace;
 
     /// <summary>
+    /// Whether discovery associates confident matches with existing library content without user acceptance.
+    /// </summary>
+    public bool AutoImport { get; set; }
+
+    /// <summary>
     /// The default quality tier lists keyed by hierarchy level.
     /// </summary>
     public Dictionary<string, RootFolderDefault> Defaults { get; set; } = [];

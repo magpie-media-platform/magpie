@@ -1,6 +1,3 @@
-import { Role } from '@/auth';
-import type { Role as RoleType } from '@/auth';
-
 interface OwnedItem {
     ownerId: string | null;
     ownerLock: boolean;
@@ -9,27 +6,14 @@ interface OwnedItem {
 export function canEditOwned(
     item: OwnedItem,
     userId: string | undefined,
-    canManage: boolean,
-    hasRole: (role: RoleType) => boolean,
-    requesterRole: RoleType,
+    isAdmin: boolean,
+    canWrite: boolean,
 ): boolean {
-    const isOwner = item.ownerId === userId;
-    const isShared = item.ownerId === null;
-    const isAdmin = hasRole(Role.Admin);
-
-    if (item.ownerLock && !isShared) {
-        return isOwner || isAdmin;
+    if (!canWrite) {
+        return false;
     }
-
-    if (isShared) {
-        return canManage;
+    if (item.ownerId === null) {
+        return isAdmin;
     }
-
-    if (canManage) {
-        return true;
-    }
-    if (hasRole(requesterRole) && isOwner) {
-        return true;
-    }
-    return false;
+    return item.ownerId === userId || (isAdmin && !item.ownerLock);
 }

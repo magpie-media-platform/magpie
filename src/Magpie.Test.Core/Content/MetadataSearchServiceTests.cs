@@ -15,7 +15,6 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
-using Magpie.Models.Paging;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Services;
 
@@ -549,7 +548,7 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsTheAnsweringProviderResults_WhenAnotherSearcherNeverAnswers()
+    public async Task SearchAsync_ReturnsBothProviderResults_WhenAggregateExceedsFormerDeadline()
     {
         // Arrange
         var answering = new Mock<IContentHierarchyMetadataSearcher>();
@@ -574,6 +573,7 @@ public sealed class MetadataSearchServiceTests
                 }
             ]);
 
+        var completion = new TaskCompletionSource<IEnumerable<MetadataSearchCandidate>>();
         var silent = new Mock<IContentHierarchyMetadataSearcher>();
         silent.SetupGet(s => s.ProviderType).Returns("provider-d");
         silent.SetupGet(s => s.SupportedContentTypes).Returns(["type-a"]);
@@ -584,7 +584,7 @@ public sealed class MetadataSearchServiceTests
                 It.IsAny<string>(),
                 It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(new TaskCompletionSource<IEnumerable<MetadataSearchCandidate>>().Task);
+            .Returns(completion.Task);
 
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var registry = new ContentTypeRegistry([], NullLoggerFactory.Instance.CreateLogger<ContentTypeRegistry>());
@@ -600,18 +600,24 @@ public sealed class MetadataSearchServiceTests
         // Act
         var pending = subject.SearchAsync("Fight Club", "type-a", cancellationToken: default);
         timeProvider.Advance(TimeSpan.FromSeconds(46));
+        completion.SetResult([new MetadataSearchCandidate
+        {
+            ProviderType = "provider-d", ExternalIdSource = "source-d", ExternalId = "551",
+            ContentType = "type-a", Title = "Fight Club Two"
+        }]);
         var results = await pending.ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(results.Matches, Has.Count.EqualTo(1));
+            Assert.That(results.Matches, Has.Count.EqualTo(2));
             Assert.That(results.Matches[0].ProviderType, Is.EqualTo("provider-a"));
+            Assert.That(results.Warnings, Is.Empty);
         }
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsEmpty_WhenNoSearcherAnswers()
+    public async Task SearchAsync_ReturnsWarnings_WhenIndividualOperationsTimeOut()
     {
         // Arrange
         var first = new Mock<IContentHierarchyMetadataSearcher>();
@@ -624,7 +630,7 @@ public sealed class MetadataSearchServiceTests
                 It.IsAny<string>(),
                 It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(new TaskCompletionSource<IEnumerable<MetadataSearchCandidate>>().Task);
+            .ThrowsAsync(new TimeoutException());
 
         var second = new Mock<IContentHierarchyMetadataSearcher>();
         second.SetupGet(s => s.ProviderType).Returns("provider-d");
@@ -636,7 +642,7 @@ public sealed class MetadataSearchServiceTests
                 It.IsAny<string>(),
                 It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(new TaskCompletionSource<IEnumerable<MetadataSearchCandidate>>().Task);
+            .ThrowsAsync(new TaskCanceledException());
 
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var registry = new ContentTypeRegistry([], NullLoggerFactory.Instance.CreateLogger<ContentTypeRegistry>());
@@ -661,8 +667,8 @@ public sealed class MetadataSearchServiceTests
             Assert.That(
                 results.Warnings,
                 Is.EquivalentTo([
-                    "provider-a did not answer the search in time. Try again.",
-                    "provider-d did not answer the search in time. Try again."
+                    "provider-a did not answer the search in time.",
+                    "provider-d did not answer the search in time."
                 ]));
         }
     }
@@ -1329,16 +1335,19 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 25,
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -1351,22 +1360,15 @@ public sealed class MetadataSearchServiceTests
                         Year = 1937
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -1447,16 +1449,19 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 25,
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     candidate,
                     candidate with { ExternalId = "item-2", Title = "Item 2" },
@@ -1465,7 +1470,8 @@ public sealed class MetadataSearchServiceTests
                     candidate with { ExternalId = "item-5", Title = "Item 5" },
                     candidate with { ExternalId = "item-6", Title = "Item 6" }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = true }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = true }
+                }
             });
         searcher
             .Setup(provider => provider.HydrateAsync(
@@ -1487,18 +1493,10 @@ public sealed class MetadataSearchServiceTests
 
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 6,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var definition = new ContentTypeDefinition
         {
             Slug = "type-a",
@@ -1605,7 +1603,7 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_ReturnsCandidateAsInLibrary_WhenTheMatchIsOnALaterPage()
+    public async Task SearchCandidatesAsync_ReturnsCandidateAsInLibrary_WhenItsCompleteIdentityMatches()
     {
         // Arrange
         var existingContentHierarchyItemId = Guid.Parse("3db97837-8a29-4b92-937b-13f948bfd62d");
@@ -1614,16 +1612,19 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 25,
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -1634,7 +1635,8 @@ public sealed class MetadataSearchServiceTests
                         Title = "Owned title"
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         searcher
             .Setup(provider => provider.HydrateAsync(
@@ -1645,78 +1647,13 @@ public sealed class MetadataSearchServiceTests
 
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .SetupSequence(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.Is<IReadOnlyCollection<(string, string, string, string)>>(identities =>
+                    identities.Contains(ValueTuple.Create("type-a", "type-a", "source-a", "shared-id"))),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>
             {
-                Items =
-                [
-                    new ContentHierarchyItem
-                    {
-                        ContentType = "type-a",
-                        Level = "root",
-                        Slug = "wrong-source",
-                        Name = "Wrong source",
-                        MetadataContainer = new MetadataContainer
-                        {
-                            Contributions =
-                            {
-                                new MetadataContribution
-                                {
-                                    ProviderType = "provider-a",
-                                    ExternalIds =
-                                    {
-                                        new ExternalId { Source = "source-b", Value = "shared-id" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                ],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 2
-            })
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items =
-                [
-                    new ContentHierarchyItem
-                    {
-                        Id = existingContentHierarchyItemId,
-                        ContentType = "type-a",
-                        Level = "root",
-                        Slug = "matching-source",
-                        Name = "Matching source",
-                        MetadataContainer = new MetadataContainer
-                        {
-                            Contributions =
-                            {
-                                new MetadataContribution
-                                {
-                                    ProviderType = "provider-a",
-                                    ExternalIds =
-                                    {
-                                        new ExternalId { Source = "source-a", Value = "shared-id" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                ],
-                PageNumber = 2,
-                PageSize = 1,
-                TotalItems = 2
-            })
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 3,
-                PageSize = 1,
-                TotalItems = 2
+                [("type-a", "type-a", "source-a", "shared-id")] = existingContentHierarchyItemId
             });
         var registry = new ContentTypeRegistry(
             [],
@@ -1745,10 +1682,8 @@ public sealed class MetadataSearchServiceTests
             Assert.That(result.Matches[0].ExistingContentHierarchyItemId, Is.EqualTo(existingContentHierarchyItemId));
             Assert.That(result.ExistsInLibraryCount, Is.EqualTo(1));
             hierarchyItems.Verify(
-                repository => repository.QueryAsync(
-                    It.IsAny<ContentHierarchyItemCriteria>(),
-                    It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 1),
-                    null,
+                repository => repository.FindByExternalIdentitiesAsync(
+                    It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
         }
@@ -1763,16 +1698,19 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 25,
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -1783,7 +1721,8 @@ public sealed class MetadataSearchServiceTests
                         Title = "Unowned title"
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         searcher
             .Setup(provider => provider.HydrateAsync(
@@ -1795,61 +1734,10 @@ public sealed class MetadataSearchServiceTests
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
 
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items =
-                [
-                    new ContentHierarchyItem
-                    {
-                        Id = Guid.Parse("45b43b4b-5bb3-412e-935d-0766236b597c"),
-                        ParentId = Guid.Parse("e60a1596-1b25-4a3e-beb0-35a666a3261f"),
-                        ContentType = "type-a",
-                        Level = "child",
-                        Slug = "matching-child",
-                        Name = "Matching child",
-                        MetadataContainer = new MetadataContainer
-                        {
-                            Contributions =
-                            {
-                                new MetadataContribution
-                                {
-                                    ProviderType = "provider-a",
-                                    ExternalIds =
-                                    {
-                                        new ExternalId { Source = "source-a", Value = "shared-id" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                ],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 1
-            });
-        hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(criteria =>
-                    criteria.RootLevelOnly == true &&
-                    criteria.Metadata.And.Single().ExternalIds.Some.Single().Single().Source.And.Single().Value ==
-                    "source-a" &&
-                    criteria.Metadata.And.Single().ExternalIds.Some.Single().Single().Value.And.Single().Value ==
-                    "shared-id"),
-                It.IsAny<PagingParameter>(),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var registry = new ContentTypeRegistry(
             [],
             NullLoggerFactory.Instance.CreateLogger<ContentTypeRegistry>());
@@ -1923,16 +1811,19 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a", "type-b"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 25,
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -1944,19 +1835,23 @@ public sealed class MetadataSearchServiceTests
                         Title = "Snow White"
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-b",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 25,
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -1968,16 +1863,15 @@ public sealed class MetadataSearchServiceTests
                         Title = "Snow White"
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -2069,20 +1963,22 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_WarnsAndReturnsNoMatches_WhenTheSearcherNeverAnswers()
+    public async Task SearchCandidatesAsync_CompletesSearch_WhenAggregateExceedsFormerDeadline()
     {
         // Arrange
+        var completion = new TaskCompletionSource<MetadataSearchBatch>();
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(new TaskCompletionSource<MetadataSearchPage>().Task);
+            .Returns(completion.Task);
 
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var subject = new MetadataSearchService(
@@ -2113,15 +2009,23 @@ public sealed class MetadataSearchServiceTests
         // Act
         var pending = subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default);
         timeProvider.Advance(TimeSpan.FromSeconds(46));
+        completion.SetResult(new MetadataSearchBatch
+        {
+            Page = new MetadataSearchPage
+            {
+                Supported = true,
+                Matches = [],
+                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+            }
+        });
         var result = await pending.ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Matches, Is.Empty);
-            Assert.That(
-                result.Warnings.Single(),
-                Is.EqualTo("provider-a did not answer the search in time. Try again."));
+            Assert.That(result.Warnings, Is.Empty);
+            Assert.That(result.PageInfo.HasMore, Is.False);
         }
     }
 
@@ -2133,16 +2037,19 @@ public sealed class MetadataSearchServiceTests
         fastSearcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         fastSearcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         fastSearcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2154,7 +2061,8 @@ public sealed class MetadataSearchServiceTests
                         Title = "Item 1"
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         fastSearcher
             .Setup(provider => provider.HydrateAsync(
@@ -2167,28 +2075,21 @@ public sealed class MetadataSearchServiceTests
         slowSearcher.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         slowSearcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         slowSearcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(new TaskCompletionSource<MetadataSearchPage>().Task);
+            .ThrowsAsync(new TaskCanceledException());
 
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var subject = new MetadataSearchService(
             [],
@@ -2225,9 +2126,7 @@ public sealed class MetadataSearchServiceTests
         {
             Assert.That(result.Matches, Has.Count.EqualTo(1));
             Assert.That(result.Matches[0].Candidate.Title, Is.EqualTo("Item 1"));
-            Assert.That(
-                result.Warnings.Single(),
-                Is.EqualTo("provider-b did not answer the search in time. Try again."));
+            Assert.That(result.Warnings.Single(), Is.EqualTo("provider-b did not answer the search in time."));
         }
     }
 
@@ -2239,13 +2138,14 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(MetadataSearchPage.NotSupported);
+            .ReturnsAsync(new MetadataSearchBatch { Page = MetadataSearchPage.NotSupported });
         var subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -2284,29 +2184,35 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_RetriesTheProvider_WhenTheCachedPageExpires()
+    public async Task SearchCandidatesAsync_StartsFresh_WhenTheSameQueryRunsAgain()
     {
         // Arrange
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .SetupSequence(provider => provider.AdvancedSearchAsync(
+            .SetupSequence(provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches = [],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [],
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             })
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2318,7 +2224,8 @@ public sealed class MetadataSearchServiceTests
                         Title = "Item 1"
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         searcher
             .Setup(provider => provider.HydrateAsync(
@@ -2329,18 +2236,10 @@ public sealed class MetadataSearchServiceTests
 
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         using var cacheStore = new MemoryCacheStore(timeProvider);
         using var cacheFactory = new MemoryCacheFactory(cacheStore);
@@ -2372,7 +2271,6 @@ public sealed class MetadataSearchServiceTests
         // Act
         var first = await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
             .ConfigureAwait(false);
-        timeProvider.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(1));
         var second = await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
             .ConfigureAwait(false);
 
@@ -2386,11 +2284,12 @@ public sealed class MetadataSearchServiceTests
         }
 
         searcher.Verify(
-            provider => provider.AdvancedSearchAsync(
+            provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()),
             Times.Exactly(2));
     }
@@ -2403,11 +2302,12 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("upstream unavailable"));
         var subject = new MetadataSearchService(
@@ -2448,25 +2348,20 @@ public sealed class MetadataSearchServiceTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(
-                first.Warnings.Single(),
-                Is.EqualTo("provider-a could not finish the search. Try again."));
-            Assert.That(
-                second.Warnings.Single(),
-                Is.EqualTo("provider-a could not finish the search. Try again."));
-            Assert.That(
-                third.Warnings.Single(),
-                Is.EqualTo("provider-a could not finish the search. Try again."));
+            Assert.That(first.Warnings.Single(), Is.EqualTo("provider-a could not finish the search."));
+            Assert.That(second.Warnings.Single(), Is.EqualTo("provider-a could not finish the search."));
+            Assert.That(third.Warnings.Single(), Is.EqualTo("provider-a could not finish the search."));
             Assert.That(fourth.Matches, Is.Empty);
             Assert.That(fourth.Warnings, Has.Some.Contains("skipped after repeated failed searches"));
         }
 
         searcher.Verify(
-            provider => provider.AdvancedSearchAsync(
+            provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()),
             Times.Exactly(3));
     }
@@ -2479,11 +2374,12 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("upstream unavailable"));
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
@@ -2531,39 +2427,42 @@ public sealed class MetadataSearchServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(skipped.Warnings, Has.Some.Contains("skipped after repeated failed searches"));
-            Assert.That(
-                probed.Warnings.Single(),
-                Is.EqualTo("provider-a could not finish the search. Try again."));
+            Assert.That(probed.Warnings.Single(), Is.EqualTo("provider-a could not finish the search."));
         }
 
         searcher.Verify(
-            provider => provider.AdvancedSearchAsync(
+            provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()),
             Times.Exactly(4));
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_KeepsTheSearchedCandidate_WhenHydrationNeverAnswers()
+    public async Task SearchCandidatesAsync_CompletesHydration_WhenAggregateExceedsFormerDeadline()
     {
         // Arrange
+        var completion = new TaskCompletionSource<MetadataSearchCandidate?>();
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 It.IsAny<string>(),
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2575,29 +2474,22 @@ public sealed class MetadataSearchServiceTests
                         Title = "Item 1"
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         searcher
             .Setup(provider => provider.HydrateAsync(
                 It.IsAny<MetadataSearchCandidate>(),
                 It.IsAny<string>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(new TaskCompletionSource<MetadataSearchCandidate?>().Task);
+            .Returns(completion.Task);
 
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var subject = new MetadataSearchService(
             [],
@@ -2618,6 +2510,16 @@ public sealed class MetadataSearchServiceTests
                         ContentType = new CriteriaSet<PropertyCriterion<string>>
                         {
                             And = [new PropertyCriterion<string> { Value = "type-a" }]
+                        },
+                        Metadata = new CriteriaSet<MetadataCriteria>
+                        {
+                            And = [new MetadataCriteria
+                            {
+                                Language = new CriteriaSet<PropertyCriterion<string>>
+                                {
+                                    And = [new PropertyCriterion<string> { Value = "en" }]
+                                }
+                            }]
                         }
                     }
                 ]
@@ -2627,14 +2529,208 @@ public sealed class MetadataSearchServiceTests
         // Act
         var pending = subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default);
         timeProvider.Advance(TimeSpan.FromSeconds(46));
+        completion.SetResult(new MetadataSearchCandidate
+        {
+            ProviderType = "provider-a",
+            ExternalIdSource = "source-a",
+            ExternalId = "item-1",
+            ContentType = "type-a",
+            Level = "type-a",
+            Title = "Hydrated item",
+            Language = "en"
+        });
         var result = await pending.ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Matches, Has.Count.EqualTo(1));
-            Assert.That(result.Matches[0].Candidate.Title, Is.EqualTo("Item 1"));
+            Assert.That(result.Matches[0].Candidate.Title, Is.EqualTo("Hydrated item"));
             Assert.That(result.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task SearchCandidatesAsync_ReleasesCaller_WhenHydrationIgnoresCancellation()
+    {
+        // Arrange
+        var completion = new TaskCompletionSource<MetadataSearchCandidate?>();
+        var started = new TaskCompletionSource();
+        var providerToken = CancellationToken.None;
+        var candidate = new MetadataSearchCandidate
+        {
+            ProviderType = "provider-a",
+            ExternalIdSource = "source-a",
+            ExternalId = "unread",
+            ContentType = "type-a",
+            Level = "type-a",
+            Title = "Unread"
+        };
+        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        searcher.SetupGet(value => value.ProviderType).Returns("provider-a");
+        searcher.SetupGet(value => value.SupportedContentTypes).Returns(["type-a"]);
+        searcher.Setup(value => value.ContinueSearchAsync("type-a", It.IsAny<ContentHierarchyItemCriteria>(),
+                25, string.Empty, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchBatch
+            {
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [candidate],
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
+            });
+        searcher.Setup(value => value.HydrateAsync(candidate, string.Empty, It.IsAny<CancellationToken>()))
+            .Callback((MetadataSearchCandidate _, string _, CancellationToken token) =>
+            {
+                providerToken = token;
+                started.SetResult();
+            })
+            .Returns(completion.Task);
+        var repository = new Mock<IContentHierarchyItemRepository>();
+        repository.Setup(value => value.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
+        var subject = new MetadataSearchService([], [searcher.Object], _registry, repository.Object,
+            TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
+        var criteria = new ContentFilterCriteria
+        {
+            ContentHierarchyItem = new CriteriaSet<ContentHierarchyItemCriteria>
+            {
+                And = [new ContentHierarchyItemCriteria
+                {
+                    Metadata = new CriteriaSet<MetadataCriteria>
+                    {
+                        And = [new MetadataCriteria
+                        {
+                            Language = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Value = "en" }]
+                            }
+                        }]
+                    }
+                }]
+            }
+        };
+        using var cancellation = new CancellationTokenSource();
+
+        // Act
+        try
+        {
+            var pending = subject.SearchCandidatesAsync(criteria, "type-a", 1,
+                cancellationToken: cancellation.Token);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            await cancellation.CancelAsync().ConfigureAwait(false);
+
+            // Assert
+            Assert.CatchAsync<OperationCanceledException>(async () =>
+                await pending.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false));
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(providerToken.IsCancellationRequested, Is.True);
+                Assert.That(completion.Task.IsCompleted, Is.False);
+            }
+        }
+        finally
+        {
+            completion.SetResult(null);
+        }
+    }
+
+    [Test]
+    public async Task SearchCandidatesAsync_RetainsUnreadRows_WhenRequiredHydrationTimesOut()
+    {
+        // Arrange
+        var healthy = new MetadataSearchCandidate
+        {
+            ProviderType = "provider-a",
+            ExternalIdSource = "source-a",
+            ExternalId = "healthy",
+            ContentType = "type-a",
+            Level = "type-a",
+            Title = "Healthy"
+        };
+        var unread = new MetadataSearchCandidate
+        {
+            ProviderType = "provider-a",
+            ExternalIdSource = "source-a",
+            ExternalId = "unread",
+            ContentType = "type-a",
+            Level = "type-a",
+            Title = "Unread"
+        };
+        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        searcher.SetupGet(value => value.ProviderType).Returns("provider-a");
+        searcher.SetupGet(value => value.SupportedContentTypes).Returns(["type-a"]);
+        searcher.Setup(value => value.ContinueSearchAsync("type-a", It.IsAny<ContentHierarchyItemCriteria>(),
+                25, string.Empty, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchBatch
+            {
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [healthy, unread],
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                },
+                Continuation = "finished"
+            });
+        searcher.Setup(value => value.HydrateAsync(healthy, string.Empty, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(healthy with { Language = "en" });
+        searcher.SetupSequence(value => value.HydrateAsync(unread, string.Empty, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TaskCanceledException("individual request timeout"))
+            .ReturnsAsync(unread with { Language = "en" });
+        var repository = new Mock<IContentHierarchyItemRepository>();
+        repository.Setup(value => value.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
+        var subject = new MetadataSearchService([], [searcher.Object], _registry, repository.Object,
+            TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
+        var criteria = new ContentFilterCriteria
+        {
+            ContentHierarchyItem = new CriteriaSet<ContentHierarchyItemCriteria>
+            {
+                And = [new ContentHierarchyItemCriteria
+                {
+                    Metadata = new CriteriaSet<MetadataCriteria>
+                    {
+                        And = [new MetadataCriteria
+                        {
+                            Language = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Value = "en" }]
+                            }
+                        }]
+                    }
+                }]
+            }
+        };
+
+        // Act
+        var first = await subject.SearchCandidatesAsync(criteria, "type-a", 1).ConfigureAwait(false);
+        var replay = await subject.SearchCandidatesAsync(criteria, "type-a", 1, first.Continuation)
+            .ConfigureAwait(false);
+        var continued = await subject.SearchCandidatesAsync(criteria, "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Matches.Select(value => value.Candidate.ExternalId), Is.EqualTo(["healthy"]));
+            Assert.That(first.Warnings, Has.Some.Contains("could not hydrate"));
+            Assert.That(first.PageInfo.HasMore, Is.True);
+            Assert.That(first.NextContinuation, Is.Not.Null);
+            Assert.That(replay.Matches.Select(value => value.Candidate.ExternalId),
+                Is.EquivalentTo(["healthy", "unread"]));
+            Assert.That(replay.Warnings, Is.Empty);
+            Assert.That(continued.Matches.Select(value => value.Candidate.ExternalId), Is.EqualTo(["unread"]));
+            Assert.That(continued.PageInfo.HasMore, Is.False);
+            Assert.That(continued.Warnings, Is.Empty);
+            searcher.Verify(value => value.HydrateAsync(healthy, string.Empty, It.IsAny<CancellationToken>()),
+                Times.Once);
+            searcher.Verify(value => value.HydrateAsync(unread, string.Empty, It.IsAny<CancellationToken>()),
+                Times.Exactly(2));
+            searcher.Verify(value => value.ContinueSearchAsync("type-a", It.IsAny<ContentHierarchyItemCriteria>(),
+                25, string.Empty, null, It.IsAny<CancellationToken>()), Times.Exactly(3));
         }
     }
 
@@ -2646,16 +2742,19 @@ public sealed class MetadataSearchServiceTests
         first.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         first.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         first
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2668,22 +2767,26 @@ public sealed class MetadataSearchServiceTests
                         Year = 1999
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var second = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         second.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         second.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         second
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2708,22 +2811,15 @@ public sealed class MetadataSearchServiceTests
                         Year = 2003
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 2,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [first.Object, second.Object],
@@ -2800,16 +2896,19 @@ public sealed class MetadataSearchServiceTests
         first.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         first.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         first
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2822,22 +2921,26 @@ public sealed class MetadataSearchServiceTests
                         Year = 2010
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var second = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         second.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         second.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         second
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2854,22 +2957,15 @@ public sealed class MetadataSearchServiceTests
                         ]
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 2,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [first.Object, second.Object],
@@ -2920,16 +3016,19 @@ public sealed class MetadataSearchServiceTests
         first.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         first.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         first
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2942,22 +3041,26 @@ public sealed class MetadataSearchServiceTests
                         Year = 1984
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var second = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         second.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         second.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         second
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -2970,22 +3073,15 @@ public sealed class MetadataSearchServiceTests
                         Year = 2021
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 2,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [first.Object, second.Object],
@@ -3301,16 +3397,19 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 25,
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     new MetadataSearchCandidate
                     {
@@ -3323,7 +3422,8 @@ public sealed class MetadataSearchServiceTests
                         Year = 1937
                     }
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         searcher
             .Setup(provider => provider.HydrateAsync(
@@ -3334,18 +3434,10 @@ public sealed class MetadataSearchServiceTests
                 candidate with { Language = "en" });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -3456,9 +3548,7 @@ public sealed class MetadataSearchServiceTests
         {
             Assert.That(results.Matches, Has.Count.EqualTo(1));
             Assert.That(results.Matches[0].ExternalId, Is.EqualTo("550"));
-            Assert.That(
-                results.Warnings,
-                Is.EqualTo(["provider-b could not finish the search. Try again."]));
+            Assert.That(results.Warnings, Is.EqualTo(["provider-b could not finish the search."]));
         }
     }
 
@@ -3518,9 +3608,7 @@ public sealed class MetadataSearchServiceTests
         {
             Assert.That(results.Matches, Has.Count.EqualTo(1));
             Assert.That(results.Matches[0].ExternalId, Is.EqualTo("550"));
-            Assert.That(
-                results.Warnings,
-                Is.EqualTo(["provider-b could not finish the search. Try again."]));
+            Assert.That(results.Warnings, Is.EqualTo(["provider-b did not answer the search in time."]));
         }
     }
 
@@ -3536,23 +3624,30 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((
                 string _,
                 ContentHierarchyItemCriteria _,
                 int maximumResults,
                 string _,
-                CancellationToken _) => new MetadataSearchPage
+                object? continuation,
+                CancellationToken _) => new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches =
+                    Continuation = (int?)continuation + maximumResults ?? maximumResults,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches =
                     [
-                        .. Enumerable.Range(1, Math.Min(maximumResults, 200)).Select(index =>
+                        .. Enumerable.Range(
+                            (int?)continuation + 1 ?? 1, Math.Min(maximumResults, 200 - ((int?)continuation ?? 0)))
+                            .Select(index =>
                         new MetadataSearchCandidate
                         {
                             ProviderType = "provider-a",
@@ -3563,7 +3658,12 @@ public sealed class MetadataSearchServiceTests
                             Title = $"Candidate {index}"
                         })
                     ],
-                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = maximumResults < 200 }
+                        PageInfo = new ProviderSearchPageInfo
+                        {
+                            RequestedPage = 1,
+                            HasMore = ((int?)continuation ?? 0) + maximumResults < 200
+                        }
+                    }
                 });
         searcher
             .Setup(provider => provider.HydrateAsync(
@@ -3577,18 +3677,10 @@ public sealed class MetadataSearchServiceTests
                 });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -3628,7 +3720,9 @@ public sealed class MetadataSearchServiceTests
         };
 
         // Act
-        var result = await subject.SearchCandidatesAsync(criteria, "type-a", page: page, cancellationToken: default)
+        var first = await subject.SearchCandidatesAsync(criteria, "type-a", 1).ConfigureAwait(false);
+        var result = page == 1 ? first : await subject.SearchCandidatesAsync(
+            criteria, "type-a", 2, first.NextContinuation)
             .ConfigureAwait(false);
 
         // Assert
@@ -3653,23 +3747,30 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((
                 string _,
                 ContentHierarchyItemCriteria _,
                 int maximumResults,
                 string _,
-                CancellationToken _) => new MetadataSearchPage
+                object? continuation,
+                CancellationToken _) => new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches =
+                    Continuation = (int?)continuation + maximumResults ?? maximumResults,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches =
                     [
-                        .. Enumerable.Range(1, Math.Min(maximumResults, 60)).Select(index =>
+                        .. Enumerable.Range(
+                            (int?)continuation + 1 ?? 1, Math.Min(maximumResults, 60 - ((int?)continuation ?? 0)))
+                            .Select(index =>
                         new MetadataSearchCandidate
                         {
                             ProviderType = "provider-a",
@@ -3680,22 +3781,19 @@ public sealed class MetadataSearchServiceTests
                             Title = index == 30 ? "Jane Example" : $"Jane Example item {index}"
                         })
                     ],
-                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = maximumResults < 60 }
+                        PageInfo = new ProviderSearchPageInfo
+                        {
+                            RequestedPage = 1,
+                            HasMore = ((int?)continuation ?? 0) + maximumResults < 60
+                        }
+                    }
                 });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -3742,7 +3840,9 @@ public sealed class MetadataSearchServiceTests
         };
 
         // Act
-        var result = await subject.SearchCandidatesAsync(criteria, "type-a", page: page, cancellationToken: default)
+        var first = await subject.SearchCandidatesAsync(criteria, "type-a", 1).ConfigureAwait(false);
+        var result = page == 1 ? first : await subject.SearchCandidatesAsync(
+            criteria, "type-a", 2, first.NextContinuation)
             .ConfigureAwait(false);
 
         // Assert
@@ -3761,25 +3861,31 @@ public sealed class MetadataSearchServiceTests
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcher.Setup(provider => provider.AdvancedSearchAsync(
+        searcher.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) => new MetadataSearchPage
+                string _, object? continuation, CancellationToken _) => new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, maximumResults / 25).Select(index => new MetadataSearchCandidate
+                    Continuation = ((int?)continuation ?? 0) + (maximumResults == 0 ? 0 : 1),
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            ((int?)continuation ?? 0) + 1, maximumResults == 0 ? 0 : 1)
+                            .Select(index => new MetadataSearchCandidate
                     {
                         ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"c{index}",
                         ContentType = "type-a", Level = "type-a", Title = $"Candidate {index}"
                     })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = true }
+                        PageInfo = new() { RequestedPage = 1, HasMore = true }
+                    }
                 });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), null,
+        hierarchyItems.Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         using var cacheStore = new MemoryCacheStore(TimeProvider.System);
         using var cacheFactory = new MemoryCacheFactory(cacheStore);
         var subject = new MetadataSearchService(
@@ -3788,20 +3894,22 @@ public sealed class MetadataSearchServiceTests
 
         // Act
         var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
-        var second = await subject.SearchCandidatesAsync(new(), "type-a", 2).ConfigureAwait(false);
+        var second = await subject.SearchCandidatesAsync(
+            new(), "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(first.Matches.Select(match => match.Candidate.ExternalId),
-                Is.EqualTo(["c1", "c2", "c3", "c4", "c5"]));
+                Is.EqualTo(["c1", "c2", "c3", "c4"]));
             Assert.That(first.PageInfo.HasMore, Is.True);
             Assert.That(second.Matches.Select(match => match.Candidate.ExternalId),
-                Is.EqualTo(["c6", "c7", "c8", "c9"]));
+                Is.EqualTo(["c5", "c6", "c7", "c8"]));
             Assert.That(second.PageInfo.HasMore, Is.True);
-            searcher.Verify(provider => provider.AdvancedSearchAsync(
+            searcher.Verify(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()), Times.Exactly(9));
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Exactly(9));
         }
     }
 
@@ -3812,44 +3920,56 @@ public sealed class MetadataSearchServiceTests
         var searcherA = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherA.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcherA.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcherA.Setup(provider => provider.AdvancedSearchAsync(
+        searcherA.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) => new MetadataSearchPage
+                string _, object? continuation, CancellationToken _) => new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, maximumResults * 2 / 5).Select(index =>
+                    Continuation = ((int?)continuation ?? 0) + maximumResults * 2 / 5,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            ((int?)continuation ?? 0) + 1, maximumResults * 2 / 5)
+                            .Select(index =>
                         new MetadataSearchCandidate
                         {
                             ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"a{index}",
                             ContentType = "type-a", Level = "type-a", Title = $"Candidate a{index}"
                         })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = true }
+                        PageInfo = new() { RequestedPage = 1, HasMore = true }
+                    }
                 });
         var searcherB = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherB.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         searcherB.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcherB.Setup(provider => provider.AdvancedSearchAsync(
+        searcherB.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) => new MetadataSearchPage
+                string _, object? continuation, CancellationToken _) => new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, maximumResults * 3 / 5).Select(index =>
+                    Continuation = ((int?)continuation ?? 0) + maximumResults * 3 / 5,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            ((int?)continuation ?? 0) + 1, maximumResults * 3 / 5)
+                            .Select(index =>
                         new MetadataSearchCandidate
                         {
                             ProviderType = "provider-b", ExternalIdSource = "source-b", ExternalId = $"b{index}",
                             ContentType = "type-a", Level = "type-a", Title = $"Candidate b{index}"
                         })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = true }
+                        PageInfo = new() { RequestedPage = 1, HasMore = true }
+                    }
                 });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), null,
+        hierarchyItems.Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var timeProvider = new FakeTimeProvider();
         using var cacheStore = new MemoryCacheStore(timeProvider);
         using var cacheFactory = new MemoryCacheFactory(cacheStore);
@@ -3860,7 +3980,9 @@ public sealed class MetadataSearchServiceTests
         // Act
         var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
         timeProvider.Advance(TimeSpan.FromHours(1));
-        var second = await subject.SearchCandidatesAsync(new(), "type-a", 2).ConfigureAwait(false);
+        var second = await subject.SearchCandidatesAsync(
+            new(), "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -3880,21 +4002,24 @@ public sealed class MetadataSearchServiceTests
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcher.Setup(provider => provider.AdvancedSearchAsync(
+        searcher.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches = [],
-                PageInfo = new() { RequestedPage = 1, HasMore = false },
-                Warnings = ["The remote request failed."]
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [],
+                    PageInfo = new() { RequestedPage = 1, HasMore = false },
+                    Warnings = ["The remote request failed."]
+                }
             });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), null,
+        hierarchyItems.Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [], [searcher.Object], _registry, hierarchyItems.Object,
             TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
@@ -3907,38 +4032,44 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_AsksAFailedProviderOnce_WhenALaterPageIsRequestedCold()
+    public async Task SearchCandidatesAsync_AsksAFailedProviderOncePerPage_WhenAHealthyProviderContinues()
     {
         // Arrange
         var searcherA = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherA.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcherA.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcherA.Setup(provider => provider.AdvancedSearchAsync(
+        searcherA.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("502 Bad Gateway"));
         var searcherB = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherB.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         searcherB.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcherB.Setup(provider => provider.AdvancedSearchAsync(
+        searcherB.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) => new MetadataSearchPage
+                string _, object? continuation, CancellationToken _) => new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, maximumResults).Select(index => new MetadataSearchCandidate
+                    Continuation = (int?)continuation + maximumResults ?? maximumResults,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            (int?)continuation + 1 ?? 1, maximumResults)
+                            .Select(index => new MetadataSearchCandidate
                     {
                         ProviderType = "provider-b", ExternalIdSource = "source-b", ExternalId = $"b{index}",
                         ContentType = "type-a", Level = "type-a", Title = $"Candidate b{index}"
                     })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = true }
+                        PageInfo = new() { RequestedPage = 1, HasMore = true }
+                    }
                 });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), null,
+        hierarchyItems.Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         using var cacheStore = new MemoryCacheStore(TimeProvider.System);
         using var cacheFactory = new MemoryCacheFactory(cacheStore);
         var subject = new MetadataSearchService(
@@ -3946,7 +4077,11 @@ public sealed class MetadataSearchServiceTests
             TimeProvider.System, NullLogger<MetadataSearchService>.Instance, cacheFactory);
 
         // Act
-        var result = await subject.SearchCandidatesAsync(new(), "type-a", 3).ConfigureAwait(false);
+        var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+        var second = await subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
+        var result = await subject.SearchCandidatesAsync(new(), "type-a", 3, second.NextContinuation)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -3957,41 +4092,51 @@ public sealed class MetadataSearchServiceTests
                     "b61", "b62", "b63", "b64", "b65", "b66", "b67", "b68", "b69", "b70",
                     "b71", "b72", "b73", "b74", "b75"
                 ]));
-            Assert.That(result.Warnings, Is.EqualTo(["provider-a could not finish the search. Try again."]));
-            searcherA.Verify(provider => provider.AdvancedSearchAsync(
+            Assert.That(result.Warnings, Is.EqualTo(["provider-a could not finish the search."]));
+            searcherA.Verify(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()), Times.Once);
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
         }
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_RecomputesAPagePastTheEnd_WhenTheProviderGrows()
+    public async Task SearchCandidatesAsync_StartsFresh_WhenAnExhaustedProviderGrows()
     {
         // Arrange
         var rows = 10;
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcher.Setup(provider => provider.AdvancedSearchAsync(
+        searcher.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) => new MetadataSearchPage
+                string _, object? continuation, CancellationToken _) => new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, Math.Min(rows, maximumResults)).Select(index =>
+                    Continuation = (int?)continuation + maximumResults ?? maximumResults,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            ((int?)continuation ?? 0) + 1, Math.Min(rows - ((int?)continuation ?? 0), maximumResults))
+                            .Select(index =>
                         new MetadataSearchCandidate
                         {
                             ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"c{index}",
                             ContentType = "type-a", Level = "type-a", Title = $"Candidate {index}"
                         })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = maximumResults < rows }
+                        PageInfo = new()
+                        {
+                            RequestedPage = 1,
+                            HasMore = ((int?)continuation ?? 0) + maximumResults < rows
+                        }
+                    }
                 });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), null,
+        hierarchyItems.Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var timeProvider = new FakeTimeProvider();
         using var cacheStore = new MemoryCacheStore(timeProvider);
         using var cacheFactory = new MemoryCacheFactory(cacheStore);
@@ -4000,16 +4145,21 @@ public sealed class MetadataSearchServiceTests
             timeProvider, NullLogger<MetadataSearchService>.Instance, cacheFactory);
 
         // Act
-        var beyond = await subject.SearchCandidatesAsync(new(), "type-a", 3).ConfigureAwait(false);
+        var beyond = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
         rows = 100;
         timeProvider.Advance(TimeSpan.FromSeconds(16));
-        await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
-        var fourth = await subject.SearchCandidatesAsync(new(), "type-a", 4).ConfigureAwait(false);
+        var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+        var second = await subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
+        var third = await subject.SearchCandidatesAsync(new(), "type-a", 3, second.NextContinuation)
+            .ConfigureAwait(false);
+        var fourth = await subject.SearchCandidatesAsync(new(), "type-a", 4, third.NextContinuation)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(beyond.Matches, Is.Empty);
+            Assert.That(beyond.Matches, Has.Count.EqualTo(10));
             Assert.That(beyond.PageInfo.HasMore, Is.False);
             Assert.That(fourth.Matches.Select(match => match.Candidate.ExternalId),
                 Is.EqualTo([
@@ -4020,56 +4170,28 @@ public sealed class MetadataSearchServiceTests
         }
     }
 
-    [Test]
-    public async Task SearchCandidatesAsync_ComputesTheEarlierPages_WhenALaterPageIsRequestedFirst()
+    [TestCase(2)]
+    [TestCase(6)]
+    [TestCase(int.MaxValue)]
+    public void SearchCandidatesAsync_RejectsTheRequest_WhenALaterPageHasNoCheckpoint(int page)
     {
         // Arrange
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcher.Setup(provider => provider.AdvancedSearchAsync(
-                "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) => new MetadataSearchPage
-                {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, maximumResults).Select(index => new MetadataSearchCandidate
-                    {
-                        ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"c{index}",
-                        ContentType = "type-a", Level = "type-a", Title = $"Candidate {index}"
-                    })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = true }
-                });
-        var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
-        var timeProvider = new FakeTimeProvider();
-        using var cacheStore = new MemoryCacheStore(timeProvider);
-        using var cacheFactory = new MemoryCacheFactory(cacheStore);
         var subject = new MetadataSearchService(
-            [], [searcher.Object], _registry, hierarchyItems.Object,
-            timeProvider, NullLogger<MetadataSearchService>.Instance, cacheFactory);
+            [], [searcher.Object], _registry, Mock.Of<IContentHierarchyItemRepository>(),
+            TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
 
         // Act
-        var cold = await subject.SearchCandidatesAsync(new(), "type-a", 6).ConfigureAwait(false);
-        timeProvider.Advance(TimeSpan.FromSeconds(16));
-        var expired = await subject.SearchCandidatesAsync(new(), "type-a", 6).ConfigureAwait(false);
+        var exception = Assert.ThrowsAsync<MetadataSearchContinuationException>(() =>
+            subject.SearchCandidatesAsync(new(), "type-a", page));
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(cold.Matches, Has.Count.EqualTo(25));
-            Assert.That(cold.Matches[0].Candidate.ExternalId, Is.EqualTo("c126"));
-            Assert.That(cold.Matches[^1].Candidate.ExternalId, Is.EqualTo("c150"));
-            Assert.That(expired.Matches.Select(match => match.Candidate.ExternalId),
-                Is.EqualTo(cold.Matches.Select(match => match.Candidate.ExternalId)));
-            searcher.Verify(provider => provider.AdvancedSearchAsync(
-                "type-a", It.IsAny<ContentHierarchyItemCriteria>(), 150,
-                string.Empty, It.IsAny<CancellationToken>()), Times.Exactly(2));
-        }
+        Assert.That(exception!.Message, Is.EqualTo("Start a new search at page one."));
+        searcher.Verify(provider => provider.ContinueSearchAsync(
+            It.IsAny<string>(), It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
+            It.IsAny<string>(), It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Test]
@@ -4079,15 +4201,20 @@ public sealed class MetadataSearchServiceTests
         var searcherA = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherA.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcherA.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcherA.Setup(provider => provider.AdvancedSearchAsync(
+        searcherA.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) =>
-                new MetadataSearchPage
+                string _, object? continuation, CancellationToken _) =>
+                new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, Math.Min(maximumResults, 50)).Select(index =>
+                    Continuation = (int?)continuation + maximumResults ?? maximumResults,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            (int?)continuation + 1 ?? 1, Math.Min(maximumResults, 50 - ((int?)continuation ?? 0)))
+                            .Select(index =>
                         new MetadataSearchCandidate
                         {
                             ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"a{index}",
@@ -4096,37 +4223,47 @@ public sealed class MetadataSearchServiceTests
                                 ? [new() { Source = "imdb", Value = "shared" }]
                                 : []
                         })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = maximumResults < 50 }
+                        PageInfo = new()
+                        {
+                            RequestedPage = 1,
+                            HasMore = ((int?)continuation ?? 0) + maximumResults < 50
+                        }
+                    }
                 });
         var searcherB = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherB.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         searcherB.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcherB.Setup(provider => provider.AdvancedSearchAsync(
+        searcherB.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches = [new()
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [new()
                 {
                     ProviderType = "provider-b", ExternalIdSource = "source-b", ExternalId = "b1",
                     ContentType = "type-a", Level = "type-a", Title = "Shared movie",
                     AdditionalExternalIds = [new() { Source = "imdb", Value = "shared" }]
                 }],
-                PageInfo = new() { RequestedPage = 1, HasMore = false }
+                    PageInfo = new() { RequestedPage = 1, HasMore = false }
+                }
             });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), null,
+        hierarchyItems.Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [], [searcherA.Object, searcherB.Object], _registry, hierarchyItems.Object,
             TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
 
         // Act
         var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
-        var second = await subject.SearchCandidatesAsync(new(), "type-a", 2).ConfigureAwait(false);
+        var second = await subject.SearchCandidatesAsync(
+            new(), "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -4148,40 +4285,6 @@ public sealed class MetadataSearchServiceTests
         }
     }
 
-    [Test]
-    public async Task SearchCandidatesAsync_AnswersAnEmptyPage_WhenTheRequestedPageIsBeyondTheCeiling()
-    {
-        // Arrange
-        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
-        searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
-        searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcher.Setup(provider => provider.AdvancedSearchAsync(
-                "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
-            {
-                Supported = true,
-                Matches = [],
-                PageInfo = new() { RequestedPage = 1, HasMore = true }
-            });
-        var subject = new MetadataSearchService(
-            [], [searcher.Object], _registry, Mock.Of<IContentHierarchyItemRepository>(),
-            TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
-
-        // Act
-        var result = await subject.SearchCandidatesAsync(new(), "type-a", int.MaxValue).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Matches, Is.Empty);
-            Assert.That(result.PageInfo.HasMore, Is.False);
-            searcher.Verify(provider => provider.AdvancedSearchAsync(
-                "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()), Times.Never);
-        }
-    }
-
     [TestCase(false, 5, "a1", "a20")]
     [TestCase(true, 5, "a1", "a20")]
     [TestCase(true, 8, "a1", "a13")]
@@ -4195,47 +4298,59 @@ public sealed class MetadataSearchServiceTests
         var searcherA = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherA.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcherA.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcherA.Setup(provider => provider.AdvancedSearchAsync(
+        searcherA.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) =>
-                new MetadataSearchPage
+                string _, object? continuation, CancellationToken _) =>
+                new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, maximumResults * 2 / divisor).Select(index =>
+                    Continuation = ((int?)continuation ?? 0) + maximumResults * 2 / divisor,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            ((int?)continuation ?? 0) + 1, maximumResults * 2 / divisor)
+                            .Select(index =>
                         new MetadataSearchCandidate
                         {
                             ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"a{index}",
                             ContentType = "type-a", Level = "type-a",
                             Title = index == 20 ? "Candidate" : $"Candidate a{index}"
                         })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = maximumResults == 25 || hasMore }
+                        PageInfo = new() { RequestedPage = 1, HasMore = continuation is null || hasMore }
+                    }
                 });
         var searcherB = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherB.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         searcherB.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
-        searcherB.Setup(provider => provider.AdvancedSearchAsync(
+        searcherB.Setup(provider => provider.ContinueSearchAsync(
                 "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-                string.Empty, It.IsAny<CancellationToken>()))
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int maximumResults,
-                string _, CancellationToken _) =>
-                new MetadataSearchPage
+                string _, object? continuation, CancellationToken _) =>
+                new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, maximumResults * 3 / 5).Select(index =>
+                    Continuation = ((int?)continuation ?? 0) + maximumResults * 3 / 5,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            ((int?)continuation ?? 0) + 1, maximumResults * 3 / 5)
+                            .Select(index =>
                         new MetadataSearchCandidate
                         {
                             ProviderType = "provider-b", ExternalIdSource = "source-b", ExternalId = $"b{index}",
                             ContentType = "type-a", Level = "type-a", Title = $"Candidate b{index}"
                         })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = maximumResults == 25 || hasMore }
+                        PageInfo = new() { RequestedPage = 1, HasMore = continuation is null || hasMore }
+                    }
                 });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
-        hierarchyItems.Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), null,
+        hierarchyItems.Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [], [searcherA.Object, searcherB.Object], _registry, hierarchyItems.Object,
             TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
@@ -4261,7 +4376,9 @@ public sealed class MetadataSearchServiceTests
 
         // Act
         var first = await subject.SearchCandidatesAsync(criteria, "type-a", 1).ConfigureAwait(false);
-        var second = await subject.SearchCandidatesAsync(criteria, "type-a", 2).ConfigureAwait(false);
+        var second = await subject.SearchCandidatesAsync(
+            criteria, "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -4284,16 +4401,19 @@ public sealed class MetadataSearchServiceTests
         searcherA.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcherA.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcherA
-            .SetupSequence(provider => provider.AdvancedSearchAsync(
+            .SetupSequence(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches = [.. Enumerable.Range(1, 10).Select(index => new MetadataSearchCandidate
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [.. Enumerable.Range(1, 10).Select(index => new MetadataSearchCandidate
                     {
                         ProviderType = "provider-a",
                         ExternalIdSource = "source-a",
@@ -4302,29 +4422,37 @@ public sealed class MetadataSearchServiceTests
                         Level = "type-a",
                         Title = "Candidate a" + index
                     })],
-                PageInfo = new() { RequestedPage = 1, HasMore = true }
+                    PageInfo = new() { RequestedPage = 1, HasMore = true }
+                }
             })
             .ThrowsAsync(new HttpRequestException("502 Bad Gateway"));
         var searcherB = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcherB.SetupGet(provider => provider.ProviderType).Returns("provider-b");
         searcherB.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcherB
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((
                 string _,
                 ContentHierarchyItemCriteria _,
                 int maximumResults,
                 string _,
+                object? continuation,
                 CancellationToken _) =>
-                new MetadataSearchPage
+                new MetadataSearchBatch
                 {
-                    Supported = true,
-                    Matches = [.. Enumerable.Range(1, maximumResults <= 25 ? 10 : 25).Select(index =>
+                    Continuation = ((int?)continuation ?? 0) + (maximumResults == 0 ? 0 : 10),
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(
+                            ((int?)continuation ?? 0) + 1, maximumResults == 0 ? 0 : 10)
+                            .Select(index =>
                         new MetadataSearchCandidate
                     {
                         ProviderType = "provider-b",
@@ -4334,22 +4462,15 @@ public sealed class MetadataSearchServiceTests
                         Level = "type-a",
                         Title = "Candidate b" + index
                     })],
-                    PageInfo = new() { RequestedPage = 1, HasMore = true }
+                        PageInfo = new() { RequestedPage = 1, HasMore = true }
+                    }
                 });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [searcherA.Object, searcherB.Object],
@@ -4385,7 +4506,7 @@ public sealed class MetadataSearchServiceTests
             Assert.That(result.Matches, Has.Count.EqualTo(25));
             Assert.That(result.Matches.Select(match => match.Candidate.ExternalId), Does.Contain("a10"));
             Assert.That(result.Matches.Select(match => match.Candidate.ExternalId), Does.Contain("b15"));
-            Assert.That(result.Warnings, Is.EqualTo(["provider-a could not finish the search. Try again."]));
+            Assert.That(result.Warnings, Is.EqualTo(["provider-a could not finish the search."]));
             Assert.That(result.PageInfo.HasMore, Is.True);
         }
     }
@@ -4398,16 +4519,19 @@ public sealed class MetadataSearchServiceTests
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
-            .Setup(provider => provider.AdvancedSearchAsync(
+            .Setup(provider => provider.ContinueSearchAsync(
                 "type-a",
                 It.IsAny<ContentHierarchyItemCriteria>(),
                 It.IsAny<int>(),
                 string.Empty,
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchPage
+            .ReturnsAsync(new MetadataSearchBatch
             {
-                Supported = true,
-                Matches =
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches =
                 [
                     .. Enumerable.Range(1, 40).Select(index => new MetadataSearchCandidate
                     {
@@ -4419,22 +4543,15 @@ public sealed class MetadataSearchServiceTests
                         Title = index == 30 ? "Jane Example" : $"Jane Example item {index}"
                     })
                 ],
-                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+                }
             });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
         hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 1,
-                TotalItems = 0
-            });
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
         var subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -4491,5 +4608,257 @@ public sealed class MetadataSearchServiceTests
             Assert.That(result.Matches[0].Candidate.ExternalId, Is.EqualTo("c1"));
             Assert.That(result.PageInfo.HasMore, Is.True);
         }
+    }
+
+    [Test]
+    public async Task SearchCandidatesAsync_ReplaysIndependentCheckpoints_WhenRequestsNavigateRetryAndOverlap()
+    {
+        // Arrange
+        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
+        searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
+        searcher.Setup(provider => provider.ContinueSearchAsync(
+            "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
+            string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int count, string _,
+                object? checkpoint, CancellationToken _) => new MetadataSearchBatch
+                {
+                    Continuation = ((int?)checkpoint ?? 0) + count,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(((int?)checkpoint ?? 0) + 1,
+                        Math.Min(count, 40 - ((int?)checkpoint ?? 0))).Select(id => new MetadataSearchCandidate
+                    {
+                        ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"c{id}",
+                        ContentType = "type-a", Level = "type-a", Title = "Candidate"
+                    })],
+                        PageInfo = new() { RequestedPage = 1, HasMore = ((int?)checkpoint ?? 0) + count < 40 }
+                    }
+                });
+        var repository = new Mock<IContentHierarchyItemRepository>();
+        repository.Setup(value => value.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
+        var subject = new MetadataSearchService([], [searcher.Object], _registry, repository.Object,
+            TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
+
+        // Act
+        var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+        var concurrent = await Task.WhenAll(
+            subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation),
+            subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation)).ConfigureAwait(false);
+        var back = await subject.SearchCandidatesAsync(new(), "type-a", 1, first.Continuation).ConfigureAwait(false);
+        var independent = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Matches, Has.Count.EqualTo(25));
+            Assert.That(first.Matches[0].Candidate.ExternalId, Is.EqualTo("c1"));
+            Assert.That(concurrent[0].Matches, Has.Count.EqualTo(15));
+            Assert.That(concurrent[0].Matches[0].Candidate.ExternalId, Is.EqualTo("c26"));
+            Assert.That(concurrent[0].Matches[^1].Candidate.ExternalId, Is.EqualTo("c40"));
+            Assert.That(concurrent[0].PageInfo.HasMore, Is.False);
+            Assert.That(concurrent[1].Matches.Select(value => value.Candidate.ExternalId),
+                Is.EqualTo(concurrent[0].Matches.Select(value => value.Candidate.ExternalId)));
+            Assert.That(back.Matches.Select(value => value.Candidate.ExternalId),
+                Is.EqualTo(first.Matches.Select(value => value.Candidate.ExternalId)));
+            Assert.That(independent.Continuation, Is.Not.EqualTo(first.Continuation));
+            Assert.That(independent.Matches[0].Candidate.ExternalId, Is.EqualTo("c1"));
+            searcher.Verify(value => value.ContinueSearchAsync("type-a", It.IsAny<ContentHierarchyItemCriteria>(),
+                25, string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Exactly(5));
+        }
+    }
+
+    [Test]
+    public async Task SearchCandidatesAsync_RetainsUnreadRows_WhenIndependentSearchesShareCooldown()
+    {
+        // Arrange
+        var throttled = false;
+        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
+        searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
+        searcher.Setup(provider => provider.ContinueSearchAsync(
+                "type-a", It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
+                string.Empty, It.IsAny<object?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int count, string _,
+                object? checkpoint, CancellationToken token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                if (throttled && count > 0)
+                {
+                    throw new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero));
+                }
+
+                return new MetadataSearchBatch
+                {
+                    Continuation = ((int?)checkpoint ?? 0) + count,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(((int?)checkpoint ?? 0) + 1,
+                            Math.Min(count, 40 - ((int?)checkpoint ?? 0))).Select(id => new MetadataSearchCandidate
+                            {
+                                ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"c{id}",
+                                ContentType = "type-a", Level = "type-a", Title = "Candidate"
+                            })],
+                        PageInfo = new() { RequestedPage = 1, HasMore = ((int?)checkpoint ?? 0) + count < 40 }
+                    }
+                };
+            });
+        var repository = new Mock<IContentHierarchyItemRepository>();
+        repository.Setup(value => value.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
+        var subject = new MetadataSearchService([], [searcher.Object], _registry, repository.Object,
+            TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
+        var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+        var independent = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+
+        // Act
+        throttled = true;
+        var blocked = await subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
+        var alsoBlocked = await subject.SearchCandidatesAsync(new(), "type-a", 2, independent.NextContinuation)
+            .ConfigureAwait(false);
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync().ConfigureAwait(false);
+        Assert.ThrowsAsync<OperationCanceledException>(() => subject.SearchCandidatesAsync(
+            new(), "type-a", 2, first.NextContinuation, cancellation.Token));
+        throttled = false;
+        var resumed = await subject.SearchCandidatesAsync(new(), "type-a", 3, blocked.NextContinuation)
+            .ConfigureAwait(false);
+        var retried = await subject.SearchCandidatesAsync(new(), "type-a", 2, independent.NextContinuation)
+            .ConfigureAwait(false);
+        var replayed = await subject.SearchCandidatesAsync(new(), "type-a", 1, first.Continuation)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(blocked.Matches, Is.Empty);
+            Assert.That(blocked.PageInfo.HasMore, Is.True);
+            Assert.That(blocked.Warnings, Has.Some.Contains("throttled"));
+            Assert.That(alsoBlocked.PageInfo.HasMore, Is.True);
+            Assert.That(resumed.Matches, Has.Count.EqualTo(15));
+            Assert.That(resumed.Matches[0].Candidate.ExternalId, Is.EqualTo("c26"));
+            Assert.That(resumed.Matches[^1].Candidate.ExternalId, Is.EqualTo("c40"));
+            Assert.That(resumed.PageInfo.HasMore, Is.False);
+            Assert.That(retried.Matches[0].Candidate.ExternalId, Is.EqualTo("c26"));
+            Assert.That(retried.Matches[^1].Candidate.ExternalId, Is.EqualTo("c40"));
+            Assert.That(replayed.Matches, Has.Count.EqualTo(25));
+            Assert.That(replayed.Matches[0].Candidate.ExternalId, Is.EqualTo("c1"));
+            Assert.That(replayed.Matches[^1].Candidate.ExternalId, Is.EqualTo("c25"));
+        }
+    }
+
+    [Test]
+    public async Task SearchCandidatesAsync_PreservesCheckpoint_WhenACanceledRequestIsRetried()
+    {
+        // Arrange
+        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
+        searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
+        using var cancellation = new CancellationTokenSource();
+        searcher.Setup(provider => provider.ContinueSearchAsync("type-a",
+            It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(), string.Empty,
+            It.IsAny<object?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string _, ContentHierarchyItemCriteria _, int count, string _,
+                object? checkpoint, CancellationToken token) =>
+            {
+                if (checkpoint is not null && count > 0 && token.CanBeCanceled &&
+                    !cancellation.IsCancellationRequested)
+                {
+                    cancellation.Cancel();
+                    token.ThrowIfCancellationRequested();
+                }
+
+                return new MetadataSearchBatch
+                {
+                    Continuation = ((int?)checkpoint ?? 0) + count,
+                    Page = new MetadataSearchPage
+                    {
+                        Supported = true,
+                        Matches = [.. Enumerable.Range(((int?)checkpoint ?? 0) + 1, count)
+                            .Select(id => new MetadataSearchCandidate
+                            {
+                                ProviderType = "provider-a", ExternalIdSource = "source-a", ExternalId = $"c{id}",
+                                ContentType = "type-a", Level = "type-a", Title = "Candidate"
+                            })],
+                        PageInfo = new() { RequestedPage = 1, HasMore = true }
+                    }
+                };
+            });
+        var repository = new Mock<IContentHierarchyItemRepository>();
+        repository.Setup(value => value.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
+        var subject = new MetadataSearchService([], [searcher.Object], _registry, repository.Object,
+            TimeProvider.System, NullLogger<MetadataSearchService>.Instance, _cacheFactory);
+        var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+
+        // Act
+        var canceled = Assert.ThrowsAsync<OperationCanceledException>(() =>
+            subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation, cancellation.Token));
+        var retried = await subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(canceled, Is.Not.Null);
+            Assert.That(retried.Matches[0].Candidate.ExternalId, Is.EqualTo("c26"));
+            Assert.That(retried.Matches[^1].Candidate.ExternalId, Is.EqualTo("c50"));
+            searcher.Verify(value => value.ContinueSearchAsync("type-a", It.IsAny<ContentHierarchyItemCriteria>(),
+                25, string.Empty, 25, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        }
+    }
+
+    [TestCase("expired")]
+    [TestCase("query")]
+    [TestCase("page")]
+    [TestCase("unknown")]
+    public async Task SearchCandidatesAsync_RejectsInvalidState_WhenTheCheckpointCannotBeReused(string change)
+    {
+        // Arrange
+        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
+        searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
+        searcher.Setup(value => value.ContinueSearchAsync("type-a", It.IsAny<ContentHierarchyItemCriteria>(),
+            25, string.Empty, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchBatch
+            {
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [],
+                    PageInfo = new() { RequestedPage = 1, HasMore = false }
+                }
+            });
+        var time = new FakeTimeProvider();
+        using var store = new MemoryCacheStore(time);
+        using var cache = new MemoryCacheFactory(store);
+        var subject = new MetadataSearchService([], [searcher.Object], _registry,
+            Mock.Of<IContentHierarchyItemRepository>(), time, NullLogger<MetadataSearchService>.Instance, cache);
+        var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+        if (change == "expired")
+        {
+            time.Advance(TimeSpan.FromHours(13));
+        }
+
+        // Act
+        var exception = Assert.ThrowsAsync<MetadataSearchContinuationException>(() =>
+            subject.SearchCandidatesAsync(new(), change == "query" ? "type-b" : "type-a",
+                change == "page" ? 2 : 1, change == "unknown" ? "missing" : first.Continuation));
+
+        // Assert
+        Assert.That(exception, Is.Not.Null);
+        searcher.Verify(value => value.ContinueSearchAsync(It.IsAny<string>(),
+            It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(), It.IsAny<string>(),
+            It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

@@ -23,6 +23,58 @@ internal sealed class RefreshTokenRepository(
 {
     private readonly TimeProvider _time = timeProvider;
 
+    /// <inheritdoc />
+    public async Task<RefreshToken?> GetRenewalAsync(
+        string tokenHash, string renewalKeyHash, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await context.RefreshTokens.AsNoTracking()
+                .FirstOrDefaultAsync(rt => rt.RenewalKeyHash == renewalKeyHash &&
+                    (rt.PreviousTokenHash == tokenHash || rt.TokenHash == tokenHash), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The refresh token repository failed to read a renewal receipt.");
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task StoreRenewalAsync(RefreshToken token, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await transactionManager.ExecuteWithTransactionAsync(async ct =>
+            {
+                await context.RefreshTokens.Where(rt => rt.TokenHash == token.TokenHash)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(rt => rt.PreviousTokenHash, token.PreviousTokenHash)
+                        .SetProperty(rt => rt.RenewalKeyHash, token.RenewalKeyHash)
+                        .SetProperty(rt => rt.ProtectedRenewal, token.ProtectedRenewal)
+                        .SetProperty(rt => rt.RenewalExpiresAt, token.RenewalExpiresAt), ct)
+                    .ConfigureAwait(false);
+                await auditRecordRepository.CreateAsync(new()
+                {
+                    Category = AuditCategories.Security,
+                    Operation = "RenewalReceipt",
+                    EntityId = token.Id.ToString(),
+                    ParentEntityId = token.UserId.ToString(),
+                    EntityType = nameof(RefreshToken),
+                    Detail = "Stored the recovery receipt for a committed renewal",
+                    Timestamp = _time.GetUtcNow().UtcDateTime,
+                    UserId = token.UserId
+                }, ct).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The refresh token repository failed to store a renewal receipt.");
+            throw;
+        }
+    }
+
     public async Task<RefreshToken> CreateAsync(RefreshToken token, CancellationToken cancellationToken = default)
     {
         try

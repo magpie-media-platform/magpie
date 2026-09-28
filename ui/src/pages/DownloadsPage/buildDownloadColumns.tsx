@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { type ColumnDef } from '@tanstack/react-table';
 import {
     PauseIcon,
@@ -28,6 +28,7 @@ import {
     type DownloadStatusValue,
     downloadStatusLabels,
     downloadStatusVariants,
+    isFailedDownloadStatus,
 } from '@/hooks/useDownloads';
 import { type BulkSelection } from '@/hooks/useBulkSelection';
 import { type DownloadFilterState } from '@/types';
@@ -71,7 +72,7 @@ function displayTitle(download: ApiDownload): string {
 }
 
 export function getEndedAt(download: ApiDownload): string {
-    if (download.status === 'Failed') {
+    if (isFailedDownloadStatus(download.status)) {
         return download.failedAt ?? download.dateCompleted ?? download.modifiedAt ?? download.createdAt;
     }
     if (download.status === 'Cancelled') {
@@ -167,8 +168,8 @@ export function TitleCell({ download }: { download: ApiDownload }) {
     const label = displayLineageLeafTitle(download);
     if (download.contentHierarchyItemId) {
         return (
-            <Link
-                to={`/library/${download.contentHierarchyItemId}`}
+            <LocalContentLink
+                contentId={download.contentHierarchyItemId}
                 className="downloads-page__title-link"
                 data-content-id={download.contentHierarchyItemId}
                 data-testid="downloads-page__item-title"
@@ -180,7 +181,7 @@ export function TitleCell({ download }: { download: ApiDownload }) {
                         title: label,
                     }}
                 />
-            </Link>
+            </LocalContentLink>
         );
     }
     return (

@@ -22,7 +22,13 @@ export function useLibrarySelection({ pageRowIds, totalItems, contentItems, rese
     );
 
     const selectedItems = useMemo(
-        () => selectedRecords.map((item) => ({ id: item.id, parentId: item.parentId, title: item.title })),
+        () =>
+            selectedRecords.map((item) => ({
+                id: item.id,
+                parentId: item.parentId,
+                title: item.title,
+                tags: item.tags,
+            })),
         [selectedRecords],
     );
 

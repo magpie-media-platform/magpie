@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -291,7 +291,8 @@ describe('ManualMatchDialog', () => {
         expect(yearInput().value).toBe('1999');
     });
 
-    it('scopes the seeded search to the parsed title, year, and content type', async () => {
+    it('Search_UsesParsedTitleYearAndContentType_WhenSeeded', async () => {
+        // Arrange
         const user = userEvent.setup();
         render(
             <ManualMatchDialog
@@ -305,10 +306,15 @@ describe('ManualMatchDialog', () => {
             { wrapper: createWrapper() },
         );
 
+        // Act
         await user.click(screen.getByRole('button', { name: /^Search$/ }));
 
+        // Assert
         await waitFor(() => {
-            expect(mockApiGet).toHaveBeenCalledWith(expect.stringMatching(/^\/content-search\?query=/));
+            expect(mockApiGet).toHaveBeenCalledWith(
+                expect.stringMatching(/^\/content-search\?query=/),
+                expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            );
         });
         const seededQuery = (
             mockBuildUrl.mock.calls.find(([path]) => path === '/content-search')?.[1] as { query: string }
@@ -320,18 +326,46 @@ describe('ManualMatchDialog', () => {
         expect(seededQuery).not.toBe('contentType = "movie"');
     });
 
-    it('searches with the live field edits, not the stale seed', async () => {
+    it('Search_RunsOnce_WhenEnterIsPressedInTheTitle', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <ManualMatchDialog
+                target={candidateTarget({ parsedSignals: { title: ['The Matrix'], year: ['1999'] } })}
+                onClose={vi.fn()}
+                onMatched={vi.fn()}
+            />,
+            { wrapper: createWrapper() },
+        );
+
+        // Act
+        await user.click(screen.getByLabelText('Title'));
+        await user.keyboard('{Enter}');
+
+        // Assert
+        await waitFor(() => {
+            expect(mockApiGet.mock.calls.filter(([url]) => String(url).startsWith('/content-search'))).toHaveLength(1);
+        });
+    });
+
+    it('Search_UsesLiveFieldEdits_WhenSeedChanges', async () => {
+        // Arrange
         const user = userEvent.setup();
         render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
+        // Act
         await user.clear(titleInput());
         await user.type(titleInput(), 'Snatch');
         await user.click(screen.getByRole('button', { name: /^Search$/ }));
 
+        // Assert
         await waitFor(() => {
-            expect(mockApiGet).toHaveBeenCalledWith(expect.stringMatching(/^\/content-search\?query=/));
+            expect(mockApiGet).toHaveBeenCalledWith(
+                expect.stringMatching(/^\/content-search\?query=/),
+                expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            );
         });
         const seededQuery = (
             mockBuildUrl.mock.calls.find(([path]) => path === '/content-search')?.[1] as { query: string }
@@ -340,14 +374,17 @@ describe('ManualMatchDialog', () => {
         expect(seededQuery).not.toContain('Fight Club');
     });
 
-    it('searches for matches and lists provider metadata candidates', async () => {
+    it('Search_ShowsProviderCandidates_WhenMatchesReturn', async () => {
+        // Arrange
         const user = userEvent.setup();
         render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
             wrapper: createWrapper(),
         });
 
+        // Act
         await user.click(screen.getByRole('button', { name: /^Search$/ }));
 
+        // Assert
         await waitFor(() => {
             expect(screen.getByTestId('manual-match-dialog__results')).toBeInTheDocument();
         });
@@ -358,10 +395,14 @@ describe('ManualMatchDialog', () => {
             '/content-search',
             expect.objectContaining({ query: expect.stringContaining('title contains "Fight Club"'), page: 1 }),
         );
-        expect(mockApiGet).toHaveBeenCalledWith(expect.stringMatching(/^\/content-search\?query=.+&page=1$/));
+        expect(mockApiGet).toHaveBeenCalledWith(
+            expect.stringMatching(/^\/content-search\?query=.+&page=1$/),
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
     });
 
-    it('paginates provider metadata candidates and resets to the first page for a new search', async () => {
+    it('Search_ReturnsToFirstPage_WhenNewSearchStartsAfterPaging', async () => {
+        // Arrange
         const firstPageCandidates = Array.from({ length: 3 }, (_, index) =>
             buildCandidate({
                 externalId: String(1000 + index),
@@ -387,6 +428,8 @@ describe('ManualMatchDialog', () => {
                 matches: firstPageCandidates.map((candidate) => ({ candidate, inLibrary: false })),
                 pageItemCount: 3,
                 existsInLibraryCount: 0,
+                continuation: 'first-page',
+                nextContinuation: 'second-page',
                 pageInfo: { requestedPage: 1, hasMore: true },
             });
         });
@@ -395,8 +438,10 @@ describe('ManualMatchDialog', () => {
             wrapper: createWrapper(),
         });
 
+        // Act
         await user.click(screen.getByRole('button', { name: /^Search$/ }));
 
+        // Assert
         await waitFor(() => {
             expect(screen.getByTestId('manual-match-dialog__pagination')).toHaveTextContent('Page 1');
         });
@@ -406,19 +451,29 @@ describe('ManualMatchDialog', () => {
         expect(screen.getByText('Candidate 3')).toBeInTheDocument();
         expect(screen.queryByText('Candidate 4')).not.toBeInTheDocument();
 
+        // Act
         await user.click(nextButton);
 
+        // Assert
         await waitFor(() => {
-            expect(mockApiGet).toHaveBeenLastCalledWith(expect.stringMatching(/^\/content-search\?query=.+&page=2$/));
+            expect(mockApiGet).toHaveBeenLastCalledWith(
+                expect.stringMatching(/^\/content-search\?query=.+&page=2&continuation=second-page$/),
+                expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            );
         });
         expect(screen.getByTestId('manual-match-dialog__pagination')).toHaveTextContent('Page 2');
         expect(screen.getByText('Page 2 Candidate')).toBeInTheDocument();
         expect((screen.getByLabelText('Go to next page') as HTMLButtonElement).disabled).toBe(true);
 
+        // Act
         await user.click(screen.getByRole('button', { name: /^Search$/ }));
 
+        // Assert
         await waitFor(() => {
-            expect(mockApiGet).toHaveBeenLastCalledWith(expect.stringMatching(/^\/content-search\?query=.+&page=1$/));
+            expect(mockApiGet).toHaveBeenLastCalledWith(
+                expect.stringMatching(/^\/content-search\?query=.+&page=1$/),
+                expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            );
         });
         expect(screen.getByTestId('manual-match-dialog__pagination')).toHaveTextContent('Page 1');
     });
@@ -491,6 +546,19 @@ describe('ManualMatchDialog', () => {
         const title = document.querySelector('.manual-match-dialog__candidate-title');
         expect(title).toHaveTextContent(longTitle);
         expect(title).toHaveClass('manual-match-dialog__candidate-title');
+    });
+
+    it('opens the preview inside the dialog content, so closing it is not an outside click on the dialog', async () => {
+        const user = userEvent.setup();
+        render(<ManualMatchDialog target={candidateTarget()} onClose={vi.fn()} onMatched={vi.fn()} />, {
+            wrapper: createWrapper(),
+        });
+        await user.click(screen.getByRole('button', { name: /^Search$/ }));
+
+        await user.click(await screen.findByRole('button', { name: /Detail/ }));
+
+        const content = document.querySelector('[data-component="manual-match-dialog"]') as HTMLElement;
+        expect(within(content).getByTestId('preview-drawer-open')).toBeInTheDocument();
     });
 
     it('associates a chosen candidate without importing, then closes and refetches', async () => {

@@ -29,6 +29,7 @@ public class MoviesContentTypeDefinitionProviderTests
         MetadataField.References |
         MetadataField.Relationships |
         MetadataField.Images |
+        MetadataField.Previews |
         MetadataField.AlternateTexts |
         MetadataField.ContentRatings |
         MetadataField.Awards |

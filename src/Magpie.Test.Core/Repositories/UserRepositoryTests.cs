@@ -15,6 +15,7 @@ using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -32,18 +33,36 @@ public sealed class UserRepositoryTests
     private Mock<IEventBus> _updateEvents = null!;
 
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IUserRepository _subject = null!;
     private Guid _adminUserId;
+
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
 
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var adminUser = new User
         {
@@ -525,6 +544,46 @@ public sealed class UserRepositoryTests
 
         // Assert
         Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public async Task PatchAsync_UsesStoredAuthorization_WhenTrackedUserIsStale()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new User
+        {
+            Username = "StaleTrackedUser",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer
+        }, _adminUserId).ConfigureAwait(false);
+        await _context.Users.Where(user => user.Id == created.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(user => user.Role, Role.Manager)).ConfigureAwait(false);
+
+        // Act
+        var changed = await _subject.PatchAsync(new UserPatch
+        {
+            Id = created.Id,
+            Role = new() { Value = Role.Viewer }
+        }, _adminUserId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(changed, Is.True);
+            Assert.That(stored!.Role, Is.EqualTo(Role.Viewer));
+        }
+    }
+
+    [Test]
+    public void LockAuthorizationAsync_RejectsRequest_WhenNoTransactionIsOpen()
+    {
+        // Act
+        var error = Assert.ThrowsAsync<InvalidOperationException>(() => _subject.LockAuthorizationAsync(_adminUserId));
+
+        // Assert
+        Assert.That(error!.Message, Is.EqualTo("An account authorization lock requires a transaction."));
     }
 
     [Test]

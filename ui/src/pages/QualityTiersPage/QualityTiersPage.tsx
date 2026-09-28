@@ -15,13 +15,14 @@ import { Role, useAuth } from '@/auth';
 import { useBulkRun } from '@/hooks/useBulkRun';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { Badge } from '@/components/ui/Badge';
-import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
+import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { Button } from '@/components/ui/Button';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
 import { DataTable, selectColumn } from '@/components/ui/DataTable';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
+import { ListFilterToolbar, type ListFilterField } from '@/components/ui/ListFilterToolbar';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
@@ -49,6 +50,11 @@ interface TierListDisplay {
 const UNIVERSAL_FILTER = '__universal__';
 const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
 const SORT_KEYS = ['name', 'mimeTypes', 'upgradeAllowed'] as const;
+const SORT_OPTIONS = [
+    { id: 'name', label: 'Name' },
+    { id: 'mimeTypes', label: 'File Types' },
+    { id: 'upgradeAllowed', label: 'Upgrades' },
+];
 const DEFAULT_FILTERS = { name: '', mime: '' };
 
 function mapTierListToDisplay(apiTierList: ApiQualityTierList): TierListDisplay {
@@ -392,6 +398,10 @@ export function QualityTiersPage() {
         () => [{ id: 'add-tier', label: 'Add Tier List', icon: <PlusIcon weight="bold" />, onClick: handleAdd }],
         [handleAdd],
     );
+    const filterFields: ListFilterField[] = [
+        { id: 'name', label: 'Name', kind: 'text', value: filters.name },
+        { id: 'mime', label: 'File Types', kind: 'facet', value: filters.mime, options: mimeOptions },
+    ];
 
     return (
         <div className="quality-tiers-page" data-page="quality-tiers">
@@ -411,6 +421,19 @@ export function QualityTiersPage() {
                                 Add Tier List
                             </Button>
                         )
+                    }
+                />
+
+                <ListFilterToolbar
+                    fields={filterFields}
+                    onCommit={(values) => setFilters({ name: values.name as string, mime: values.mime as string })}
+                    sorting={sorting}
+                    sortOptions={SORT_OPTIONS}
+                    onSortingChange={setSorting}
+                    selection={
+                        canManage && tierLists.length > 0
+                            ? { active: selection.selectionMode, onToggle: selection.toggleSelectionMode }
+                            : undefined
                     }
                 />
 
@@ -451,11 +474,6 @@ export function QualityTiersPage() {
                                         <span className="bulk-actions-toolbar__btn-label">Delete</span>
                                     </Button>
                                 </BulkActionsToolbar>
-
-                                <SelectModeToggle
-                                    active={selection.selectionMode}
-                                    onToggle={selection.toggleSelectionMode}
-                                />
                             </>
                         )}
 

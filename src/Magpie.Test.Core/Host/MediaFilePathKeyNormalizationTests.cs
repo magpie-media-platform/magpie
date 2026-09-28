@@ -10,11 +10,13 @@ using Magpie.App.Hosting;
 using Magpie.Core;
 using Magpie.Core.Content;
 using Magpie.Core.Repositories;
+using Magpie.Core.Subjects;
 using Magpie.Data;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -28,6 +30,7 @@ namespace Magpie.Test.Core.Host;
 public sealed class MediaFilePathKeyNormalizationTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IMediaFileRepository _mediaFiles = null!;
     private ITransactionManager _transactions = null!;
     private IAuditRecordRepository _audit = null!;
@@ -35,14 +38,32 @@ public sealed class MediaFilePathKeyNormalizationTests
     private ContentFileService _files = null!;
     private Mock<IContentService> _fulfillment = null!;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public async Task SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync().ConfigureAwait(false);
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-        await _context.Database.OpenConnectionAsync().ConfigureAwait(false);
-        await _context.Database.EnsureCreatedAsync().ConfigureAwait(false);
 
         var metadataContainer = new MetadataContainer { Id = Guid.NewGuid(), CreatedAt = DateTime.UtcNow };
         var hierarchyItem = new ContentHierarchyItem
@@ -74,21 +95,24 @@ public sealed class MediaFilePathKeyNormalizationTests
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
-        _mediaFiles = new MediaFileRepository(_context, NullLogger<MediaFileRepository>.Instance);
         _transactions = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         var events = Mock.Of<IEventBus>();
         _audit = new AuditRecordRepository(_context, events, NullLogger<AuditRecordRepository>.Instance,
             _transactions, Mock.Of<IJobExecutionScopeFactory>(), TimeProvider.System);
         _content = new ContentRepository(_context, _transactions, events, TimeProvider.System,
-            NullLogger<ContentRepository>.Instance);
+            NullLogger<ContentRepository>.Instance, Mock.Of<IContentTypeRegistry>(), Mock.Of<IFileSystem>(), _audit);
         var hierarchy = new Mock<IContentHierarchyItemRepository>();
         hierarchy.Setup(repository => repository.GetByIdAsync(hierarchyItem.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(hierarchyItem);
         hierarchy.Setup(repository => repository.GetLineageAsync(hierarchyItem.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync([hierarchyItem]);
+        _mediaFiles = new MediaFileRepository(_context, NullLogger<MediaFileRepository>.Instance,
+            _transactions, Mock.Of<IContentRepository>(), hierarchy.Object, events);
         _files = new ContentFileService(hierarchy.Object, Mock.Of<IMetadataContainerRepository>(),
-            Mock.Of<IRootFolderRepository>(), Mock.Of<IContentTypeRegistry>(), Mock.Of<IFileSystem>(),
-            _mediaFiles, _content, _audit, _transactions, TimeProvider.System,
+            Mock.Of<IRootFolderRepository>(), Mock.Of<IContentTypeRegistry>(),
+            new SubjectKindRegistry([], NullLogger<SubjectKindRegistry>.Instance),
+            Mock.Of<IFileSystem>(),
+            _mediaFiles, _content, _audit, _transactions, Mock.Of<IJobManager>(), TimeProvider.System,
             NullLogger<ContentFileService>.Instance);
         _fulfillment = new Mock<IContentService>();
     }

@@ -94,7 +94,7 @@ export function ContentPickerDialog({ open, mode, isSubmitting, onOpenChange, on
                             size="sm"
                         />
                     ) : (
-                        <ul className="content-picker__list">
+                        <ul className="content-picker__list" role="list">
                             {items.map((item) => (
                                 <li key={item.id} className="content-picker__option">
                                     <ContentPoster

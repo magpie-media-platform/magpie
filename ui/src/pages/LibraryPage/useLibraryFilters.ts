@@ -11,9 +11,9 @@ import {
 } from '@/hooks/useFilters';
 import { type LibraryLevelDefinition, type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useLiveUrlFilter } from '@/hooks/useLiveUrlFilter';
 import { useToggle } from '@/hooks/useToggle';
-import { Role, type User } from '@/auth';
-import { type ApiFulfillmentStatus } from '@/types';
+import type { User } from '@/auth';
 import { parseMagpieQl } from '@/lib/magpieQl';
 import { canEditOwned } from '@/lib/ownership';
 import {
@@ -21,6 +21,7 @@ import {
     readContentFilterSelection,
     setContentFilter,
     setContentFilterSelection,
+    hasComplexContentFilter,
 } from '@/lib/contentColumnFilters';
 import {
     buildContentFilterOptions,
@@ -43,8 +44,8 @@ interface UseLibraryFiltersArgs {
     routeContentTypeSlug: string | undefined;
     selectedLevel: LibraryLevelDefinition | null;
     user: User | null;
-    canManageContent: boolean;
-    hasRole: (minRole: Role) => boolean;
+    isAdmin: boolean;
+    canWriteFilters: boolean;
 }
 
 export function useLibraryFilters({
@@ -54,18 +55,47 @@ export function useLibraryFilters({
     routeContentTypeSlug,
     selectedLevel,
     user,
-    canManageContent,
-    hasRole,
+    isAdmin,
+    canWriteFilters,
 }: UseLibraryFiltersArgs) {
     const { toast } = useToast();
 
     const appliedSavedFilterId = params.savedFilter;
 
-    const { filters: savedContentFilters, isLoading: savedFiltersLoading } = useContentFilters();
-    const savedFilterOptions = useMemo(
-        () => savedContentFilters.filter((f) => f.query).map((f) => ({ id: f.id, name: f.name, query: f.query })),
-        [savedContentFilters],
-    );
+    const {
+        filters: savedContentFilters,
+        isLoading: savedFiltersLoading,
+        listError: savedFiltersListError,
+        refetch: retrySavedFilters,
+    } = useContentFilters();
+    const [pendingSavedFilter, setPendingSavedFilter] = useState<{
+        id: string;
+        name: string;
+        query: string;
+        criteria: string;
+    } | null>(null);
+    const savedFilterOptions = useMemo(() => {
+        const formatted = savedContentFilters
+            .filter((f) => f.query || f.criteriaCount === 0)
+            .map((f) => ({ id: f.id, name: f.name, query: f.query }));
+        return pendingSavedFilter
+            ? [...formatted.filter((filter) => filter.id !== pendingSavedFilter.id), pendingSavedFilter]
+            : formatted;
+    }, [savedContentFilters, pendingSavedFilter]);
+
+    useEffect(() => {
+        if (
+            pendingSavedFilter &&
+            savedContentFilters.some(
+                (filter) =>
+                    filter.id === pendingSavedFilter.id &&
+                    filter.query &&
+                    JSON.stringify(filter.criteria) === pendingSavedFilter.criteria,
+            )
+        ) {
+            setPendingSavedFilter(null);
+        }
+    }, [pendingSavedFilter, savedContentFilters]);
 
     const resolvedAppliedFilter = useMemo(() => {
         if (!appliedSavedFilterId) {
@@ -74,12 +104,22 @@ export function useLibraryFilters({
         return savedFilterOptions.find((f) => f.id === appliedSavedFilterId) ?? null;
     }, [appliedSavedFilterId, savedFilterOptions]);
 
+    const filterRestoreError =
+        appliedSavedFilterId && !resolvedAppliedFilter
+            ? (savedContentFilters.find((filter) => filter.id === appliedSavedFilterId)?.queryError ??
+              savedFiltersListError ??
+              null)
+            : null;
+
     const appliedSavedFilterExists = useMemo(() => {
         if (!appliedSavedFilterId) {
             return false;
         }
-        return savedContentFilters.some((f) => f.id === appliedSavedFilterId);
-    }, [appliedSavedFilterId, savedContentFilters]);
+        return (
+            pendingSavedFilter?.id === appliedSavedFilterId ||
+            savedContentFilters.some((f) => f.id === appliedSavedFilterId)
+        );
+    }, [appliedSavedFilterId, savedContentFilters, pendingSavedFilter]);
 
     const [divergedFromId, setDivergedFromId] = useState<string | null>(null);
     const resolvedDivergedFilter = useMemo(() => {
@@ -91,19 +131,39 @@ export function useLibraryFilters({
 
     const referencedSavedFilter = resolvedAppliedFilter ?? resolvedDivergedFilter;
 
-    const filterQuery = useMemo(() => {
-        if (appliedSavedFilterId) {
-            return resolvedAppliedFilter ? resolvedAppliedFilter.query : '';
-        }
-        return params.filter;
-    }, [appliedSavedFilterId, resolvedAppliedFilter, params.filter]);
+    const urlFilterQuery = useMemo(() => {
+        const query = appliedSavedFilterId ? (resolvedAppliedFilter?.query ?? '') : params.filter;
+        const legacyStatus = normalizeFulfillmentApiName(params.fulfillment);
+        return legacyStatus
+            ? [query.trim() ? `(${query})` : '', `fulfillment = ${legacyStatus}`].filter(Boolean).join(' and ')
+            : query;
+    }, [appliedSavedFilterId, resolvedAppliedFilter, params.filter, params.fulfillment]);
+
+    const commitFilterQuery = useCallback(
+        (query: string, replace: boolean, state: { liveFilterCommit: string }) => {
+            const reference = referencedSavedFilter;
+            if (query.trim().length === 0) {
+                updateParams({ filter: '', fulfillment: '', savedFilter: '', page: '1' }, { replace, state });
+            } else if (reference && query.trim() === reference.query.trim()) {
+                updateParams({ filter: '', fulfillment: '', savedFilter: reference.id, page: '1' }, { replace, state });
+            } else {
+                setDivergedFromId(reference?.id ?? null);
+                updateParams({ filter: query, fulfillment: '', savedFilter: '', page: '1' }, { replace, state });
+            }
+        },
+        [referencedSavedFilter, updateParams],
+    );
+    const liveFilter = useLiveUrlFilter({
+        value: urlFilterQuery,
+        onCommit: commitFilterQuery,
+        externalKey: `${params.savedFilter}\u0000${params.fulfillment}`,
+    });
+    const filterQuery = liveFilter.value;
 
     const [filterBarExpanded, setFilterBarExpanded] = useState<boolean | undefined>(() =>
-        params.filter.length > 0 || appliedSavedFilterId.length > 0 ? true : undefined,
+        params.filter.length > 0 || params.fulfillment.length > 0 || appliedSavedFilterId.length > 0 ? true : undefined,
     );
     const debouncedFilterQuery = useDebouncedValue(filterQuery, 300);
-
-    const fulfillment: ApiFulfillmentStatus | '' = normalizeFulfillmentApiName(params.fulfillment) ?? '';
 
     const sortField = params.sort && VALID_SORT_FIELDS.includes(params.sort) ? params.sort : 'publishDate';
     const sortDir = params.sortDir && VALID_SORT_DIRECTIONS.includes(params.sortDir) ? params.sortDir : 'desc';
@@ -112,6 +172,7 @@ export function useLibraryFilters({
 
     const [saveFilterDialogOpen, , openSaveFilterDialog, closeSaveFilterDialog] = useToggle();
     const [saveFilterError, setSaveFilterError] = useState<string | null>(null);
+    const [saveFilterQueryError, setSaveFilterQueryError] = useState<string | null>(null);
 
     const isAppliedFilterDirty =
         referencedSavedFilter !== null && filterQuery.trim() !== referencedSavedFilter.query.trim();
@@ -124,8 +185,8 @@ export function useLibraryFilters({
         if (!fullFilter) {
             return false;
         }
-        return canEditOwned(fullFilter, user?.id, canManageContent, hasRole, Role.Requester);
-    }, [referencedSavedFilter, savedContentFilters, user?.id, canManageContent, hasRole]);
+        return canEditOwned(fullFilter, user?.id, isAdmin, canWriteFilters);
+    }, [referencedSavedFilter, savedContentFilters, user?.id, isAdmin, canWriteFilters]);
 
     const canOfferUpdate = isAppliedFilterDirty && canUpdateAppliedFilter;
 
@@ -133,29 +194,19 @@ export function useLibraryFilters({
     const updateFilterMutation = useUpdateContentFilter();
 
     const handleFilterQueryChange = useCallback(
-        (query: string) => {
+        (query: string, immediate = false) => {
             if (query.length > 0) {
                 setFilterBarExpanded(true);
             }
 
             const reference = referencedSavedFilter;
 
-            if (query.trim().length === 0) {
-                setDivergedFromId(null);
-                updateParams({ filter: '', savedFilter: '', page: '1' });
-                return;
-            }
-
-            if (reference && query.trim() === reference.query.trim()) {
-                setDivergedFromId(null);
-                updateParams({ filter: '', savedFilter: reference.id, page: '1' });
-                return;
-            }
-
-            setDivergedFromId(reference ? reference.id : null);
-            updateParams({ filter: query, savedFilter: '', page: '1' });
+            setDivergedFromId(
+                query.trim().length > 0 && reference && query.trim() !== reference.query.trim() ? reference.id : null,
+            );
+            liveFilter.change(query, immediate);
         },
-        [updateParams, referencedSavedFilter],
+        [liveFilter, referencedSavedFilter],
     );
 
     const handleSortingChange = useCallback(
@@ -173,17 +224,9 @@ export function useLibraryFilters({
 
     const setFilterField = useCallback(
         (mutate: (query: string) => string) => {
-            handleFilterQueryChange(mutate(filterQuery));
+            handleFilterQueryChange(mutate(filterQuery), true);
         },
         [handleFilterQueryChange, filterQuery],
-    );
-
-    const handleFulfillmentChange = useCallback(
-        (value: string) => {
-            const next = normalizeFulfillmentApiName(value);
-            updateParams({ fulfillment: next ?? '', page: '1' });
-        },
-        [updateParams],
     );
 
     const headerFilters: ContentHeaderFilters = useMemo(() => {
@@ -202,36 +245,47 @@ export function useLibraryFilters({
             contentTypeHideAll: Boolean(routeContentTypeSlug),
             contentTypeLocked: Boolean(lockedSelection),
             monitoring: readContentFilter(filterQuery, 'monitoring'),
-            fulfillment,
+            fulfillment: readContentFilter(filterQuery, 'fulfillment'),
             title: readContentFilter(filterQuery, 'title'),
             publishDateFrom: readContentFilter(filterQuery, 'publishDateFrom'),
             publishDateTo: readContentFilter(filterQuery, 'publishDateTo'),
+            advancedFields: (
+                [
+                    'contentType',
+                    'level',
+                    'monitoring',
+                    'fulfillment',
+                    'title',
+                    'publishDateFrom',
+                    'publishDateTo',
+                ] as const
+            ).filter((field) => hasComplexContentFilter(filterQuery, field)),
         };
-    }, [contentTypes, filterQuery, fulfillment, routeContentTypeSlug, selectedLevel]);
+    }, [contentTypes, filterQuery, routeContentTypeSlug, selectedLevel]);
 
     const headerFilterHandlers = useMemo(
         () => ({
             onContentTypeChange: (value: string) =>
                 setFilterField((query) => setContentFilterSelection(query, parseContentFilterSelectionValue(value))),
             onMonitoringChange: (value: string) => setFilterField((q) => setContentFilter(q, 'monitoring', value)),
-            onFulfillmentChange: handleFulfillmentChange,
+            onFulfillmentChange: (value: string) => setFilterField((q) => setContentFilter(q, 'fulfillment', value)),
             onTitleChange: (value: string) => setFilterField((q) => setContentFilter(q, 'title', value)),
             onPublishDateChange: ({ from, to }: { from: string; to: string }) =>
                 setFilterField((q) =>
                     setContentFilter(setContentFilter(q, 'publishDateFrom', from), 'publishDateTo', to),
                 ),
         }),
-        [setFilterField, handleFulfillmentChange],
+        [setFilterField],
     );
 
     const missingSavedFilterNoticeRef = useRef(false);
     useEffect(() => {
-        if (!appliedSavedFilterId || savedFiltersLoading) {
+        if (!appliedSavedFilterId || savedFiltersLoading || savedFiltersListError) {
             return;
         }
         if (appliedSavedFilterExists) {
             missingSavedFilterNoticeRef.current = false;
-            if (params.filter) {
+            if (params.filter && resolvedAppliedFilter) {
                 updateParams({ filter: '' }, { replace: true });
             }
             return;
@@ -245,7 +299,16 @@ export function useLibraryFilters({
             });
         }
         updateParams({ savedFilter: '', filter: '' }, { replace: true });
-    }, [appliedSavedFilterId, savedFiltersLoading, appliedSavedFilterExists, params.filter, updateParams, toast]);
+    }, [
+        appliedSavedFilterId,
+        savedFiltersLoading,
+        savedFiltersListError,
+        appliedSavedFilterExists,
+        resolvedAppliedFilter,
+        params.filter,
+        updateParams,
+        toast,
+    ]);
 
     useEffect(() => {
         if (divergedFromId === null) {
@@ -264,27 +327,30 @@ export function useLibraryFilters({
     const showSaveControl = hasActiveFilter && !isOnUnmodifiedSavedFilter;
     const saveControlLabel = canOfferUpdate ? 'Save changes' : 'Save filter';
 
-    const hasActiveSearchOrFilter = hasActiveFilter || fulfillment.length > 0;
+    const hasActiveSearchOrFilter = hasActiveFilter;
 
     const handleClearSearchAndFilters = useCallback(() => {
         setDivergedFromId(null);
-        updateParams({ filter: '', fulfillment: '', savedFilter: '', page: '1' });
+        liveFilter.change('', true, true);
         setFilterBarExpanded(false);
-    }, [updateParams]);
+    }, [liveFilter]);
 
     const handleOpenSaveFilter = useCallback(() => {
         setSaveFilterError(null);
+        setSaveFilterQueryError(null);
         openSaveFilterDialog();
     }, [openSaveFilterDialog]);
 
     const handleSaveFilter = useCallback(
         async (name: string) => {
             setSaveFilterError(null);
+            setSaveFilterQueryError(null);
+            const revision = liveFilter.getRevision();
 
             const parseResult = await parseMagpieQl(filterQuery, 'content');
 
             if (parseResult.error) {
-                setSaveFilterError(parseResult.error.message);
+                setSaveFilterQueryError(parseResult.error.message);
                 return;
             }
 
@@ -297,9 +363,19 @@ export function useLibraryFilters({
                     },
                 });
 
-                if (created?.id) {
+                if (created?.id && liveFilter.getRevision() === revision) {
+                    setPendingSavedFilter({
+                        id: created.id,
+                        name,
+                        query: filterQuery,
+                        criteria: JSON.stringify(parseResult.criteria),
+                    });
+                    liveFilter.cancelPending();
                     setDivergedFromId(null);
-                    updateParams({ savedFilter: created.id, filter: '' }, { replace: true });
+                    updateParams(
+                        { savedFilter: created.id, filter: '', fulfillment: '' },
+                        { replace: true, state: liveFilter.createCommitState() },
+                    );
                 }
 
                 closeSaveFilterDialog();
@@ -312,7 +388,7 @@ export function useLibraryFilters({
                 setSaveFilterError('Failed to save filter. Please try again.');
             }
         },
-        [closeSaveFilterDialog, filterQuery, createFilterMutation, updateParams, toast],
+        [closeSaveFilterDialog, filterQuery, createFilterMutation, updateParams, toast, liveFilter],
     );
 
     const handleUpdateFilter = useCallback(async () => {
@@ -320,10 +396,12 @@ export function useLibraryFilters({
             return;
         }
         setSaveFilterError(null);
+        setSaveFilterQueryError(null);
+        const revision = liveFilter.getRevision();
 
         const parseResult = await parseMagpieQl(filterQuery, 'content');
         if (parseResult.error) {
-            setSaveFilterError(parseResult.error.message);
+            setSaveFilterQueryError(parseResult.error.message);
             return;
         }
 
@@ -333,8 +411,25 @@ export function useLibraryFilters({
                 criteria: { value: parseResult.criteria as ContentFilterCriteria },
             });
 
-            setDivergedFromId(null);
-            updateParams({ savedFilter: referencedSavedFilter.id, filter: '' }, { replace: true });
+            const isCurrent = liveFilter.getRevision() === revision;
+            setPendingSavedFilter((current) =>
+                !isCurrent && current && current.id !== referencedSavedFilter.id
+                    ? current
+                    : {
+                          id: referencedSavedFilter.id,
+                          name: referencedSavedFilter.name,
+                          query: filterQuery,
+                          criteria: JSON.stringify(parseResult.criteria),
+                      },
+            );
+            if (isCurrent) {
+                liveFilter.cancelPending();
+                setDivergedFromId(null);
+                updateParams(
+                    { savedFilter: referencedSavedFilter.id, filter: '', fulfillment: '' },
+                    { replace: true, state: liveFilter.createCommitState() },
+                );
+            }
 
             closeSaveFilterDialog();
             toast({
@@ -345,12 +440,25 @@ export function useLibraryFilters({
         } catch {
             setSaveFilterError('Failed to update filter. Please try again.');
         }
-    }, [referencedSavedFilter, filterQuery, updateFilterMutation, updateParams, closeSaveFilterDialog, toast]);
+    }, [
+        referencedSavedFilter,
+        filterQuery,
+        updateFilterMutation,
+        updateParams,
+        closeSaveFilterDialog,
+        toast,
+        liveFilter,
+    ]);
 
     return {
+        isRestoringFilter: Boolean(
+            appliedSavedFilterId &&
+            (!resolvedAppliedFilter || (debouncedFilterQuery !== filterQuery && filterQuery === urlFilterQuery)),
+        ),
+        filterRestoreError,
+        retrySavedFilters,
         filterQuery,
         debouncedFilterQuery,
-        fulfillment,
         sortField,
         sortDir,
         sorting,
@@ -374,6 +482,7 @@ export function useLibraryFilters({
         handleSaveFilter,
         handleUpdateFilter,
         saveFilterError,
+        saveFilterQueryError,
         isSavingFilter: createFilterMutation.isPending,
         isUpdatingFilter: updateFilterMutation.isPending,
     };

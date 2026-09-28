@@ -10,6 +10,12 @@ namespace Magpie.QueryLanguage;
 public static class FilterQueryExtensions
 {
     /// <summary>
+    /// The error message for a content filter that sets the removed top-level media-file criteria.
+    /// </summary>
+    public const string LegacyMediaFilesMessage =
+        "The filter uses the removed top-level media file criteria.";
+
+    /// <summary>
     /// Parses a query string into content filter criteria.
     /// </summary>
     /// <param name="query">The query string to parse</param>
@@ -46,7 +52,7 @@ public static class FilterQueryExtensions
     public static string FormatContentFilter(this ContentFilterCriteria criteria)
     {
         return criteria.FormatFilterQueryOrDefault()
-            ?? throw new ArgumentException("Media file criteria cannot be formatted as a filter query.");
+            ?? throw new ArgumentException(LegacyMediaFilesMessage);
     }
 
     /// <summary>

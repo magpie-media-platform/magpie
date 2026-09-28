@@ -86,16 +86,22 @@ public sealed class MemoryCacheFactoryTests
         // Arrange
         using var store = new MemoryCacheStore(TimeProvider.System);
         using var subject = new MemoryCacheFactory(store);
+        const int callers = 4;
+        var entered = 0;
         var policyCalls = 0;
 
         // Act
-        var tasks = Enumerable.Range(0, 20)
-            .Select(_ => Task.Run(() => subject.GetOrCreate("concurrent", () =>
+        var tasks = Enumerable.Range(0, callers)
+            .Select(_ => Task.Run(() =>
             {
-                Interlocked.Increment(ref policyCalls);
-                Thread.Sleep(20);
-                return new CachePolicy();
-            })))
+                Interlocked.Increment(ref entered);
+                return subject.GetOrCreate("concurrent", () =>
+                {
+                    Interlocked.Increment(ref policyCalls);
+                    SpinWait.SpinUntil(() => Volatile.Read(ref entered) == callers);
+                    return new CachePolicy();
+                });
+            }))
             .ToArray();
         var caches = await Task.WhenAll(tasks).ConfigureAwait(false);
 

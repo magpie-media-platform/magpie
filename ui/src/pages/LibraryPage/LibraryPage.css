@@ -62,6 +62,13 @@
         min-width: 0;
     }
 
+    .library-page__filter-recovery-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+        margin-top: var(--space-sm);
+    }
+
     .library-page__saved-filter {
         display: flex;
         align-items: center;
@@ -130,14 +137,24 @@
     .library-gallery-toolbar__count {
         font-size: var(--text-sm);
         color: var(--text-secondary);
+
+        /* The mobile selection bar shows the count, and here it would push the sort controls to a new line. */
+        @media (max-width: 1023px) {
+            display: none;
+        }
     }
 
     .library-gallery-toolbar__direction {
         display: inline-flex;
         align-items: stretch;
         overflow: hidden;
+        min-height: 32px;
         border: 1px solid var(--border-default);
         border-radius: var(--radius-md);
+
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
+        }
     }
 
     .library-gallery-toolbar__direction-option {
@@ -160,6 +177,11 @@
 
     .library-gallery-toolbar__direction-option:hover:not(:disabled) {
         color: var(--text-primary);
+    }
+
+    .library-gallery-toolbar__direction-option:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: calc(-1 * var(--focus-ring-width));
     }
 
     .library-gallery-toolbar__direction-option[data-state='on'] {
@@ -209,6 +231,7 @@
         border: 1px solid var(--border-subtle);
         border-radius: var(--radius-md);
         background-color: var(--bg-secondary);
+        pointer-events: none;
         transition:
             border-color var(--duration-fast) var(--easing-default),
             transform var(--duration-fast) var(--easing-default);
@@ -228,6 +251,27 @@
         object-fit: cover;
     }
 
+    .library-gallery-tile__poster-target {
+        position: absolute;
+        z-index: 1;
+        inset: 0;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        pointer-events: auto;
+    }
+
+    .library-gallery-tile__poster:has(.library-gallery-tile__poster-target:focus-visible) {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: 2px;
+    }
+
+    .library-gallery-tile__poster [data-slot='content.gallery.poster'] {
+        position: relative;
+        z-index: 2;
+        pointer-events: none;
+    }
+
     .library-gallery-tile__poster--placeholder {
         display: flex;
         align-items: center;
@@ -238,6 +282,7 @@
 
     .library-gallery-tile__type {
         position: absolute;
+        z-index: 3;
         top: var(--space-sm);
         right: var(--space-sm);
         width: 28px;
@@ -252,10 +297,8 @@
         opacity: 0.8;
     }
 
-    .library-gallery-tile__check {
-        position: absolute;
-        top: var(--space-sm);
-        left: var(--space-sm);
+    .library-gallery-tile__poster > .selection-circle-toggle {
+        z-index: 3;
     }
 
     .library-gallery-tile[data-selected='true'] .library-gallery-tile__poster {
@@ -276,16 +319,7 @@
         min-width: 0;
     }
 
-    .library-gallery-tile__status-dot {
-        flex-shrink: 0;
-        width: 7px;
-        height: 7px;
-        margin-top: 0.42em;
-        border-radius: var(--radius-full);
-        background-color: var(--dot-color, var(--status-unknown));
-    }
-
-    .library-gallery-tile__unmonitored {
+    .library-gallery-tile__monitoring {
         display: inline-flex;
         align-items: center;
         flex-shrink: 0;
@@ -298,6 +332,14 @@
         }
     }
 
+    .library-gallery-tile__monitoring--active {
+        color: var(--status-healthy);
+    }
+
+    .library-gallery-tile__fulfillment {
+        align-self: flex-start;
+    }
+
     .library-gallery-tile__title {
         display: -webkit-box;
         -webkit-box-orient: vertical;
@@ -307,6 +349,18 @@
         font-size: var(--text-base);
         font-weight: var(--weight-medium);
         color: var(--text-primary);
+    }
+
+    .library-gallery-tile__text {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+        padding: 0;
+        border: 0;
+        background: none;
+        text-align: left;
+        text-decoration: none;
+        cursor: pointer;
     }
 
     .library-gallery-tile__year {

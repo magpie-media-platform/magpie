@@ -13,8 +13,10 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.Integrations;
+using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
 using Magpie.Models.Releases;
+using Magpie.Models.Storage;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Jobs;
@@ -41,6 +43,9 @@ public sealed class ReleaseServiceTests
     private Mock<IDownloadService> _acquisitionDownloadService = null!;
     private Mock<IContentHierarchyItemRepository> _acquisitionHierarchyItems = null!;
     private Mock<IRootFolderService> _acquisitionRootFolders = null!;
+    private Mock<IFileSystem> _capacityFileSystem = null!;
+    private Mock<IJobManager> _acquisitionJobs = null!;
+    private Mock<IJobExecutionRepository> _executions = null!;
     private IReleaseService _acquisitionSubject = null!;
     private Guid _acquisitionReleaseId;
     private Guid _acquisitionLeafId;
@@ -81,9 +86,11 @@ public sealed class ReleaseServiceTests
     private ContentItem _selectionCandidate = null!;
     private Guid _selectionHierarchyId;
     private Guid _selectionTierListId;
+    private QualityTierList _selectionTierList = null!;
 
     private Mock<IContentHierarchyItemRepository> _viewContentHierarchyItems = null!;
     private Mock<IReleaseRepository> _viewReleaseRepository = null!;
+    private Mock<IReleaseScopeRepository> _viewReleaseScopes = null!;
     private Mock<IDownloadRepository> _viewDownloadRepository = null!;
     private Mock<IQualityTierListRepository> _viewQualityTierLists = null!;
     private IReleaseService _viewSubject = null!;
@@ -92,9 +99,13 @@ public sealed class ReleaseServiceTests
     [SetUp]
     public void SetUp()
     {
+        _executions = new Mock<IJobExecutionRepository> { CallBase = true };
+        _executions.Setup(repository => repository.QueryAsync(It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>());
         {
-            _acquisitionReleaseId = Guid.NewGuid();
-            _acquisitionLeafId = Guid.NewGuid();
+            _acquisitionReleaseId = new("5e1ea5e0-0000-0000-0000-000000000001");
+            _acquisitionLeafId = new("1eaf0000-0000-0000-0000-000000000001");
             _acquisitionShowId = Guid.NewGuid();
             _acquisitionSeasonOneId = Guid.NewGuid();
             _acquisitionSeasonTwoId = Guid.NewGuid();
@@ -113,6 +124,7 @@ public sealed class ReleaseServiceTests
                 {
                     Id = _acquisitionReleaseId,
                     Protocol = "torrent",
+                    Size = 100,
                     ExternalId = "abc",
                     Title = "Show S01E01 1080p",
                     PublishDate = DateTime.UtcNow,
@@ -161,7 +173,7 @@ public sealed class ReleaseServiceTests
                 Level = "series",
                 Slug = "Show",
                 Name = "Show",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 EffectiveQualityTierListId = _acquisitionQualityTierListId,
             };
             var seasonOne = new ContentHierarchyItem
@@ -173,7 +185,7 @@ public sealed class ReleaseServiceTests
                 Level = "season",
                 Slug = "Season 1",
                 Name = "Season 1",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 EffectiveQualityTierListId = _acquisitionQualityTierListId,
             };
             var seasonTwo = new ContentHierarchyItem
@@ -185,7 +197,7 @@ public sealed class ReleaseServiceTests
                 Level = "season",
                 Slug = "Season 2",
                 Name = "Season 2",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 EffectiveQualityTierListId = _acquisitionQualityTierListId,
             };
             var episodeOne = new ContentHierarchyItem
@@ -197,7 +209,7 @@ public sealed class ReleaseServiceTests
                 Level = "episode",
                 Slug = "S1E1",
                 Name = "S1E1",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 EffectiveQualityTierListId = _acquisitionQualityTierListId,
             };
             var episodeTwo = new ContentHierarchyItem
@@ -209,7 +221,7 @@ public sealed class ReleaseServiceTests
                 Level = "episode",
                 Slug = "S1E2",
                 Name = "S1E2",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 EffectiveQualityTierListId = _acquisitionQualityTierListId,
             };
             var episodeThree = new ContentHierarchyItem
@@ -221,7 +233,7 @@ public sealed class ReleaseServiceTests
                 Level = "episode",
                 Slug = "S2E1",
                 Name = "S2E1",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 EffectiveQualityTierListId = _acquisitionQualityTierListId,
             };
             var orphan = new ContentHierarchyItem
@@ -233,7 +245,7 @@ public sealed class ReleaseServiceTests
                 Level = "episode",
                 Slug = "Orphan",
                 Name = "Orphan",
-                EffectiveMonitoring = true,
+                EffectiveMonitoring = MonitoringMode.Monitored,
                 EffectiveQualityTierListId = _acquisitionQualityTierListId,
             };
             var nodes = new List<ContentHierarchyItem>
@@ -270,6 +282,11 @@ public sealed class ReleaseServiceTests
             _acquisitionDownloadRepository
                 .Setup(r => r.UpdateAsync(It.IsAny<Download>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(true);
+            _acquisitionDownloadRepository
+                .Setup(r => r.ListByReleaseAsync(
+                    It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync([]);
 
             var integration = new Mock<IDownloadClientIntegration>();
             integration.SetupGet(i => i.ProviderType).Returns("downloadclient-a");
@@ -302,6 +319,12 @@ public sealed class ReleaseServiceTests
 
             _acquisitionDownloadService = new Mock<IDownloadService>();
             _acquisitionRootFolders = new Mock<IRootFolderService>();
+            _acquisitionRootFolders.Setup(service => service.GetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new RootFolder { Name = "Library", Path = "/library", ContentType = "tv" });
+            _capacityFileSystem = new Mock<IFileSystem>();
+            _capacityFileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity(It.IsAny<string>()))
+                .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 1000 });
+            _acquisitionJobs = new Mock<IJobManager>();
 
             var transactionManager = new Mock<ITransactionManager>();
             transactionManager
@@ -376,6 +399,7 @@ public sealed class ReleaseServiceTests
                 contentTypeRegistry.Object,
                 [],
                 TimeProvider.System,
+                Mock.Of<IFileSystem>(),
                 NullLogger<ReleaseEvaluationService>.Instance);
             _acquisitionSubject = new ReleaseService(
                 _acquisitionHierarchyItems.Object,
@@ -384,13 +408,15 @@ public sealed class ReleaseServiceTests
                 _acquisitionReleaseScopes.Object,
                 _acquisitionDownloadScopes.Object,
                 _acquisitionDownloadRepository.Object,
-                new ReleaseBlockList(_acquisitionDownloadRepository.Object, TimeProvider.System),
+                new ReleaseBlockList(_acquisitionDownloadRepository.Object),
                 _acquisitionDownloadClients.Object,
                 [integration.Object],
                 _acquisitionDownloadService.Object,
                 _acquisitionRootFolders.Object,
+                _capacityFileSystem.Object,
                 Mock.Of<IAuditRecordRepository>(),
-                Mock.Of<IJobManager>(),
+                _acquisitionJobs.Object,
+                _executions.Object,
                 transactionManager.Object,
                 Mock.Of<IEventBus>(),
                 releaseEvaluationService,
@@ -526,15 +552,8 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<Download>());
             _packSelectionDownloadRepository
-                .Setup(r => r.ListFailedByReleaseIdentitiesAsync(
+                .Setup(r => r.ListByReleaseAsync(
                     It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
-                    It.IsAny<Guid?>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync([]);
-            _packSelectionDownloadRepository
-                .Setup(r => r.ListImportedByContentHierarchyItemAsync(
-                    It.IsAny<Guid>(),
-                    It.IsAny<DateTime>(),
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
 
@@ -700,6 +719,7 @@ public sealed class ReleaseServiceTests
                 contentTypeRegistry.Object,
                 [],
                 TimeProvider.System,
+                Mock.Of<IFileSystem>(),
                 NullLogger<ReleaseEvaluationService>.Instance);
             _packSelectionSubject = new ReleaseService(
                 _packSelectionContentHierarchyItems.Object,
@@ -708,13 +728,15 @@ public sealed class ReleaseServiceTests
                 _packSelectionReleaseScopes.Object,
                 Mock.Of<IDownloadScopeRepository>(),
                 _packSelectionDownloadRepository.Object,
-                new ReleaseBlockList(_packSelectionDownloadRepository.Object, TimeProvider.System),
+                new ReleaseBlockList(_packSelectionDownloadRepository.Object),
                 Mock.Of<IDownloadClientRepository>(),
                 [],
                 Mock.Of<IDownloadService>(),
                 Mock.Of<IRootFolderService>(),
+                Mock.Of<IFileSystem>(),
                 Mock.Of<IAuditRecordRepository>(),
                 Mock.Of<IJobManager>(),
+                _executions.Object,
                 transactionManager.Object,
                 Mock.Of<IEventBus>(),
                 releaseEvaluationService,
@@ -829,15 +851,8 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PagedList<Download>());
             _selectionDownloadRepository
-                .Setup(r => r.ListFailedByReleaseIdentitiesAsync(
+                .Setup(r => r.ListByReleaseAsync(
                     It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
-                    It.IsAny<Guid?>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync([]);
-            _selectionDownloadRepository
-                .Setup(r => r.ListImportedByContentHierarchyItemAsync(
-                    It.IsAny<Guid>(),
-                    It.IsAny<DateTime>(),
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
 
@@ -935,10 +950,11 @@ public sealed class ReleaseServiceTests
                 },
                 CreatedAt = createdAt
             };
-            var tierList = new QualityTierList
+            _selectionTierList = new()
             {
                 Id = _selectionTierListId,
                 Name = "List",
+                UpgradeAllowed = true,
                 CreatedAt = createdAt,
                 QualityTierRanks =
                 [
@@ -980,7 +996,7 @@ public sealed class ReleaseServiceTests
             };
             _selectionQualityTierLists
                 .Setup(r => r.GetByIdAsync(_selectionTierListId, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(tierList);
+                .ReturnsAsync(_selectionTierList);
 
             _selectionFactProvider = new Mock<IReleaseMatchContentTypeDefinitionProvider>();
             _selectionFactProvider
@@ -1055,6 +1071,7 @@ public sealed class ReleaseServiceTests
                 _selectionContentTypeRegistry.Object,
                 [],
                 TimeProvider.System,
+                Mock.Of<IFileSystem>(),
                 NullLogger<ReleaseEvaluationService>.Instance);
             _selectionSubject = new ReleaseService(
                 _selectionContentHierarchyItems.Object,
@@ -1063,13 +1080,15 @@ public sealed class ReleaseServiceTests
                 _selectionReleaseScopes.Object,
                 Mock.Of<IDownloadScopeRepository>(),
                 _selectionDownloadRepository.Object,
-                new ReleaseBlockList(_selectionDownloadRepository.Object, TimeProvider.System),
+                new ReleaseBlockList(_selectionDownloadRepository.Object),
                 Mock.Of<IDownloadClientRepository>(),
                 [],
                 Mock.Of<IDownloadService>(),
                 Mock.Of<IRootFolderService>(),
+                Mock.Of<IFileSystem>(),
                 Mock.Of<IAuditRecordRepository>(),
                 Mock.Of<IJobManager>(),
+                _executions.Object,
                 transactionManager.Object,
                 Mock.Of<IEventBus>(),
                 releaseEvaluationService,
@@ -1108,6 +1127,14 @@ public sealed class ReleaseServiceTests
                 .Setup(r => r.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync([hierarchyItem]);
 
+            _viewReleaseScopes = new Mock<IReleaseScopeRepository> { CallBase = true };
+            _viewReleaseScopes
+                .Setup(r => r.QueryAsync(
+                    It.IsAny<ReleaseScopeQuery>(),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new PagedList<ReleaseScope>());
             _viewReleaseRepository = new Mock<IReleaseRepository> { CallBase = true };
             _viewReleaseRepository
                 .Setup(r => r.QueryAsync(
@@ -1180,28 +1207,105 @@ public sealed class ReleaseServiceTests
                 contentTypeRegistry.Object,
                 [],
                 TimeProvider.System,
+                Mock.Of<IFileSystem>(),
                 NullLogger<ReleaseEvaluationService>.Instance);
 
             _viewSubject = new ReleaseService(
                 _viewContentHierarchyItems.Object,
                 indexerRepository.Object,
                 _viewReleaseRepository.Object,
-                Mock.Of<IReleaseScopeRepository>(),
+                _viewReleaseScopes.Object,
                 Mock.Of<IDownloadScopeRepository>(),
                 _viewDownloadRepository.Object,
-                new ReleaseBlockList(_viewDownloadRepository.Object, TimeProvider.System),
+                new ReleaseBlockList(_viewDownloadRepository.Object),
                 Mock.Of<IDownloadClientRepository>(),
                 [],
                 Mock.Of<IDownloadService>(),
                 Mock.Of<IRootFolderService>(),
+                Mock.Of<IFileSystem>(),
                 Mock.Of<IAuditRecordRepository>(),
                 Mock.Of<IJobManager>(),
+                _executions.Object,
                 transactionManager.Object,
                 Mock.Of<IEventBus>(),
                 releaseEvaluationService,
                 [],
                 TimeProvider.System,
                 NullLogger<ReleaseService>.Instance);
+        }
+    }
+
+    [TestCase(100, 0, "insufficient free space. Required: 100 bytes. Available: 0 bytes.")]
+    [TestCase(100, 99, "insufficient free space. Required: 100 bytes. Available: 99 bytes.")]
+    [TestCase(null, 1000, "the capacity check is unavailable. Required: unknown. Available: 1000 bytes.")]
+    [TestCase(100, null, "the capacity check is unavailable. Required: 100 bytes. Available: unknown.")]
+    public async Task AcquireAsync_DefersWithoutFailedDownload_WhenCapacityCannotAdmit(long? size, long? available,
+        string expected)
+    {
+        // Arrange
+        var release = await _acquisitionReleaseRepository.Object.GetByIdAsync(_acquisitionReleaseId)
+            .ConfigureAwait(false);
+        release!.Size = size;
+        _capacityFileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(available is { } bytes
+                ? new StorageCapacity { VolumeId = "library", AvailableBytes = bytes } : null);
+        var progress = new Mock<IProgressReporter>();
+
+        // Act
+        var result = await _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, null, progress: progress.Object,
+            grabTargetContentHierarchyItemId: _acquisitionLeafId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Null);
+            progress.Verify(reporter => reporter.Report(1, "Waiting for destination capacity: " + expected),
+                Times.Once);
+            _acquisitionDownloadService.VerifyNoOtherCalls();
+            _acquisitionDownloadRepository.Verify(repository => repository.CreateAsync(It.IsAny<Download>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+            _acquisitionJobs.Verify(manager => manager.ExecuteAsync(It.Is<JobEnqueueRequest>(request =>
+                request.JobType == "ReleaseDownloadItem" && request.IsSuccessor && request.NotBeforeAt != null &&
+                request.Parameters!["releaseId"] == _acquisitionReleaseId.ToString("D")),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task AcquireAsync_GrabsOnce_WhenCapacityBecomesAvailableAndRetryIsRepeated()
+    {
+        // Arrange
+        _capacityFileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 0 });
+        _acquisitionDownloadService.Setup(service => service.GrabAsync(It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string?>(),
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(GrabResult.FromSuccess(new DownloadInfo
+            {
+                ExternalId = "recovered-grab",
+                Status = DownloadStatus.Downloading
+            }));
+
+        // Act
+        var waiting = await _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, null).ConfigureAwait(false);
+        _capacityFileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 100 });
+        var acquired = await _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, null).ConfigureAwait(false);
+        _acquisitionDownloadRepository.Setup(repository => repository.QueryAsync(
+            It.Is<DownloadQuery>(query => query.ReleaseId == _acquisitionReleaseId && query.DownloadClientId == null),
+            It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download> { Items = [acquired!] });
+        var repeated = await _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(waiting, Is.Null);
+            Assert.That(acquired!.ExternalId, Is.EqualTo("recovered-grab"));
+            Assert.That(repeated!.Id, Is.EqualTo(acquired.Id));
+            _acquisitionDownloadService.Verify(service => service.GrabAsync(It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string?>(),
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 
@@ -1339,11 +1443,80 @@ public sealed class ReleaseServiceTests
             _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, userId: null));
         _acquisitionDownloadRepository.Verify(
             r => r.CreateAsync(
-                It.Is<Download>(d => d.Status == DownloadStatus.Failed &&
+                It.Is<Download>(d => d.Status == DownloadStatus.Faulted &&
                     d.FailureReason == DownloadFailureReason.AmbiguousDispatchFailure),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [TestCase(false, DownloadStatus.Failed)]
+    [TestCase(true, DownloadStatus.Faulted)]
+    public async Task AcquireAsync_FailsWithTheRejectionReason_WhenEveryClientRejectsThePayload(
+        bool transient,
+        DownloadStatus expectedStatus)
+    {
+        // Arrange
+        var release = new Release
+        {
+            Id = _acquisitionReleaseId,
+            Protocol = "torrent",
+            Size = 100,
+            Title = "Show S01E01 1080p",
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            InfoUrl = new Uri("https://tracker.test/download.php?id=7&passkey=SECRET-PASSKEY"),
+        };
+        _acquisitionReleaseRepository
+            .Setup(r => r.GetByIdAsync(_acquisitionReleaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(release);
+        _acquisitionDownloadClients
+            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new DownloadClient
+                {
+                    Id = _acquisitionClientOneId,
+                    ProviderType = "downloadclient-a",
+                    Name = "primary",
+                    Enabled = true,
+                    Priority = 1,
+                    Status = IntegrationHealthStatus.Healthy
+                }
+            ]);
+        _acquisitionDownloadService
+            .Setup(s => s.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GrabResult
+            {
+                ErrorMessage = "The indexer returned an HTML page instead of a .torrent file (HTTP 200, text/html). " +
+                    "Check the indexer's login.",
+                Transient = transient
+            });
+
+        // Act
+        var exception = Assert.CatchAsync<InvalidOperationException>(
+            () => _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, userId: null));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo(
+                "All eligible download clients rejected the release: The indexer returned an HTML page instead of " +
+                "a .torrent file (HTTP 200, text/html). Check the indexer's login."));
+            _acquisitionDownloadRepository.Verify(
+                r => r.CreateAsync(
+                    It.Is<Download>(d => d.Status == expectedStatus &&
+                        d.FailureReason == DownloadFailureReason.ClientRejected),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 
     [Test]
@@ -1356,6 +1529,7 @@ public sealed class ReleaseServiceTests
         {
             Id = _acquisitionReleaseId,
             Protocol = "torrent",
+            Size = 100,
             Title = "Show S01E01 1080p",
             PublishDate = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow,
@@ -1366,6 +1540,7 @@ public sealed class ReleaseServiceTests
                     Id = firstSourceId,
                     ReleaseId = _acquisitionReleaseId,
                     Key = "first",
+                    Size = 100,
                     IndexerId = Guid.Parse("11111111-1111-1111-1111-111111111111"),
                     Protocol = "torrent",
                     ExternalId = "first",
@@ -1377,6 +1552,7 @@ public sealed class ReleaseServiceTests
                     Id = secondSourceId,
                     ReleaseId = _acquisitionReleaseId,
                     Key = "second",
+                    Size = 100,
                     IndexerId = Guid.Parse("22222222-2222-2222-2222-222222222222"),
                     Protocol = "torrent",
                     ExternalId = "second",
@@ -1512,6 +1688,81 @@ public sealed class ReleaseServiceTests
     }
 
     [Test]
+    public async Task AcquireAsync_LeavesTheUnmatchedEpisodeOutOfTheDownloadScope_WhenGrabbingAPack()
+    {
+        // Arrange
+        _acquisitionReleaseScopes
+            .Setup(r => r.QueryAsync(
+                It.Is<ReleaseScopeQuery>(query => query.ReleaseId == _acquisitionReleaseId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ReleaseScope>
+            {
+                Items =
+                [
+                    new ReleaseScope
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = _acquisitionReleaseId,
+                        ContentHierarchyItemId = _acquisitionSeasonOneId
+                    },
+                    new ReleaseScope
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = _acquisitionReleaseId,
+                        ContentHierarchyItemId = _acquisitionLeafId
+                    },
+                    new ReleaseScope
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = _acquisitionReleaseId,
+                        ContentHierarchyItemId = _acquisitionEpisodeTwoId,
+                        Status = ReleaseScopeStatus.Unmatched
+                    },
+                ],
+                TotalItems = 3,
+            });
+        _acquisitionDownloadService
+            .Setup(s => s.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(GrabResult.FromSuccess(new DownloadInfo
+            {
+                ExternalId = "ext-1",
+                Status = DownloadStatus.Downloading
+            }));
+
+        // Act
+        await _acquisitionSubject
+            .AcquireAsync(_acquisitionReleaseId, userId: null, grabTargetContentHierarchyItemId: _acquisitionLeafId)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _acquisitionDownloadScopes.Verify(
+                r => r.CreateAsync(
+                    It.Is<DownloadScope>(scope =>
+                        scope.ContentHierarchyItemId == _acquisitionSeasonOneId ||
+                        scope.ContentHierarchyItemId == _acquisitionLeafId),
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(2));
+            _acquisitionDownloadScopes.Verify(
+                r => r.CreateAsync(
+                    It.Is<DownloadScope>(scope => scope.ContentHierarchyItemId == _acquisitionEpisodeTwoId),
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
     public async Task AcquireAsync_DropsFulfilledLeavesFromTheDownloadScope_WhenGrabbingAPack()
     {
         // Arrange
@@ -1533,7 +1784,7 @@ public sealed class ReleaseServiceTests
                         Level = "season",
                         Slug = "Season 1",
                         Name = "Season 1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         EffectiveQualityTierListId = _acquisitionQualityTierListId,
                     },
                     new ContentHierarchyItem
@@ -1544,7 +1795,7 @@ public sealed class ReleaseServiceTests
                         Level = "episode",
                         Slug = "S1E1",
                         Name = "S1E1",
-                        EffectiveMonitoring = true,
+                        EffectiveMonitoring = MonitoringMode.Monitored,
                         EffectiveQualityTierListId = _acquisitionQualityTierListId,
                     },
                 ],
@@ -1612,6 +1863,82 @@ public sealed class ReleaseServiceTests
     }
 
     [Test]
+    public void AcquireAsync_RecordsFailed_WhenOneClientRejectsPermanentlyAndAnotherTransiently()
+    {
+        // Arrange
+        _acquisitionDownloadService
+            .SetupSequence(s => s.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GrabResult { ErrorMessage = "The indexer returned a damaged .torrent file." })
+            .ReturnsAsync(new GrabResult { ErrorMessage = "The indexer returned HTTP 503.", Transient = true });
+
+        // Act
+        Assert.CatchAsync<InvalidOperationException>(
+            () => _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, userId: null));
+
+        // Assert
+        _acquisitionDownloadRepository.Verify(
+            r => r.CreateAsync(
+                It.Is<Download>(d => d.Status == DownloadStatus.Failed &&
+                    d.FailureReason == DownloadFailureReason.ClientRejected),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task AcquireAsync_CreatesANewDownloadRow_WhenTheLatestAttemptFaulted()
+    {
+        // Arrange
+        var faultedDownload = new Download
+        {
+            Id = Guid.NewGuid(),
+            ReleaseId = _acquisitionReleaseId,
+            DownloadClientId = _acquisitionClientOneId,
+            ExternalId = "ext-faulted",
+            Title = "Show S01 SEASONPACK 1080p",
+            Status = DownloadStatus.Faulted,
+            FailureReason = DownloadFailureReason.DownloadStuck,
+            CreatedAt = DateTime.UtcNow
+        };
+        _acquisitionDownloadRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<DownloadQuery>(q => q.ReleaseId == _acquisitionReleaseId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download> { Items = [faultedDownload], TotalItems = 1 });
+        _acquisitionDownloadService
+            .Setup(s => s.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(GrabResult.FromSuccess(
+                new DownloadInfo { ExternalId = "ext-new", Status = DownloadStatus.Queued }));
+
+        // Act
+        var result = await _acquisitionSubject.AcquireAsync(_acquisitionReleaseId, userId: null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(Download.ExternalId)).EqualTo("ext-new"));
+            Assert.That(result, Has.Property(nameof(Download.Id)).Not.EqualTo(faultedDownload.Id));
+            _acquisitionDownloadRepository.Verify(
+                r => r.UpdateAsync(It.IsAny<Download>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
     public async Task AcquireAsync_ReusesTheActiveDownload_WhenOneIsAlreadyInFlight()
     {
         // Arrange
@@ -1650,6 +1977,88 @@ public sealed class ReleaseServiceTests
                     It.IsAny<CancellationToken>()),
                 Times.Never);
         }
+    }
+
+    [TestCase(false, "5e1ea5e0-0000-0000-0000-000000000001", "1eaf0000-0000-0000-0000-000000000001", 0)]
+    [TestCase(true, "5e1ea5e0-0000-0000-0000-000000000001", "1eaf0000-0000-0000-0000-000000000001", 1)]
+    [TestCase(false, "5e1ea5e0-0000-0000-0000-000000000001", "0e1e0000-0000-0000-0000-000000000002", 1)]
+    [TestCase(false, "5e1ea5e0-0000-0000-0000-000000000002", "1eaf0000-0000-0000-0000-000000000001", 0)]
+    public async Task AcquireAsync_GrabsOnlyWhenInteractive_WhenTheReleaseIsImportedForTheGrabTarget(
+        bool interactive,
+        string importedReleaseId,
+        string importedScopeId,
+        int expectedGrabs)
+    {
+        // Arrange
+        _acquisitionReleaseRepository
+            .Setup(r => r.GetByIdAsync(_acquisitionReleaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release
+            {
+                Id = _acquisitionReleaseId,
+                Protocol = "torrent",
+                Size = 100,
+                ExternalId = "abc",
+                Title = "Show S01E01 1080p",
+                PublishDate = DateTime.UtcNow,
+                CreatedAt = DateTime.UtcNow,
+                IdentityKeys =
+                {
+                    new ReleaseIdentityKey { Authority = "btih", Value = "6414e27cfd9532f098ab160de57cfa4462fa8c90" }
+                }
+            });
+        _acquisitionDownloadRepository
+            .Setup(r => r.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    ReleaseId = new Guid(importedReleaseId),
+                    ExternalId = "ext-imported",
+                    Title = "Show S01E01 1080p",
+                    Status = DownloadStatus.Imported,
+                    ReleaseIdentityKeys =
+                    {
+                        new ReleaseIdentityKey
+                        {
+                            Authority = "btih",
+                            Value = "6414e27cfd9532f098ab160de57cfa4462fa8c90"
+                        }
+                    },
+                    Scope = { new DownloadScope { ContentHierarchyItemId = new Guid(importedScopeId) } }
+                }
+            ]);
+        _acquisitionDownloadService
+            .Setup(s => s.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(GrabResult.FromSuccess(
+                new DownloadInfo { ExternalId = "ext-new", Status = DownloadStatus.Queued }));
+
+        // Act
+        await _acquisitionSubject
+            .AcquireAsync(
+                _acquisitionReleaseId,
+                userId: null,
+                interactive: interactive,
+                grabTargetContentHierarchyItemId: _acquisitionLeafId)
+            .ConfigureAwait(false);
+
+        // Assert
+        _acquisitionDownloadService.Verify(
+            s => s.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedGrabs));
     }
 
     [Test]
@@ -2095,9 +2504,8 @@ public sealed class ReleaseServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<Release> { Items = [release], TotalItems = 1 });
         _selectionDownloadRepository
-            .Setup(r => r.ListImportedByContentHierarchyItemAsync(
-                _selectionHierarchyId,
-                It.IsAny<DateTime>(),
+            .Setup(r => r.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -2231,8 +2639,10 @@ public sealed class ReleaseServiceTests
         Assert.That(selected, Is.Null);
     }
 
-    [Test]
-    public async Task SelectBestReleaseAsync_SelectsUntaintedFallback_WhenMatchesHaveOnlyTextSupport()
+    [TestCase(DownloadStatus.Failed)]
+    [TestCase(DownloadStatus.Faulted)]
+    public async Task SelectBestReleaseAsync_SelectsUntaintedFallback_WhenMatchesHaveOnlyTextSupport(
+        DownloadStatus taintStatus)
     {
         // Arrange
         var tainted = new Release
@@ -2263,9 +2673,8 @@ public sealed class ReleaseServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<Release> { Items = [tainted, fallback], TotalItems = 2 });
         _selectionDownloadRepository
-            .Setup(r => r.ListFailedByReleaseIdentitiesAsync(
+            .Setup(r => r.ListByReleaseAsync(
                 It.Is<IReadOnlyCollection<ReleaseIdentityKey>>(keys => keys.Any(key => key.Value == "tainted-key")),
-                It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -2276,7 +2685,7 @@ public sealed class ReleaseServiceTests
                     DownloadClientId = Guid.NewGuid(),
                     ExternalId = string.Empty,
                     Title = "failed grab",
-                    Status = DownloadStatus.Failed,
+                    Status = taintStatus,
                     CreatedAt = DateTime.UtcNow,
                     ReleaseIdentityKeys =
                     {
@@ -2292,6 +2701,137 @@ public sealed class ReleaseServiceTests
 
         // Assert
         Assert.That(selected, Has.Property(nameof(Release.Id)).EqualTo(fallback.Id));
+    }
+
+    [Test]
+    public async Task SelectBestReleaseAsync_SelectsTheHealthyRelease_WhenTheFaultedReleaseHasABetterMatchAndTier()
+    {
+        // Arrange
+        var faulted = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            IdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "faulted-key" } }
+        };
+        var healthy = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.720p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            IdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "healthy-key" } }
+        };
+        _selectionReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.ContentHierarchyItemId == _selectionHierarchyId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release> { Items = [faulted, healthy], TotalItems = 2 });
+        _selectionFactProvider
+            .Setup(provider => provider.IsMatch(
+                It.IsAny<ContentTarget>(),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.Is<Release>(release => release.Id == faulted.Id),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Identity);
+        _selectionDownloadRepository
+            .Setup(r => r.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    Id = Guid.NewGuid(),
+                    ReleaseId = faulted.Id,
+                    DownloadClientId = Guid.NewGuid(),
+                    ExternalId = "faulted",
+                    Title = "faulted grab",
+                    Status = DownloadStatus.Faulted,
+                    CreatedAt = DateTime.UtcNow,
+                    ReleaseIdentityKeys =
+                    {
+                        new ReleaseIdentityKey { Authority = "provider", Value = "faulted-key" },
+                    }
+                }
+            ]);
+
+        // Act
+        var selected = await _selectionSubject
+            .SelectBestReleaseAsync(_selectionCandidate.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(selected, Has.Property(nameof(Release.Id)).EqualTo(healthy.Id));
+    }
+
+    [Test]
+    public async Task SelectBestReleaseAsync_SelectsTheFaultedRelease_WhenOnlyAnUnrankableAlternativeRemains()
+    {
+        // Arrange
+        var faulted = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            IdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "faulted-key" } }
+        };
+        var unrankable = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.360p.DVDRip.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            IdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "unrankable-key" } }
+        };
+        _selectionReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.ContentHierarchyItemId == _selectionHierarchyId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release> { Items = [unrankable, faulted], TotalItems = 2 });
+        _selectionDownloadRepository
+            .Setup(r => r.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    Id = Guid.NewGuid(),
+                    ReleaseId = faulted.Id,
+                    DownloadClientId = Guid.NewGuid(),
+                    ExternalId = "faulted",
+                    Title = "faulted grab",
+                    Status = DownloadStatus.Faulted,
+                    CreatedAt = DateTime.UtcNow,
+                    ReleaseIdentityKeys =
+                    {
+                        new ReleaseIdentityKey { Authority = "provider", Value = "faulted-key" },
+                    }
+                }
+            ]);
+
+        // Act
+        var selected = await _selectionSubject
+            .SelectBestReleaseAsync(_selectionCandidate.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(selected, Has.Property(nameof(Release.Id)).EqualTo(faulted.Id));
     }
 
     [Test]
@@ -2540,6 +3080,191 @@ public sealed class ReleaseServiceTests
     }
 
     [Test]
+    public async Task SelectBestReleaseAsync_ReturnsNull_WhenUpgradeAllowedIsFalse()
+    {
+        // Arrange
+        _selectionTierList.UpgradeAllowed = false;
+        var upgradable = _selectionCandidate with { Fulfillment = FulfillmentStatus.Upgradable };
+        _selectionContentHierarchyItems
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = _selectionHierarchyId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "dune",
+                        Name = "Dune",
+                        CreatedAt = DateTime.UtcNow,
+                        ContentItem = new ContentItem
+                        {
+                            Id = upgradable.Id,
+                            ContentHierarchyItemId = _selectionHierarchyId,
+                            Fulfillment = upgradable.Fulfillment,
+                        },
+                    }
+                ],
+                TotalItems = 1,
+            });
+        var importedRelease = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.720p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        var higherTier = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.2160p.BluRay.x265-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _selectionReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.ContentHierarchyItemId == _selectionHierarchyId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release> { Items = [higherTier], TotalItems = 1 });
+        _selectionReleaseRepository
+            .Setup(r => r.GetByIdAsync(importedRelease.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(importedRelease);
+        _selectionDownloadRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = importedRelease.Id,
+                        DownloadClientId = Guid.NewGuid(),
+                        ExternalId = "ext-imported",
+                        Title = importedRelease.Title,
+                        Status = DownloadStatus.Imported,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                ],
+                TotalItems = 1
+            });
+
+        // Act
+        var selected = await _selectionSubject
+            .SelectBestReleaseAsync(upgradable.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(selected, Is.Null);
+    }
+
+    [Test]
+    public async Task SelectBestReleaseAsync_ReturnsTheRelease_WhenTheItemIsMissingAndUpgradeAllowedIsFalse()
+    {
+        // Arrange
+        _selectionTierList.UpgradeAllowed = false;
+        var release = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _selectionReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.ContentHierarchyItemId == _selectionHierarchyId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release> { Items = [release], TotalItems = 1 });
+
+        // Act
+        var selected = await _selectionSubject
+            .SelectBestReleaseAsync(_selectionCandidate.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(selected?.Id, Is.EqualTo(release.Id));
+    }
+
+    [Test]
+    public async Task SelectBestReleaseAsync_ReturnsNull_WhenTheCurrentFileHasNoQualityRank()
+    {
+        // Arrange
+        var upgradable = _selectionCandidate with { Fulfillment = FulfillmentStatus.Upgradable };
+        _selectionContentHierarchyItems
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = _selectionHierarchyId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "dune",
+                        Name = "Dune",
+                        CreatedAt = DateTime.UtcNow,
+                        ContentItem = new ContentItem
+                        {
+                            Id = upgradable.Id,
+                            ContentHierarchyItemId = _selectionHierarchyId,
+                            Fulfillment = upgradable.Fulfillment,
+                        },
+                    }
+                ],
+                TotalItems = 1,
+            });
+        var sameQuality = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.AMZN.WEB-DL.DDP5.1.H.264-KyoGo",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _selectionReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.ContentHierarchyItemId == _selectionHierarchyId),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release> { Items = [sameQuality], TotalItems = 1 });
+
+        // Act
+        var selected = await _selectionSubject
+            .SelectBestReleaseAsync(upgradable.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(selected, Is.Null);
+    }
+
+    [Test]
     public async Task GetReleaseViewAsync_ReturnsNull_WhenContentHierarchyItemNotFound()
     {
         // Arrange
@@ -2564,6 +3289,60 @@ public sealed class ReleaseServiceTests
         // Assert
         Assert.That(result, Is.Not.Null);
         Assert.That(result, Is.Empty);
+    }
+
+    [TestCase(ReleaseScopeStatus.Matched)]
+    [TestCase(ReleaseScopeStatus.Unmatched)]
+    public async Task GetReleaseViewAsync_ReportsTheScopeStatus(ReleaseScopeStatus status)
+    {
+        // Arrange
+        var releaseId = Guid.NewGuid();
+        _viewReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ReleaseQuery>(query => query.IncludeUnmatched),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release>
+            {
+                Items =
+                [
+                    new Release
+                    {
+                        Id = releaseId,
+                        Protocol = "torrent",
+                        Title = "Release-00",
+                        PublishDate = DateTime.UtcNow,
+                        CreatedAt = DateTime.UtcNow,
+                    },
+                ],
+                TotalItems = 1,
+            });
+        _viewReleaseScopes
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ReleaseScopeQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ReleaseScope>
+            {
+                Items =
+                [
+                    new ReleaseScope
+                    {
+                        ReleaseId = releaseId,
+                        ContentHierarchyItemId = _viewHierarchyId,
+                        Status = status,
+                    },
+                ],
+                TotalItems = 1,
+            });
+
+        // Act
+        var result = await _viewSubject.GetReleaseViewAsync(_viewHierarchyId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result!.Single().Status, Is.EqualTo(status));
     }
 
     [Test]
@@ -3294,5 +4073,211 @@ public sealed class ReleaseServiceTests
         // Assert
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.Select(row => row.Id), Does.Contain(release.Id));
+    }
+
+    [Test]
+    public async Task SelectAcceptableReleasesAsync_ReturnsEveryAcceptableRelease_WhenSeveralReleasesMatch()
+    {
+        // Arrange
+        var fullHd = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        var hd = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.720p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        var otherFullHd = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.WEB-DL.x264-OTHER",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _selectionReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ReleaseQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release> { Items = [hd, fullHd, otherFullHd], TotalItems = 3 });
+
+        // Act
+        var shotgun = await _selectionSubject
+            .SelectAcceptableReleasesAsync(_selectionCandidate.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+        var best = await _selectionSubject
+            .SelectBestReleaseAsync(_selectionCandidate.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                shotgun.Select(release => release.Id),
+                Is.EquivalentTo([fullHd.Id, hd.Id, otherFullHd.Id]));
+            Assert.That(best, Is.Not.Null);
+        }
+    }
+
+    [TestCase(DownloadStatus.Downloading, 1)]
+    [TestCase(DownloadStatus.Downloaded, 1)]
+    [TestCase(DownloadStatus.Cancelled, 2)]
+    public async Task SelectAcceptableReleasesAsync_SkipsOnlyTheActiveRelease_WhenAnotherDownloadExists(
+        DownloadStatus status,
+        int expectedCount)
+    {
+        // Arrange
+        var active = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        var other = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.WEB-DL.x264-OTHER",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _selectionReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ReleaseQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release> { Items = [active, other], TotalItems = 2 });
+        _selectionDownloadRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = active.Id,
+                        DownloadClientId = Guid.NewGuid(),
+                        ExternalId = "ext-1",
+                        Title = active.Title,
+                        Status = status,
+                        CreatedAt = DateTime.UtcNow,
+                    }
+                ],
+                TotalItems = 1
+            });
+
+        // Act
+        var shotgun = await _selectionSubject
+            .SelectAcceptableReleasesAsync(_selectionCandidate.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(shotgun, Has.Count.EqualTo(expectedCount));
+            Assert.That(shotgun.Select(release => release.Id), Does.Contain(other.Id));
+        }
+    }
+
+    [Test]
+    public async Task SelectAcceptableReleasesAsync_ExcludesTaintedAndSuppressedReleases_WhenOthersRemain()
+    {
+        // Arrange
+        var tainted = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            IdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "tainted-key" } }
+        };
+        var suppressed = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.1080p.WEB-DL.x264-OTHER",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            IdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "winner-key" } }
+        };
+        var remaining = new Release
+        {
+            Id = Guid.NewGuid(),
+            Protocol = "torrent",
+            Title = "Dune.2021.720p.BluRay.x264-GRP",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            IdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "loser-key" } }
+        };
+        _selectionReleaseRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ReleaseQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release> { Items = [tainted, suppressed, remaining], TotalItems = 3 });
+        _selectionDownloadRepository
+            .Setup(r => r.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    Id = Guid.NewGuid(),
+                    DownloadClientId = Guid.NewGuid(),
+                    ExternalId = "failed",
+                    Title = tainted.Title,
+                    Status = DownloadStatus.Failed,
+                    CreatedAt = DateTime.UtcNow,
+                    ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "tainted-key" } }
+                },
+                new Download
+                {
+                    Id = Guid.NewGuid(),
+                    DownloadClientId = Guid.NewGuid(),
+                    ExternalId = "winner",
+                    Title = suppressed.Title,
+                    Status = DownloadStatus.Imported,
+                    DateCompleted = DateTime.UtcNow,
+                    CreatedAt = DateTime.UtcNow,
+                    ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "provider", Value = "winner-key" } }
+                }
+            ]);
+
+        // Act
+        var shotgun = await _selectionSubject
+            .SelectAcceptableReleasesAsync(_selectionCandidate.Id, userId: null, correlationId: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(shotgun.Select(release => release.Id), Is.EqualTo([remaining.Id]));
     }
 }

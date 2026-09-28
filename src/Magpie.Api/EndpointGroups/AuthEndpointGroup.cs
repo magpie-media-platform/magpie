@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -23,7 +24,7 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
     private static void SetRefreshCookie(HttpContext httpContext, AuthSession session)
     {
         httpContext.Response.Cookies.Append(
-            RefreshCookieName,
+            AuthenticationCookies.GetName(RefreshCookieName, httpContext.Request),
             session.RefreshToken,
             new CookieOptions
             {
@@ -39,7 +40,7 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
     private static void ClearRefreshCookie(HttpContext httpContext)
     {
         httpContext.Response.Cookies.Delete(
-            RefreshCookieName,
+            AuthenticationCookies.GetName(RefreshCookieName, httpContext.Request),
             new CookieOptions
             {
                 HttpOnly = true,
@@ -52,7 +53,7 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
     private static void SetStreamAuthCookie(HttpContext httpContext, AuthSession session)
     {
         httpContext.Response.Cookies.Append(
-            StreamAuthentication.CookieName,
+            AuthenticationCookies.GetName(StreamAuthentication.CookieName, httpContext.Request),
             session.AccessToken,
             new CookieOptions
             {
@@ -68,7 +69,7 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
     private static void ClearStreamAuthCookie(HttpContext httpContext)
     {
         httpContext.Response.Cookies.Delete(
-            StreamAuthentication.CookieName,
+            AuthenticationCookies.GetName(StreamAuthentication.CookieName, httpContext.Request),
             new CookieOptions
             {
                 HttpOnly = true,
@@ -89,7 +90,7 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
         builder.MapPost("logout", AuthLogoutAsync)
             .WithName(nameof(AuthLogoutAsync))
             .Produces(StatusCodes.Status204NoContent)
-            .RequireViewer();
+            .AllowAnonymous();
 
         builder.MapPost("refresh", AuthRefreshAsync)
             .WithName(nameof(AuthRefreshAsync))
@@ -135,11 +136,24 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
         [FromServices] IAuthService authService,
         CancellationToken cancellationToken)
     {
-        var refreshToken = httpContext.Request.Cookies[RefreshCookieName];
+        var refreshToken = GetRefreshToken(httpContext);
 
-        if (!string.IsNullOrWhiteSpace(refreshToken))
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Results.NoContent();
+        }
+
+        var renewalKey = GetRenewalKey(httpContext);
+        if (string.IsNullOrEmpty(renewalKey))
         {
             await authService.LogoutAsync(refreshToken, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            if (!await authService.LogoutAsync(refreshToken, renewalKey, cancellationToken).ConfigureAwait(false))
+            {
+                return Results.NoContent();
+            }
         }
 
         ClearRefreshCookie(httpContext);
@@ -153,24 +167,23 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
         [FromServices] IAuthService authService,
         CancellationToken cancellationToken)
     {
-        var refreshToken = httpContext.Request.Cookies[RefreshCookieName];
+        var refreshToken = GetRefreshToken(httpContext);
 
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
-            ClearRefreshCookie(httpContext);
-            ClearStreamAuthCookie(httpContext);
             return Results.Problem(
                 title: "Missing refresh token",
                 detail: "The session expired. Sign in again.",
                 statusCode: StatusCodes.Status401Unauthorized);
         }
 
-        var session = await authService.RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
+        var renewalKey = GetRenewalKey(httpContext);
+        var session = string.IsNullOrEmpty(renewalKey)
+            ? await authService.RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false)
+            : await authService.RefreshAsync(refreshToken, renewalKey, cancellationToken).ConfigureAwait(false);
 
         if (session is null)
         {
-            ClearRefreshCookie(httpContext);
-            ClearStreamAuthCookie(httpContext);
             return Results.Problem(
                 title: "Invalid refresh token",
                 detail: "The refresh token is missing, expired, or already used.",
@@ -192,5 +205,19 @@ internal sealed class AuthEndpointGroup : IApiEndpointGroup
         AuthenticatedUser user)
     {
         return Results.Ok(authService.GetEffectivePermissions(user.Role));
+    }
+
+    private static string? GetRenewalKey(HttpContext context)
+    {
+        var authorization = context.Request.Headers.Authorization.ToString();
+        return authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authorization[7..].Trim()
+            : null;
+    }
+
+    private static string? GetRefreshToken(HttpContext context)
+    {
+        return context.Request.Cookies[AuthenticationCookies.GetName(RefreshCookieName, context.Request)]
+            ?? context.Request.Cookies[RefreshCookieName];
     }
 }

@@ -106,6 +106,21 @@ describe('FileTypesPage', () => {
         });
     });
 
+    it.each([
+        ['Deny list', 'Add Entry', 'Add deny-list entry'],
+        ['MIME registry', 'Add Mapping', 'Add MIME mapping'],
+    ])('opens the %s tab add dialog from the floating button', async (tab, action, dialog) => {
+        const user = userEvent.setup();
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await user.click(await screen.findByRole('tab', { name: new RegExp(tab) }));
+        const fab = document.querySelector('.quick-actions-button__fab') as HTMLElement;
+        expect(fab).toHaveAttribute('aria-label', action);
+        await user.click(fab);
+
+        expect(await screen.findByRole('dialog', { name: dialog })).toBeInTheDocument();
+    });
+
     it('renders the page title', async () => {
         render(<FileTypesPage />, { wrapper: createTestWrapper() });
 
@@ -266,6 +281,17 @@ describe('FileTypesPage deny list', () => {
         const row = document.querySelector('[data-row-id="deny-1"]')!;
         expect(row.querySelector('[data-label="Source"]')).not.toBeInTheDocument();
         expect(within(row as HTMLElement).queryByText('Bundled')).not.toBeInTheDocument();
+    });
+
+    it('keeps the row actions on the card header line', async () => {
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-row-id="deny-1"]')).toBeInTheDocument();
+        });
+
+        const row = document.querySelector('[data-row-id="deny-1"]')!;
+        expect(row.querySelector('[data-column="actions"]')).toHaveAttribute('data-mobile-role', 'header');
     });
 
     it('enables the delete button on extension rows', async () => {
@@ -446,6 +472,17 @@ describe('FileTypesPage mime registry', () => {
         expect(document.querySelector('[data-column="source"]')).not.toBeInTheDocument();
     });
 
+    it('keeps the row actions on the card header line', async () => {
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-row-id=".mkv"]')).toBeInTheDocument();
+        });
+
+        const row = document.querySelector('[data-row-id=".mkv"]')!;
+        expect(row.querySelector('[data-column="actions"]')).toHaveAttribute('data-mobile-role', 'header');
+    });
+
     it('enables the delete button on mapping rows', async () => {
         render(<FileTypesPage />, { wrapper: createTestWrapper() });
 
@@ -516,6 +553,29 @@ describe('FileTypesPage mime registry', () => {
         await waitFor(() => {
             expect(within(form).getByRole('alert')).toHaveTextContent(/extension and mime type are required/i);
         });
+    });
+
+    it('shows the server rejection of a malformed MIME type and keeps both inputs', async () => {
+        vi.mocked(apiPut).mockRejectedValueOnce({
+            status: 400,
+            message: 'not-a-mime is not a valid MIME type. Use type/subtype, for example video/mp4.',
+        });
+        const user = userEvent.setup();
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-action="add-mime-mapping"]')).toBeInTheDocument();
+        });
+        await user.click(document.querySelector('[data-action="add-mime-mapping"]') as HTMLButtonElement);
+
+        const form = await screen.findByRole('dialog');
+        await user.type(within(form).getByLabelText('Extension'), '.qaux');
+        await user.type(within(form).getByLabelText('MIME type'), 'not-a-mime');
+        await user.click(within(form).getByRole('button', { name: /^add$/i }));
+
+        expect(await within(form).findByRole('alert')).toHaveTextContent('not-a-mime is not a valid MIME type');
+        expect(within(form).getByLabelText('Extension')).toHaveValue('.qaux');
+        expect(within(form).getByLabelText('MIME type')).toHaveValue('not-a-mime');
     });
 
     it('edits a mime mapping through a modal and apiPut', async () => {

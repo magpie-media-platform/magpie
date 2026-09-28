@@ -44,6 +44,17 @@ public interface IContentHierarchyItemRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds the earliest root item for each effective external identity without loading content data.
+    /// </summary>
+    /// <param name="identities">The content types, hierarchy levels, sources and external ids to match without case sensitivity</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The matching item ids, keyed by lowercase identity, with missing identities omitted</returns>
+    Task<IReadOnlyDictionary<(string ContentType, string Level, string Source, string Value), Guid>>
+        FindByExternalIdentitiesAsync(
+            IReadOnlyCollection<(string ContentType, string Level, string Source, string Value)> identities,
+            CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the parent and the effective monitoring of the items and of every ancestor above them.
     /// </summary>
     /// <param name="contentHierarchyItemIds">The ids of the items to start from</param>
@@ -112,6 +123,13 @@ public interface IContentHierarchyItemRepository :
     Task<IReadOnlyDictionary<Guid, int>> GetChildCountsByParentAsync(
         IReadOnlyCollection<Guid> parentIds,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Finds duplicate root items.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>Each set of duplicate root items</returns>
+    Task<IReadOnlyList<DuplicateRoots>> FindDuplicateRootsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Recomputes the effective values of every item.

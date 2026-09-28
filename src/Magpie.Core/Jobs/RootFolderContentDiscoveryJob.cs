@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Models;
@@ -26,10 +28,13 @@ internal sealed class RootFolderContentDiscoveryJob(
     IRootFolderRepository rootFolderRepository,
     ILibraryImportCandidateRepository libraryImportCandidateRepository,
     IMediaFileRepository mediaFileRepository,
+    IContentHierarchyItemRepository contentHierarchyItemRepository,
+    IContentFileService contentFileService,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     IContentTypeRegistry contentTypeRegistry,
     IJobManager jobManager,
+    ILibraryImportService libraryImportService,
     IFileSystem fileSystem,
     IEventBus eventBus,
     IProgressReporter progressReporter,
@@ -53,12 +58,12 @@ internal sealed class RootFolderContentDiscoveryJob(
     {
         JobType = MagpieJobs.Types.RootFolderContentDiscovery,
         DisplayName = "Root folder content discovery",
-        Description = "Discovers content in a root folder and creates library import candidates.",
+        Description = "Discovers files in a root folder, or in every root folder, and creates library import " +
+            "candidates.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromHours(2),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
         LockPartitionFields = [MagpieJobs.Parameters.RootFolderId],
@@ -68,18 +73,44 @@ internal sealed class RootFolderContentDiscoveryJob(
         },
         Parameters =
         [
-            new(MagpieJobs.Parameters.RootFolderId, "Required. The root folder to scan.", DataType.String, true, null)
+            new(
+                MagpieJobs.Parameters.RootFolderId,
+                "The root folder to scan. Leave it empty to queue a scan of each root folder.",
+                DataType.String,
+                false,
+                null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            },
+            new(
+                MagpieJobs.Parameters.ContentHierarchyItemId,
+                "The library item whose top-level folder to scan, instead of the full root folder.",
+                DataType.String,
+                false,
+                null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            },
+            new(MagpieJobs.Parameters.RecoveryInactivityMinutes,
+                "Minutes without candidate activity before recovery checks for an inactive import execution.",
+                DataType.Number, false, "60")
+            {
+                ValidateValue = value =>
+                    int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes) &&
+                    minutes > 0
+                        ? null : "must be a positive integer."
+            }
         ],
     };
 
     private const int ListingProgressInterval = 1000;
 
-    private static readonly TimeSpan StrandedImportReclaimThreshold = TimeSpan.FromHours(1);
-
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    private static Dictionary<string, List<string>> ToSignalDictionary(
+    internal static Dictionary<string, List<string>> ToSignalDictionary(
         IReadOnlyDictionary<string, IReadOnlyList<string>>? signals)
     {
         if (signals is null)
@@ -211,7 +242,17 @@ internal sealed class RootFolderContentDiscoveryJob(
     {
         if (!TryResolveRootFolderId(context, out var raw, out var source))
         {
-            throw new ArgumentException("A root folder ID is required.");
+            await QueueEachRootFolderAsync(context, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        Guid? contentHierarchyItemId = null;
+        if (context.Parameters.TryGetValue(MagpieJobs.Parameters.ContentHierarchyItemId, out var rawItemId) &&
+            !string.IsNullOrWhiteSpace(rawItemId))
+        {
+            contentHierarchyItemId = Guid.TryParse(rawItemId, out var parsedItemId)
+                ? parsedItemId
+                : throw new ArgumentException("The content hierarchy item ID has an invalid format.");
         }
 
         if (!Guid.TryParse(raw, out var rootFolderId))
@@ -222,15 +263,80 @@ internal sealed class RootFolderContentDiscoveryJob(
                     : "The root folder ID has an invalid format.");
         }
 
+        var inactivityMinutes = 60;
+        if (context.Parameters.TryGetValue(MagpieJobs.Parameters.RecoveryInactivityMinutes, out var rawMinutes) &&
+            (!int.TryParse(rawMinutes, NumberStyles.Integer, CultureInfo.InvariantCulture, out inactivityMinutes) ||
+                inactivityMinutes <= 0))
+        {
+            throw new ArgumentException("Recovery inactivity minutes must be a positive integer.");
+        }
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var recoveryCutoff = inactivityMinutes >= (now - DateTime.MinValue).TotalMinutes
+            ? DateTime.MinValue
+            : now.AddMinutes(-inactivityMinutes);
         await ScanAsync(
             rootFolderId,
+            contentHierarchyItemId,
+            recoveryCutoff,
             context.ManualTriggerUserId,
             context.CorrelationId,
             cancellationToken).ConfigureAwait(false);
     }
 
+    private async Task QueueEachRootFolderAsync(JobContext context, CancellationToken cancellationToken)
+    {
+        var rootFolders = await rootFolderRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var rootFolder in rootFolders)
+        {
+            var parameters = new Dictionary<string, string>
+            {
+                [MagpieJobs.Parameters.RootFolderId] = rootFolder.Id.ToString("D")
+            };
+            if (context.Parameters.TryGetValue(MagpieJobs.Parameters.RecoveryInactivityMinutes, out var minutes))
+            {
+                parameters[MagpieJobs.Parameters.RecoveryInactivityMinutes] = minutes;
+            }
+
+            await jobManager.ExecuteAsync(
+                new JobEnqueueRequest
+                {
+                    JobType = Spec.JobType,
+                    Parameters = parameters,
+                    Mode = JobExecutionMode.Queue,
+                    UserId = context.ManualTriggerUserId,
+                    CorrelationId = context.CorrelationId,
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        progressReporter.Report(1, $"The job queued a scan of {rootFolders.Count()} root folder(s).");
+    }
+
+    private async Task<string?> ResolveScopePathAsync(
+        Guid rootFolderId,
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken)
+    {
+        var lineage = await contentHierarchyItemRepository
+            .GetLineageAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (lineage.Count == 0 || lineage[^1].EffectiveRootFolderId != rootFolderId)
+        {
+            throw new ArgumentException("The content hierarchy item is not in the root folder.");
+        }
+
+        var path = await contentFileService.GetEffectivePathAsync(lineage[^1].Id, cancellationToken)
+            .ConfigureAwait(false);
+        return !string.IsNullOrWhiteSpace(path) && fileSystem.DirectoryExists(path)
+            ? fileSystem.GetFullPath(path)
+            : null;
+    }
+
     private async Task ScanAsync(
         Guid rootFolderId,
+        Guid? contentHierarchyItemId,
+        DateTime recoveryCutoff,
         Guid? userId,
         Guid? correlationId,
         CancellationToken cancellationToken)
@@ -269,26 +375,49 @@ internal sealed class RootFolderContentDiscoveryJob(
             scanRunId,
             rootFolderId);
 
-        await ReclaimStrandedImportsAsync(rootFolderId, userId, cancellationToken).ConfigureAwait(false);
+        var scopePath = contentHierarchyItemId is { } itemId
+            ? await ResolveScopePathAsync(rootFolderId, itemId, cancellationToken).ConfigureAwait(false)
+            : null;
+        if (scopePath is not null)
+        {
+            plans = [.. plans.Where(plan => fileSystem.IsPathWithin(fileSystem.GetFullPath(plan.BasePath), scopePath))];
+        }
 
-        await libraryImportCandidateRepository
-            .DeleteByRootFolderAsync(rootFolderId, userId, cancellationToken)
+        await ReclaimStrandedImportsAsync(rootFolderId, recoveryCutoff, userId, cancellationToken)
             .ConfigureAwait(false);
 
-        var inFlightPaths = await LoadInFlightPathsAsync(rootFolderId, cancellationToken).ConfigureAwait(false);
         var linkedPaths = await LoadLinkedPathsAsync(
             plans.Select(plan => plan.BasePath),
             cancellationToken).ConfigureAwait(false);
+        var existing = await libraryImportCandidateRepository.QueryAllAsync(
+            new LibraryImportCandidateQuery { RootFolderId = rootFolderId },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var replaced = existing
+            .Where(candidate => !IsKept(candidate, linkedPaths) && (scopePath is null ||
+                fileSystem.IsPathWithin(scopePath, fileSystem.GetFullPath(candidate.FilePath))))
+            .ToList();
+
+        await libraryImportCandidateRepository
+            .DeleteByRootFolderAsync(rootFolderId, [.. replaced.Select(candidate => candidate.Id)], userId,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var keptCandidates = existing.Except(replaced).ToList();
+        var inFlightPaths = keptCandidates
+            .Select(candidate => fileSystem.GetFullPath(candidate.FilePath))
+            .ToHashSet(PathComparer);
 
         cancellationToken.ThrowIfCancellationRequested();
         progressReporter.Report(null, "The scan will list the files.");
 
         var planned = new List<PlannedFile>();
         var seenPaths = new HashSet<string>(PathComparer);
+        var scannedPaths = new List<string>();
         var listedCount = 0;
         foreach (var plan in plans)
         {
-            if (!fileSystem.DirectoryExists(plan.BasePath))
+            var listingPath = scopePath ?? plan.BasePath;
+            if (!fileSystem.DirectoryExists(listingPath))
             {
                 logger.LogInformation(
                     "Root folder {RootFolderId} has no folder at {BasePath}, so the scan skipped it",
@@ -297,9 +426,10 @@ internal sealed class RootFolderContentDiscoveryJob(
                 continue;
             }
 
+            scannedPaths.Add(fileSystem.GetFullPath(listingPath));
             try
             {
-                foreach (var file in fileSystem.EnumerateFiles(plan.BasePath))
+                foreach (var file in fileSystem.EnumerateFiles(listingPath))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
@@ -339,6 +469,9 @@ internal sealed class RootFolderContentDiscoveryJob(
                 throw;
             }
         }
+
+        await DeleteVanishedRejectionsAsync(keptCandidates, scannedPaths, seenPaths, userId, cancellationToken)
+            .ConfigureAwait(false);
 
         var selected = new List<PlannedFile>(planned.Count);
         foreach (var group in planned.GroupBy(
@@ -410,6 +543,9 @@ internal sealed class RootFolderContentDiscoveryJob(
             }
         }
 
+        await RefreshKeptTargetsAsync(rootFolder, keptCandidates, userId, correlationId, cancellationToken)
+            .ConfigureAwait(false);
+
         if (await HasUnresolvedCandidatesAsync(cancellationToken).ConfigureAwait(false))
         {
             await EnqueueMatchResolutionAsync(userId, correlationId, cancellationToken).ConfigureAwait(false);
@@ -439,7 +575,8 @@ internal sealed class RootFolderContentDiscoveryJob(
         progressReporter.Report(1, "The root-folder scan completed.");
     }
 
-    private async Task ReclaimStrandedImportsAsync(Guid rootFolderId, Guid? userId, CancellationToken cancellationToken)
+    private async Task ReclaimStrandedImportsAsync(
+        Guid rootFolderId, DateTime cutoff, Guid? userId, CancellationToken cancellationToken)
     {
         var inFlight = await libraryImportCandidateRepository.QueryAllAsync(
             new LibraryImportCandidateQuery
@@ -449,7 +586,6 @@ internal sealed class RootFolderContentDiscoveryJob(
             },
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        var cutoff = timeProvider.GetUtcNow().UtcDateTime - StrandedImportReclaimThreshold;
         foreach (var candidate in inFlight)
         {
             var lastActivity = candidate.ModifiedAt ?? candidate.CreatedAt;
@@ -459,9 +595,9 @@ internal sealed class RootFolderContentDiscoveryJob(
             }
 
             var reclaimed = await libraryImportCandidateRepository
-                .MarkImportFailedAsync(
+                .TryReclaimInactiveImportAsync(
                     candidate.Id,
-                    "Import did not complete within the reclaim window and was reset so the file can be rescanned.",
+                    cutoff,
                     userId,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -478,25 +614,71 @@ internal sealed class RootFolderContentDiscoveryJob(
         }
     }
 
-    private async Task<IReadOnlySet<string>> LoadInFlightPathsAsync(
-        Guid rootFolderId,
+    private bool IsKept(LibraryImportCandidate candidate, IReadOnlySet<string> linkedPaths) => candidate.Status switch
+    {
+        LibraryImportCandidateStatus.Queued or LibraryImportCandidateStatus.Importing or
+            LibraryImportCandidateStatus.Rejected => true,
+        LibraryImportCandidateStatus.Pending or LibraryImportCandidateStatus.Failed =>
+            candidate.Matches.Count > 0 && fileSystem.FileExists(candidate.FilePath) &&
+                !linkedPaths.Contains(fileSystem.GetFullPath(candidate.FilePath)),
+        _ => false
+    };
+
+    private async Task RefreshKeptTargetsAsync(
+        RootFolder rootFolder,
+        IReadOnlyList<LibraryImportCandidate> keptCandidates,
+        Guid? userId,
+        Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        var candidates = await libraryImportCandidateRepository.QueryAllAsync(
-            new LibraryImportCandidateQuery
-            {
-                RootFolderId = rootFolderId,
-                Statuses = [LibraryImportCandidateStatus.Queued, LibraryImportCandidateStatus.Importing]
-            },
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        var paths = new HashSet<string>(PathComparer);
-        foreach (var candidate in candidates)
+        var matched = keptCandidates
+            .Where(candidate => candidate.Status is LibraryImportCandidateStatus.Pending or
+                LibraryImportCandidateStatus.Failed)
+            .ToList();
+        if (matched.Count == 0)
         {
-            paths.Add(fileSystem.GetFullPath(candidate.FilePath));
+            return;
         }
 
-        return paths;
+        try
+        {
+            var retargeted = await libraryImportService
+                .RefreshLibraryTargetsAsync(matched, userId, cancellationToken)
+                .ConfigureAwait(false);
+            if (rootFolder.AutoImport && retargeted.Count > 0)
+            {
+                await libraryImportService
+                    .AssociateMissingFilesAsync(retargeted, userId, correlationId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "The scan failed to refresh the library items of kept matches.");
+        }
+    }
+
+    private async Task DeleteVanishedRejectionsAsync(
+        IReadOnlyList<LibraryImportCandidate> keptCandidates,
+        IReadOnlyList<string> scannedPaths,
+        IReadOnlySet<string> seenPaths,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        foreach (var candidate in keptCandidates.Where(candidate =>
+            candidate.Status == LibraryImportCandidateStatus.Rejected))
+        {
+            var path = fileSystem.GetFullPath(candidate.FilePath);
+            if (!seenPaths.Contains(path) && scannedPaths.Any(scanned => fileSystem.IsPathWithin(scanned, path)))
+            {
+                await libraryImportCandidateRepository.DeleteAsync(candidate.Id, userId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
     }
 
     private async Task<IReadOnlySet<string>> LoadLinkedPathsAsync(

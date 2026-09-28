@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -101,6 +101,31 @@ describe('MetadataProviderStep', () => {
 
         expect(await screen.findByText('Provider A')).toBeInTheDocument();
         expect(screen.getByLabelText(/apiKey/i)).toBeInTheDocument();
+    });
+
+    it('labels each provider card field on its own when providers share a setting key', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiModule.apiGet).mockResolvedValue(
+            ['Wikidata', 'MusicBrainz'].map((name, index) => ({
+                name,
+                extensionId: `ext-${index}`,
+                createdAt: '2024-01-01T00:00:00Z',
+                settings: [],
+                schema: [{ key: 'contact', type: 'String', displayName: 'Contact' }],
+            })),
+        );
+
+        renderStep(vi.fn());
+
+        const wikidata = (await screen.findByText('Wikidata')).closest('section') as HTMLElement;
+        const musicBrainz = screen.getByText('MusicBrainz').closest('section') as HTMLElement;
+        const wikidataInput = within(wikidata).getByLabelText('Contact');
+        const musicBrainzInput = within(musicBrainz).getByLabelText('Contact');
+        await user.click(within(wikidata).getByText('Contact'));
+
+        expect(wikidataInput.id).not.toBe(musicBrainzInput.id);
+        expect(wikidataInput.id).not.toContain('undefined');
+        expect(wikidataInput).toHaveFocus();
     });
 
     it('shows schema-only extension groups with their default values', async () => {

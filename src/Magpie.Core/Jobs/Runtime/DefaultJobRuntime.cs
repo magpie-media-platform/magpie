@@ -28,6 +28,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
     {
         public CancellationTokenSource Cts { get; } = cts;
         public bool OperatorCancelled { get; set; }
+        public bool LeaseLost { get; set; }
     }
 
     private const string OutcomeCompleted = "completed";
@@ -36,11 +37,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
 
     private const string OutcomeCancelled = "cancelled";
 
-    private const string OutcomeTimeout = "timeout";
-
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(30);
-
-    private static readonly TimeSpan DefaultMaxRunDuration = TimeSpan.FromHours(1);
 
     private readonly IJobExecutionScopeFactory _jobExecutionScopeFactory;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -117,7 +114,6 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         var repos = _scopeFactory.CreateAsyncScope();
         await using var reposHandle = repos.ConfigureAwait(false);
         var executions = repos.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
-        var auditRecords = repos.ServiceProvider.GetRequiredService<IAuditRecordRepository>();
         var transactionManager = repos.ServiceProvider.GetRequiredService<ITransactionManager>();
         var jobManager = repos.ServiceProvider.GetRequiredService<IJobManager>();
         var retryPolicy = repos.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
@@ -181,15 +177,6 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         }
 
         var failurePolicy = spec.FailurePolicy;
-        var declaredTimeout = spec.Timeout is { } specTimeout && specTimeout > TimeSpan.Zero
-            ? specTimeout
-            : default(TimeSpan?);
-        var effectiveTimeout = declaredTimeout ?? DefaultMaxRunDuration;
-        var deadline = _timeProvider.GetUtcNow() + effectiveTimeout;
-
-        await executions
-            .TrySetRunningTimeoutAsync(executionId, _nodeId, deadline.UtcDateTime, default)
-            .ConfigureAwait(false);
 
         var jobCts = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
@@ -302,8 +289,6 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 return;
             }
 
-            jobCts.CancelAfter(effectiveTimeout);
-
             var jobContext = new JobContext(
                 ExecutionId: executionId,
                 ScheduleTriggerId: execution.ScheduleTriggerId,
@@ -314,10 +299,10 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 Event: execution.EventTriggerId is null
                     ? null
                     : execution.TriggerContext.ToMagpieEvent(),
-                CorrelationId: execution.CorrelationId,
-                Deadline: deadline);
+                CorrelationId: execution.CorrelationId);
 
             await handler.ExecuteAsync(jobContext, jobCts.Token).ConfigureAwait(false);
+            await jobExecutionScope.FlushProgressAsync(jobCts.Token).ConfigureAwait(false);
             var completedByThisRun = await executions
                 .TryMarkRunningCompletedAsync(executionId, default)
                 .ConfigureAwait(false);
@@ -365,36 +350,17 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                         execution.JobType);
                 }
             }
-            else if (!hostShutdown)
+            else if (runningEntry.LeaseLost)
             {
-                var seconds = effectiveTimeout.TotalSeconds;
-                var reason = $"Timed out after {seconds:N0}s";
-                outcome = OutcomeTimeout;
+                // Another node owns the execution now, so this run writes nothing for it.
+                const string reason = "Lost the execution lease to another node";
+                outcome = OutcomeFailed;
                 activity?.SetStatus(ActivityStatusCode.Error, reason);
-                var failedByThisRun = await TransitionFailureAsync(
-                    executions,
-                    auditRecords,
-                    transactionManager,
-                    jobManager,
-                    retryPolicy,
-                    execution,
-                    spec,
-                    failurePolicy,
-                    reason,
-                    timeoutAudit: true)
-                    .ConfigureAwait(false);
-                if (failedByThisRun)
-                {
-                    JobsTelemetry.FailuresTotal.Add(
-                        1,
-                        new KeyValuePair<string, object?>("job.type", execution.JobType),
-                        new KeyValuePair<string, object?>("reason_kind", "timeout"));
-                    _logger.LogWarning(
-                        "Job execution {ExecutionId} ({JobType}) timed out after {TimeoutSeconds:N0}s",
-                        executionId,
-                        execution.JobType,
-                        seconds);
-                }
+                _logger.LogWarning(
+                    "Job execution {ExecutionId} ({JobType}) stopped because node {NodeId} lost its lease",
+                    executionId,
+                    execution.JobType,
+                    _nodeId);
             }
             else if (hostShutdown)
             {
@@ -403,15 +369,13 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 activity?.SetStatus(ActivityStatusCode.Error, reason);
                 var failedByThisRun = await TransitionFailureAsync(
                     executions,
-                    auditRecords,
                     transactionManager,
                     jobManager,
                     retryPolicy,
                     execution,
                     spec,
                     failurePolicy,
-                    reason,
-                    timeoutAudit: false)
+                    reason)
                     .ConfigureAwait(false);
                 if (failedByThisRun)
                 {
@@ -444,10 +408,34 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 }
             }
         }
+        catch (UpstreamThrottledException ex)
+        {
+            var now = _timeProvider.GetUtcNow();
+            var retryAt = ex.RetryAt > now ? ex.RetryAt : now.AddSeconds(1);
+            var spread = executionId.ToByteArray()[0] % 30;
+            var notBefore = (retryAt < DateTimeOffset.MaxValue.AddSeconds(-spread)
+                ? retryAt.AddSeconds(spread) : DateTimeOffset.MaxValue).UtcDateTime;
+            var deferred = await executions.TryDeferRunningAsync(executionId, _nodeId, notBefore, default)
+                .ConfigureAwait(false);
+            if (deferred)
+            {
+                outcome = "deferred";
+                activity?.SetTag("job.not_before", notBefore);
+                _logger.LogInformation("Upstream throttling deferred execution {ExecutionId} until {NotBefore:O}",
+                    executionId, notBefore);
+            }
+            else if (await executions.TryMarkCancellationRequestedCancelledAsync(executionId, null, default)
+                .ConfigureAwait(false))
+            {
+                outcome = OutcomeCancelled;
+            }
+        }
         catch (Exception ex)
         {
             outcome = OutcomeFailed;
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            activity?.SetTag("error.type", ex.GetType().FullName);
             JobsTelemetry.FailuresTotal.Add(
                 1,
                 new KeyValuePair<string, object?>("job.type", execution.JobType),
@@ -455,15 +443,13 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             _logger.LogError(ex, "Job execution {ExecutionId} ({JobType}) failed", executionId, execution.JobType);
             var failedByThisRun = await TransitionFailureAsync(
                 executions,
-                auditRecords,
                 transactionManager,
                 jobManager,
                 retryPolicy,
                 execution,
                 spec,
                 failurePolicy,
-                ex.Message,
-                timeoutAudit: false)
+                ex.Message)
                 .ConfigureAwait(false);
             if (!failedByThisRun)
             {
@@ -528,15 +514,13 @@ internal sealed class DefaultJobRuntime : IJobRuntime
 
     private static async Task<JobFailureTransitionResult> TransitionRunningToFailureAsync(
         IJobExecutionRepository executions,
-        IAuditRecordRepository auditRecords,
         ITransactionManager transactionManager,
         IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution failed,
         JobSpec? spec,
         JobFailurePolicy policy,
-        string reason,
-        bool timeoutAudit)
+        string reason)
     {
         var result = new JobFailureTransitionResult(false, false, null);
         await transactionManager.ExecuteWithTransactionAsync(
@@ -548,22 +532,6 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 if (!transitioned)
                 {
                     return;
-                }
-
-                if (timeoutAudit)
-                {
-                    await auditRecords.CreateAsync(
-                        new()
-                        {
-                            Category = AuditCategories.Jobs,
-                            Operation = "JobTimeout",
-                            EntityId = failed.Id.ToString(),
-                            EntityType = nameof(JobExecution),
-                            Detail = $"Job execution {failed.Id} ({failed.JobType}) timed out. {reason}",
-                            UserId = failed.CreatedByUserId,
-                            CorrelationId = failed.CorrelationId
-                        },
-                        transactionToken).ConfigureAwait(false);
                 }
 
                 if (policy is JobFailurePolicy.Fail ||
@@ -600,27 +568,23 @@ internal sealed class DefaultJobRuntime : IJobRuntime
 
     private async Task<bool> TransitionFailureAsync(
         IJobExecutionRepository executions,
-        IAuditRecordRepository auditRecords,
         ITransactionManager transactionManager,
         IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution failed,
         JobSpec spec,
         JobFailurePolicy policy,
-        string reason,
-        bool timeoutAudit)
+        string reason)
     {
         var result = await TransitionRunningToFailureAsync(
             executions,
-            auditRecords,
             transactionManager,
             jobManager,
             retryPolicy,
             failed,
             spec,
             policy,
-            reason,
-            timeoutAudit).ConfigureAwait(false);
+            reason).ConfigureAwait(false);
 
         if (!result.Transitioned)
         {
@@ -661,19 +625,20 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         {
             try
             {
-                await Task.Delay(_heartbeatInterval, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(_heartbeatInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return;
             }
 
+            bool owned;
             try
             {
                 var scope = _scopeFactory.CreateAsyncScope();
                 await using var scopeHandle = scope.ConfigureAwait(false);
-                await scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>()
-                    .TouchHeartbeatAsync(executionId, cancellationToken)
+                owned = await scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>()
+                    .TouchHeartbeatAsync(executionId, _nodeId, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -682,8 +647,30 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "The runtime failed to update heartbeat for execution {ExecutionId}", executionId);
+                // A failed write says nothing about ownership, so the job keeps running.
+                _logger.LogWarning(
+                    ex,
+                    "The runtime failed to update heartbeat for execution {ExecutionId}",
+                    executionId);
+                continue;
             }
+
+            if (owned)
+            {
+                continue;
+            }
+
+            _logger.LogWarning(
+                "Execution {ExecutionId} is no longer owned by node {NodeId}, so the runtime cancels it",
+                executionId,
+                _nodeId);
+            if (_running.TryGetValue(executionId, out var running))
+            {
+                running.LeaseLost = true;
+                await running.Cts.CancelAsync().ConfigureAwait(false);
+            }
+
+            return;
         }
     }
 
@@ -694,7 +681,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         await using var scopeHandle = scope.ConfigureAwait(false);
         var executions = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
         var cancellation = await executions
-            .RequestCancellationAsync(executionId, cancellationToken)
+            .CancelAsync(executionId, cancellationToken)
             .ConfigureAwait(false);
 
         if (cancellation is null)

@@ -335,9 +335,11 @@ function TypeIndex({ types, counts }: { types: LibraryTypeDefinition[]; counts: 
                                             <code className="content-types__slug">{type.slug}</code>
                                         </span>
                                     </td>
-                                    <td>{typeHandledFileTypes(type.levels).join(', ') || 'None'}</td>
-                                    <td>{formatLevelCount(type.levels.length)}</td>
-                                    <td>
+                                    <td data-label="Accepted files and sidecars">
+                                        {typeHandledFileTypes(type.levels).join(', ') || 'None'}
+                                    </td>
+                                    <td data-label="Levels">{formatLevelCount(type.levels.length)}</td>
+                                    <td data-label="Items">
                                         <ItemCount
                                             count={counts[type.slug]}
                                             className="content-types__index-count"

@@ -6,6 +6,7 @@ using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models.Data;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -18,17 +19,36 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ExtensionActivationGenerationRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IExtensionActivationGenerationRepository _subject = null!;
+
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
 
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
 
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
         _context.ExtensionActivationStates.Add(new ExtensionActivationState { Id = 1, Generation = 0 });
         _context.SaveChanges();
 

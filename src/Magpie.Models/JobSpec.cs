@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 
 using Magpie.Models.Enums;
@@ -57,11 +56,6 @@ public sealed record JobSpec
     public JobFailurePolicy FailurePolicy { get; init; }
 
     /// <summary>
-    /// The maximum duration of an execution before cancellation.
-    /// </summary>
-    public TimeSpan? Timeout { get; init; }
-
-    /// <summary>
     /// The trigger modes that the job supports.
     /// </summary>
     public IReadOnlyList<JobTriggerMode> SupportedTriggerModes { get; init; } = [];
@@ -85,6 +79,11 @@ public sealed record JobSpec
     /// The parameter names that form the lock partition.
     /// </summary>
     public IReadOnlyList<string> LockPartitionFields { get; init; } = [];
+
+    /// <summary>
+    /// The lock partition fields whose values are GUIDs rather than arbitrary text.
+    /// </summary>
+    public IReadOnlyList<string> GuidLockPartitionFields { get; set; } = [];
 
     /// <summary>
     /// The event context keys that form the lock partition.

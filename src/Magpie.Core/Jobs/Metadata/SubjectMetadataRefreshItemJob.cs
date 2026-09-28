@@ -43,12 +43,18 @@ internal sealed class SubjectMetadataRefreshItemJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Retry,
-        Timeout = TimeSpan.FromMinutes(5),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         RequesterTriggerModes = [JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
         LockPartitionFields = [MagpieJobs.Parameters.SubjectId],
-        Parameters = [new(MagpieJobs.Parameters.SubjectId, "The subject id to refresh.", DataType.String, true, null)],
+        Parameters =
+        [
+            new(MagpieJobs.Parameters.SubjectId, "The subject id to refresh.", DataType.String, true, null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            }
+        ],
     };
 
     private const string UserProviderType = "user";
@@ -249,6 +255,8 @@ internal sealed class SubjectMetadataRefreshItemJob(
         }
 
         var fetchResults = await Task.WhenAll(providerTasks).ConfigureAwait(false);
+        var retryAt = fetchResults.Select(result => result.Exception).OfType<UpstreamThrottledException>()
+            .Select(throttle => (DateTimeOffset?)throttle.RetryAt).Max();
 
         var replacements = new List<ContributionReplacement>();
         var completed = 0;
@@ -302,8 +310,18 @@ internal sealed class SubjectMetadataRefreshItemJob(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (retryAt is not null && replacements.Count == 0)
+        {
+            throw new UpstreamThrottledException(retryAt.Value);
+        }
+
         await ApplyRefreshWritesAsync(container.Id, replacements, subject, userId, correlationId, cancellationToken)
             .ConfigureAwait(false);
+
+        if (retryAt is not null)
+        {
+            throw new UpstreamThrottledException(retryAt.Value);
+        }
 
         progress.Report(1, "The subject metadata refresh completed.");
     }

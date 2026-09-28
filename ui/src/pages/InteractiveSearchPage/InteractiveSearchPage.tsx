@@ -9,11 +9,13 @@ import {
 } from '@phosphor-icons/react';
 import { type ColumnDef } from '@tanstack/react-table';
 
-import { useAuth } from '@/auth';
+import { Role, useAuth } from '@/auth';
+import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { ContentDetailsHeader } from '@/components/content/ContentDetailsHeader';
 import { ReleaseDetailsDialog } from '@/components/releases/ReleaseDetailsDialog';
+import { ReleaseStatusBadge } from '@/components/releases/ReleaseStatusBadge';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog';
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -21,6 +23,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/Toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useContentDetail } from '@/hooks/useContent';
+import { useConfiguredIndexerCount } from '@/hooks/useIndexers';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useReleaseGrabGuard } from '@/hooks/useReleaseGrabGuard';
 import {
@@ -28,11 +31,16 @@ import {
     useInteractiveSearch,
     type InteractiveSearchCandidate,
 } from '@/hooks/useInteractiveSearch';
+import type { ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/dateFormatting';
 import { getErrorMessage, isConflictError } from '@/lib/errors';
 import { formatFileSize } from '@/lib/formatSize';
 
 import './InteractiveSearchPage.css';
+
+// The API sets these problem-details types on grab conflicts. The detail text can change.
+const NO_DOWNLOAD_CLIENT_PROBLEM_TYPE = 'urn:magpie:problem:no-download-client';
+const ACQUISITION_IN_PROGRESS_PROBLEM_TYPE = 'urn:magpie:problem:acquisition-in-progress';
 
 function MatchCell({ candidate }: { candidate: InteractiveSearchCandidate }) {
     const positive = candidate.matchResult === 'Identity' || candidate.matchResult === 'Confident';
@@ -49,12 +57,14 @@ export function InteractiveSearchPage() {
     useDocumentTitle('Interactive Search');
     const usesCardLayout = useCardLayout();
     const { contentHierarchyItemId } = useParams<{ contentHierarchyItemId: string }>();
-    const { hasPermission } = useAuth();
+    const { hasPermission, hasRole } = useAuth();
+    const configuredIndexerCount = useConfiguredIndexerCount();
     const { toast } = useToast();
     const canGrab = hasPermission('content.request');
 
     const detailQuery = useContentDetail(contentHierarchyItemId);
-    const { candidates, isLoading, isFetching, error, refetch } = useInteractiveSearch(contentHierarchyItemId);
+    const { candidates, partial, warning, retryAt, isLoading, isFetching, error, refetch } =
+        useInteractiveSearch(contentHierarchyItemId);
     const grabMutation = useGrabInteractiveCandidate();
     const { pendingReleaseIds, succeededReleaseIds, tryBeginGrab, markGrabSucceeded, markGrabFailed } =
         useReleaseGrabGuard();
@@ -82,7 +92,10 @@ export function InteractiveSearchPage() {
                     },
                     onError: (grabError) => {
                         markGrabFailed(candidate.release.id);
-                        if (isConflictError(grabError)) {
+                        const conflict = isConflictError(grabError) ? (grabError as ApiError).details : undefined;
+                        const problemType =
+                            conflict && typeof conflict === 'object' && 'type' in conflict ? conflict.type : undefined;
+                        if (problemType === NO_DOWNLOAD_CLIENT_PROBLEM_TYPE) {
                             toast({
                                 title: 'No download client configured',
                                 description: 'Add a download client on the Download Clients page to download releases.',
@@ -90,9 +103,18 @@ export function InteractiveSearchPage() {
                             });
                             return;
                         }
+                        if (problemType === ACQUISITION_IN_PROGRESS_PROBLEM_TYPE) {
+                            toast({
+                                title: 'Already downloading',
+                                description: 'This release is already queued or downloading.',
+                                variant: 'info',
+                            });
+                            return;
+                        }
+                        const message = getErrorMessage(grabError, 'Failed to grab the release.');
                         toast({
                             title: 'Grab failed',
-                            description: getErrorMessage(grabError, 'Failed to grab the release.'),
+                            description: message,
                             variant: 'error',
                         });
                     },
@@ -177,6 +199,21 @@ export function InteractiveSearchPage() {
                 cell: ({ row }) => <MatchCell candidate={row.original} />,
             },
             {
+                id: 'status',
+                accessorFn: (row) => row.acquisitionStatus ?? '',
+                header: 'Status',
+                meta: { mobileRole: 'header' },
+                size: 110,
+                cell: ({ row }) => {
+                    const status = row.original.acquisitionStatus;
+                    return status ? (
+                        <ReleaseStatusBadge status={status} failureReason={row.original.failureReason} />
+                    ) : usesCardLayout ? null : (
+                        <span className="interactive-search__empty-cell">-</span>
+                    );
+                },
+            },
+            {
                 id: 'publishDate',
                 accessorFn: (row) => row.release.publishDate,
                 header: 'Published',
@@ -228,7 +265,7 @@ export function InteractiveSearchPage() {
                 },
             },
         ],
-        [canGrab, handleGrab, pendingReleaseIds, succeededReleaseIds],
+        [canGrab, handleGrab, pendingReleaseIds, succeededReleaseIds, usesCardLayout],
     );
 
     const getRowId = useCallback((row: InteractiveSearchCandidate) => row.release.id, []);
@@ -272,6 +309,13 @@ export function InteractiveSearchPage() {
                     </Button>
                 </div>
 
+                {!isLoading && !error && partial && (
+                    <Alert variant="warning">
+                        {warning ?? 'The search is incomplete. Some providers did not return results.'}
+                        {retryAt && <> Retry after {new Date(retryAt).toLocaleString()}.</>}
+                    </Alert>
+                )}
+
                 {isLoading ? (
                     <>
                         <div
@@ -301,11 +345,33 @@ export function InteractiveSearchPage() {
                         }
                         size="sm"
                     />
+                ) : candidates.length === 0 && configuredIndexerCount === 0 ? (
+                    <EmptyState
+                        icon={<MagnifyingGlassIcon weight="thin" aria-hidden="true" />}
+                        title="No indexers configured"
+                        description={
+                            hasRole(Role.Admin)
+                                ? 'Magpie has no indexer connection to search. Add one, then search again.'
+                                : 'Magpie has no indexer connection to search. Ask an administrator to add one.'
+                        }
+                        action={
+                            hasRole(Role.Admin) ? (
+                                <Button asChild variant="secondary" size="sm">
+                                    <Link to="/admin/indexers">Configure indexers</Link>
+                                </Button>
+                            ) : undefined
+                        }
+                        size="sm"
+                    />
                 ) : candidates.length === 0 ? (
                     <EmptyState
                         icon={<MagnifyingGlassIcon weight="thin" aria-hidden="true" />}
-                        title="No releases found"
-                        description="No indexer found a release for this item. Try again later or review and correct the item's metadata."
+                        title={partial ? 'Search incomplete' : 'No releases found'}
+                        description={
+                            partial
+                                ? 'Some providers could not complete the search. Search again after they recover.'
+                                : "No indexer found a release for this item. Try again later or review and correct the item's metadata."
+                        }
                         size="sm"
                     />
                 ) : (

@@ -102,6 +102,8 @@
         font-size: var(--text-2xl);
         font-weight: var(--weight-semibold);
         color: var(--text-primary);
+        min-width: 0;
+        overflow-wrap: anywhere;
     }
 
     .extension-detail__version {

@@ -448,32 +448,19 @@ internal static class MappingExtensions
         IReadOnlyList<string>? names,
         IReadOnlyList<string>? keys)
     {
-        names ??= [];
-        keys ??= [];
+        // Open Library sorts and deduplicates key arrays apart from name arrays, so positions do not pair them.
+        var knownKeys = new HashSet<string>(
+            (keys ?? []).Where(key => !string.IsNullOrWhiteSpace(key)).Select(key => key.Trim()),
+            StringComparer.Ordinal);
         var facets = new List<SubjectFacetPair>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var paired = Math.Min(names.Count, keys.Count);
-        for (var index = 0; index < paired; index++)
+        foreach (var name in (names ?? []).Where(name => name is not null).Select(name => name.Trim()))
         {
-            var name = names[index]?.Trim();
-            var key = keys[index]?.Trim();
-            if (name is null || !seen.Add(string.Concat(name, "\0", key ?? string.Empty)))
+            if (seen.Add(name))
             {
-                continue;
+                var key = name.ToOpenLibrarySubjectKey();
+                facets.Add(new SubjectFacetPair(name, key.Length > 0 && knownKeys.Contains(key) ? key : null));
             }
-
-            facets.Add(new SubjectFacetPair(name, key));
-        }
-
-        for (var index = paired; index < names.Count; index++)
-        {
-            var name = names[index]?.Trim();
-            if (name is null || !seen.Add(string.Concat(name, "\0")))
-            {
-                continue;
-            }
-
-            facets.Add(new SubjectFacetPair(name, null));
         }
 
         return facets;

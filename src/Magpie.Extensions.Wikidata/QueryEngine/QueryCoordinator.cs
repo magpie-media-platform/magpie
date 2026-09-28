@@ -24,7 +24,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         internal sealed class Lease : IDisposable
         {
             private readonly CoalescingStore<TValue> _cache;
-            private readonly CancellationTokenRegistration _registration;
+            private CancellationTokenRegistration _registration;
             private int _released;
 
             internal Lease(CoalescingStore<TValue> cache, string key, TValue value)
@@ -40,17 +40,14 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
                 string key,
                 Entry entry,
                 bool completedAtLookup,
-                CancellationToken cancellationToken)
+                Action? requestObserver)
             {
                 _cache = cache;
                 Key = key;
                 Entry = entry;
                 CompletedAtLookup = completedAtLookup;
                 Completion = entry.Source.Task;
-                if (!completedAtLookup && cancellationToken.CanBeCanceled)
-                {
-                    _registration = cancellationToken.Register(Release);
-                }
+                RequestObserver = requestObserver;
             }
 
             internal string Key { get; }
@@ -61,7 +58,19 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
 
             internal Task<TValue> Completion { get; }
 
+            internal Action? RequestObserver { get; }
+
+            internal bool IsReleased => Volatile.Read(ref _released) != 0;
+
             internal CancellationToken FillToken => Entry?.FillCancellation.Token ?? CancellationToken.None;
+
+            internal void RegisterCancellation(CancellationToken cancellationToken)
+            {
+                if (!CompletedAtLookup && cancellationToken.CanBeCanceled)
+                {
+                    _registration = cancellationToken.Register(Release);
+                }
+            }
 
             public void Dispose()
             {
@@ -90,6 +99,8 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
 
             internal bool FillStarted { get; set; }
 
+            internal List<Lease> Waiters { get; } = [];
+
             internal bool TryDisposeFill() => Interlocked.Exchange(ref _fillDisposed, 1) == 0;
         }
 
@@ -116,10 +127,12 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
             string key,
             CancellationToken cancellationToken,
             out bool owner,
-            out bool completedAtLookup)
+            out bool completedAtLookup,
+            Action? requestObserver = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Entry entry;
+            Lease lease;
             lock (_gate)
             {
                 if (_positive.TryGet<TValue>(key, out var cached) || _negative.TryGet(key, out cached))
@@ -152,9 +165,32 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
                     owner = true;
                     completedAtLookup = false;
                 }
+
+                lease = new Lease(
+                    this, key, entry, completedAtLookup,
+                    UpstreamRequestAccounting.Observer ?? requestObserver);
+                entry.Waiters.Add(lease);
             }
 
-            return new Lease(this, key, entry, completedAtLookup, cancellationToken);
+            lease.RegisterCancellation(cancellationToken);
+            return lease;
+        }
+
+        internal void RecordRequest(IEnumerable<Lease> leases)
+        {
+            lock (_gate)
+            {
+                var waiters = leases.SelectMany(lease => lease.Entry?.Waiters ?? [])
+                    .Where(value => !value.IsReleased);
+                var waiter = waiters.FirstOrDefault(value => value.RequestObserver is not null)
+                    ?? waiters.FirstOrDefault();
+                if (waiter is null)
+                {
+                    throw new OperationCanceledException("The shared Wikidata request has no active waiters.");
+                }
+
+                waiter.RequestObserver?.Invoke();
+            }
         }
 
         internal bool TryStartFill(Lease lease)
@@ -236,6 +272,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
             var disposeCancellation = false;
             lock (_gate)
             {
+                lease.Entry?.Waiters.Remove(lease);
                 if (_entries.TryGetValue(lease.Key, out var entry) &&
                     ReferenceEquals(entry, lease.Entry) &&
                     !lease.CompletedAtLookup)
@@ -386,7 +423,8 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
                     key,
                     cancellationToken,
                     out var owner,
-                    out var completedAtLookup);
+                    out var completedAtLookup,
+                    context.UpstreamRequestObserver);
                 provenanceObserver?.Invoke(Provenance(owner, completedAtLookup));
                 leases[qid] = lease;
                 if (owner)
@@ -545,6 +583,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         Func<TValue, bool> negative,
         Func<TValue, bool> retain)
     {
+        using var accounting = new UpstreamRequestAccounting(() => cache.RecordRequest([lease]));
         try
         {
             var value = await factory(lease.FillToken).ConfigureAwait(false);
@@ -591,6 +630,8 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
             }
 
             using var lifetime = new CombinedFillLifetime(batch.Select(owner => owner.Lease.FillToken));
+            using var accounting = new UpstreamRequestAccounting(() =>
+                _entities.RecordRequest(batch.Select(owner => owner.Lease)));
             try
             {
                 var entities = await _client.GetEntitiesAsync(

@@ -5,4 +5,5 @@ export interface DetailRow {
     label: ReactNode;
     value: ReactNode;
     mono?: boolean;
+    multiline?: boolean;
 }

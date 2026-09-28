@@ -70,7 +70,7 @@ internal static class FilterQueryTokenizationExtensions
         builder
             .Match(QuotedString, FilterQueryToken.String)
             .Match(Number, FilterQueryToken.Number)
-            .Match(Identifier, FilterQueryToken.Identifier);
+            .Match(Identifier, FilterQueryToken.Identifier, requireDelimiters: true);
 
         return builder.Build();
     }

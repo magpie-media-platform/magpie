@@ -43,4 +43,9 @@ public sealed record SubjectKindDefinition
     /// The metadata fields that identify matching subjects when external IDs do not.
     /// </summary>
     public MetadataField FallbackIdentityFields { get; set; }
+
+    /// <summary>
+    /// The relationship roles that subjects of this kind can fill for content.
+    /// </summary>
+    public IReadOnlyList<RelationshipRoleDefinition> RelationshipRoles { get; set; } = [];
 }

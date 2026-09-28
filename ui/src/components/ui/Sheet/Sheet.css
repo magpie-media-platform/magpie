@@ -186,7 +186,6 @@
         flex-direction: column-reverse;
         gap: var(--space-sm);
         padding: var(--space-lg);
-        padding-right: calc(var(--space-lg) + var(--touch-target-min) + var(--space-sm));
         border-top: 1px solid var(--border-default);
         margin-top: auto;
 
@@ -203,6 +202,7 @@
         line-height: var(--leading-tight);
         color: var(--text-primary);
         margin: 0;
+        overflow-wrap: anywhere;
     }
 
     .sheet-description {

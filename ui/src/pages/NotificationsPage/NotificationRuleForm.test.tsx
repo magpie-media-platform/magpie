@@ -19,6 +19,7 @@ import { ApiError, apiGet } from '@/lib/api';
 import { NotificationRuleForm } from './NotificationRuleForm';
 
 const PROVIDERS = ['webhook', 'discord'];
+const PROVIDER_LABELS = { webhook: 'Webhook', discord: 'Discord' };
 
 const SCHEMA_WITH_DEFAULTS: IntegrationSettingDefinition[] = [
     { key: 'url', type: SchemaDataType.String, displayName: 'Webhook URL', required: true },
@@ -62,6 +63,7 @@ describe('NotificationRuleForm', () => {
                     onOpenChange={vi.fn()}
                     initialValues={null}
                     providers={['webhook']}
+                    providerLabels={PROVIDER_LABELS}
                     onSubmit={vi.fn()}
                 />
             </Wrapper>,
@@ -85,6 +87,7 @@ describe('NotificationRuleForm', () => {
                     onOpenChange={vi.fn()}
                     initialValues={null}
                     providers={PROVIDERS}
+                    providerLabels={PROVIDER_LABELS}
                     onSubmit={vi.fn()}
                 />
             </Wrapper>,
@@ -110,6 +113,7 @@ describe('NotificationRuleForm', () => {
                         enabled: true,
                     }}
                     providers={PROVIDERS}
+                    providerLabels={PROVIDER_LABELS}
                     onSubmit={vi.fn()}
                     isSubmitting={true}
                 />
@@ -128,7 +132,7 @@ describe('NotificationRuleForm', () => {
         const onSubmit = vi.fn().mockRejectedValue(
             new ApiError(400, 'Validation failed', {
                 isValid: false,
-                issues: [{ key: 'url', message: 'URL is required.' }],
+                issues: [{ key: 'url', message: 'URL must be an absolute address.' }],
             }),
         );
 
@@ -139,6 +143,7 @@ describe('NotificationRuleForm', () => {
                     onOpenChange={vi.fn()}
                     initialValues={null}
                     providers={['webhook']}
+                    providerLabels={PROVIDER_LABELS}
                     onSubmit={onSubmit}
                 />
             </Wrapper>,
@@ -146,13 +151,70 @@ describe('NotificationRuleForm', () => {
 
         await screen.findByLabelText(/Webhook URL/i);
         await user.type(screen.getByLabelText(/^Name/), 'Failures Webhook');
+        await user.type(screen.getByLabelText(/Webhook URL/i), 'hooks/relative');
         await user.click(screen.getByRole('button', { name: /save/i }));
 
         await waitFor(() => {
-            expect(screen.getByText('URL is required.')).toBeInTheDocument();
+            expect(screen.getByText('URL must be an absolute address.')).toBeInTheDocument();
         });
         expect(onSubmit).toHaveBeenCalledOnce();
         expect(screen.getByLabelText(/Webhook URL/i)).toHaveAttribute('aria-invalid', 'true');
+    });
+
+    it('blocks saving and marks the field when a required provider setting is empty, even if disabled', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+
+        render(
+            <Wrapper>
+                <NotificationRuleForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={null}
+                    providers={['webhook']}
+                    providerLabels={PROVIDER_LABELS}
+                    onSubmit={onSubmit}
+                />
+            </Wrapper>,
+        );
+
+        await screen.findByLabelText(/Webhook URL/i);
+        await user.type(screen.getByLabelText(/^Name/), 'QA rule');
+        await user.click(screen.getByRole('switch', { name: 'Enabled' }));
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(await screen.findByText('Webhook URL is required.')).toBeInTheDocument();
+        expect(screen.getByLabelText(/Webhook URL/i)).toHaveAttribute('aria-invalid', 'true');
+        expect(screen.getByLabelText(/^Name/)).toHaveValue('QA rule');
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('moves focus to the first invalid field above the fold when Save is blocked', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+
+        render(
+            <Wrapper>
+                <NotificationRuleForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={null}
+                    providers={['webhook']}
+                    providerLabels={PROVIDER_LABELS}
+                    onSubmit={onSubmit}
+                />
+            </Wrapper>,
+        );
+
+        await screen.findByLabelText(/Webhook URL/i);
+        await user.click(screen.getByRole('button', { name: /add filter/i }));
+        await user.type(screen.getByLabelText(/Webhook URL/i), 'https://example.test/hook');
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => expect(screen.getByLabelText(/^Name/)).toHaveFocus());
+        expect(screen.getByText('Name is required')).toBeInTheDocument();
+        expect(screen.getByText('Key is required')).toBeInTheDocument();
+        expect(onSubmit).not.toHaveBeenCalled();
     });
 
     it('shows a retryable schema error instead of treating it as no settings', async () => {
@@ -182,6 +244,7 @@ describe('NotificationRuleForm', () => {
                         enabled: true,
                     }}
                     providers={PROVIDERS}
+                    providerLabels={PROVIDER_LABELS}
                     onSubmit={vi.fn()}
                 />
             </Wrapper>,
@@ -215,6 +278,7 @@ describe('NotificationRuleForm', () => {
                             enabled: true,
                         }}
                         providers={PROVIDERS}
+                        providerLabels={PROVIDER_LABELS}
                         onSubmit={vi.fn()}
                     />
                 </Wrapper>,
@@ -247,6 +311,7 @@ describe('NotificationRuleForm', () => {
                             enabled: true,
                         }}
                         providers={PROVIDERS}
+                        providerLabels={PROVIDER_LABELS}
                         onSubmit={vi.fn()}
                     />
                 </Wrapper>,
@@ -285,6 +350,7 @@ describe('NotificationRuleForm', () => {
                         onOpenChange={onOpenChange}
                         initialValues={baseInitial}
                         providers={PROVIDERS}
+                        providerLabels={PROVIDER_LABELS}
                         onSubmit={vi.fn()}
                     />
                 </Wrapper>,
@@ -309,6 +375,7 @@ describe('NotificationRuleForm', () => {
                         onOpenChange={onOpenChange}
                         initialValues={baseInitial}
                         providers={PROVIDERS}
+                        providerLabels={PROVIDER_LABELS}
                         onSubmit={vi.fn()}
                     />
                 </Wrapper>,

@@ -33,6 +33,8 @@ interface ScheduleTriggersTabProps {
     crud: ScheduleTriggerCrud;
     templates: TemplateOption[];
     systemJobTypes?: ReadonlySet<string>;
+    runnableJobTypes?: ReadonlySet<string>;
+    userScopeOnly?: boolean;
     canManage: boolean;
     canRun: boolean;
 }
@@ -45,7 +47,15 @@ function isOnDemand(jobType: string, templates: TemplateOption[]): boolean {
     return spec.onDemand;
 }
 
-export function ScheduleTriggersTab({ crud, templates, systemJobTypes, canManage, canRun }: ScheduleTriggersTabProps) {
+export function ScheduleTriggersTab({
+    crud,
+    templates,
+    systemJobTypes,
+    runnableJobTypes,
+    userScopeOnly = false,
+    canManage,
+    canRun,
+}: ScheduleTriggersTabProps) {
     const {
         triggers,
         runningJobs,
@@ -77,8 +87,12 @@ export function ScheduleTriggersTab({ crud, templates, systemJobTypes, canManage
                         isRunning={runningJobs.has(trigger.id)}
                         isToggling={togglingTriggers.has(trigger.id)}
                         isSystemScoped={isSystemScoped}
-                        canManage={canManage && !isSystemScoped}
-                        canRun={canRun && isOnDemand(trigger.jobType, templates)}
+                        canManage={canManage && !isSystemScoped && (!userScopeOnly || trigger.scope === 'User')}
+                        canRun={
+                            canRun &&
+                            isOnDemand(trigger.jobType, templates) &&
+                            (runnableJobTypes?.has(trigger.jobType) ?? true)
+                        }
                         onEdit={() => handleEdit(trigger)}
                         onDelete={() => handleDeleteClick(trigger)}
                         onToggle={(enabled) => handleToggle(trigger, enabled)}

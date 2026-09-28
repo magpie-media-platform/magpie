@@ -1,12 +1,12 @@
-import { EyeIcon, EyeSlashIcon } from '@phosphor-icons/react';
-
 import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
 import { Badge } from '@/components/ui/Badge';
-import { ContentFulfillmentBadge } from '@/components/content/ContentCardPrimitives';
+import { ContentFulfillmentBadge, ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
+import { formatShortDate } from '@/lib/dateFormatting';
+import { formatPrimaryMediaSummary } from '@/lib/formatSize';
 import type { ContentListItem } from '@/types';
 
 interface LibraryMobileCardProps {
@@ -19,10 +19,6 @@ interface LibraryMobileCardProps {
 
 export function LibraryMobileCard({ item, selectionMode, selected, onToggle, onLongPress }: LibraryMobileCardProps) {
     const { contentTypes } = useLibraryTypes();
-    const monitored = item.effectiveMonitoring;
-    const monitoringLabel = monitored ? 'Monitored' : 'Not monitored';
-    const monitoringTitle = item.monitoring === null ? `${monitoringLabel} (inherited)` : monitoringLabel;
-    const MonitoringIcon = monitored ? EyeIcon : EyeSlashIcon;
     const kindLabel = resolveContentTypeLabel(
         { level: item.level, levelLabel: item.levelLabel, contentType: item.contentType },
         contentTypes,
@@ -46,13 +42,13 @@ export function LibraryMobileCard({ item, selectionMode, selected, onToggle, onL
             onLongPress={onLongPress}
             selectionLabel={`Select ${item.title} card`}
             titleAccessory={
-                <span
-                    className={`library-page__mobile-eye${monitored ? ' library-page__mobile-eye--on' : ''}`}
-                    title={monitoringTitle}
-                    data-monitoring={item.effectiveMonitoring}
-                >
-                    <MonitoringIcon weight={monitored ? 'fill' : 'regular'} aria-label={monitoringTitle} />
-                </span>
+                <ContentMonitoringIndicator
+                    monitoring={item.monitoring}
+                    effectiveMonitoring={item.effectiveMonitoring}
+                    className="library-page__mobile-eye"
+                    activeClassName="library-page__mobile-eye--on"
+                    dataMonitoring={item.effectiveMonitoring !== 'Unmonitored' ? 'true' : 'false'}
+                />
             }
             description={item.overview || undefined}
         >
@@ -61,8 +57,10 @@ export function LibraryMobileCard({ item, selectionMode, selected, onToggle, onL
                     {kindLabel}
                 </Badge>
             )}
-            <ContentFulfillmentBadge fulfillment={item.fulfillment} effectiveMonitoring={item.effectiveMonitoring} />
+            <ContentFulfillmentBadge fulfillment={item.fulfillment} importPending={item.importPending} />
             {item.acquisitionStatus && <AcquisitionBadge status={item.acquisitionStatus} />}
+            <span>Media: {formatPrimaryMediaSummary(item.primaryMediaFileCount, item.primaryMediaSize)}</span>
+            <span>Fulfilled: {item.fulfilledAt ? formatShortDate(item.fulfilledAt) : '—'}</span>
         </MobileMediaCard>
     );
 }

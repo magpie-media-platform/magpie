@@ -302,7 +302,7 @@ export function FilterForm({
                                 <XIcon weight="bold" aria-hidden="true" />
                                 <span>
                                     {isShared
-                                        ? 'Only managers can edit shared filters.'
+                                        ? 'Only admins can edit shared filters.'
                                         : isOwner
                                           ? 'This filter is locked.'
                                           : 'Only the owner can edit this filter.'}
@@ -325,7 +325,7 @@ export function FilterForm({
                                     onChange={setQuery}
                                     context="content"
                                     readOnly={disabled}
-                                    placeholder='genre has "Action" and monitoring = true'
+                                    placeholder='genre has "Action" and monitoring != Unmonitored'
                                 />
                             )}
                         </div>

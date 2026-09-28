@@ -9,6 +9,16 @@ namespace Magpie.Models.MetadataSearch;
 public sealed record ProviderMetadataCandidateSearchResult
 {
     /// <summary>
+    /// The reusable checkpoint for this page, including the first page.
+    /// </summary>
+    public string? Continuation { get; init; }
+
+    /// <summary>
+    /// The checkpoint for the next page, or null when all sources are exhausted.
+    /// </summary>
+    public string? NextContinuation { get; init; }
+
+    /// <summary>
     /// A result with no candidates.
     /// </summary>
     public static ProviderMetadataCandidateSearchResult Empty => new()

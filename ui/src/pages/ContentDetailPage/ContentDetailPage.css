@@ -44,6 +44,10 @@
         margin-left: var(--space-xs);
     }
 
+    .content-detail-page__file-confirm-name {
+        overflow-wrap: anywhere;
+    }
+
     .content-detail-page__loading {
         display: flex;
         flex-direction: column;
@@ -98,18 +102,18 @@
         }
     }
 
-    @media (max-width: 639px) {
-        .content-detail-page:has(> .quick-actions-button) {
-            padding-bottom: calc(
-                var(--bottom-nav-height) + 56px + var(--space-lg) * 2 + env(safe-area-inset-bottom, 0px)
-            );
-        }
-    }
-
     @media (min-width: 1100px) {
         .content-detail-page {
             padding: var(--space-xl);
             gap: var(--space-xl);
+        }
+    }
+
+    .monitoring-control__confirm-paragraph {
+        display: block;
+
+        & + & {
+            margin-top: var(--space-sm);
         }
     }
 }

@@ -15,6 +15,7 @@ import { formatDateTime } from '@/lib/dateFormatting';
 import { getMagpieActivityStatusBadge } from '@/lib/magpieActivityStatusBadge';
 
 import { entryLabel } from './entryLabel';
+import { LocalContentLink, LocalContentItemReference } from '@/components/content/LocalContentPreview';
 
 import './RelatedEventsModal.css';
 
@@ -231,7 +232,6 @@ export function RelatedEventsChain({
         setAlsoPage(index < 0 ? 1 : Math.floor(index / RELATED_PAGE_SIZE) + 1);
     }, [also, selfId, selfKind]);
 
-    const isCapped = (activity?.capped ?? false) || (contentActivity?.capped ?? false);
     const totalRelatedCount = chainNodeCount + also.length;
     const alsoTotalPages = Math.max(1, Math.ceil(also.length / RELATED_PAGE_SIZE));
     const safeAlsoPage = Math.min(alsoPage, alsoTotalPages);
@@ -254,16 +254,27 @@ export function RelatedEventsChain({
                 <p className="related-events__empty">No activity is related to this one.</p>
             ) : (
                 <div className="related-events__chain" data-testid="related-events__chain">
-                    {isCapped && (
+                    {activity?.capped && (
                         <p className="related-events__capped-note" data-testid="related-events-capped" role="status">
                             <InfoIcon weight="duotone" aria-hidden="true" />
-                            This chain is truncated at {activity?.totalCount ?? chainNodeCount} activities.
+                            This chain is truncated at {activity.totalCount} activities.
+                        </p>
+                    )}
+                    {contentActivity?.capped && (
+                        <p
+                            className="related-events__capped-note"
+                            data-testid="related-events-content-capped"
+                            role="status"
+                        >
+                            <InfoIcon weight="duotone" aria-hidden="true" />
+                            Only the latest {contentActivity.entries.length} of {contentActivity.totalCount} activities
+                            for this item were searched.
                         </p>
                     )}
 
                     {chainRoots.length > 0 && (
                         <>
-                            <ol className="related-events__chain-list">
+                            <ol className="related-events__chain-list" role="list">
                                 {chainPageRoots.map((root) => (
                                     <ChainBranch
                                         key={root.entry.id}
@@ -280,6 +291,7 @@ export function RelatedEventsChain({
                                     className="related-events__pager"
                                     page={safeChainPage}
                                     pageCount={chainTotalPages}
+                                    totalItems={chainNodeCount}
                                     onFirst={() => setChainPage(1)}
                                     onPrevious={() => setChainPage((page) => Math.max(1, page - 1))}
                                     onNext={() => setChainPage((page) => Math.min(chainTotalPages, page + 1))}
@@ -292,7 +304,7 @@ export function RelatedEventsChain({
                     {also.length > 0 && (
                         <div className="related-events__also" data-testid="related-events__also">
                             <h4 className="related-events__also-title">Also in this activity group</h4>
-                            <ol className="related-events__also-list">
+                            <ol className="related-events__also-list" role="list">
                                 {alsoPageEntries.map((entry) => (
                                     <AlsoStep
                                         key={`${entry.kind}-${entry.id}`}
@@ -308,6 +320,7 @@ export function RelatedEventsChain({
                                     className="related-events__pager"
                                     page={safeAlsoPage}
                                     pageCount={alsoTotalPages}
+                                    totalItems={also.length}
                                     onFirst={() => setAlsoPage(1)}
                                     onPrevious={() => setAlsoPage((p) => Math.max(1, p - 1))}
                                     onNext={() => setAlsoPage((p) => Math.min(alsoTotalPages, p + 1))}
@@ -371,6 +384,14 @@ function RelatedEventCard({ entry, isSelf }: RelatedEventCardProps) {
                     {formatDateTime(entry.timestamp)}
                 </span>
                 {entry.detail && <p className="related-events__step-detail">{entry.detail}</p>}
+                {entry.entityId && entry.entityType === 'ContentHierarchyItem' && (
+                    <LocalContentLink contentId={entry.entityId}>Open content preview</LocalContentLink>
+                )}
+                {entry.entityId && entry.entityType === 'ContentItem' && (
+                    <LocalContentItemReference contentItemId={entry.entityId}>
+                        Open content preview
+                    </LocalContentItemReference>
+                )}
             </div>
         </div>
     );
@@ -397,7 +418,7 @@ function ChainBranch({ node, selfId, selfKind, showParent }: ChainBranchProps) {
                     <div className="related-events__connector" aria-hidden="true">
                         <ArrowDownIcon weight="bold" />
                     </div>
-                    <ol className="related-events__children">
+                    <ol className="related-events__children" role="list">
                         {node.children.map((child) => (
                             <ChainBranch key={child.entry.id} node={child} selfId={selfId} selfKind={selfKind} />
                         ))}

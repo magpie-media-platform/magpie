@@ -457,6 +457,38 @@ describe('SetupPage', () => {
         expect(document.querySelector('[data-page="setup"]')).toBeInTheDocument();
     });
 
+    it('keeps the active claim mounted when the server reports it claimed before sign-in finishes', async () => {
+        const user = userEvent.setup();
+        let claimed = false;
+        vi.mocked(setupApiModule.fetchSetupStatus).mockImplementation(async () => ({
+            isRequired: true,
+            isComplete: false,
+            requiresAdminClaim: !claimed,
+        }));
+        vi.mocked(setupApiModule.createSetupAdmin).mockImplementation(async () => {
+            claimed = true;
+            return { id: 'user-1', username: 'admin', email: null, role: Role.Admin };
+        });
+        let finishLogin!: (user: Awaited<ReturnType<typeof authApiModule.login>>) => void;
+        vi.mocked(authApiModule.login).mockReturnValue(
+            new Promise((resolve) => {
+                finishLogin = resolve;
+            }),
+        );
+        renderSetupPage();
+        await claimAdmin(user);
+
+        await waitFor(() => expect(authApiModule.login).toHaveBeenCalledOnce());
+        expect(screen.getByRole('button', { name: /continue setup/i })).toBeDisabled();
+        expect(screen.queryByText('Login page')).not.toBeInTheDocument();
+        await act(async () => {
+            finishLogin({ id: 'user-1', username: 'admin', role: Role.Admin });
+        });
+        await waitForStep('indexer');
+        expect(setupApiModule.createSetupAdmin).toHaveBeenCalledOnce();
+        expect(authApiModule.login).toHaveBeenCalledOnce();
+    });
+
     it('skips the metadata step when no extension settings groups exist', async () => {
         const user = userEvent.setup();
         mockAdminClaim();

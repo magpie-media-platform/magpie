@@ -24,6 +24,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFo
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { IntegrationSettingsForm } from '@/components/integrations/IntegrationSettingsForm';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
+import { returnFocusOnClose } from '@/lib/returnFocus';
 
 import './DownloadClientForm.css';
 
@@ -77,7 +78,11 @@ export function DownloadClientForm({
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [showStaleSaveDialog, setShowStaleSaveDialog] = useState(false);
 
-    const { types: providerTypes, isLoading: isLoadingProviderTypes } = useDownloadClientProviderTypes();
+    const {
+        types: providerTypes,
+        labels: providerLabels,
+        isLoading: isLoadingProviderTypes,
+    } = useDownloadClientProviderTypes();
 
     const resetFormErrors = useCallback(() => {
         setErrors({});
@@ -210,12 +215,7 @@ export function DownloadClientForm({
                 side="right"
                 className="download-client-form__sheet"
                 data-component="download-client-form"
-                onCloseAutoFocus={(e) => {
-                    if (returnFocusRef?.current) {
-                        e.preventDefault();
-                        returnFocusRef.current.focus();
-                    }
-                }}
+                onCloseAutoFocus={returnFocusOnClose(returnFocusRef)}
             >
                 <SheetHeader>
                     <SheetTitle>{isEditing ? 'Edit Download Client' : 'Add Download Client'}</SheetTitle>
@@ -258,7 +258,7 @@ export function DownloadClientForm({
                             {isEditing ? (
                                 <Input
                                     id="client-provider"
-                                    value={values.provider}
+                                    value={providerLabels[values.provider] ?? values.provider}
                                     readOnly
                                     disabled
                                     data-field="provider"
@@ -288,7 +288,7 @@ export function DownloadClientForm({
                                     <SelectContent>
                                         {providerTypes.map((type) => (
                                             <SelectItem key={type} value={type}>
-                                                {type}
+                                                {providerLabels[type]}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>

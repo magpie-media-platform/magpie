@@ -5,8 +5,9 @@ import { ArrowCounterClockwiseIcon, WarningCircleIcon } from '@phosphor-icons/re
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
+import { ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
 import { getFulfillmentBadge } from '@/types/content';
-import type { FulfillmentStatus } from '@/types';
+import type { FulfillmentStatus, MonitoringMode } from '@/types';
 
 import { StatusRow as SharedStatusRow } from '../StatusRow';
 import { Skeleton } from '../Skeleton';
@@ -32,7 +33,9 @@ export interface RecentContentItem {
     addedAt: string;
     fulfillment: FulfillmentStatus;
 
-    effectiveMonitoring?: boolean;
+    monitoring?: MonitoringMode | null;
+
+    effectiveMonitoring?: MonitoringMode;
 }
 
 export interface ContentStatsWidgetProps extends HTMLAttributes<HTMLDivElement> {
@@ -80,7 +83,6 @@ interface ContentItemProps {
 const ContentItem = ({ item, url }: ContentItemProps) => {
     const isClickable = url !== undefined;
     const { variant, label: statusLabel } = getFulfillmentBadge(item.fulfillment);
-    const suppressed = item.effectiveMonitoring === false;
 
     const content = (
         <>
@@ -90,11 +92,17 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
                 qualifiedName={{ id: item.id, parentId: item.parentId, title: item.title }}
             />
             <span className="content-stats-widget__item-meta">
-                {!suppressed && (
-                    <span className="content-stats-widget__item-status" aria-label={`Status: ${statusLabel}`}>
-                        {statusLabel}
-                    </span>
+                {item.effectiveMonitoring !== undefined && (
+                    <ContentMonitoringIndicator
+                        monitoring={item.monitoring === undefined ? item.effectiveMonitoring : item.monitoring}
+                        effectiveMonitoring={item.effectiveMonitoring}
+                        className="content-stats-widget__item-monitoring"
+                        activeClassName="content-stats-widget__item-monitoring--active"
+                    />
                 )}
+                <span className="content-stats-widget__item-status" aria-label={`Status: ${statusLabel}`}>
+                    {statusLabel}
+                </span>
                 <span className="content-stats-widget__item-timestamp">{item.addedAt}</span>
             </span>
         </>
@@ -106,14 +114,14 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
                 to={url}
                 className={[
                     'content-stats-widget__item',
-                    suppressed ? '' : `content-stats-widget__item--${variant}`,
+                    `content-stats-widget__item--${variant}`,
                     'content-stats-widget__item--clickable',
                 ]
                     .filter(Boolean)
                     .join(' ')}
                 data-content-id={item.id}
-                data-status={suppressed ? undefined : item.fulfillment}
-                data-variant={suppressed ? undefined : variant}
+                data-status={item.fulfillment}
+                data-variant={variant}
                 data-clickable
             >
                 {content}
@@ -123,12 +131,10 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
 
     return (
         <div
-            className={['content-stats-widget__item', suppressed ? '' : `content-stats-widget__item--${variant}`]
-                .filter(Boolean)
-                .join(' ')}
+            className={['content-stats-widget__item', `content-stats-widget__item--${variant}`].join(' ')}
             data-content-id={item.id}
-            data-status={suppressed ? undefined : item.fulfillment}
-            data-variant={suppressed ? undefined : variant}
+            data-status={item.fulfillment}
+            data-variant={variant}
         >
             {content}
         </div>

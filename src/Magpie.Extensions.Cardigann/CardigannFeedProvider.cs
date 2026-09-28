@@ -24,6 +24,8 @@ internal sealed class CardigannFeedProvider(
 
     public string ProviderType => Constants.ProviderTypeName;
 
+    public string DisplayName => Constants.DisplayName;
+
     public IReadOnlyList<SettingSchemaDefinition> SettingsSchema
     {
         get

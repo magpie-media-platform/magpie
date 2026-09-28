@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
@@ -10,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Sdk.Caching;
+using Magpie.Sdk.Http;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
@@ -21,19 +23,24 @@ internal sealed class FlareSolverrClient(
     ISettingsService settingsService,
     ICacheFactory cacheFactory,
     ILogger<FlareSolverrClient> logger,
-    SolverQueue queue) : ICloudflareSolver
+    IUpstreamCooldown cooldown,
+    SolverQueue queue,
+    TimeProvider timeProvider) : ICloudflareSolver
 {
     public const string HttpClientName = "magpie.cardigann.flaresolverr";
     public const string SettingsGroupName = "magpie.cardigann";
     public const string UrlSettingKey = "flareSolverrUrl";
     public const string MemoName = "cardigann-flaresolverr";
+    public const string FailureMemoName = "cardigann-flaresolverr-failures";
 
     private const string EndpointSuffix = "/v1";
     private const int SolverTimeoutMilliseconds = 60000;
 
-    public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(65);
+    public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(120);
 
     public static readonly TimeSpan ReuseWindow = TimeSpan.FromSeconds(60);
+
+    public static readonly TimeSpan FailureBackoff = TimeSpan.FromMinutes(10);
 
     private readonly ICache _memo = cacheFactory.GetOrCreate(
         MemoName,
@@ -41,6 +48,15 @@ internal sealed class FlareSolverrClient(
         {
             Freshness = ReuseWindow,
             Retention = ReuseWindow,
+            MaximumEntries = 64,
+        });
+
+    private readonly ICache _failures = cacheFactory.GetOrCreate(
+        FailureMemoName,
+        () => new CachePolicy
+        {
+            Freshness = FailureBackoff,
+            Retention = FailureBackoff,
             MaximumEntries = 64,
         });
 
@@ -62,7 +78,7 @@ internal sealed class FlareSolverrClient(
     }
 
     public async Task<CloudflareClearance?> SolveAsync(
-        Uri target, bool reuse, CancellationToken cancellationToken)
+        Uri target, bool reuse, CancellationToken cancellationToken, string? authenticationScope = null)
     {
         var endpoint = await ResolveEndpointAsync(cancellationToken).ConfigureAwait(false);
         if (endpoint is null)
@@ -83,6 +99,19 @@ internal sealed class FlareSolverrClient(
                 return remembered with { Reused = true };
             }
 
+            if (SolverRequestScope.Current == SolverRequestKind.Background &&
+                _failures.TryGet<DateTimeOffset?>(FailureKey(target), out var backoff) && backoff is { } retryAt)
+            {
+                outcome = "backoff";
+                logger.LogInformation(
+                    "FlareSolverr skipped the challenge of {Target} for {Remaining} because it failed there recently",
+                    target.GetLeftPart(UriPartial.Authority),
+                    retryAt - timeProvider.GetUtcNow());
+                return null;
+            }
+
+            using var upstream = new HttpRequestMessage(HttpMethod.Get, target);
+            cooldown.Check(upstream, authenticationScope, cancellationToken);
             if (!await queue.EnterAsync(cancellationToken).ConfigureAwait(false))
             {
                 outcome = "busy";
@@ -91,50 +120,25 @@ internal sealed class FlareSolverrClient(
                     endpoint,
                     queue.Wait,
                     target.GetLeftPart(UriPartial.Authority));
-                return null;
+                throw new SolverBusyException();
             }
 
+            var solving = SolveAdmittedAsync();
+            (CloudflareClearance? Clearance, string Outcome) solved;
             try
             {
-                if (reuse && TryReuse(target) is { } shared)
-                {
-                    outcome = "reused";
-                    return shared with { Reused = true };
-                }
-
-                string payload;
-                using (var content = BuildCommand(target))
-                {
-                    using var response = await clientFactory
-                        .CreateClient(HttpClientName)
-                        .PostAsync(endpoint, content, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        outcome = "rejected";
-                        logger.LogWarning(
-                            "FlareSolverr at {Endpoint} returned HTTP {Status}",
-                            endpoint,
-                            (int)response.StatusCode);
-                        return null;
-                    }
-
-                    payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                }
-
-                var clearance = ParseClearance(payload, endpoint);
-                outcome = clearance is null ? "rejected" : "solved";
-                if (reuse && clearance is not null)
-                {
-                    Remember(target, clearance);
-                }
-
-                return clearance;
+                solved = await solving.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            finally
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                queue.Leave();
+                outcome = "cancelled";
+                _ = solving.ContinueWith(LogAbandoned, target.GetLeftPart(UriPartial.Authority),
+                    CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+                throw;
             }
+
+            outcome = solved.Outcome;
+            return solved.Clearance;
         }
         catch (JsonException exception)
         {
@@ -149,6 +153,7 @@ internal sealed class FlareSolverrClient(
         }
         catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
+            outcome = "timeout";
             logger.LogWarning(exception, "FlareSolverr at {Endpoint} did not answer in time", endpoint);
             return null;
         }
@@ -157,10 +162,134 @@ internal sealed class FlareSolverrClient(
             activity?.SetTag("magpie.request.outcome", outcome);
             Telemetry.Solves.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
         }
+
+        async Task<(CloudflareClearance? Clearance, string Outcome)> SolveAdmittedAsync()
+        {
+            try
+            {
+                if (reuse && TryReuse(target) is { } shared)
+                {
+                    return (shared with { Reused = true }, "reused");
+                }
+
+                CloudflareClearance? clearance = null;
+                var challengeFailed = false;
+                using var request = new HttpRequestMessage(HttpMethod.Get, target);
+                using var admitted = await cooldown.SendAsync(request, authenticationScope, async token =>
+                {
+                    using var content = BuildCommand(target);
+                    using var response = await clientFactory
+                        .CreateClient(HttpClientName)
+                        .PostAsync(endpoint, content, token)
+                        .ConfigureAwait(false);
+                    var payload = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        challengeFailed = IsChallengeFailure(payload);
+                        logger.LogWarning(
+                            "FlareSolverr at {Endpoint} returned HTTP {Status}",
+                            endpoint,
+                            (int)response.StatusCode);
+                        return new HttpResponseMessage(HttpStatusCode.OK);
+                    }
+
+                    using var document = JsonDocument.Parse(payload);
+                    if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                        document.RootElement.TryGetProperty("solution", out var solution) &&
+                        solution.ValueKind == JsonValueKind.Object &&
+                        solution.TryGetProperty("status", out var status) && status.TryGetInt32(out var code) &&
+                        code is 429 or 503)
+                    {
+                        var throttled = new HttpResponseMessage((HttpStatusCode)code);
+                        if (solution.TryGetProperty("headers", out var headers) &&
+                            headers.ValueKind == JsonValueKind.Object)
+                        {
+                            foreach (var header in headers.EnumerateObject())
+                            {
+                                if (header.Name.Equals("Retry-After", StringComparison.OrdinalIgnoreCase) &&
+                                    header.Value.ValueKind == JsonValueKind.String)
+                                {
+                                    throttled.Headers.TryAddWithoutValidation("Retry-After", header.Value.GetString());
+                                }
+                            }
+                        }
+
+                        if (code == 429 || throttled.Headers.Contains("Retry-After"))
+                        {
+                            return throttled;
+                        }
+
+                        throttled.Dispose();
+                    }
+
+                    clearance = ParseClearance(payload, endpoint);
+                    challengeFailed = clearance is null && IsChallengeFailure(payload);
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                }, CancellationToken.None).ConfigureAwait(false);
+
+                if (challengeFailed)
+                {
+                    var until = timeProvider.GetUtcNow() + FailureBackoff;
+                    _failures.Set<DateTimeOffset?>(FailureKey(target), until);
+                    logger.LogWarning(
+                        "FlareSolverr could not solve the challenge of {Target}, so background solves " +
+                        "skip it for {Backoff}",
+                        target.GetLeftPart(UriPartial.Authority),
+                        FailureBackoff);
+                }
+                else if (reuse && clearance is not null)
+                {
+                    Remember(target, clearance);
+                }
+
+                return (clearance, clearance is null ? "rejected" : "solved");
+            }
+            finally
+            {
+                queue.Leave();
+            }
+        }
+    }
+
+    private static string FailureKey(Uri target) => target.GetLeftPart(UriPartial.Authority).ToUpperInvariant();
+
+    private static bool IsChallengeFailure(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("message", out var message) &&
+                message.ValueKind == JsonValueKind.String &&
+                message.GetString() is { } text &&
+                (text.Contains("Error solving the challenge. Timeout after", StringComparison.Ordinal) ||
+                    text.Contains("Cloudflare has blocked this request", StringComparison.Ordinal));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string MemoKey(Uri target) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target.AbsoluteUri)));
+
+    private void LogAbandoned(Task<(CloudflareClearance? Clearance, string Outcome)> solving, object? target)
+    {
+        if (solving.Exception is { } exception)
+        {
+            logger.LogWarning(
+                exception.GetBaseException(),
+                "FlareSolverr failed the challenge of {Target} after its caller left",
+                target);
+            return;
+        }
+
+        logger.LogInformation(
+            "FlareSolverr finished the challenge of {Target} with {Outcome} after its caller left",
+            target,
+            solving.Result.Outcome);
+    }
 
     public void Forget(Uri target)
     {

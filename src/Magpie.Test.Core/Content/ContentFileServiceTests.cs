@@ -9,11 +9,14 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Content;
+using Magpie.Core.Jobs;
+using Magpie.Core.Subjects;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
 using Magpie.Models.Patch;
 using Magpie.Sdk.Content;
@@ -40,6 +43,7 @@ public sealed class ContentFileServiceTests
     private Mock<IContentRepository> _contentItems = null!;
     private Mock<IAuditRecordRepository> _auditRecords = null!;
     private Mock<ITransactionManager> _transactionManager = null!;
+    private Mock<IJobManager> _jobManager = null!;
     private Dictionary<string, long> _files = null!;
     private RootFolder _rootFolder = null!;
     private ContentHierarchyItem _leaf = null!;
@@ -123,6 +127,11 @@ public sealed class ContentFileServiceTests
         _mediaFiles = new Mock<IMediaFileRepository> { CallBase = true };
         _contentItems = new Mock<IContentRepository> { CallBase = true };
         _auditRecords = new Mock<IAuditRecordRepository> { CallBase = true };
+        _jobManager = new Mock<IJobManager>();
+        _jobManager.Setup(manager => manager.ExecuteAsync(
+                It.IsAny<JobEnqueueRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.NewGuid());
         _transactionManager = new Mock<ITransactionManager>();
         _transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
@@ -147,11 +156,13 @@ public sealed class ContentFileServiceTests
             _metadataContainers.Object,
             _rootFolders.Object,
             _contentTypes.Object,
+            new SubjectKindRegistry([], NullLogger<SubjectKindRegistry>.Instance),
             _fileSystem.Object,
             _mediaFiles.Object,
             _contentItems.Object,
             _auditRecords.Object,
             _transactionManager.Object,
+            _jobManager.Object,
             TimeProvider.System,
             NullLogger<ContentFileService>.Instance);
     }
@@ -496,6 +507,145 @@ public sealed class ContentFileServiceTests
             Assert.That(result.Rename.FullName, Is.EqualTo(Path.Combine(_rootFolder.Path, "The Matrix (1999).mkv")));
             Assert.That(result.Item, Is.SameAs(_leaf));
         }
+    }
+
+    [Test]
+    public async Task PreviewRenameAsync_NestsMaskFoldersUnderTheExistingFolder_WhenTheUserCreatedIt()
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+            Path = "Show",
+            RootFolderId = _rootFolder.Id,
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var primary = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            FileKind = "Video",
+            FilePath = Path.Combine(_rootFolder.Path, "Show", "old.mkv")
+        };
+        _rootFolder.RenameTemplate = "Extras/{Title}.{Ext}";
+        _leaf.ContentType = "tv";
+        _leaf.Level = "episode";
+        _leaf.Name = "Episode";
+        _leaf.ParentId = show.Id;
+        _leaf.ContentItem = new ContentItem { MediaFiles = { primary } };
+        _files[primary.FilePath] = 5;
+        _contentHierarchyItems
+            .Setup(r => r.GetLineageAsync(_leaf.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_leaf, show]);
+        _contentHierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.AncestorId == _leaf.Id),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+        _contentTypes
+            .Setup(registry => registry.GetDefinitionFor("tv"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "tv",
+                DisplayName = "TV",
+                LevelDefinitions =
+                [
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "show",
+                        DisplayName = "Show",
+                        CustomMetadataFields = [],
+                        Subfolder = string.Empty
+                    },
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "episode",
+                        DisplayName = "Episode",
+                        CustomMetadataFields = [],
+                        AcceptedFileTypes = [".mkv"]
+                    }
+                ]
+            });
+
+        // Act
+        var placement = await _subject.PreviewRenameAsync(_leaf.Id, new FileInfo(primary.FilePath))
+            .ConfigureAwait(false);
+        var rename = await _subject.PreviewRenameMaskAsync(_leaf.Id, new() { MediaFileIds = [primary.Id] })
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                placement.Rename.FullName,
+                Is.EqualTo(Path.Combine(_rootFolder.Path, "Show", "Extras", "Episode.mkv")));
+            Assert.That(rename.Files.Single().DestinationPath, Is.EqualTo(placement.Rename.FullName));
+        }
+    }
+
+    [Test]
+    public async Task PreviewRenameAsync_NestsMaskFoldersUnderTheGeneratedFolder_WhenTheFolderIsNew()
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+            RootFolderId = _rootFolder.Id,
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow,
+            Settings = { ["content.path.origin"] = "Generated" }
+        };
+        _rootFolder.RenameTemplate = "Extras/{Title}.{Ext}";
+        _leaf.ContentType = "tv";
+        _leaf.Level = "episode";
+        _leaf.Name = "Episode";
+        _leaf.ParentId = show.Id;
+        _contentHierarchyItems
+            .Setup(r => r.GetLineageAsync(_leaf.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_leaf, show]);
+        _contentTypes
+            .Setup(registry => registry.GetDefinitionFor("tv"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "tv",
+                DisplayName = "TV",
+                LevelDefinitions =
+                [
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "show",
+                        DisplayName = "Show",
+                        CustomMetadataFields = [],
+                        Subfolder = string.Empty
+                    },
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "episode",
+                        DisplayName = "Episode",
+                        CustomMetadataFields = [],
+                        AcceptedFileTypes = [".mkv"]
+                    }
+                ]
+            });
+        var original = new FileInfo(Path.Combine(_rootFolder.Path, "incoming", "old.mkv"));
+
+        // Act
+        var placement = await _subject.PreviewRenameAsync(_leaf.Id, original).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            placement.Rename.FullName,
+            Is.EqualTo(Path.Combine(_rootFolder.Path, "Episode", "Extras", "Episode.mkv")));
     }
 
     [Test]
@@ -859,6 +1009,7 @@ public sealed class ContentFileServiceTests
     {
         // Arrange
         var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var actingUserId = Guid.NewGuid();
         var lineageLocked = false;
         var contentItem = new ContentItem
         {
@@ -928,8 +1079,15 @@ public sealed class ContentFileServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileAttached" });
 
+        _contentItems.Setup(repository => repository.ReconcileMediaStateAsync(
+                _leaf.Id, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback(() => contentItem.Fulfillment = FulfillmentStatus.Fulfilled)
+            .Returns(Task.CompletedTask);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+
         // Act
-        var result = await _subject.AttachAsync(_leaf.Id, path, Guid.NewGuid()).ConfigureAwait(false);
+        var result = await _subject.AttachAsync(_leaf.Id, path, actingUserId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -939,6 +1097,14 @@ public sealed class ContentFileServiceTests
             Assert.That(result.Result.MediaFile.FilePath, Is.EqualTo(path));
             Assert.That(contentItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Fulfilled));
             Assert.That(mediaFiles, Has.Count.EqualTo(1));
+            _jobManager.Verify(manager => manager.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.JobType == MagpieJobs.Types.MediaInfoExtractScan &&
+                    request.Mode == JobExecutionMode.Queue &&
+                    request.UserId == actingUserId &&
+                    request.Parameters != null &&
+                    request.Parameters[MagpieJobs.Parameters.ContentHierarchyItemId] == _leaf.Id.ToString("D")),
+                It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 
@@ -1086,6 +1252,13 @@ public sealed class ContentFileServiceTests
                 It.IsAny<AuditRecord>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileAttached" });
+
+        _contentItems.Setup(repository => repository.ReconcileMediaStateAsync(
+                _leaf.Id, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback(() => contentItem.Fulfillment = FulfillmentStatus.Fulfilled)
+            .Returns(Task.CompletedTask);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
 
         // Act
         var result = await _subject.AttachImportedAsync(_leaf.Id, path, null).ConfigureAwait(false);
@@ -1795,6 +1968,13 @@ public sealed class ContentFileServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileUnlinked" });
 
+        _contentItems.Setup(repository => repository.ReconcileMediaStateAsync(
+                _leaf.Id, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback(() => contentItem.Fulfillment = FulfillmentStatus.Missing)
+            .Returns(Task.CompletedTask);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+
         // Act
         var result = await _subject.UnlinkAsync(_leaf.Id, mediaFile.Id, Guid.NewGuid()).ConfigureAwait(false);
 
@@ -1989,6 +2169,13 @@ public sealed class ContentFileServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileUnlinked" });
 
+        _contentItems.Setup(repository => repository.ReconcileMediaStateAsync(
+                _leaf.Id, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback(() => contentItem.Fulfillment = FulfillmentStatus.Missing)
+            .Returns(Task.CompletedTask);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+
         // Act
         var result = await _subject.UnlinkAsync(_leaf.Id, primary.Id, Guid.NewGuid()).ConfigureAwait(false);
 
@@ -2052,6 +2239,13 @@ public sealed class ContentFileServiceTests
                 It.IsAny<AuditRecord>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileDeleted" });
+
+        _contentItems.Setup(repository => repository.ReconcileMediaStateAsync(
+                _leaf.Id, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback(() => contentItem.Fulfillment = FulfillmentStatus.Missing)
+            .Returns(Task.CompletedTask);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
 
         // Act
         var result = await _subject.DeleteAsync(_leaf.Id, mediaFile.Id, null).ConfigureAwait(false);

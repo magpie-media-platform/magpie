@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, type ReactNode, type RefObject } from 'react';
 import {
     FolderIcon,
     FolderOpenIcon,
@@ -22,6 +22,7 @@ import {
     DialogClose,
 } from '@/components/ui/Dialog';
 import { useFileBrowser, type FileSystemEntry } from '@/hooks/useFileBrowser';
+import { returnFocusOnClose } from '@/lib/returnFocus';
 
 import type { PathInputMode } from '@/components/ui/PathInput';
 
@@ -144,6 +145,12 @@ export interface FileBrowserProps {
     description?: string;
 
     endpoint?: string;
+
+    /** Where focus goes when the dialog closes. Without it, the dialog keeps its default focus behaviour. */
+    returnFocusRef?: RefObject<HTMLElement | null>;
+
+    /** Where focus goes when the control in returnFocusRef is gone. */
+    fallbackFocusRef?: RefObject<HTMLElement | null>;
 }
 
 export function FileBrowser({
@@ -156,6 +163,8 @@ export function FileBrowser({
     title,
     description,
     endpoint,
+    returnFocusRef,
+    fallbackFocusRef,
 }: FileBrowserProps): ReactNode {
     const defaultInitialPath = normalizeInitialPath(initialPath);
 
@@ -282,7 +291,11 @@ export function FileBrowser({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="file-browser__dialog" data-component="file-browser">
+            <DialogContent
+                className="file-browser__dialog"
+                data-component="file-browser"
+                onCloseAutoFocus={returnFocusOnClose(returnFocusRef, fallbackFocusRef)}
+            >
                 <DialogHeader>
                     <DialogTitle>{dialogTitle}</DialogTitle>
                     <DialogDescription>{dialogDescription}</DialogDescription>
@@ -376,10 +389,10 @@ export function FileBrowser({
                         ) : filteredEntries.length === 0 ? (
                             <div className="file-browser__empty">
                                 <FolderOpenIcon size={32} weight="light" aria-hidden="true" />
-                                <span>This folder is empty</span>
+                                <span>{entries.length > 0 ? 'No subfolders' : 'This folder is empty'}</span>
                             </div>
                         ) : (
-                            <ul className="file-browser__list" aria-label="Directory contents">
+                            <ul className="file-browser__list" aria-label="Directory contents" role="list">
                                 {filteredEntries.map((entry) => {
                                     const isSelected = selectedEntry?.path === entry.path;
                                     const isSelectable =

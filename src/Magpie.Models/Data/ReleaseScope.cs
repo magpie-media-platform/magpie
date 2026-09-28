@@ -1,5 +1,7 @@
 using System;
 
+using Magpie.Models.Enums;
+
 namespace Magpie.Models.Data;
 
 /// <summary>
@@ -21,6 +23,11 @@ public record ReleaseScope
     /// The id of the content hierarchy item in the scope.
     /// </summary>
     public Guid ContentHierarchyItemId { get; set; }
+
+    /// <summary>
+    /// The status of the release in the scope of the content hierarchy item.
+    /// </summary>
+    public ReleaseScopeStatus Status { get; set; }
 
     /// <summary>
     /// The <see cref="Release"/> in the scope.

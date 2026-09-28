@@ -1,5 +1,5 @@
+import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { useCallback, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 import { CheckCircleIcon, CompassIcon, FunnelSimpleIcon, ImageBrokenIcon, WarningIcon } from '@phosphor-icons/react';
 
@@ -11,7 +11,8 @@ import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
-import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
+import { type MobileListSortOption } from '@/components/ui/MobileListToolbar';
+import { ListFilterToolbar, type ListFilterField } from '@/components/ui/ListFilterToolbar';
 import { Pager } from '@/components/ui/Pager';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
@@ -208,7 +209,8 @@ export function WishlistDiscoveredList({
                 accessorFn: (row) => row.publishDate ?? '',
                 sortDescFirst: true,
                 size: 104,
-                cell: ({ row }) => (row.original.linkId !== null ? formatShortDate(row.original.publishDate) : '-'),
+                cell: ({ row }) =>
+                    row.original.linkId !== null ? formatShortDate(row.original.publishDate, 'Unknown') : '-',
             },
             {
                 id: 'status',
@@ -253,6 +255,17 @@ export function WishlistDiscoveredList({
             data-component="wishlist-discovered-empty"
         />
     );
+    const filterFields: ListFilterField[] = [
+        { id: 'search', label: 'Title', kind: 'text', value: filters.search },
+        {
+            id: 'inLibrary',
+            label: 'Library presence',
+            kind: 'facet',
+            value: filters.inLibrary,
+            options: IN_LIBRARY_OPTIONS,
+        },
+        { id: 'status', label: 'Status', kind: 'facet', value: filters.status, options: STATUS_OPTIONS },
+    ];
 
     return (
         <section
@@ -286,35 +299,19 @@ export function WishlistDiscoveredList({
                 </div>
             </div>
 
-            {usesCardLayout && (
-                <div className="wishlist-discovered__mobile-filters" role="group" aria-label="Discovered list filters">
-                    <ColumnHeaderFilter
-                        type="text"
-                        label="Title"
-                        active={filters.search.length > 0}
-                        value={filters.search}
-                        onChange={(value) => setFilters({ search: value })}
-                    />
-                    <ColumnHeaderFilter
-                        type="facet"
-                        label="Library presence"
-                        active={filters.inLibrary.length > 0}
-                        options={IN_LIBRARY_OPTIONS}
-                        value={filters.inLibrary}
-                        onChange={handleInLibraryChange}
-                        allLabel="All"
-                    />
-                    <ColumnHeaderFilter
-                        type="facet"
-                        label="Status"
-                        active={filters.status.length > 0}
-                        options={STATUS_OPTIONS}
-                        value={filters.status}
-                        onChange={handleStatusChange}
-                        allLabel="All"
-                    />
-                </div>
-            )}
+            <ListFilterToolbar
+                fields={filterFields}
+                onCommit={(values) =>
+                    setFilters({
+                        search: values.search as string,
+                        inLibrary: values.inLibrary as string,
+                        status: values.status as string,
+                    })
+                }
+                sorting={sorting}
+                sortOptions={WISHLIST_DISCOVERED_SORT_OPTIONS}
+                onSortingChange={handleSortingChange}
+            />
 
             {isLoading ? (
                 <div className="wishlist-discovered__list" aria-label="Loading discovered list">
@@ -338,12 +335,6 @@ export function WishlistDiscoveredList({
                     {usesCardLayout ? (
                         rows.length > 0 ? (
                             <>
-                                <MobileListToolbar
-                                    className="wishlist-discovered__mobile-toolbar"
-                                    sorting={sorting}
-                                    sortOptions={WISHLIST_DISCOVERED_SORT_OPTIONS}
-                                    onSortingChange={handleSortingChange}
-                                />
                                 <div
                                     className="wishlist-discovered__mobile-list"
                                     data-testid="wishlist-discovered__mobile-list"
@@ -382,6 +373,7 @@ export function WishlistDiscoveredList({
                     className="wishlist-discovered__pagination"
                     page={pageNumber}
                     pageCount={pageCount}
+                    totalItems={totalItems}
                     onFirst={() => setPage(1)}
                     onPrevious={() => setPage(Math.max(1, pageNumber - 1))}
                     onNext={() => setPage(Math.min(pageCount, pageNumber + 1))}
@@ -417,8 +409,8 @@ function DiscoveredTitle({ row }: { row: WishlistDiscoveredRow }) {
 
     if (row.linkId !== null) {
         return (
-            <Link
-                to={`/library/${row.linkId}`}
+            <LocalContentLink
+                contentId={row.linkId}
                 className="wishlist-discovered__row-title wishlist-discovered__row-title--link"
                 data-action="open-content"
             >
@@ -428,7 +420,7 @@ function DiscoveredTitle({ row }: { row: WishlistDiscoveredRow }) {
                         title: titleText,
                     }}
                 />
-            </Link>
+            </LocalContentLink>
         );
     }
 
@@ -479,7 +471,7 @@ function DiscoveredMobileCard({ row }: { row: WishlistDiscoveredRow }) {
             {inLibrary && (
                 <>
                     <span>Added {formatShortDate(row.addedAt)}</span>
-                    <span>Published {formatShortDate(row.publishDate)}</span>
+                    <span>Published {formatShortDate(row.publishDate, 'Unknown')}</span>
                 </>
             )}
             <DiscoveredStatus row={row} />

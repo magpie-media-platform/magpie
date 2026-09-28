@@ -9,6 +9,33 @@ function noopHandlers() {
 }
 
 describe('Pager', () => {
+    it('Pagination_ShowsExactResultCount_WhenNumberedTotalIsKnown', () => {
+        // Arrange
+        render(<Pager page={2} pageCount={3} totalItems={30} {...noopHandlers()} />);
+
+        // Act
+        const pagination = screen.getByRole('navigation', { name: 'Pagination' });
+
+        // Assert
+        expect(pagination).toHaveTextContent('Page 2 of 3');
+        expect(pagination).toHaveTextContent('30 results');
+    });
+
+    it('Pagination_UpdatesCountAndNavigation_WhenNumberedTotalShrinks', () => {
+        // Arrange
+        const { rerender } = render(<Pager page={2} pageCount={3} totalItems={30} {...noopHandlers()} />);
+
+        // Act
+        rerender(<Pager page={1} pageCount={1} totalItems={1} {...noopHandlers()} />);
+
+        // Assert
+        const pagination = screen.getByRole('navigation', { name: 'Pagination' });
+        expect(pagination).toHaveTextContent('Page 1 of 1');
+        expect(pagination).toHaveTextContent('1 result');
+        expect(screen.getByRole('button', { name: 'Go to next page' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Go to previous page' })).toBeDisabled();
+    });
+
     it('renders the page-position indicator', () => {
         render(<Pager page={2} pageCount={5} {...noopHandlers()} />);
         expect(screen.getByText('Page 2 of 5')).toBeInTheDocument();

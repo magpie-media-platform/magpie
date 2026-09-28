@@ -15,6 +15,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -30,21 +31,39 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class RootFolderRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IRootFolderRepository _subject = null!;
     private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
     private List<MagpieEvent> _publishedEvents = null!;
     private Guid _userId;
     private string _contentType = null!;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        using var context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(_template)
+            .Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite("Data Source=:memory:")
+            .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var user = new User
         {
@@ -1189,6 +1208,32 @@ public sealed class RootFolderRepositoryTests
                 _publishedEvents.Count(magpieEvent =>
                     magpieEvent.Name == "library.importCandidate.updated"),
                 Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_StoresAutoImportAndReportsTheField_WhenAutoImportIsTurnedOn()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(
+            new RootFolder { Name = "Movies", Path = "/media/movies", ContentType = _contentType },
+            _userId).ConfigureAwait(false);
+        var afterCreate = await _context.RootFolders.AsNoTracking().SingleAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.PatchAsync(
+            new RootFolderPatch { Id = created.Id, AutoImport = new() { Value = true } },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.RootFolders.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        var published = _publishedEvents.Last(magpieEvent => magpieEvent.Name == "library.rootFolder.updated");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(afterCreate.AutoImport, Is.False);
+            Assert.That(result, Is.True);
+            Assert.That(stored.AutoImport, Is.True);
+            Assert.That(published.Context["rootFolder.changedFields"], Is.EqualTo("autoImport"));
         }
     }
 }

@@ -36,7 +36,7 @@ public sealed class CardigannExtension : IExtensionLifecycle
     public Version Version => new(1, 0, 0);
 
     /// <inheritdoc />
-    public string Name => "Cardigann";
+    public string Name => Constants.DisplayName;
 
     /// <inheritdoc />
     public string? TargetABI => "[1.0.0,)";
@@ -68,6 +68,8 @@ public sealed class CardigannExtension : IExtensionLifecycle
 
         services
             .AddHttpClient(CardigannSessionManager.HttpClientName)
+            .AddUpstreamCooldown(request => request.Options.TryGetValue(
+                CardigannSessionManager.AuthenticationScopeKey, out var scope) ? scope : null)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 UseCookies = false,

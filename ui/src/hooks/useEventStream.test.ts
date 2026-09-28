@@ -3,6 +3,7 @@ import { createElement, StrictMode, type ComponentProps, type ReactNode } from '
 import { render, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { installSharedWorkerHarness } from '@/test/sharedWorkerHarness';
 
 import {
     getActiveEventSubscriptionCount,
@@ -29,6 +30,7 @@ let testQueryClient: QueryClient;
 
 function installFakeEventSource() {
     class FakeEventSource implements MockEventSource {
+        static CLOSED = 2;
         url: string;
         closed = false;
         onmessage: Listener | null = null;
@@ -46,6 +48,7 @@ function installFakeEventSource() {
         }
     }
     (globalThis as unknown as { EventSource: typeof FakeEventSource }).EventSource = FakeEventSource;
+    installSharedWorkerHarness(FakeEventSource);
 }
 
 function ActiveSession({ children }: { children: ReactNode }) {
@@ -97,6 +100,8 @@ describe('useEventStream', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+        localStorage.clear();
     });
 
     it('opens one unfiltered EventSource for the active application session', () => {
@@ -325,7 +330,7 @@ describe('useEventStream', () => {
 
         expect(handler).toHaveBeenCalledWith({ name: 'stream.reconnected', context: {} });
         expect(invalidateSpy).not.toHaveBeenCalled();
-        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy).not.toHaveBeenCalled();
     });
 
     it('delivers reconnect reconciliation through entity-scoped subscriptions', () => {
@@ -340,7 +345,7 @@ describe('useEventStream', () => {
         sources[0].onopen?.();
 
         expect(handler).toHaveBeenCalledWith({ name: 'stream.reconnected', context: {} });
-        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy).not.toHaveBeenCalled();
     });
 
     it('swallows malformed payloads without notifying listeners', () => {
@@ -350,6 +355,6 @@ describe('useEventStream', () => {
 
         expect(() => sources[0].emit('not-json')).not.toThrow();
         expect(handler).not.toHaveBeenCalled();
-        expect(warnSpy).toHaveBeenCalled();
+        expect(warnSpy).not.toHaveBeenCalled();
     });
 });

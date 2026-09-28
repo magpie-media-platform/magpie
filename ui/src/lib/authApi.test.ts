@@ -8,9 +8,15 @@ import {
     isTokenExpired,
     hasStoredSession,
     getCurrentUserFromToken,
+    getStoredSessionCacheUserId,
 } from './authApi';
 import { clearAuthStorage, tokenExpirationStorage, tokenStorage } from './tokenStorage';
 import { Role } from '@/auth/types';
+
+vi.mock('./authSessionLock', () => ({
+    withAuthSessionLock: (_scope: string, action: (signal: AbortSignal) => Promise<unknown>) =>
+        action(new AbortController().signal),
+}));
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -37,6 +43,25 @@ describe('authApi', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    describe('getStoredSessionCacheUserId', () => {
+        it.each(['sub', 'nameid', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier'])(
+            'identifies the cache owner from expired %s claims without authenticating',
+            (claim) => {
+                tokenStorage.set(createMockJwt({ [claim]: 'user-123', name: 'testuser', role: 2, exp: 1 }));
+                expect(getStoredSessionCacheUserId()).toBe('user-123');
+                expect(getCurrentUserFromToken()).toBeNull();
+            },
+        );
+
+        it.each(['not-a-jwt', '', 'a.bnVsbA.c', 'a.e30.c', 'a.eyJzdWIiOjEyM30.c'])(
+            'does not identify a cache owner for malformed or missing identity %s',
+            (token) => {
+                tokenStorage.set(token);
+                expect(getStoredSessionCacheUserId()).toBeUndefined();
+            },
+        );
     });
 
     describe('decodeJwtUser', () => {
@@ -315,6 +340,7 @@ describe('authApi', () => {
         };
 
         it('refreshes tokens and returns user', async () => {
+            tokenStorage.set('old-access-token');
             mockFetch.mockResolvedValueOnce({
                 ok: true,
                 status: 200,

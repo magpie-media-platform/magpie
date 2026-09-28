@@ -26,6 +26,8 @@ internal sealed class CardigannSessionManager(
 {
     public const string HttpClientName = "magpie.cardigann";
 
+    internal static readonly HttpRequestOptionsKey<string> AuthenticationScopeKey = new("magpie.upstream.auth");
+
     private const string MethodForm = "form";
     private const string MethodPost = "post";
     private const string MethodGet = "get";
@@ -189,8 +191,12 @@ internal sealed class CardigannSessionManager(
             return SuccessfulOutcome();
         }
 
-        var gate = state.LoginGates.GetOrAdd(sessionKey, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var gate = state.LoginGates.GetOrAdd(sessionKey, _ => new SolverQueue { WaitForBackground = true });
+        if (!await gate.EnterAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new SolverBusyException();
+        }
+
         try
         {
             if (!forceRefresh && session.Authenticated)
@@ -240,7 +246,7 @@ internal sealed class CardigannSessionManager(
         }
         finally
         {
-            gate.Release();
+            gate.Leave();
         }
     }
 
@@ -683,6 +689,11 @@ internal sealed class CardigannSessionManager(
         {
             var onCookieScope = SameAuthority(currentUri, cookieScope);
             using var request = new HttpRequestMessage(currentMethod, currentUri);
+            if (onCookieScope && sessionKey.LastIndexOf('#') is var separator && separator >= 0)
+            {
+                request.Options.Set(AuthenticationScopeKey, sessionKey[(separator + 1)..]);
+            }
+
             request.Headers.TryAddWithoutValidation(
                 "User-Agent",
                 ResolveUserAgent(sessionKey, userAgent, onCookieScope));
@@ -729,47 +740,57 @@ internal sealed class CardigannSessionManager(
 
             if (onCookieScope && response.DetectCloudflareChallenge() is not null)
             {
-                var session = state.Sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
-                if (clearanceReused && !clearanceRefreshed)
+                try
                 {
-                    solver.Forget(cookieScope);
-                    clearanceRetried = false;
-                    clearanceReused = false;
-                    clearanceRefreshed = true;
-                    logger.LogDebug(
-                        "The tracker of {SessionKey} refused Cardigann's stored clearance cookie.",
-                        sessionKey);
-                }
-
-                if (!clearanceRetried && !session.ClearanceIsTlsBound(timeProvider.GetUtcNow()))
-                {
-                    clearanceRetried = true;
-                    (clearanceApplied, clearanceReused) =
-                        await TryAcquireClearanceAsync(sessionKey, cookieScope, cancellationToken)
-                            .ConfigureAwait(false);
-                    if (clearanceApplied)
+                    var session = state.Sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
+                    if (clearanceReused && !clearanceRefreshed)
                     {
-                        response.Dispose();
-                        continue;
-                    }
-                }
-
-                if (currentMethod == HttpMethod.Get)
-                {
-                    if (clearanceApplied && !clearanceReused)
-                    {
-                        session.BindClearanceToTls(timeProvider.GetUtcNow() + TlsBindingLifetime);
+                        solver.Forget(cookieScope);
+                        clearanceRetried = false;
+                        clearanceReused = false;
+                        clearanceRefreshed = true;
                         logger.LogDebug(
-                            "The tracker of {SessionKey} rejected the clearance cookie.",
+                            "The tracker of {SessionKey} refused Cardigann's stored clearance cookie.",
                             sessionKey);
                     }
 
-                    if (await FetchThroughSolverAsync(currentUri, cancellationToken).ConfigureAwait(false)
-                        is { } solved)
+                    if (!clearanceRetried && !session.ClearanceIsTlsBound(timeProvider.GetUtcNow()))
                     {
-                        response.Dispose();
-                        return solved;
+                        clearanceRetried = true;
+                        (clearanceApplied, clearanceReused) =
+                            await TryAcquireClearanceAsync(sessionKey, cookieScope, cancellationToken)
+                                .ConfigureAwait(false);
+                        if (clearanceApplied)
+                        {
+                            response.Dispose();
+                            continue;
+                        }
                     }
+
+                    if (currentMethod == HttpMethod.Get)
+                    {
+                        if (clearanceApplied && !clearanceReused)
+                        {
+                            session.BindClearanceToTls(timeProvider.GetUtcNow() + TlsBindingLifetime);
+                            logger.LogDebug(
+                                "The tracker of {SessionKey} rejected the clearance cookie.",
+                                sessionKey);
+                        }
+
+                        if (await FetchThroughSolverAsync(currentUri,
+                            request.Options.TryGetValue(AuthenticationScopeKey, out var scope) ? scope : null,
+                            cancellationToken).ConfigureAwait(false)
+                            is { } solved)
+                        {
+                            response.Dispose();
+                            return solved;
+                        }
+                    }
+                }
+                catch
+                {
+                    response.Dispose();
+                    throw;
                 }
             }
 
@@ -779,9 +800,11 @@ internal sealed class CardigannSessionManager(
 
     private async Task<HttpResponseMessage?> FetchThroughSolverAsync(
         Uri requestUri,
+        string? authenticationScope,
         CancellationToken cancellationToken)
     {
-        var solved = await solver.SolveAsync(requestUri, reuse: false, cancellationToken).ConfigureAwait(false);
+        var solved = await solver.SolveAsync(requestUri, reuse: false, cancellationToken, authenticationScope)
+            .ConfigureAwait(false);
         if (solved?.Body is not { Length: > 0 } solvedBody || solved.Status is < 200 or > 299)
         {
             return null;
@@ -816,7 +839,11 @@ internal sealed class CardigannSessionManager(
     {
         var session = state.Sessions.GetOrAdd(sessionKey, _ => new TrackerSession());
         var stamp = session.ClearanceStamp;
-        await session.ClearanceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (!await session.ClearanceGate.EnterAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new SolverBusyException();
+        }
+
         try
         {
             if (session.ClearanceStamp != stamp)
@@ -824,7 +851,10 @@ internal sealed class CardigannSessionManager(
                 return (true, true);
             }
 
-            var clearance = await solver.SolveAsync(scopeUri, reuse: true, cancellationToken).ConfigureAwait(false);
+            var authenticationScope = sessionKey.LastIndexOf('#') is var separator && separator >= 0
+                ? sessionKey[(separator + 1)..] : null;
+            var clearance = await solver.SolveAsync(scopeUri, reuse: true, cancellationToken, authenticationScope)
+                .ConfigureAwait(false);
             if (clearance is null)
             {
                 return (false, false);
@@ -855,6 +885,8 @@ internal sealed class CardigannSessionManager(
                 logger.LogWarning(
                     "FlareSolverr returned no Cloudflare cookie for the unsolved challenge of {SessionKey}.",
                     sessionKey);
+
+                session.BindClearanceToTls(timeProvider.GetUtcNow() + TlsBindingLifetime);
                 return (false, false);
             }
 
@@ -868,7 +900,7 @@ internal sealed class CardigannSessionManager(
         }
         finally
         {
-            session.ClearanceGate.Release();
+            session.ClearanceGate.Leave();
         }
     }
 

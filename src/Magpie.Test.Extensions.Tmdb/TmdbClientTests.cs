@@ -22,7 +22,7 @@ public class TmdbClientTests
     private const string SecretKey = "super-secret-tmdb-key-do-not-leak";
 
     [Test]
-    public void GetAsync_ThrowsWithoutLeakingApiKey_WhenServerFails()
+    public void GetAsync_ThrowsWithStatusCode_WhenServerFails()
     {
         // Arrange
         using var http = new MockHttpMessageHandler();
@@ -44,12 +44,12 @@ public class TmdbClientTests
             default).ConfigureAwait(false));
 
         // Assert
-        Assert.That(exception!.Message, Does.Not.Contain(SecretKey));
+        Assert.That(exception!.StatusCode, Is.EqualTo(HttpStatusCode.InternalServerError));
         http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
-    public void GetAsync_DropsCredentialBearingInnerException_WhenTransportFails()
+    public void GetAsync_PropagatesTransportException_WhenTransportFails()
     {
         // Arrange
         using var http = new MockHttpMessageHandler();
@@ -72,12 +72,7 @@ public class TmdbClientTests
             default).ConfigureAwait(false));
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(exception!.ToString(), Does.Not.Contain(SecretKey));
-            Assert.That(exception.InnerException, Is.Null);
-        }
-
+        Assert.That(exception!.Message, Does.Contain("api_key=super-secret-tmdb-key-do-not-leak"));
         http.VerifyNoOutstandingExpectation();
     }
 

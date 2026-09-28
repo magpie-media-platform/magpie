@@ -93,7 +93,7 @@ export function SetupPage(): ReactNode {
         return <RouteLoadingState />;
     }
 
-    if (status?.isRequired && !status.requiresAdminClaim && !isAuthenticated) {
+    if (status?.isRequired && !status.requiresAdminClaim && !isAuthenticated && stepId !== 'admin') {
         return <Navigate to="/login" state={{ from: location }} replace />;
     }
 

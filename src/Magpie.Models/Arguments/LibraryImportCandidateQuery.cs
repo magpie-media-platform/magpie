@@ -36,6 +36,11 @@ public sealed record LibraryImportCandidateQuery
     public bool? HasMatches { get; init; }
 
     /// <summary>
+    /// The ids of the existing library items that a candidate must target, or <c>null</c> to match any target.
+    /// </summary>
+    public IReadOnlyCollection<Guid>? ContentHierarchyItemIds { get; init; }
+
+    /// <summary>
     /// The ids of the candidates to exclude from the selection, or <c>null</c> to exclude nothing.
     /// </summary>
     public IReadOnlyList<Guid>? ExcludeIds { get; init; }

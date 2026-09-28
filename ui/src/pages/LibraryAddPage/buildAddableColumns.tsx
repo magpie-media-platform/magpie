@@ -1,6 +1,6 @@
+import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { type ColumnDef } from '@tanstack/react-table';
 import { CaretDownIcon, CheckIcon, PlusIcon } from '@phosphor-icons/react';
-import { Link } from 'react-router-dom';
 
 import { DisabledTooltip } from '@/auth/DisabledTooltip';
 import { ContentPoster } from '@/components/content/ContentCardPrimitives';
@@ -141,13 +141,13 @@ export function TitleHeading({
         <h3 className="library-add-page__title">
             {candidate.inLibrary ? (
                 candidate.existingContentHierarchyItemId ? (
-                    <Link
-                        to={`/library/${candidate.existingContentHierarchyItemId}`}
+                    <LocalContentLink
+                        contentId={candidate.existingContentHierarchyItemId}
                         className="library-add-page__title-link"
                         data-action="open-library-item"
                     >
                         {candidate.title}
-                    </Link>
+                    </LocalContentLink>
                 ) : (
                     candidate.title
                 )

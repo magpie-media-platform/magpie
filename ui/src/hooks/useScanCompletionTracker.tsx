@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useNavigate } from 'react-router-dom';
 
 import { apiGet, buildUrl } from '@/lib/api';
+import { contentQueryKeys } from '@/hooks/useContent';
 import { isTerminalJobExecutionStatus, useJobExecution } from '@/hooks/useJobs';
 import { libraryImportCandidateQueryKeys, type PagedLibraryImportCandidates } from '@/hooks/useLibraryImportCandidates';
 import { useToast } from '@/hooks/ui/useToast';
@@ -160,7 +161,10 @@ async function emitCompletionToast({
 }: EmitCompletionToastArgs): Promise<void> {
     const afterCount = await fetchCurrentPendingCount();
 
-    await queryClient.invalidateQueries({ queryKey: libraryImportCandidateQueryKeys.all });
+    await Promise.all([
+        queryClient.invalidateQueries({ queryKey: libraryImportCandidateQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: contentQueryKeys.all }),
+    ]);
 
     if (beforeCount === null || afterCount === null) {
         toast({

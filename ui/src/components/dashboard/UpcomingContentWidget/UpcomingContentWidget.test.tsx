@@ -1,9 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
+import { mapUpcomingContent } from '@/hooks/dashboardTransforms';
+import type { ApiContentItemWithMetadata } from '@/lib/contentMapping';
+
 import { UpcomingContentWidget, type UpcomingContentItem } from './UpcomingContentWidget';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 const renderWithRouter = (ui: React.ReactElement) => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -11,6 +15,7 @@ const renderWithRouter = (ui: React.ReactElement) => {
         <QueryClientProvider client={queryClient}>
             <MemoryRouter>{ui}</MemoryRouter>
         </QueryClientProvider>,
+        { wrapper: TooltipProvider },
     );
 };
 
@@ -44,7 +49,7 @@ const mockItems: UpcomingContentItem[] = [
         date: new Date(Date.now() + 86400000 * 2).toISOString(),
         contentType: 'movie',
         levelLabel: 'Movie',
-        fulfillment: 'missing',
+        fulfillment: 'partial',
     },
     {
         id: '4',
@@ -139,7 +144,7 @@ describe('UpcomingContentWidget', () => {
                 </MemoryRouter>
             </QueryClientProvider>
         );
-        const view = render(renderWidget([mockItems[0]]));
+        const view = render(renderWidget([mockItems[0]]), { wrapper: TooltipProvider });
         const failedImage = screen.getByRole('presentation');
         fireEvent.error(failedImage);
         expect(screen.queryByRole('presentation')).not.toBeInTheDocument();
@@ -147,6 +152,74 @@ describe('UpcomingContentWidget', () => {
         view.rerender(renderWidget([{ ...mockItems[0], posterUrl: 'https://example.com/replacement-poster.jpg' }]));
 
         expect(screen.getByRole('presentation')).toHaveAttribute('src', 'https://example.com/replacement-poster.jpg');
+    });
+});
+
+describe('UpcomingContentWidget production mapping', () => {
+    it('shows mapped monitoring and fulfillment as independent states', () => {
+        // Arrange
+        const apiItems: ApiContentItemWithMetadata[] = [
+            {
+                id: 'monitored',
+                metadataContainerId: 'metadata-monitored',
+                contentType: 'movies',
+                level: 'movie',
+                slug: 'monitored',
+                name: 'Mapped monitored release',
+                monitoring: 'Monitored',
+                effectiveMonitoring: 'Monitored',
+                createdAt: '2026-01-01T00:00:00Z',
+                metadataContainer: {
+                    id: 'metadata-monitored',
+                    contributions: [{ ordinal: 0, publishDate: '2999-01-01T00:00:00Z' }],
+                },
+                contentItem: {
+                    id: 'content-monitored',
+                    contentHierarchyItemId: 'monitored',
+                    fulfillment: 'Fulfilled',
+                    createdAt: '2026-01-01T00:00:00Z',
+                },
+            },
+            {
+                id: 'inherited',
+                metadataContainerId: 'metadata-inherited',
+                contentType: 'movies',
+                level: 'movie',
+                slug: 'inherited',
+                name: 'Mapped inherited release',
+                monitoring: null,
+                effectiveMonitoring: 'Unmonitored',
+                createdAt: '2026-01-01T00:00:00Z',
+                metadataContainer: {
+                    id: 'metadata-inherited',
+                    contributions: [{ ordinal: 0, publishDate: '2999-01-01T00:00:00Z' }],
+                },
+                contentItem: {
+                    id: 'content-inherited',
+                    contentHierarchyItemId: 'inherited',
+                    fulfillment: 'Fulfilled',
+                    createdAt: '2026-01-01T00:00:00Z',
+                },
+            },
+        ];
+
+        // Act
+        const items = mapUpcomingContent(apiItems);
+
+        renderWithRouter(<UpcomingContentWidget items={items} />);
+
+        // Assert
+        const monitoredItem = screen
+            .getByText('Mapped monitored release', { selector: '.content-lineage-title__segment--leaf' })
+            .closest('.upcoming-content-widget__item');
+        const inheritedItem = screen
+            .getByText('Mapped inherited release', { selector: '.content-lineage-title__segment--leaf' })
+            .closest('.upcoming-content-widget__item');
+
+        expect(within(monitoredItem as HTMLElement).getByLabelText('Monitored')).toBeInTheDocument();
+        expect(within(monitoredItem as HTMLElement).getByText('Fulfilled')).toBeInTheDocument();
+        expect(within(inheritedItem as HTMLElement).getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
+        expect(within(inheritedItem as HTMLElement).getByText('Fulfilled')).toBeInTheDocument();
     });
 });
 
@@ -387,14 +460,17 @@ describe('UpcomingContentWidget data attributes', () => {
     });
 
     it('applies data-fulfillment to each item', () => {
+        // Arrange
+        // Act
         renderWithRouter(<UpcomingContentWidget items={mockItems} />);
 
+        // Assert
         const items = document.querySelectorAll(
             '.upcoming-content-widget__item:not(.upcoming-content-widget__item--skeleton)',
         );
         expect(items[0]).toHaveAttribute('data-fulfillment', 'missing');
         expect(items[1]).toHaveAttribute('data-fulfillment', 'fulfilled');
-        expect(items[2]).toHaveAttribute('data-fulfillment', 'missing');
+        expect(items[2]).toHaveAttribute('data-fulfillment', 'partial');
         expect(items[3]).toHaveAttribute('data-fulfillment', 'upgradable');
     });
 
@@ -440,13 +516,17 @@ describe('UpcomingContentWidget accessibility', () => {
         expect(iconWrapper).toHaveAttribute('aria-hidden', 'true');
     });
 
-    it('fulfillment indicators are hidden from screen readers', () => {
+    it('fulfillment states are readable', () => {
+        // Arrange
+        // Act
         renderWithRouter(<UpcomingContentWidget items={mockItems} />);
 
-        const indicators = document.querySelectorAll('.upcoming-content-widget__item-indicator');
-        indicators.forEach((indicator) => {
-            expect(indicator).toHaveAttribute('aria-hidden', 'true');
-        });
+        // Assert
+        expect(screen.getByText('Missing')).toBeInTheDocument();
+        expect(screen.getByText('Fulfilled')).toBeInTheDocument();
+        expect(screen.getByText('Partial')).toBeInTheDocument();
+        expect(screen.getByText('Upgradable')).toBeInTheDocument();
+        expect(screen.getByText('External')).toBeInTheDocument();
     });
 });
 

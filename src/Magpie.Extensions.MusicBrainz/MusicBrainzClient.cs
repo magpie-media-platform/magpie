@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 
 using Magpie.Extensions.MusicBrainz.Mapping;
 using Magpie.Extensions.MusicBrainz.QueryEngine;
+using Magpie.Sdk.Http;
 
 using Microsoft.Extensions.Logging;
 
@@ -19,7 +20,8 @@ namespace Magpie.Extensions.MusicBrainz;
 internal sealed class MusicBrainzClient(
     IHttpClientFactory httpClientFactory,
     TimeProvider timeProvider,
-    ILogger<MusicBrainzClient> logger) : IMusicBrainzClient
+    ILogger<MusicBrainzClient> logger,
+    IUpstreamCooldown cooldown) : IMusicBrainzClient
 {
     public const string HttpClientName = "magpie.musicbrainz";
 
@@ -418,15 +420,17 @@ internal sealed class MusicBrainzClient(
     {
         using var client = httpClientFactory.CreateClient(HttpClientName);
         client.BaseAddress ??= new Uri(DefaultBaseUrl, UriKind.Absolute);
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(relativeTarget, UriKind.Relative));
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(client.BaseAddress, relativeTarget));
         request.Headers.TryAddWithoutValidation("Accept", "application/json");
         request.Headers.TryAddWithoutValidation("User-Agent", BuildUserAgent(settings));
 
         HttpResponseMessage response;
         var nextInterval = MinimumRequestInterval;
+        cooldown.Check(request, null, cancellationToken);
         await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            cooldown.Check(request, null, cancellationToken);
             var remaining = _nextSendTimestamp - Stopwatch.GetTimestamp();
             if (remaining > 0)
             {

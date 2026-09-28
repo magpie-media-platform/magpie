@@ -44,7 +44,7 @@ interface GrabReleaseVariables {
 async function grabRelease(variables: GrabReleaseVariables): Promise<JobActionDisposition> {
     const parameters: Record<string, string> = {
         releaseId: variables.id,
-        ignoreFailedTaint: 'true',
+        interactive: 'true',
         contentHierarchyItemId: variables.contentHierarchyItemId,
     };
 

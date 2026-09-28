@@ -95,6 +95,12 @@ describe('Filter Query Autocomplete', () => {
             'not',
         ]);
     });
+    it('offers media file fields inside a media file predicate', () => {
+        const result = getCompletions('mediaFiles has (|)');
+
+        expect(getLabels(result)).toEqual(['fileKind', 'mimeType', 'filePath', 'fileSize', 'and', 'or', 'not']);
+        expect(result?.options.find((option) => option.label === 'fileSize')?.detail).toBe('long');
+    });
 
     describe('Field Registry Functions', () => {
         describe('getScalarField', () => {
@@ -287,7 +293,15 @@ describe('Filter Query Autocomplete', () => {
                 'path',
                 'contentType',
                 'level',
+                'fulfillment',
                 'monitoring',
+                'activeAcquisitionStatus',
+                'qualityStatus',
+                'pendingMetadataRefresh',
+                'hasSearchableTitle',
+                'importPending',
+                'primaryMediaSize',
+                'primaryMediaFileCount',
                 'rootFolderId',
                 'parentId',
                 'title',
@@ -311,6 +325,8 @@ describe('Filter Query Autocomplete', () => {
                 'images',
                 'relationship',
                 'relationships',
+                'mediaFile',
+                'mediaFiles',
                 'and',
                 'or',
                 'not',
@@ -336,14 +352,14 @@ describe('Filter Query Autocomplete', () => {
 
             const monitoringCompletion = result!.options.find((o) => o.label === 'monitoring');
             expect(monitoringCompletion).toBeDefined();
-            expect(monitoringCompletion!.detail).toBe('boolean');
+            expect(monitoringCompletion!.detail).toBe('enum');
 
             const fileSizeCompletion = result!.options.find((o) => o.label === 'fileSize');
             expect(fileSizeCompletion).toBeUndefined();
         });
 
         it('suggests true and false for a boolean field value', () => {
-            const result = getCompletions('monitoring = |');
+            const result = getCompletions('importPending = |');
 
             expect(result).not.toBeNull();
             expect(getLabels(result)).toEqual(expect.arrayContaining(['true', 'false']));
@@ -615,12 +631,12 @@ describe('Filter Query Autocomplete', () => {
             expect(fieldNames).toContain('image');
         });
 
-        it('monitoring field is boolean', () => {
+        it('monitoring field is an enum of monitoring modes', () => {
             const monitoring = getScalarField(contentFieldRegistry, 'monitoring');
 
             expect(monitoring).toBeDefined();
-            expect(monitoring!.type).toBe('boolean');
-            expect(monitoring!.enumValues).toBeUndefined();
+            expect(monitoring!.type).toBe('enum');
+            expect(monitoring!.enumValues).toEqual(['Unmonitored', 'Monitored', 'Shotgun']);
         });
 
         it('awards collection has expected item fields', () => {

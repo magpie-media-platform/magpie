@@ -1,3 +1,4 @@
+import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowCounterClockwiseIcon, TrayIcon, WarningCircleIcon } from '@phosphor-icons/react';
@@ -87,7 +88,7 @@ const DownloadItem = ({ download, url }: DownloadItemProps) => {
             <div className="download-queue-widget__item-header">
                 <span className="download-queue-widget__item-title">
                     {download.contentId ? (
-                        <Link to={`/library/${download.contentId}`} className="download-queue-widget__item-link">
+                        <LocalContentLink contentId={download.contentId} className="download-queue-widget__item-link">
                             <ContentLineageTitle
                                 qualifiedName={{
                                     id: download.contentId,
@@ -95,7 +96,7 @@ const DownloadItem = ({ download, url }: DownloadItemProps) => {
                                     title: download.title,
                                 }}
                             />
-                        </Link>
+                        </LocalContentLink>
                     ) : (
                         download.title
                     )}

@@ -33,6 +33,10 @@
     <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
     <ProjectReference Include="..\Magpie.CommandLine.Generators\Magpie.CommandLine.Generators.csproj" />
     <ProjectReference Include="..\Magpie.Data.SQLite\Magpie.Data.SQLite.csproj" />
+    <ProjectReference Include="..\Magpie.Extensions.MediaInfo.FFProbe\Magpie.Extensions.MediaInfo.FFProbe.csproj" />
+    <ProjectReference Include="..\Magpie.Extensions.Cardigann\Magpie.Extensions.Cardigann.csproj" />
+    <ProjectReference Include="..\Magpie.Extensions.Tvmaze\Magpie.Extensions.Tvmaze.csproj" />
+    <ProjectReference Include="..\Magpie.Extensions.Tv\Magpie.Extensions.Tv.csproj" />
   </ItemGroup>
 
 </Project>

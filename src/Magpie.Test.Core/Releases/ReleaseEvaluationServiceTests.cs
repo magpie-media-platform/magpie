@@ -218,6 +218,19 @@ public sealed class ReleaseEvaluationServiceTests
 
         var contentTypeRegistry = new Mock<IContentTypeRegistry>();
         contentTypeRegistry.Setup(value => value.FindProviderFor("tv")).Returns(_releaseMatchProvider.Object);
+        contentTypeRegistry.Setup(value => value.GetDefinitionFor("tv")).Returns(new ContentTypeDefinition
+        {
+            Slug = "tv",
+            DisplayName = "TV",
+            LevelDefinitions =
+            [
+                new()
+                {
+                    Slug = "show", DisplayName = "Show", AcceptedFileTypes = [".mkv"],
+                    AcceptedSidecarTypes = [".srt"], CustomMetadataFields = []
+                }
+            ]
+        });
         contentTypeRegistry
             .Setup(value => value.GetChildLevels("tv", "show"))
             .Returns([new ContentHierarchyLevelDefinition
@@ -243,6 +256,11 @@ public sealed class ReleaseEvaluationServiceTests
         _releases = new Mock<IReleaseRepository> { CallBase = true };
         _downloads = new Mock<IDownloadRepository> { CallBase = true };
         _qualityTierLists = new Mock<IQualityTierListRepository> { CallBase = true };
+        var fileSystem = new Mock<IFileSystem>();
+        fileSystem.Setup(value => value.MatchesAnyFileTypeAsync(
+                It.Is<string>(path => path.EndsWith(".mkv", StringComparison.Ordinal)),
+                It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         _subject = new ReleaseEvaluationService(
             _contentHierarchyItems.Object,
@@ -253,6 +271,7 @@ public sealed class ReleaseEvaluationServiceTests
             contentTypeRegistry.Object,
             [_contentFactProvider.Object],
             TimeProvider.System,
+            fileSystem.Object,
             NullLogger<ReleaseEvaluationService>.Instance);
     }
 
@@ -278,6 +297,273 @@ public sealed class ReleaseEvaluationServiceTests
                 It.IsAny<ContentTarget>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Test]
+    public async Task CreateEvaluationContextAsync_UsesReconciledQuality_WhenHistoricalDownloadsExist()
+    {
+        // Arrange
+        _show.ContentItem = new ContentItem
+        {
+            ContentHierarchyItemId = _show.Id,
+            MediaReconciledAt = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),
+            CurrentFileQualityRank = 4
+        };
+
+        // Act
+        var result = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.CurrentFileQualityRank, Is.EqualTo(4));
+        _downloads.Verify(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+            It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestCase(720, true)]
+    [TestCase(1080, false)]
+    public async Task ScoreFileForContentAsync_UsesCurrentMediaProperties_WhenAssessingReplacement(
+        int height,
+        bool expected)
+    {
+        // Arrange
+        var listId = Guid.NewGuid();
+        _show.EffectiveQualityTierListId = listId;
+        _qualityTierLists.Setup(repository => repository.GetByIdAsync(listId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = listId,
+                Name = "Current media",
+                QualityTierRanks =
+                [
+                    new()
+                    {
+                        Ordinal = 4, QualityTier = new QualityTier
+                        {
+                            Name = "720", Criteria = new QualityTierCriteria
+                            {
+                                And = [new DictionaryCriteria<PropertyCriterion<string>>
+                                {
+                                    Items = new Dictionary<string, PropertyCriterion<string>>
+                                    {
+                                        ["Height"] = new() { Operator = CriteriaValueOperator.Equals, Value = "720" },
+                                        ["Size"] = new() { Operator = CriteriaValueOperator.Equals, Value = "400" },
+                                        ["Language.en"] = new()
+                                        {
+                                            Operator = CriteriaValueOperator.Equals, Value = "true"
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                ]
+            });
+        var file = new MediaFile
+        {
+            FilePath = "/media/current.mkv",
+            FileKind = "Video",
+            FileSize = 400,
+            MediaInfo = new() { Tracks = [new() { Name = "Video", Type = "Video", Height = height, Language = "en" }] }
+        };
+
+        // Act
+        var result = await _subject.ScoreFileForContentAsync(file, _show.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result!.IsAcceptable, Is.EqualTo(expected));
+        _downloads.Verify(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+            It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestCase("/media/Show S01E01.mkv", true, true, true, "Show S01E01 1080p WEB-DL-GRP", 1, true, false, 1)]
+    [TestCase("/media/Show S01E01.mkv", false, true, true, "Show S01E01 1080p WEB-DL-GRP", null, false, false, 0)]
+    [TestCase("/media/Show S01E01 2160p.mkv", true, true, true, "Show S01E01 1080p WEB-DL-GRP", 0, true, false, 0)]
+    [TestCase("/media/Show S01E01 CAM.mkv", true, true, true, "Show S01E01 1080p WEB-DL-GRP", null, false, true, 0)]
+    [TestCase("/media/Show S01E01.mkv", true, true, true, "Show S01E01-GRP", 1, true, false, 1)]
+    [TestCase("/media/Show S01E01.mkv", true, false, false, "Show S01E01 1080p WEB-DL-GRP", 1, true, false, 1)]
+    [TestCase("/media/Show S01E01.mkv", true, true, false, "Show S01E01 1080p WEB-DL-GRP", 1, true, false, 1)]
+    [TestCase("/media/Show S01E01.mkv", true, false, false, "Show S01E01-GRP", null, false, false, 1)]
+    public async Task ScoreFileForContentAsync_UsesLinkedImportQuality_WhenFileHasNoQuality(
+        string filePath,
+        bool linked,
+        bool hasReleaseId,
+        bool releaseStored,
+        string downloadTitle,
+        int? expectedRank,
+        bool expectedCutoffMet,
+        bool expectedExcluded,
+        int expectedDownloadReads)
+    {
+        // Arrange
+        var listId = Guid.NewGuid();
+        var downloadId = Guid.NewGuid();
+        var releaseId = Guid.NewGuid();
+        _show.EffectiveQualityTierListId = listId;
+        _qualityTierLists.Setup(repository => repository.GetByIdAsync(listId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = listId,
+                Name = "Linked import",
+                Rules =
+                [
+                    new()
+                    {
+                        Kind = RuleKind.Exclude, Criteria = new QualityTierCriteria
+                        {
+                            And = [new DictionaryCriteria<PropertyCriterion<string>>
+                            {
+                                Items = new Dictionary<string, PropertyCriterion<string>>
+                                {
+                                    ["Title"] = new() { Operator = CriteriaValueOperator.ContainsWord, Value = "CAM" }
+                                }
+                            }]
+                        }
+                    }
+                ],
+                QualityTierRanks =
+                [
+                    new()
+                    {
+                        Ordinal = 0, QualityTier = new QualityTier
+                        {
+                            Name = "2160p", Criteria = new QualityTierCriteria
+                            {
+                                And = [new DictionaryCriteria<PropertyCriterion<string>>
+                                {
+                                    Items = new Dictionary<string, PropertyCriterion<string>>
+                                    {
+                                        ["Title"] = new()
+                                        {
+                                            Operator = CriteriaValueOperator.ContainsString, Value = "2160p"
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    },
+                    new()
+                    {
+                        Ordinal = 1, IsCutoff = true, QualityTier = new QualityTier
+                        {
+                            Name = "1080p", Criteria = new QualityTierCriteria
+                            {
+                                And = [new DictionaryCriteria<PropertyCriterion<string>>
+                                {
+                                    Items = new Dictionary<string, PropertyCriterion<string>>
+                                    {
+                                        ["Title"] = new()
+                                        {
+                                            Operator = CriteriaValueOperator.ContainsString, Value = "1080p"
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                ]
+            });
+        _downloads.Setup(repository => repository.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Download
+            {
+                Id = downloadId,
+                ReleaseId = hasReleaseId ? releaseId : null,
+                ExternalId = "linked",
+                Title = downloadTitle,
+                Status = DownloadStatus.Imported
+            });
+        _releases.Setup(repository => repository.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(releaseStored
+                ? new Release { Id = releaseId, Title = "Show S01E01 1080p WEB-DL-GRP", Protocol = "torrent" }
+                : null);
+        var file = new MediaFile
+        {
+            FilePath = filePath,
+            FileKind = "Video",
+            FileSize = 400,
+            DownloadId = linked ? downloadId : null
+        };
+
+        // Act
+        var result = await _subject.ScoreFileForContentAsync(file, _show.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.MatchedRankOrdinal, Is.EqualTo(expectedRank));
+            Assert.That(result.IsCutoffMet, Is.EqualTo(expectedCutoffMet));
+            Assert.That(result.IsExcluded, Is.EqualTo(expectedExcluded));
+        }
+
+        _downloads.Verify(repository => repository.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedDownloadReads));
+    }
+
+    [Test]
+    public async Task CreateEvaluationContextAsync_UsesLinkedImportGroup_WhenReconciledFileHasNoQuality()
+    {
+        // Arrange
+        var listId = Guid.NewGuid();
+        var downloadId = Guid.NewGuid();
+        var releaseId = Guid.NewGuid();
+        _show.EffectiveQualityTierListId = listId;
+        _show.ContentItem = new ContentItem
+        {
+            ContentHierarchyItemId = _show.Id,
+            MediaReconciledAt = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),
+            PrimaryMediaFileCount = 1,
+            CurrentFileQualityRank = 1,
+            MediaFiles = { new MediaFile { FilePath = "Show S01E01.mkv", FileKind = "Video", DownloadId = downloadId } }
+        };
+        _qualityTierLists.Setup(repository => repository.GetByIdAsync(listId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = listId,
+                Name = "Linked import",
+                QualityTierRanks =
+                [
+                    new()
+                    {
+                        Ordinal = 1, IsCutoff = true, QualityTier = new QualityTier
+                        {
+                            Name = "1080p", Criteria = new QualityTierCriteria
+                            {
+                                And = [new DictionaryCriteria<PropertyCriterion<string>>
+                                {
+                                    Items = new Dictionary<string, PropertyCriterion<string>>
+                                    {
+                                        ["Title"] = new()
+                                        {
+                                            Operator = CriteriaValueOperator.ContainsString, Value = "1080p"
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                ]
+            });
+        _downloads.Setup(repository => repository.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Download
+            {
+                Id = downloadId,
+                ReleaseId = releaseId,
+                ExternalId = "linked",
+                Title = "Show S01E01 1080p PROPER-GRP",
+                Status = DownloadStatus.Imported
+            });
+        _releases.Setup(repository => repository.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Id = releaseId, Title = "Show S01E01 1080p PROPER-GRP", Protocol = "torrent" });
+
+        // Act
+        var result = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.CurrentFileQualityRank, Is.EqualTo(1));
+            Assert.That(result.CurrentFileGroup, Is.EqualTo("GRP"));
+            Assert.That(result.CurrentFileRevision?.Version, Is.EqualTo(2));
+        }
     }
 
     [Test]
@@ -504,10 +790,15 @@ public sealed class ReleaseEvaluationServiceTests
     [TestCase("Show S01E01 1080p PROPER-OTHER", "Show S01E01 1080p-GROUP", false)]
     [TestCase("Show S01E01 1080p PROPER", "Show S01E01 1080p", false)]
     [TestCase("Show S01E01 1080p-GROUP", "Show S01E01 1080p-GROUP", false)]
+    [TestCase("Show S01E01 1080p PROPER-GROUP", "Show S01E01 1080p-GROUP", true, true)]
+    [TestCase("Show S01E01 1080p PROPER-OTHER", "Show S01E01 1080p-GROUP", false, true)]
+    [TestCase("Show S01E01 1080p PROPER", "Show S01E01 1080p", false, true)]
+    [TestCase("Show S01E01 1080p-GROUP", "Show S01E01 1080p-GROUP", false, true)]
     public async Task AssessForContentAsync_AcceptsOnlyTheSameGroup_WhenTierAndRevisionTie(
         string title,
         string currentFileTitle,
-        bool expected)
+        bool expected,
+        bool reconciled = false)
     {
         // Arrange
         var tierListId = Guid.NewGuid();
@@ -536,6 +827,21 @@ public sealed class ReleaseEvaluationServiceTests
             CreatedAt = DateTime.UtcNow
         };
         _show.EffectiveQualityTierListId = tierListId;
+        if (reconciled)
+        {
+            _show.ContentItem = new ContentItem
+            {
+                ContentHierarchyItemId = _show.Id,
+                MediaReconciledAt = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),
+                CurrentFileQualityRank = 2,
+                MediaFiles =
+                {
+                    new MediaFile { FilePath = currentFileTitle + ".mkv", FileKind = "Video" },
+                    new MediaFile { FilePath = "Show S01E01 1080p PROPER-GROUP.srt", FileKind = "Subtitle" }
+                }
+            };
+        }
+
         _qualityTierLists
             .Setup(repository => repository.GetByIdAsync(tierListId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QualityTierList
@@ -582,7 +888,7 @@ public sealed class ReleaseEvaluationServiceTests
             .ReturnsAsync(new Release
             {
                 Id = importedReleaseId,
-                Title = currentFileTitle,
+                Title = reconciled ? "Show S01E01 1080p PROPER-STALE" : currentFileTitle,
                 Protocol = "torrent"
             });
 
@@ -595,5 +901,412 @@ public sealed class ReleaseEvaluationServiceTests
 
         // Assert
         Assert.That(assessment.IsAcceptable, Is.EqualTo(expected));
+    }
+
+    [TestCase(true, true, 1)]
+    [TestCase(false, true, null)]
+    [TestCase(true, false, 1)]
+    public async Task CreateEvaluationContextAsync_UsesTheLinkedImportQuality_WhenReconciledFileHasNoRank(
+        bool linked,
+        bool releaseStored,
+        int? expectedRank)
+    {
+        // Arrange
+        var tierListId = Guid.NewGuid();
+        var linkedDownloadId = Guid.NewGuid();
+        var linkedReleaseId = Guid.NewGuid();
+        _show.EffectiveQualityTierListId = tierListId;
+        _show.ContentItem = new ContentItem
+        {
+            ContentHierarchyItemId = _show.Id,
+            MediaReconciledAt = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),
+            PrimaryMediaFileCount = 1,
+            CurrentFileQualityRank = null,
+            MediaFiles =
+            {
+                new MediaFile
+                {
+                    FilePath = "Show S01E01.mkv",
+                    FileKind = "Video",
+                    DownloadId = linked ? linkedDownloadId : null
+                }
+            }
+        };
+        _qualityTierLists
+            .Setup(repository => repository.GetByIdAsync(tierListId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = tierListId,
+                Name = "List",
+                CreatedAt = DateTime.UtcNow,
+                QualityTierRanks =
+                [
+                    new QualityTierListRank
+                    {
+                        QualityTierListId = tierListId,
+                        Ordinal = 0,
+                        QualityTier = new QualityTier
+                        {
+                            Name = "2160p",
+                            Criteria = new QualityTierCriteria
+                            {
+                                And =
+                                [
+                                    new DictionaryCriteria<PropertyCriterion<string>>
+                                    {
+                                        Items = new Dictionary<string, PropertyCriterion<string>>
+                                        {
+                                            ["Title"] = new()
+                                            {
+                                                Operator = CriteriaValueOperator.ContainsString, Value = "2160p"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    new QualityTierListRank
+                    {
+                        QualityTierListId = tierListId,
+                        Ordinal = 1,
+                        QualityTier = new QualityTier
+                        {
+                            Name = "1080p",
+                            Criteria = new QualityTierCriteria
+                            {
+                                And =
+                                [
+                                    new DictionaryCriteria<PropertyCriterion<string>>
+                                    {
+                                        Items = new Dictionary<string, PropertyCriterion<string>>
+                                        {
+                                            ["Title"] = new()
+                                            {
+                                                Operator = CriteriaValueOperator.ContainsString, Value = "1080p"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    new QualityTierListRank
+                    {
+                        QualityTierListId = tierListId,
+                        Ordinal = 2,
+                        QualityTier = new QualityTier
+                        {
+                            Name = "720p",
+                            Criteria = new QualityTierCriteria
+                            {
+                                And =
+                                [
+                                    new DictionaryCriteria<PropertyCriterion<string>>
+                                    {
+                                        Items = new Dictionary<string, PropertyCriterion<string>>
+                                        {
+                                            ["Title"] = new()
+                                            {
+                                                Operator = CriteriaValueOperator.ContainsString, Value = "720p"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            });
+        _downloads
+            .Setup(repository => repository.GetByIdAsync(linkedDownloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Download
+            {
+                Id = linkedDownloadId,
+                ReleaseId = linkedReleaseId,
+                ExternalId = "linked",
+                Title = "Show S01E01 1080p-X",
+                Status = DownloadStatus.Imported,
+                DateCompleted = new DateTime(2026, 9, 21, 1, 0, 0, DateTimeKind.Utc),
+                CreatedAt = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc)
+            });
+        _downloads
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = Guid.NewGuid(),
+                        ExternalId = "later-completed",
+                        Title = "Show S01E01 720p-A",
+                        Status = DownloadStatus.Imported,
+                        DateCompleted = new DateTime(2026, 9, 21, 2, 0, 0, DateTimeKind.Utc),
+                        CreatedAt = new DateTime(2026, 9, 21, 2, 0, 0, DateTimeKind.Utc)
+                    }
+                ],
+                TotalItems = 1
+            });
+        _releases
+            .Setup(repository => repository.GetByIdAsync(linkedReleaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(releaseStored
+                ? new Release { Id = linkedReleaseId, Title = "Show S01E01 1080p-X", Protocol = "torrent" }
+                : null);
+        _releases
+            .Setup(repository => repository.GetByIdAsync(
+                It.Is<Guid>(id => id != linkedReleaseId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Title = "Show S01E01 720p-A", Protocol = "torrent" });
+
+        // Act
+        var result = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.CurrentFileQualityRank, Is.EqualTo(expectedRank));
+    }
+
+    [Test]
+    public async Task CreateEvaluationContextAsync_UsesOnlyImportedDownloads_WhenMediaIsNotReconciled()
+    {
+        // Arrange
+        var tierListId = Guid.NewGuid();
+        var importedReleaseId = Guid.NewGuid();
+        var cancelledReleaseId = Guid.NewGuid();
+        var activeReleaseId = Guid.NewGuid();
+        _show.EffectiveQualityTierListId = tierListId;
+        _qualityTierLists
+            .Setup(repository => repository.GetByIdAsync(tierListId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = tierListId,
+                Name = "List",
+                CreatedAt = DateTime.UtcNow,
+                QualityTierRanks =
+                [
+                    new QualityTierListRank
+                    {
+                        QualityTierListId = tierListId,
+                        Ordinal = 1,
+                        QualityTier = new QualityTier
+                        {
+                            Name = "1080p",
+                            Criteria = new QualityTierCriteria
+                            {
+                                And =
+                                [
+                                    new DictionaryCriteria<PropertyCriterion<string>>
+                                    {
+                                        Items = new Dictionary<string, PropertyCriterion<string>>
+                                        {
+                                            ["Title"] = new()
+                                            {
+                                                Operator = CriteriaValueOperator.ContainsString, Value = "1080p"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    new QualityTierListRank
+                    {
+                        QualityTierListId = tierListId,
+                        Ordinal = 2,
+                        QualityTier = new QualityTier
+                        {
+                            Name = "720p",
+                            Criteria = new QualityTierCriteria
+                            {
+                                And =
+                                [
+                                    new DictionaryCriteria<PropertyCriterion<string>>
+                                    {
+                                        Items = new Dictionary<string, PropertyCriterion<string>>
+                                        {
+                                            ["Title"] = new()
+                                            {
+                                                Operator = CriteriaValueOperator.ContainsString, Value = "720p"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            });
+        _downloads
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = importedReleaseId,
+                        ExternalId = "imported",
+                        Title = "Show S01E01 720p-A",
+                        Status = DownloadStatus.Imported,
+                        CreatedAt = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc)
+                    },
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = cancelledReleaseId,
+                        ExternalId = "cancelled",
+                        Title = "Show S01E01 1080p-B",
+                        Status = DownloadStatus.Cancelled,
+                        CreatedAt = new DateTime(2026, 9, 21, 1, 0, 0, DateTimeKind.Utc)
+                    },
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = activeReleaseId,
+                        ExternalId = "active",
+                        Title = "Show S01E01 1080p-C",
+                        Status = DownloadStatus.Downloading,
+                        CreatedAt = new DateTime(2026, 9, 21, 2, 0, 0, DateTimeKind.Utc)
+                    }
+                ],
+                TotalItems = 3
+            });
+        _releases
+            .Setup(repository => repository.GetByIdAsync(importedReleaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Id = importedReleaseId, Title = "Show S01E01 720p-A", Protocol = "torrent" });
+        _releases
+            .Setup(repository => repository.GetByIdAsync(
+                It.Is<Guid>(id => id != importedReleaseId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Title = "Show S01E01 1080p-B", Protocol = "torrent" });
+
+        // Act
+        var result = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.CurrentFileQualityRank, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task CreateEvaluationContextAsync_UsesTheNewestImportTitle_WhenItsReleaseIsNotStored()
+    {
+        // Arrange
+        var tierListId = Guid.NewGuid();
+        var importedReleaseId = Guid.NewGuid();
+        _show.EffectiveQualityTierListId = tierListId;
+        _qualityTierLists
+            .Setup(repository => repository.GetByIdAsync(tierListId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = tierListId,
+                Name = "List",
+                CreatedAt = DateTime.UtcNow,
+                QualityTierRanks =
+                [
+                    new QualityTierListRank
+                    {
+                        QualityTierListId = tierListId,
+                        Ordinal = 1,
+                        QualityTier = new QualityTier
+                        {
+                            Name = "1080p",
+                            Criteria = new QualityTierCriteria
+                            {
+                                And =
+                                [
+                                    new DictionaryCriteria<PropertyCriterion<string>>
+                                    {
+                                        Items = new Dictionary<string, PropertyCriterion<string>>
+                                        {
+                                            ["Title"] = new()
+                                            {
+                                                Operator = CriteriaValueOperator.ContainsString, Value = "1080p"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    new QualityTierListRank
+                    {
+                        QualityTierListId = tierListId,
+                        Ordinal = 2,
+                        QualityTier = new QualityTier
+                        {
+                            Name = "720p",
+                            Criteria = new QualityTierCriteria
+                            {
+                                And =
+                                [
+                                    new DictionaryCriteria<PropertyCriterion<string>>
+                                    {
+                                        Items = new Dictionary<string, PropertyCriterion<string>>
+                                        {
+                                            ["Title"] = new()
+                                            {
+                                                Operator = CriteriaValueOperator.ContainsString, Value = "720p"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            });
+        _downloads
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = null,
+                        ExternalId = "newest",
+                        Title = "Show S01E01 1080p PROPER-NEW",
+                        Status = DownloadStatus.Imported,
+                        CreatedAt = new DateTime(2026, 9, 21, 2, 0, 0, DateTimeKind.Utc)
+                    },
+                    new Download
+                    {
+                        Id = Guid.NewGuid(),
+                        ReleaseId = importedReleaseId,
+                        ExternalId = "older",
+                        Title = "Show S01E01 720p-OLD",
+                        Status = DownloadStatus.Imported,
+                        CreatedAt = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc)
+                    }
+                ],
+                TotalItems = 2
+            });
+        _releases
+            .Setup(repository => repository.GetByIdAsync(importedReleaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Id = importedReleaseId, Title = "Show S01E01 720p-OLD", Protocol = "torrent" });
+
+        // Act
+        var result = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.CurrentFileQualityRank, Is.EqualTo(1));
+            Assert.That(result.CurrentFileGroup, Is.EqualTo("NEW"));
+            Assert.That(result.CurrentFileRevision?.Version, Is.EqualTo(2));
+        }
     }
 }

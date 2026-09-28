@@ -1,0 +1,57 @@
+import { chromium } from '@playwright/test';
+import assert from 'node:assert/strict';
+
+const browser = await chromium.launch({ headless: true });
+const context = await browser.newContext();
+const page = await context.newPage();
+page.on('pageerror', error => console.error(error));
+try {
+    await page.goto('http://127.0.0.1:5291/e2e/continuation.html');
+    console.log(await page.locator('body').innerText());
+    await page.getByText('First fixture movie', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Go to next page', exact: true }).click();
+    await page.getByText('Second fixture movie', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Go to previous page', exact: true }).click();
+    await page.getByText('First fixture movie', { exact: true }).waitFor();
+    let requests = JSON.parse(await page.getByLabel('Fixture request log').innerText());
+    assert.deepEqual(requests.map(request => request.page), [1, 2, 1]);
+    assert.equal(requests[0].token, null);
+    assert.ok(requests[1].token);
+    assert.ok(requests[2].token);
+    await page.getByRole('button', { name: 'Fail the next page request' }).click();
+    await page.getByRole('button', { name: 'Go to next page', exact: true }).click();
+    await page.getByText('Search failed', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await page.getByText('Second fixture movie', { exact: true }).waitFor();
+    requests = JSON.parse(await page.getByLabel('Fixture request log').innerText());
+    assert.equal(requests[3].token, requests[4].token);
+    await page.getByRole('button', { name: 'Expire fixture checkpoints' }).click();
+    await page.getByRole('button', { name: 'Go to previous page', exact: true }).click();
+    await page.getByText('The checkpoint expired. Start a new search.').waitFor();
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await page.getByText('First fixture movie', { exact: true }).waitFor();
+    requests = JSON.parse(await page.getByLabel('Fixture request log').innerText());
+    assert.equal(requests.at(-1).token, null);
+    const separate = await context.newPage();
+    await separate.goto('http://127.0.0.1:5291/e2e/continuation.html');
+    await separate.getByText('First fixture movie', { exact: true }).waitFor();
+    await separate.getByRole('button', { name: 'Go to next page', exact: true }).click();
+    await separate.getByText('Second fixture movie', { exact: true }).waitFor();
+    const independent = JSON.parse(await separate.getByLabel('Fixture request log').innerText());
+    assert.equal(independent[0].token, null);
+    assert.notEqual(independent[1].token, requests[1].token);
+    await page.getByText('First fixture movie', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Fail the next page request' }).click();
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await page.getByText('Search failed', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await page.getByText('First fixture movie', { exact: true }).waitFor();
+    requests = JSON.parse(await page.getByLabel('Fixture request log').innerText());
+    assert.equal(requests.at(-2).token, null);
+    assert.equal(requests.at(-1).token, null);
+    console.log(JSON.stringify({ requests, independent }, null, 2));
+    console.log('PASS: search, next, previous page one, failed-page retry, expired continuation, fresh search, independent tabs');
+} finally {
+    await context.close();
+    await browser.close();
+}

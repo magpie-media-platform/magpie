@@ -181,8 +181,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
     {
         return Warning(
             $"Schedule for {entry.Name} is missing",
-            $"The built-in {entry.JobType} schedule is missing. Fix restores the default " +
-            $"{entry.Schedule} schedule, or it can remain removed if that was intentional.",
+            $"The built-in {entry.JobType} schedule is missing.",
             JobDiagnosticAffectedEntityPrefixes.Job + entry.JobType,
             MissingDefaultJobRepair.Id);
     }
@@ -199,8 +198,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
     {
         return Warning(
             $"Event trigger for {entry.Name} is missing",
-            $"The built-in {entry.JobType} event trigger is missing. Fix restores it, " +
-            "or it can remain removed if that was intentional.",
+            $"The built-in {entry.JobType} event trigger is missing.",
             JobDiagnosticAffectedEntityPrefixes.EventTriggerJob + entry.JobType,
             MissingDefaultJobRepair.Id);
     }
@@ -367,7 +365,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
             trigger,
             spec,
             MagpieJobs.Parameters.FailedDownloadRetentionDays,
-            ParameterFloor.Positive,
+            ParameterFloor.NonNegative,
             findings);
 
         if (releaseObservationRetentionDays is { } releaseDays &&
@@ -376,8 +374,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
         {
             findings.Add(Warning(
                 "Release observations are retained longer than failed downloads",
-                "Release observations are kept longer than the failed downloads that use them. " +
-                "Release observation retention should be reduced, or failed download retention increased.",
+                "Release observations are kept longer than the failed downloads that use them.",
                 JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
         }
 
@@ -505,7 +502,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
             findings.Add(Warning(
                 "IntegrationHealthCheck timeout exceeds stale window",
                 "The integration health check timeout is longer than the time before a connection " +
-                "is considered stale. The timeout should be reduced, or the stale window increased.",
+                "is considered stale.",
                 JobDiagnosticAffectedEntityPrefixes.ScheduleTrigger + trigger.Id));
         }
 
@@ -728,9 +725,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
             findings.Add(Warning(
                 $"Job type {jobType} has no handler on this node",
                 $"Enabled triggers reference {jobType}, but this node cannot run it, and " +
-                $"{queued.TotalItems} queued execution(s) wait for it. " +
-                "Restore its extension or remove its triggers and cancel its queued executions. " +
-                "In a cluster, first check whether another scheduler-eligible node provides the handler.",
+                $"{queued.TotalItems} queued execution(s) wait for it.",
                 JobDiagnosticAffectedEntityPrefixes.Job + jobType));
         }
 

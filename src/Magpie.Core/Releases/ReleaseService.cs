@@ -11,6 +11,7 @@ using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Core.Jobs;
+using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -43,8 +44,10 @@ internal sealed class ReleaseService(
     IEnumerable<IDownloadClientIntegration> downloadClientIntegrations,
     IDownloadService downloadService,
     IRootFolderService rootFolderService,
+    IFileSystem fileSystem,
     IAuditRecordRepository auditRecordRepository,
     IJobManager jobManager,
+    IJobExecutionRepository jobExecutionRepository,
     ITransactionManager transactionManager,
     IEventBus eventBus,
     IReleaseEvaluationService releaseEvaluationService,
@@ -62,8 +65,6 @@ internal sealed class ReleaseService(
     ];
 
     private const int PageSize = 200;
-
-    private const string SuspectLastResortNote = "Last-resort grab: liveness preflight flagged release as Suspect.";
 
     private const double DownloadBackoffFactor = 2.0;
 
@@ -143,8 +144,7 @@ internal sealed class ReleaseService(
         };
     }
 
-    private static bool IsActiveDownloadStatus(DownloadStatus status) =>
-        status is not DownloadStatus.Imported and not DownloadStatus.Failed and not DownloadStatus.Cancelled;
+    private static bool IsActiveDownloadStatus(DownloadStatus status) => !DownloadStatuses.Finished.Contains(status);
 
     private static IReadOnlyList<DownloadClient> FilterEligibleClients(IEnumerable<DownloadClient> clients)
     {
@@ -250,7 +250,7 @@ internal sealed class ReleaseService(
     }
 
     private static bool IsTerminalDownload(Download download) =>
-        download.Status is DownloadStatus.Failed or DownloadStatus.Cancelled;
+        download.Status is DownloadStatus.Failed or DownloadStatus.Faulted or DownloadStatus.Cancelled;
 
     private static DecisionResult ResolveDecision(
         Release release,
@@ -345,7 +345,7 @@ internal sealed class ReleaseService(
             return (null, null);
         }
 
-        var failureReason = download.Status == DownloadStatus.Failed
+        var failureReason = DownloadStatuses.Failures.Contains(download.Status)
             ? download.FailureReason
             : null;
         return (download.Status, failureReason);
@@ -479,7 +479,7 @@ internal sealed class ReleaseService(
             .ConfigureAwait(false);
 
         var releases = await releaseRepository.QueryAllAsync(
-            new ReleaseQuery { ContentHierarchyItemIds = contentHierarchyItemIds },
+            new ReleaseQuery { ContentHierarchyItemIds = contentHierarchyItemIds, IncludeUnmatched = true },
             sort: null,
             cancellationToken).ConfigureAwait(false);
 
@@ -487,6 +487,15 @@ internal sealed class ReleaseService(
         {
             return [];
         }
+
+        var matchedReleaseIds = (await releaseScopeRepository.QueryAllAsync(
+                new ReleaseScopeQuery { ReleaseIds = [.. releases.Select(release => release.Id)] },
+                sort: null,
+                cancellationToken).ConfigureAwait(false))
+            .Where(scope => scope.Status == ReleaseScopeStatus.Matched &&
+                contentHierarchyItemIds.Contains(scope.ContentHierarchyItemId))
+            .Select(scope => scope.ReleaseId)
+            .ToHashSet();
 
         var releaseGroups = CoalesceLogicalReleases(releases);
 
@@ -514,6 +523,13 @@ internal sealed class ReleaseService(
         }
 
         var downloadsByIndexerExternalId = BuildDownloadsByIndexerExternalId(releases, downloadsByReleaseId);
+
+        var acquisitionJobs = await jobExecutionRepository.QueryAllAsync(new JobExecutionQuery
+        {
+            JobType = MagpieJobs.Types.ReleaseDownloadItem,
+            Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
+            ParameterValueReferences = contentHierarchyItemIds.Select(id => id.ToString("D")).ToArray()
+        }, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var evaluationContext = await releaseEvaluationService
             .CreateEvaluationContextAsync(contentHierarchyItemId, cancellationToken)
@@ -563,6 +579,24 @@ internal sealed class ReleaseService(
                 downloadsByIndexerExternalId,
                 release);
             var (isMatch, rejectionReason) = MatchRelease(release, matchTarget, contentHierarchyItemId);
+            var waitingJob = acquisitionJobs
+                .Where(job => job.CancellationRequestedAt is null &&
+                    job.StatusMessage?.StartsWith("Waiting for destination capacity: ",
+                        StringComparison.Ordinal) == true &&
+                    job.Parameters.TryGetValue(MagpieJobs.Parameters.ReleaseId, out var rawReleaseId) &&
+                    Guid.TryParse(rawReleaseId, out var jobReleaseId) && group.ReleaseIds.Contains(jobReleaseId) &&
+                    job.Parameters.TryGetValue(MagpieJobs.Parameters.ContentHierarchyItemId, out var rawTargetId) &&
+                    Guid.TryParse(rawTargetId, out var targetId) && contentHierarchyItemIds.Contains(targetId))
+                .OrderByDescending(job => job.ModifiedAt ?? job.CreatedAt)
+                .FirstOrDefault();
+            var waitingReason = waitingJob is not null &&
+                (!logicalDownloadsByReleaseId.TryGetValue(release.Id, out var latestDownload) ||
+                    (latestDownload.CreatedAt < waitingJob.CreatedAt ||
+                        Guid.TryParse(waitingJob.Parameters.GetValueOrDefault(
+                            ReleaseDownloadItemJob.CapacityPreviousDownloadId), out var previousDownloadId) &&
+                        latestDownload.Id == previousDownloadId) &&
+                    DownloadStatuses.Finished.Contains(latestDownload.Status))
+                ? waitingJob.StatusMessage : null;
             var decision = ResolveDecision(
                 release,
                 logicalDownloadsByReleaseId,
@@ -590,10 +624,14 @@ internal sealed class ReleaseService(
                 IsMatch = isMatch,
                 RejectionReason = rejectionReason,
                 AcquisitionStatus = acquisitionStatus,
+                AcquisitionWaitingReason = waitingReason,
                 FailureReason = failureReason,
                 Decision = decision.Kind,
                 DecisionReason = decision.Reason,
                 GrabbedAt = decision.GrabbedAt,
+                Status = group.ReleaseIds.Any(matchedReleaseIds.Contains)
+                    ? ReleaseScopeStatus.Matched
+                    : ReleaseScopeStatus.Unmatched,
             });
         }
 
@@ -607,13 +645,53 @@ internal sealed class ReleaseService(
         return rows;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> PatchContentReleaseAsync(
+        Guid contentHierarchyItemId,
+        Guid releaseId,
+        ContentReleasePatch patch,
+        Guid? userId,
+        CancellationToken cancellationToken = default)
+    {
+        var nodeIds = await ListContentReleaseScopeNodeIdsAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        var scopes = (await releaseScopeRepository.QueryAllAsync(
+                new ReleaseScopeQuery { ReleaseId = releaseId },
+                sort: null,
+                cancellationToken).ConfigureAwait(false))
+            .Where(scope => nodeIds.Contains(scope.ContentHierarchyItemId))
+            .ToList();
+        if (scopes.Count == 0)
+        {
+            return false;
+        }
+
+        if (patch.Status is not { Value: var status })
+        {
+            return true;
+        }
+
+        await transactionManager.ExecuteWithTransactionAsync(
+            async transactionCancellationToken =>
+            {
+                foreach (var scope in scopes.Where(scope => scope.Status != status))
+                {
+                    await releaseScopeRepository.UpdateAsync(
+                        scope with { Status = status },
+                        userId,
+                        transactionCancellationToken).ConfigureAwait(false);
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
     public Task<Download?> AcquireAsync(
         Guid releaseId,
         Guid? userId,
         Guid? correlationId = null,
         IProgressReporter? progress = null,
-        bool suspectLastResort = false,
-        bool ignoreFailedTaint = false,
+        bool interactive = false,
         Guid? grabTargetContentHierarchyItemId = null,
         CancellationToken cancellationToken = default)
     {
@@ -622,8 +700,7 @@ internal sealed class ReleaseService(
                 releaseId,
                 userId,
                 correlationId,
-                suspectLastResort,
-                ignoreFailedTaint,
+                interactive,
                 grabTargetContentHierarchyItemId),
             progress,
             cancellationToken);
@@ -635,6 +712,27 @@ internal sealed class ReleaseService(
         Guid? correlationId = null,
         CancellationToken cancellationToken = default)
     {
+        return (await SelectReleasesAsync(contentItemId, allAcceptable: false, userId, correlationId, cancellationToken)
+            .ConfigureAwait(false)).FirstOrDefault();
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<Release>> SelectAcceptableReleasesAsync(
+        Guid contentItemId,
+        Guid? userId = null,
+        Guid? correlationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        return SelectReleasesAsync(contentItemId, allAcceptable: true, userId, correlationId, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<Release>> SelectReleasesAsync(
+        Guid contentItemId,
+        bool allAcceptable,
+        Guid? userId,
+        Guid? correlationId,
+        CancellationToken cancellationToken)
+    {
         var page = await contentHierarchyItemRepository
             .QueryAsync(
                 new ContentHierarchyItemCriteria { ContentItemId = contentItemId },
@@ -645,20 +743,19 @@ internal sealed class ReleaseService(
         var item = page.Items.FirstOrDefault();
         if (item?.ContentItem is not { } contentItem)
         {
-            return null;
+            return [];
         }
 
         var candidate = new CandidateContentItem(contentItemId, item.Id, contentItem.Fulfillment);
-        var selection = await SelectReleaseForCandidateAsync(
+        return await SelectReleasesForCandidateAsync(
             candidate,
+            allAcceptable,
             userId,
             correlationId,
             suppliedContext: null,
             writeAudit: true,
             cancellationToken)
             .ConfigureAwait(false);
-
-        return selection;
     }
 
     private async Task<string> MissingQualityTierListMessageAsync(
@@ -697,6 +794,22 @@ internal sealed class ReleaseService(
             progress?.Report(1, "The acquisition stopped because another acquisition is active for this release.");
             await QueueDownloadRefreshIfNeededAsync(existingDownload, cancellationToken).ConfigureAwait(false);
             return existingDownload;
+        }
+
+        if (!request.Interactive &&
+            request.GrabTargetContentHierarchyItemId is { } grabTargetId &&
+            (await releaseBlockList.ResolveStatusesAsync([release], grabTargetId, cancellationToken)
+                .ConfigureAwait(false))
+                .TryGetValue(release.Id, out var acquisition) &&
+            acquisition.Status == DownloadStatus.Imported)
+        {
+            logger.LogInformation(
+                "The release service did not grab release {ReleaseId} because a download of it is Imported for " +
+                "{ContentHierarchyItemId}",
+                release.Id,
+                grabTargetId);
+            progress?.Report(1, "The acquisition stopped because a download of this release is Imported for the item.");
+            return null;
         }
 
         foreach (var contentHierarchyItemId in downloadScopeNodeIds)
@@ -764,6 +877,7 @@ internal sealed class ReleaseService(
         var lastAttemptRelease = release;
         var taintedClientIds = new HashSet<Guid>();
         var ambiguousDispatch = false;
+        var allRejectionsTransient = true;
         for (var i = 0; i < eligible.Count; i++)
         {
             var (sourceRelease, sourceId, downloadClient) = eligible[i];
@@ -776,6 +890,12 @@ internal sealed class ReleaseService(
             lastSourceId = sourceId;
             lastAttemptRelease = sourceRelease;
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (await DeferForDestinationCapacityAsync(sourceRelease, downloadScopeNodeIds, request, progress,
+                cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
 
             var previousAttempt = await GetPreviousAttemptAsync(release.Id, downloadClient.Id, cancellationToken)
                 .ConfigureAwait(false);
@@ -801,7 +921,7 @@ internal sealed class ReleaseService(
                         downloadClient,
                         downloadClient.Settings,
                         contentType: contentType,
-                        ignoreFailedTaint: request.IgnoreFailedTaint,
+                        interactive: request.Interactive,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
@@ -820,6 +940,7 @@ internal sealed class ReleaseService(
 
                 if (!grabResult.Success || grabResult.DownloadInfo is null)
                 {
+                    allRejectionsTransient &= grabResult.Transient;
                     lastFailure = new InvalidOperationException(
                         grabResult.ErrorMessage ?? "Download service refused the grab.");
                     continue;
@@ -837,7 +958,6 @@ internal sealed class ReleaseService(
                             downloadClient,
                             grabResult.DownloadInfo,
                             request.UserId,
-                            request.SuspectLastResort,
                             transactionCancellationToken).ConfigureAwait(false);
                         await EnsureDownloadScopeAsync(
                             persisted.Id,
@@ -884,6 +1004,7 @@ internal sealed class ReleaseService(
                 lastSourceId,
                 lastClientId!.Value,
                 DownloadFailureReason.AmbiguousDispatchFailure,
+                DownloadStatus.Faulted,
                 ambiguousReason,
                 downloadScopeNodeIds,
                 request.UserId,
@@ -927,6 +1048,7 @@ internal sealed class ReleaseService(
             lastSourceId,
             lastClientId!.Value,
             DownloadFailureReason.ClientRejected,
+            lastFailure is not null && allRejectionsTransient ? DownloadStatus.Faulted : DownloadStatus.Failed,
             allFailedReason,
             downloadScopeNodeIds,
             request.UserId,
@@ -938,14 +1060,13 @@ internal sealed class ReleaseService(
                 allFailedReason,
                 GrabScopeImpact(downloadScopeNodeIds)),
             cancellationToken).ConfigureAwait(false);
-        throw new InvalidOperationException(
-            $"All eligible download clients rejected release {release.Id}.",
-            lastFailure);
+
+        throw new InvalidOperationException(allFailedReason, lastFailure);
     }
 
     private async Task QueueDownloadRefreshIfNeededAsync(Download download, CancellationToken cancellationToken)
     {
-        if (download.Status is DownloadStatus.Imported or DownloadStatus.Failed)
+        if (download.Status is DownloadStatus.Imported or DownloadStatus.Failed or DownloadStatus.Faulted)
         {
             return;
         }
@@ -973,6 +1094,62 @@ internal sealed class ReleaseService(
         }
     }
 
+    private async Task<bool> DeferForDestinationCapacityAsync(
+        Release release,
+        IReadOnlyList<Guid> downloadScopeNodeIds,
+        ReleaseAcquisitionContext request,
+        IProgressReporter? progress,
+        CancellationToken cancellationToken)
+    {
+        foreach (var contentHierarchyItemId in downloadScopeNodeIds)
+        {
+            var item = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
+                .ConfigureAwait(false);
+            var root = item is null ? null : await rootFolderService.GetAsync(item.EffectiveRootFolderId,
+                cancellationToken).ConfigureAwait(false);
+            var capacity = root is null ? null : RootFolderService.ReadDestinationCapacity(fileSystem, root.Path);
+            var reason = RootFolderService.CapacityWaitingReason(release.Size, capacity?.AvailableBytes);
+            if (reason is null)
+            {
+                continue;
+            }
+
+            progress?.Report(1, reason);
+            var previousDownloads = await downloadRepository.QueryAllAsync(new DownloadQuery
+            {
+                ReleaseId = release.Id
+            }, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var previousDownload = previousDownloads.OrderByDescending(download => download.CreatedAt)
+                .ThenByDescending(download => download.Id).FirstOrDefault();
+            await jobManager.ExecuteAsync(new JobEnqueueRequest
+            {
+                JobType = MagpieJobs.Types.ReleaseDownloadItem,
+                Mode = JobExecutionMode.Queue,
+                IsSuccessor = true,
+                NotBeforeAt = timeProvider.GetUtcNow().UtcDateTime.AddMinutes(10),
+                StatusMessage = reason,
+                UserId = request.UserId,
+                CorrelationId = request.CorrelationId,
+                Parameters = new Dictionary<string, string>
+                {
+                    [MagpieJobs.Parameters.ReleaseId] = release.Id.ToString("D"),
+                    [MagpieJobs.Parameters.ContentHierarchyItemId] =
+                        (request.GrabTargetContentHierarchyItemId ?? contentHierarchyItemId).ToString("D"),
+                    [MagpieJobs.Parameters.Interactive] = request.Interactive.ToString(),
+                    [ReleaseDownloadItemJob.CapacityDeferredAt] = timeProvider.GetUtcNow().UtcDateTime
+                        .ToString("O", CultureInfo.InvariantCulture),
+                    [ReleaseDownloadItemJob.CapacityPreviousDownloadId] = previousDownload?.Id.ToString("D") ?? ""
+                }
+            }, cancellationToken).ConfigureAwait(false);
+            await eventBus.PublishAsync(ReleaseEventBuilder.BuildReleaseGrabRejectedEvent(
+                release.Id, release.IndexerId ?? Guid.Empty, reason, GrabScopeImpact(downloadScopeNodeIds)),
+                cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        return false;
+    }
+
     private async Task<IReadOnlyList<Guid>> ResolveDownloadScopeNodeIdsAsync(
         Guid releaseId,
         Guid? grabTargetContentHierarchyItemId,
@@ -983,6 +1160,7 @@ internal sealed class ReleaseService(
             sort: null,
             cancellationToken).ConfigureAwait(false);
         var releaseScopeNodeIds = releaseScopes
+            .Where(scope => scope.Status == ReleaseScopeStatus.Matched)
             .Select(scope => scope.ContentHierarchyItemId)
             .Distinct()
             .ToList();
@@ -1137,28 +1315,18 @@ internal sealed class ReleaseService(
         DownloadClient downloadClient,
         DownloadInfo downloadInfo,
         Guid? userId,
-        bool suspectLastResort,
         CancellationToken cancellationToken)
     {
         var completed = downloadInfo.Status is DownloadStatus.Downloaded or DownloadStatus.Imported
             ? (DateTime?)timeProvider.GetUtcNow().UtcDateTime
             : null;
 
-        var statusReason = suspectLastResort
-            ? string.IsNullOrWhiteSpace(downloadInfo.StatusReason)
-                ? SuspectLastResortNote
-                : $"{SuspectLastResortNote} {downloadInfo.StatusReason}"
-            : downloadInfo.StatusReason;
-
         var existingDownloads = await downloadRepository.QueryAllAsync(
             new DownloadQuery { ReleaseId = release.Id },
             sort: null,
             cancellationToken).ConfigureAwait(false);
 
-        var existing = existingDownloads.FirstOrDefault(d =>
-            d.Status is not DownloadStatus.Failed
-                and not DownloadStatus.Imported
-                and not DownloadStatus.Cancelled);
+        var existing = existingDownloads.FirstOrDefault(d => !DownloadStatuses.Finished.Contains(d.Status));
 
         if (existing is null)
         {
@@ -1170,7 +1338,7 @@ internal sealed class ReleaseService(
                 ExternalId = downloadInfo.ExternalId,
                 Title = release.Title,
                 Status = downloadInfo.Status,
-                StatusReason = statusReason,
+                StatusReason = downloadInfo.StatusReason,
                 OutputPath = downloadInfo.OutputPath,
                 DateCompleted = completed,
                 HeldByPolicy = downloadInfo.HeldByPolicy,
@@ -1190,7 +1358,7 @@ internal sealed class ReleaseService(
             ExternalId = downloadInfo.ExternalId,
             Title = release.Title,
             Status = downloadInfo.Status,
-            StatusReason = statusReason,
+            StatusReason = downloadInfo.StatusReason,
             OutputPath = downloadInfo.OutputPath,
             DateCompleted = completed,
             HeldByPolicy = downloadInfo.HeldByPolicy,
@@ -1210,6 +1378,7 @@ internal sealed class ReleaseService(
         Guid? releaseSourceId,
         Guid downloadClientId,
         DownloadFailureReason failureReason,
+        DownloadStatus status,
         string reason,
         IReadOnlyList<Guid> downloadScopeNodeIds,
         Guid? userId,
@@ -1225,7 +1394,7 @@ internal sealed class ReleaseService(
                 DownloadClientId = downloadClientId,
                 ExternalId = string.Empty,
                 Title = release.Title,
-                Status = DownloadStatus.Failed,
+                Status = status,
                 StatusReason = reason,
                 FailureReason = failureReason,
                 FailedAt = now
@@ -1393,8 +1562,9 @@ internal sealed class ReleaseService(
         }
     }
 
-    private async Task<Release?> SelectReleaseForCandidateAsync(
+    private async Task<IReadOnlyList<Release>> SelectReleasesForCandidateAsync(
         CandidateContentItem candidate,
+        bool allAcceptable,
         Guid? userId,
         Guid? correlationId,
         ReleaseEvaluationContext? suppliedContext,
@@ -1410,7 +1580,7 @@ internal sealed class ReleaseService(
             .ConfigureAwait(false);
         if (releases is null)
         {
-            return null;
+            return [];
         }
 
         var releasesById = releases.ToDictionary(release => release.Id);
@@ -1420,7 +1590,7 @@ internal sealed class ReleaseService(
             sort: null,
             cancellationToken).ConfigureAwait(false);
 
-        var failedReleaseIds = await releaseBlockList.ResolveAsync(
+        var acquisitionStatuses = await releaseBlockList.ResolveStatusesAsync(
             releases,
             candidate.ContentHierarchyItemId,
             cancellationToken)
@@ -1431,8 +1601,7 @@ internal sealed class ReleaseService(
         var scored = await SelectAcceptableReleasesAsync(
             candidate,
             releases,
-
-            failedReleaseIds,
+            acquisitionStatuses,
             evaluationContext,
             userId,
             correlationId,
@@ -1441,7 +1610,7 @@ internal sealed class ReleaseService(
             .ConfigureAwait(false);
         if (scored is null)
         {
-            return null;
+            return [];
         }
 
         if (scored.Releases.Count == 0)
@@ -1471,7 +1640,7 @@ internal sealed class ReleaseService(
                     cancellationToken).ConfigureAwait(false);
             }
 
-            return null;
+            return [];
         }
 
         var comparers = releaseComparers.ToList();
@@ -1479,9 +1648,11 @@ internal sealed class ReleaseService(
         List<object>? comparisonTrace = logger.IsEnabled(LogLevel.Trace) ? [] : null;
         var primaryGroups = scored.Releases
             .GroupBy(release => (
+                Faulted: acquisitionStatuses.GetValueOrDefault(release.Release.Id).Status == DownloadStatus.Faulted,
                 release.Result.MatchResult,
                 EffectiveQualityRank: releaseEvaluationService.EffectiveQualityRank(release.Result, evaluationContext)))
-            .OrderByDescending(group => group.Key.MatchResult)
+            .OrderBy(group => group.Key.Faulted)
+            .ThenByDescending(group => group.Key.MatchResult)
             .ThenBy(group => group.Key.EffectiveQualityRank);
 
         foreach (var primaryGroup in primaryGroups)
@@ -1490,7 +1661,8 @@ internal sealed class ReleaseService(
             {
                 comparisonTrace.Add(new
                 {
-                    Criterion = "MatchResultAndEffectiveQualityRank",
+                    Criterion = "FaultedMatchResultAndEffectiveQualityRank",
+                    primaryGroup.Key.Faulted,
                     primaryGroup.Key.MatchResult,
                     primaryGroup.Key.EffectiveQualityRank,
                     ReleaseIds = primaryGroup.Select(release => release.Release.Id),
@@ -1603,6 +1775,17 @@ internal sealed class ReleaseService(
                 }));
         }
 
+        if (allAcceptable)
+        {
+            var activeReleaseIds = downloads
+                .Where(download => IsActiveDownloadStatus(download.Status) && download.ReleaseId is not null)
+                .Select(download => download.ReleaseId!.Value)
+                .ToHashSet();
+            return [.. ranked
+                .Select(release => release.Release)
+                .Where(release => !activeReleaseIds.Contains(release.Id))];
+        }
+
         if (!await CanStartNewDownloadAsync(
             candidate,
             downloads,
@@ -1614,10 +1797,10 @@ internal sealed class ReleaseService(
             cancellationToken)
             .ConfigureAwait(false))
         {
-            return null;
+            return [];
         }
 
-        return ranked.First().Release;
+        return [ranked.First().Release];
     }
 
     private async Task<IReadOnlyList<Release>?> LoadStoredReleasesAsync(
@@ -1718,13 +1901,14 @@ internal sealed class ReleaseService(
     private async Task<AcceptableReleaseSet?> SelectAcceptableReleasesAsync(
         CandidateContentItem candidate,
         IReadOnlyList<Release> releases,
-        IReadOnlySet<Guid> failedReleaseIds,
+        IReadOnlyDictionary<Guid, (DownloadStatus Status, DownloadFailureReason? FailureReason)> acquisitionStatuses,
         ReleaseEvaluationContext evaluationContext,
         Guid? userId,
         Guid? correlationId,
         bool writeAudit,
         CancellationToken cancellationToken)
     {
+        var blockedReleaseIds = ReleaseBlockList.Blocked(acquisitionStatuses);
         var skippedFailed = 0;
         var skippedNotMatched = 0;
         var skippedNotAcceptable = 0;
@@ -1735,14 +1919,15 @@ internal sealed class ReleaseService(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (failedReleaseIds.Contains(release.Id))
+            if (blockedReleaseIds.Contains(release.Id))
             {
                 skippedFailed++;
                 logger.LogDebug(
-                    "The auto-grab skipped release {ReleaseId} for content {ContentItemId} because a " +
-                    "Failed record is active",
+                    "The auto-grab skipped release {ReleaseId} for content {ContentItemId} because a download " +
+                    "of it is {DownloadStatus}",
                     release.Id,
-                    candidate.ContentItemId);
+                    candidate.ContentItemId,
+                    acquisitionStatuses[release.Id].Status);
                 continue;
             }
 
@@ -1789,7 +1974,12 @@ internal sealed class ReleaseService(
             }
 
             if (candidate.Fulfillment == FulfillmentStatus.Upgradable &&
-                !releaseEvaluationService.IsAcceptableUpgradeOverCurrentFile(assessment, release, evaluationContext))
+                (evaluationContext.QualityTierList?.UpgradeAllowed != true ||
+                    evaluationContext.CurrentFileQualityRank is null ||
+                    !releaseEvaluationService.IsAcceptableUpgradeOverCurrentFile(
+                        assessment,
+                        release,
+                        evaluationContext)))
             {
                 skippedNotAnUpgrade++;
                 continue;
@@ -1874,8 +2064,7 @@ internal sealed class ReleaseService(
         Guid ReleaseId,
         Guid? UserId,
         Guid? CorrelationId,
-        bool SuspectLastResort,
-        bool IgnoreFailedTaint,
+        bool Interactive,
         Guid? GrabTargetContentHierarchyItemId);
 
     private sealed record AcceptableReleaseSet(

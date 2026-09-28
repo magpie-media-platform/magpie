@@ -39,7 +39,6 @@ internal sealed class MediaInfoExtractScanJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Requeue,
-        Timeout = TimeSpan.FromMinutes(5),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
         LockPartitionFields = [MagpieJobs.Parameters.ContentHierarchyItemId],
@@ -55,7 +54,11 @@ internal sealed class MediaInfoExtractScanJob(
                 "library content.",
                 DataType.String,
                 false,
-                null),
+                null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            },
             new(
                 MagpieJobs.Parameters.MaxAgeHours,
                 "Hours before extracted media info is considered stale.",
@@ -146,6 +149,10 @@ internal sealed class MediaInfoExtractScanJob(
             progressReporter.ReportFraction(i, total);
 
             var candidate = candidates[i];
+
+            var requireMissingMediaInfo =
+                (contentHierarchyItemId is null && candidate.MediaInfo is null) ||
+                context.Event?.Name == MagpieEvents.Names.ContentImported;
             try
             {
                 await jobManager.ExecuteAsync(
@@ -157,9 +164,7 @@ internal sealed class MediaInfoExtractScanJob(
                             [MagpieJobs.Parameters.MediaFileId] = candidate.Id.ToString("D"),
                             [MagpieJobs.Parameters.FilePath] = candidate.FilePath,
                             [MagpieJobs.Parameters.RequireMissingMediaInfo] =
-                                contentHierarchyItemId is null && candidate.MediaInfo is null
-                                    ? bool.TrueString
-                                    : bool.FalseString,
+                                requireMissingMediaInfo ? bool.TrueString : bool.FalseString,
                         },
                         Mode = JobExecutionMode.Queue,
                         UserId = context.ManualTriggerUserId,

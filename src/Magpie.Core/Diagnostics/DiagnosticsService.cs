@@ -41,7 +41,7 @@ internal sealed class DiagnosticsService(
         var finding = await findingRepository.GetByIdAsync(findingId, cancellationToken).ConfigureAwait(false);
         if (finding is null)
         {
-            return DiagnosticRepairResult.Failed("The finding no longer exists; re-run the doctor scan.");
+            return DiagnosticRepairResult.Failed("The finding no longer exists.");
         }
 
         if (string.IsNullOrWhiteSpace(finding.RepairId))

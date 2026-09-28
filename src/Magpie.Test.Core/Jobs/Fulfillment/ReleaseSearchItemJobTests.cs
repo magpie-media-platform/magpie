@@ -33,8 +33,9 @@ public sealed class ReleaseSearchItemJobTests
             JobExecutionMode.Immediate,
             new Dictionary<string, string>
             {
-                ["contentHierarchyItemId"] = "11111111-1111-1111-1111-111111111111"
-            }).SetArgDisplayNames("Immediate", "force=absent")
+                ["contentHierarchyItemId"] = "11111111-1111-1111-1111-111111111111",
+                ["force"] = "true"
+            }).SetArgDisplayNames("Immediate", "force=true")
     ];
 
     private static readonly TestCaseData[] NonForcingRequests =
@@ -58,7 +59,20 @@ public sealed class ReleaseSearchItemJobTests
             {
                 ["contentHierarchyItemId"] = "11111111-1111-1111-1111-111111111111",
                 ["force"] = "not-a-bool"
-            }).SetArgDisplayNames("Queue", "force=not-a-bool")
+            }).SetArgDisplayNames("Queue", "force=not-a-bool"),
+        new TestCaseData(
+            JobExecutionMode.Immediate,
+            new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "11111111-1111-1111-1111-111111111111"
+            }).SetArgDisplayNames("Immediate", "force=absent"),
+        new TestCaseData(
+            JobExecutionMode.Immediate,
+            new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "11111111-1111-1111-1111-111111111111",
+                ["force"] = "false"
+            }).SetArgDisplayNames("Immediate", "force=false")
     ];
 
     private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
@@ -134,6 +148,36 @@ public sealed class ReleaseSearchItemJobTests
             s => s.SearchAsync(
                 ItemId,
                 context.ManualTriggerUserId,
+                context.CorrelationId,
+                context.ExecutionId,
+                It.IsAny<IProgressReporter?>(),
+                false,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_PassesNoOverride_WhenEventRequestDoesNotForceTheSearch()
+    {
+        // Arrange
+        var context = _jobContext with
+        {
+            EventTriggerId = Guid.NewGuid(),
+            ManualTriggerUserId = null,
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = ItemId.ToString("D"),
+            },
+        };
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _releaseSearchService.Verify(
+            service => service.SearchAsync(
+                ItemId,
+                null,
                 context.CorrelationId,
                 context.ExecutionId,
                 It.IsAny<IProgressReporter?>(),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     ArrowSquareOutIcon,
@@ -62,10 +62,20 @@ const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
     Failed: 'failed',
     Invalidated: 'stale',
     MatchingPending: 'warning',
+    Rejected: 'stale',
+};
+
+const STATUS_LABEL: Record<string, string> = {
+    MatchingPending: 'Matching pending',
+    Rejected: 'Silenced',
 };
 
 function isMatchingPending(group: LibraryImportCandidateGroup): boolean {
     return !group.match && (group.statusCounts.MatchingPending ?? 0) > 0;
+}
+
+function isSilenced(group: LibraryImportCandidateGroup): boolean {
+    return Object.entries(group.statusCounts).every(([status, count]) => status === 'Rejected' || !count);
 }
 
 // Mirrors the claim criteria SubmitImportAsync applies.
@@ -277,7 +287,7 @@ function statusRollup(statusCounts: LibraryImportCandidateStatusCounts): ReactNo
         <div className="library-import-page__status-rollup">
             {entries.map(([status, count]) => (
                 <Badge key={status} size="sm" variant={STATUS_BADGE_VARIANT[status] ?? 'default'}>
-                    {count} {status}
+                    {count} {STATUS_LABEL[status] ?? status}
                 </Badge>
             ))}
         </div>
@@ -300,15 +310,8 @@ function GroupRowActions({ group, onAccept, onDigIn, onMatch, acceptingKeys }: G
         </Button>
     );
 
-    if (isMatchingPending(group)) {
-        return (
-            <div className="library-import-page__row-actions">
-                <Button variant="secondary" size="sm" disabled data-action="matching-pending">
-                    Matching pending
-                </Button>
-                {digInButton}
-            </div>
-        );
+    if (isSilenced(group)) {
+        return <div className="library-import-page__row-actions">{digInButton}</div>;
     }
 
     if (!group.match) {
@@ -397,21 +400,32 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
     const [isBulkAccepting, setIsBulkAccepting] = useState(false);
     const [acceptAction, setAcceptAction] = useState<ImportAcceptAction | null>(null);
 
-    const acceptGroupMutation = useAcceptLibraryImportCandidateGroup();
+    const { mutateAsync: acceptGroup } = useAcceptLibraryImportCandidateGroup();
     const acceptGroupBatchMutation = useAcceptLibraryImportCandidateGroup({ deferInvalidation: true });
     const bulkAcceptGroupsMutation = useBulkAcceptLibraryImportCandidateGroups();
     const scan = useImportScanController();
 
     const groupRowIds = useMemo(() => items.map((group) => group.groupKey), [items]);
     const selection = useBulkSelection({ pageRowIds: groupRowIds, totalCount: totalItems });
+    const knownGroups = useRef<Record<string, LibraryImportCandidateGroup>>({});
+    useEffect(() => {
+        for (const group of items) {
+            knownGroups.current[group.groupKey] = group;
+        }
+    }, [items]);
     const selectedGroups = useMemo(
-        () => items.filter((group) => selection.isRowChecked(group.groupKey)),
+        () =>
+            selection.allPages
+                ? items.filter((group) => selection.isRowChecked(group.groupKey))
+                : selection.selectedIds
+                      .map((id) => items.find((group) => group.groupKey === id) ?? knownGroups.current[id])
+                      .filter((group) => group !== undefined),
         [items, selection],
     );
     const bulkFilter = useMemo(() => ({ rootFolderId: rootFolderFilter || undefined }), [rootFolderFilter]);
 
     const clearSelection = selection.clear;
-    useEffect(() => clearSelection(), [clearSelection, page, rootFolderFilter]);
+    useEffect(() => clearSelection(), [clearSelection, rootFolderFilter]);
 
     const setPage = useCallback(
         (next: number) => {
@@ -493,7 +507,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
         async (group: LibraryImportCandidateGroup, monitoringMode: LibraryImportMonitoringMode) => {
             setAcceptingKeys((prev) => new Set(prev).add(group.groupKey));
             try {
-                const result = await acceptGroupMutation.mutateAsync({
+                const result = await acceptGroup({
                     groupKey: group.groupKey,
                     rootFolderId: rootFolderFilter || undefined,
                     monitoringMode,
@@ -530,7 +544,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                 });
             }
         },
-        [acceptGroupMutation, rootFolderFilter, toast],
+        [acceptGroup, rootFolderFilter, toast],
     );
 
     const handleBulkAccept = useCallback(
@@ -670,7 +684,15 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                     <GroupRowActions
                         group={row.original}
                         onAccept={(group) =>
-                            setAcceptAction(() => (mode: LibraryImportMonitoringMode) => handleAccept(group, mode))
+                            setAcceptAction(() =>
+                                Object.assign((mode: LibraryImportMonitoringMode) => handleAccept(group, mode), {
+                                    renameSelection: {
+                                        filters: [
+                                            { rootFolderId: rootFolderFilter || undefined, groupKey: group.groupKey },
+                                        ],
+                                    },
+                                }),
+                            )
                         }
                         onDigIn={handleDigIn}
                         onMatch={(group) =>
@@ -816,7 +838,22 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                 <Button
                     variant="primary"
                     size="sm"
-                    onClick={() => setAcceptAction(() => handleBulkAccept)}
+                    onClick={() => {
+                        const resolved = selection.resolve();
+                        setAcceptAction(() =>
+                            Object.assign((mode: LibraryImportMonitoringMode) => handleBulkAccept(mode), {
+                                renameSelection: {
+                                    filters:
+                                        resolved.mode === 'all'
+                                            ? [{ ...bulkFilter, excludeGroupKeys: resolved.excludeIds }]
+                                            : selectedGroups.map((group) => ({
+                                                  rootFolderId: rootFolderFilter || undefined,
+                                                  groupKey: group.groupKey,
+                                              })),
+                                },
+                            }),
+                        );
+                    }}
                     loading={isBulkAccepting}
                     data-action="bulk-accept"
                 >
@@ -848,7 +885,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                     className="library-import-page__selection-bar"
                     data-component="library-import-selection-bar"
                     selection={selection}
-                    pageSelectedCount={selectedGroups.length}
+                    pageSelectedCount={selection.pageSelectedCount}
                     totalCount={totalItems}
                     onClear={selection.clear}
                     itemNounPlural="groups"
@@ -856,7 +893,22 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                     <Button
                         variant="primary"
                         size="sm"
-                        onClick={() => setAcceptAction(() => handleBulkAccept)}
+                        onClick={() => {
+                            const resolved = selection.resolve();
+                            setAcceptAction(() =>
+                                Object.assign((mode: LibraryImportMonitoringMode) => handleBulkAccept(mode), {
+                                    renameSelection: {
+                                        filters:
+                                            resolved.mode === 'all'
+                                                ? [{ ...bulkFilter, excludeGroupKeys: resolved.excludeIds }]
+                                                : selectedGroups.map((group) => ({
+                                                      rootFolderId: rootFolderFilter || undefined,
+                                                      groupKey: group.groupKey,
+                                                  })),
+                                    },
+                                }),
+                            );
+                        }}
                         loading={isBulkAccepting}
                         disabled={!selection.hasSelection}
                         data-action="bulk-accept"

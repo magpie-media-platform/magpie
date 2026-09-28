@@ -16,6 +16,7 @@ using Magpie.Models.Enums;
 using Magpie.Models.Patch;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -33,20 +34,39 @@ public sealed class ExtensionPackageSourceRepositoryTests
     private Mock<IEventBus> _updateEvents = null!;
 
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IExtensionPackageSourceRepository _subject = null!;
     private IDataProtectionService _dataProtectionService = null!;
     private ILoggerFactory _loggerFactory = null!;
     private Guid _userId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>().UseSqlite(_template);
+        options.UseMagpieSeeding([], []);
+        using var context = new MagpieDbContext(options.Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
-        var options = new DbContextOptionsBuilder<MagpieDbContext>().UseSqlite("Data Source=:memory:");
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite(connection, contextOwnsConnection: true);
         options.UseMagpieSeeding([], []);
         _context = new MagpieDbContext(options.Options);
-
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
 
         var user = new User
         {

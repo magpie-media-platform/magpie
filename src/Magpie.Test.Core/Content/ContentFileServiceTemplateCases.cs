@@ -22,7 +22,7 @@ internal sealed class ContentFileServiceTemplateCases
             null,
             null,
             "source",
-            new[] { "Solo ()" });
+            new[] { "Solo" });
         yield return new TestCaseData(
             "{TITLE}|{title}|{Title}",
             "Inception",
@@ -78,7 +78,7 @@ internal sealed class ContentFileServiceTemplateCases
             null,
             null,
             "source",
-            new[] { "Trailing ()", "next" });
+            new[] { "Trailing", "next" });
         yield return new TestCaseData(
             "{{not-a-token}} {Title}",
             "Brackets",
@@ -113,7 +113,7 @@ internal sealed class ContentFileServiceTemplateCases
             null,
             null,
             "source.mkv",
-            new[] { ".mkv" });
+            new[] { "The Matrix", "source.mkv" });
         yield return new TestCaseData(
             "Movies/{Title} - released {Year}.mkv",
             "Inception",

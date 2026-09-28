@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+    <head><meta charset="utf-8"><title>Isolated search continuation fixture</title></head>
+    <body>
+        <p>Local EVE-291 fixture. Uses the real Add Content page with a deterministic API fixture. No production data.</p>
+        <button id="fail">Fail the next page request</button>
+        <button id="expire">Expire fixture checkpoints</button>
+        <pre id="requests" aria-label="Fixture request log"></pre>
+        <div id="root"></div>
+        <script type="module">
+            import '/src/styles/index.css';
+            import React from 'react';
+            import { createRoot } from 'react-dom/client';
+            import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+            import { MemoryRouter } from 'react-router-dom';
+            import { AuthContext } from '/src/auth/AuthContext.tsx';
+            import { LibraryAddPage } from '/src/pages/LibraryAddPage/LibraryAddPage.tsx';
+            import { ToastProvider, ToastStateProvider, ToastViewport } from '/src/components/ui/Toast/index.ts';
+            import { TooltipProvider } from '/src/components/ui/Tooltip/index.ts';
+
+            const originalFetch = window.fetch;
+            const checkpoints = new Map();
+            const requests = [];
+            let fail = false;
+            document.getElementById('fail').onclick = () => { fail = true; };
+            document.getElementById('expire').onclick = () => checkpoints.clear();
+            window.fetch = async (input, options) => {
+                const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+                if (!url.pathname.startsWith('/api/')) return originalFetch(input, options);
+                let result = [];
+                let status = 200;
+                if (url.pathname === '/api/content-types') result = [{
+                    slug: 'movie', displayName: 'Movies', pluralDisplayName: 'Movies',
+                    levelDefinitions: [{ slug: 'movie', displayName: 'Movie', customMetadataFields: [],
+                        supportedMetadataFields: 1 }],
+                }];
+                if (url.pathname.includes('/parse')) result = {};
+                if (url.pathname === '/api/content-search') {
+                    const page = Number(url.searchParams.get('page') || 1);
+                    const token = url.searchParams.get('continuation');
+                    const query = url.searchParams.get('query');
+                    requests.push({ page, token, query });
+                    document.getElementById('requests').textContent = JSON.stringify(requests, null, 2);
+                    if (fail) {
+                        fail = false;
+                        status = 503;
+                        result = { detail: 'Fixture transport failure. Retry the same page.' };
+                    } else if (token && (!checkpoints.has(token) || checkpoints.get(token).page !== page ||
+                        checkpoints.get(token).query !== query)) {
+                        status = 400;
+                        result = { detail: 'The checkpoint expired. Start a new search.', code: 'invalid_search_continuation' };
+                    } else {
+                        const current = token || crypto.randomUUID();
+                        const next = page === 1 ? crypto.randomUUID() : null;
+                        checkpoints.set(current, { page, query });
+                        if (next) checkpoints.set(next, { page: page + 1, query });
+                        result = {
+                            continuation: current, nextContinuation: next,
+                            matches: [{ candidate: { providerType: 'fixture', externalIdSource: 'fixture',
+                                externalId: String(page), contentType: 'movie', level: 'movie',
+                                title: page === 1 ? 'First fixture movie' : 'Second fixture movie' }, inLibrary: false }],
+                            pageItemCount: 1, existsInLibraryCount: 0,
+                            pageInfo: { requestedPage: page, hasMore: page === 1 }, warnings: [],
+                        };
+                    }
+                }
+                return new Response(JSON.stringify(result), { status, headers: { 'Content-Type': 'application/json' } });
+            };
+            const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+            const auth = { isAuthenticated: true, isLoading: false, user: { id: 'fixture', username: 'fixture', role: 3 },
+                hasRole: () => true, hasPermission: () => true, getRequiredRole: () => 0,
+                signIn() {}, async signOut() {}, async login() {} };
+            const h = React.createElement;
+            createRoot(document.getElementById('root')).render(
+                h(QueryClientProvider, { client }, h(AuthContext.Provider, { value: auth },
+                    h(MemoryRouter, { initialEntries: [{ pathname: '/library/add', state: { filterQuery: 'title contains "fixture"' } }] },
+                        h(ToastStateProvider, null, h(TooltipProvider, null, h(ToastProvider, null,
+                            h(LibraryAddPage), h(ToastViewport))))))),
+            );
+        </script>
+    </body>
+</html>

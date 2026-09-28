@@ -45,6 +45,16 @@ public interface IAuthService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Rotates a refresh token or recovers the same committed renewal.
+    /// </summary>
+    /// <param name="refreshToken">The previous or current refresh token</param>
+    /// <param name="renewalKey">The client proof retained until renewal completes</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<AuthSession?> RefreshAsync(
+        string refreshToken, string renewalKey, CancellationToken cancellationToken = default)
+        => RefreshAsync(refreshToken, cancellationToken);
+
+    /// <summary>
     /// Revokes a refresh token.
     /// </summary>
     /// <param name="refreshToken">The refresh token to revoke</param>
@@ -52,6 +62,15 @@ public interface IAuthService
     Task<bool> LogoutAsync(
         string refreshToken,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Revokes a session, including a renewal whose response was interrupted.
+    /// </summary>
+    /// <param name="refreshToken">The previous or current refresh token</param>
+    /// <param name="renewalKey">The client proof for a pending renewal</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> LogoutAsync(string refreshToken, string renewalKey, CancellationToken cancellationToken = default)
+        => LogoutAsync(refreshToken, cancellationToken);
 
     /// <summary>
     /// Gets the grant state of every named permission for a role.

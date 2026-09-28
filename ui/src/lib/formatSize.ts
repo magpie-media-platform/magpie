@@ -23,6 +23,13 @@ export function formatFileSize(bytes: number, options: FormatFileSizeOptions = {
     return `${trimTrailingZeros ? parseFloat(fixed) : fixed} ${units[i]}`;
 }
 
+export function formatPrimaryMediaSummary(fileCount?: number, size?: number): string {
+    const count = fileCount ?? '—';
+    const fileLabel = fileCount === 1 ? 'file' : 'files';
+    const formattedSize = size === undefined ? '—' : formatFileSize(size);
+    return `${count} ${fileLabel} · ${formattedSize}`;
+}
+
 export function formatBackupSize(bytes: number): string {
     return formatFileSize(bytes, {
         decimals: (i) => (i === 0 ? 0 : 1),

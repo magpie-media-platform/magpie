@@ -26,9 +26,29 @@ public record ContentItem
     public FulfillmentStatus Fulfillment { get; set; }
 
     /// <summary>
-    /// The UTC time when the item most recently became fulfilled.
+    /// The latest known UTC import or replacement time of applicable primary media.
     /// </summary>
     public DateTime? FulfilledAt { get; set; }
+
+    /// <summary>
+    /// The total size of primary media files on this item and its descendants.
+    /// </summary>
+    public long PrimaryMediaSize { get; set; }
+
+    /// <summary>
+    /// The number of primary media files on this item and its descendants.
+    /// </summary>
+    public int PrimaryMediaFileCount { get; set; }
+
+    /// <summary>
+    /// The UTC time when current media files last supplied the stored state.
+    /// </summary>
+    public DateTime? MediaReconciledAt { get; set; }
+
+    /// <summary>
+    /// The best quality rank derived from the current primary media files.
+    /// </summary>
+    public int? CurrentFileQualityRank { get; set; }
 
     /// <summary>
     /// The UTC time of the request.

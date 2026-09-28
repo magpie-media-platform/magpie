@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { UsersThreeIcon, UserIcon } from '@phosphor-icons/react';
 
 export type OwnershipScope = 'all' | 'mine';
@@ -27,6 +28,7 @@ export function OwnershipToggle({
     className,
 }: OwnershipToggleProps) {
     const classes = ['ownership-toggle', 'tabs-list', className].filter(Boolean).join(' ');
+    const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
     return (
         <div
@@ -36,14 +38,31 @@ export function OwnershipToggle({
             data-component="ownership-toggle"
             data-scope={value}
         >
-            {OPTIONS.map(({ value: optionValue, label, icon: Icon }) => {
+            {OPTIONS.map(({ value: optionValue, label, icon: Icon }, index) => {
                 const isActive = value === optionValue;
                 return (
                     <button
                         key={optionValue}
+                        ref={(node) => {
+                            optionRefs.current[index] = node;
+                        }}
                         type="button"
                         role="radio"
                         aria-checked={isActive}
+                        tabIndex={isActive ? 0 : -1}
+                        onKeyDown={(event) => {
+                            const direction =
+                                event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                                    ? 1
+                                    : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                                      ? -1
+                                      : 0;
+                            if (!direction) return;
+                            event.preventDefault();
+                            const next = (index + direction + OPTIONS.length) % OPTIONS.length;
+                            onValueChange(OPTIONS[next].value);
+                            optionRefs.current[next]?.focus();
+                        }}
                         className="ownership-toggle__option tabs-trigger"
                         data-state={isActive ? 'active' : 'inactive'}
                         data-value={optionValue}

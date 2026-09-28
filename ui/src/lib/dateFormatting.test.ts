@@ -5,12 +5,22 @@ import {
     formatDate,
     formatDateTime,
     formatInstantDate,
+    formatPublishDate,
     formatShortDate,
     formatUtcDate,
     formatUtcDateTime,
 } from './dateFormatting';
 
 const originalTimeZone = process.env.TZ;
+
+describe('formatPublishDate', () => {
+    it('shows the year of a year-only date and the full date otherwise', () => {
+        expect(formatPublishDate('1970-01-01T00:00:00Z', '--')).toBe('1970');
+        expect(formatPublishDate('2009-11-13', '--')).toBe(formatShortDate('2009-11-13'));
+        expect(formatPublishDate(null, '--')).toBe('--');
+        expect(formatPublishDate('0001-01-01T00:00:00Z', '--')).toBe('--');
+    });
+});
 
 describe('formatShortDate', () => {
     afterEach(() => {

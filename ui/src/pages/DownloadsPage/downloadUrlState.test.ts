@@ -25,6 +25,14 @@ describe('canonicalizeDownloadSearchParams', () => {
         );
     });
 
+    it('keeps the faulted history filter', () => {
+        const params = new URLSearchParams('tab=history&hstate=faulted');
+
+        const canonical = canonicalizeDownloadSearchParams(params);
+
+        expect(canonical?.toString()).toBe('tab=history&hstate=Faulted');
+    });
+
     it('removes default tab and sort params', () => {
         const params = new URLSearchParams('tab=queue&qsort=added:desc&hsort=completed:desc');
 

@@ -19,6 +19,7 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -34,16 +35,37 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ContentHierarchyItemRepositoryPatchTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IContentHierarchyItemRepository _subject = null!;
     private Guid _metadataContainerId;
     private Guid _userId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.UseSqlite(_template).Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
-        _context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        _context = new MagpieDbContext(options.UseSqlite(connection, contextOwnsConnection: true).Options);
         var user = new User
         {
             Username = "TestUser",
@@ -67,7 +89,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             _context, auditRecords, transactions,
             Mock.Of<IMetadataContainerRepository>(),
             Mock.Of<IContentTypeRegistry>(), Mock.Of<IEventBus>(),
-            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System);
+            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System, Mock.Of<IContentRepository>());
     }
 
     [TearDown]
@@ -78,9 +100,10 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
     }
 
     [TestCase(null)]
-    [TestCase(true)]
-    [TestCase(false)]
-    public async Task PatchAsync_SetsMonitoringAndAudits_WhenMonitoringIsPatched(bool? monitoring)
+    [TestCase(MonitoringMode.Monitored)]
+    [TestCase(MonitoringMode.Unmonitored)]
+    [TestCase(MonitoringMode.Shotgun)]
+    public async Task PatchAsync_SetsMonitoringAndAudits_WhenMonitoringIsPatched(MonitoringMode? monitoring)
     {
         // Arrange
         var item = new ContentHierarchyItem
@@ -90,7 +113,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "monitor-movie",
             Name = "Monitor Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item);
@@ -127,7 +150,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             new()
             {
                 Id = Guid.NewGuid(),
-                Monitoring = new() { Value = true }
+                Monitoring = new() { Value = MonitoringMode.Monitored }
             },
             _userId).ConfigureAwait(false);
 
@@ -167,8 +190,8 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "root",
             Slug = "effective-parent",
             Name = "Parent",
-            Monitoring = true,
-            EffectiveMonitoring = true,
+            Monitoring = MonitoringMode.Monitored,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             EffectiveRootFolderId = rootFolder.Id,
             EffectiveQualityTierListId = qualityTierList.Id,
             CreatedAt = DateTime.UtcNow
@@ -183,7 +206,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Slug = "effective-child",
             Name = "Child",
             Monitoring = null,
-            EffectiveMonitoring = true,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             EffectiveRootFolderId = rootFolder.Id,
             EffectiveQualityTierListId = qualityTierList.Id,
             CreatedAt = DateTime.UtcNow
@@ -196,7 +219,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             new()
             {
                 Id = parent.Id,
-                Monitoring = new() { Value = false }
+                Monitoring = new() { Value = MonitoringMode.Unmonitored }
             },
             _userId).ConfigureAwait(false);
 
@@ -207,9 +230,13 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            Assert.That(stored.Single(item => item.Id == parent.Id).EffectiveMonitoring, Is.False);
+            Assert.That(
+                stored.Single(item => item.Id == parent.Id).EffectiveMonitoring,
+                Is.EqualTo(MonitoringMode.Unmonitored));
             Assert.That(stored.Single(item => item.Id == child.Id).Monitoring, Is.Null);
-            Assert.That(stored.Single(item => item.Id == child.Id).EffectiveMonitoring, Is.False);
+            Assert.That(
+                stored.Single(item => item.Id == child.Id).EffectiveMonitoring,
+                Is.EqualTo(MonitoringMode.Unmonitored));
         }
     }
 
@@ -236,8 +263,8 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "root",
             Slug = "scoped-parent",
             Name = "Parent",
-            Monitoring = false,
-            EffectiveMonitoring = false,
+            Monitoring = MonitoringMode.Unmonitored,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
             EffectiveRootFolderId = rootFolder.Id,
             CreatedAt = DateTime.UtcNow
         };
@@ -251,7 +278,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Slug = "scoped-child",
             Name = "Child",
             Monitoring = null,
-            EffectiveMonitoring = true,
+            EffectiveMonitoring = MonitoringMode.Monitored,
             EffectiveRootFolderId = rootFolder.Id,
             CreatedAt = DateTime.UtcNow
         };
@@ -264,7 +291,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Slug = "scoped-unrelated",
             Name = "Unrelated",
             Monitoring = null,
-            EffectiveMonitoring = false,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
             EffectiveRootFolderId = rootFolder.Id,
             CreatedAt = DateTime.UtcNow
         };
@@ -287,8 +314,8 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            Assert.That(stored["scoped-child"], Is.False);
-            Assert.That(stored["scoped-unrelated"], Is.False);
+            Assert.That(stored["scoped-child"], Is.EqualTo(MonitoringMode.Unmonitored));
+            Assert.That(stored["scoped-unrelated"], Is.EqualTo(MonitoringMode.Unmonitored));
         }
     }
 
@@ -305,7 +332,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "tier-movie",
             Name = "Tier Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item);
@@ -374,7 +401,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "movie-a",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(a);
@@ -390,7 +417,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "movie-b",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(b);
@@ -406,7 +433,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-c",
             Name = "movie-c",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(c);
@@ -423,7 +450,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             new()
             {
                 Filter = criteria,
-                Patch = new() { Monitoring = new() { Value = false } }
+                Patch = new() { Monitoring = new() { Value = MonitoringMode.Unmonitored } }
             },
             _userId).ConfigureAwait(false);
 
@@ -433,9 +460,9 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
         {
             Assert.That(result.Count, Is.EqualTo(2));
             Assert.That(result.Error, Is.Null);
-            Assert.That(refreshed.Single(i => i.Id == a.Id).Monitoring, Is.EqualTo(false));
-            Assert.That(refreshed.Single(i => i.Id == b.Id).Monitoring, Is.EqualTo(false));
-            Assert.That(refreshed.Single(i => i.Id == c.Id).Monitoring, Is.EqualTo(true));
+            Assert.That(refreshed.Single(i => i.Id == a.Id).Monitoring, Is.EqualTo(MonitoringMode.Unmonitored));
+            Assert.That(refreshed.Single(i => i.Id == b.Id).Monitoring, Is.EqualTo(MonitoringMode.Unmonitored));
+            Assert.That(refreshed.Single(i => i.Id == c.Id).Monitoring, Is.EqualTo(MonitoringMode.Monitored));
         }
     }
 
@@ -462,7 +489,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "movie-a",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(a);
@@ -478,7 +505,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "movie-b",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(b);
@@ -538,7 +565,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "movie-a",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(a);
@@ -585,7 +612,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "movie-a",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(a);
@@ -601,7 +628,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "movie-b",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(b);
@@ -617,7 +644,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-c",
             Name = "movie-c",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(c);
@@ -666,7 +693,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "movie-a",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(a);
@@ -682,7 +709,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "movie-b",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(b);
@@ -736,7 +763,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "movie-a",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(a);
@@ -752,7 +779,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "movie-b",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(b);
@@ -768,7 +795,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-c",
             Name = "movie-c",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(c);
@@ -814,7 +841,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "movie-a",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(a);
@@ -830,7 +857,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "movie-b",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(b);
@@ -846,7 +873,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "movie-c",
             Name = "movie-c",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(c);
@@ -892,7 +919,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "patch-movie",
             Name = "Patch Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId).ConfigureAwait(false)
         };
@@ -903,7 +930,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
         var patch = new ContentHierarchyItemPatch
         {
             Id = item.Id,
-            Monitoring = new() { Value = false }
+            Monitoring = new() { Value = MonitoringMode.Unmonitored }
         };
 
         // Act
@@ -913,7 +940,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
         Assert.That(result, Is.True);
 
         var updated = await _subject.GetByIdAsync(item.Id).ConfigureAwait(false);
-        Assert.That(updated, Has.Property(nameof(updated.Monitoring)).EqualTo(false));
+        Assert.That(updated, Has.Property(nameof(updated.Monitoring)).EqualTo(MonitoringMode.Unmonitored));
     }
 
     [Test]
@@ -931,7 +958,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "quality-movie",
             Name = "Quality Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId).ConfigureAwait(false)
         };
@@ -970,7 +997,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "clear-quality-movie",
             Name = "Clear Quality Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             QualityTierListId = tierList.Id,
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId).ConfigureAwait(false)
@@ -1006,7 +1033,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "path-movie",
             Name = "Path Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             Path = "/old/path",
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId).ConfigureAwait(false)
@@ -1046,7 +1073,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "inherited-path-movie",
             Name = "Inherited Path Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             Path = "/old/path",
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
@@ -1087,7 +1114,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "lang-movie",
             Name = "Language Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             LanguagePreferences = ["en"],
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId).ConfigureAwait(false)
@@ -1127,7 +1154,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
         var patch = new ContentHierarchyItemPatch
         {
             Id = Guid.NewGuid(),
-            Monitoring = new() { Value = false }
+            Monitoring = new() { Value = MonitoringMode.Unmonitored }
         };
 
         // Act
@@ -1148,7 +1175,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "audit-patch-movie",
             Name = "Audit Patch Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId).ConfigureAwait(false)
         };
@@ -1159,7 +1186,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
         var patch = new ContentHierarchyItemPatch
         {
             Id = item.Id,
-            Monitoring = new() { Value = false }
+            Monitoring = new() { Value = MonitoringMode.Unmonitored }
         };
 
         // Act
@@ -1190,7 +1217,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "tag-movie",
             Name = "Tag Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId).ConfigureAwait(false)
         };
@@ -1237,7 +1264,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "remove-tag-movie",
             Name = "Remove Tag Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = metadataContainer
         };
@@ -1284,7 +1311,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "tag-audit-movie",
             Name = "Tag Audit Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = metadataContainer
         };
@@ -1327,7 +1354,7 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
             Level = "level-a",
             Slug = "settings-patch-movie",
             Name = "Settings Patch Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow,
             MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
                 .ConfigureAwait(false)

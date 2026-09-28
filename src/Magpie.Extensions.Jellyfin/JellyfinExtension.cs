@@ -23,7 +23,7 @@ public sealed class JellyfinExtension : IExtension
     public Version Version => new(1, 0, 0);
 
     /// <inheritdoc />
-    public string Name => "Jellyfin";
+    public string Name => Constants.DisplayName;
 
     /// <inheritdoc />
     public string? TargetABI => "[1.0.0,)";

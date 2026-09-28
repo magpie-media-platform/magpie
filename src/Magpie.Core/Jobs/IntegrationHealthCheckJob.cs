@@ -33,7 +33,6 @@ internal sealed class IntegrationHealthCheckJob(
         Scope = JobScope.Administrative,
         Enabled = true,
         OnDemand = true,
-        Timeout = TimeSpan.FromMinutes(15),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters =
@@ -43,18 +42,33 @@ internal sealed class IntegrationHealthCheckJob(
                 "Minutes before an integration health check is stale.",
                 DataType.Number,
                 false,
-                DefaultStaleAfterMinutes.ToString(CultureInfo.InvariantCulture)),
+                DefaultStaleAfterMinutes.ToString(CultureInfo.InvariantCulture))
+            {
+                ValidateScheduleValue = (value, _, utcNow) =>
+                    int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes) &&
+                    minutes > utcNow.Ticks / TimeSpan.TicksPerMinute
+                        ? "exceeds the supported date range." : null
+            },
             new(
                 MagpieJobs.Parameters.TimeoutSeconds,
                 "Seconds allowed for each connection test.",
                 DataType.Number,
                 false,
                 DefaultTimeoutSeconds.ToString(CultureInfo.InvariantCulture))
+            {
+                ValidateScheduleValue = (value, _, _) =>
+                    int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds) &&
+                    seconds > MaximumTimeoutSeconds
+                        ? "exceeds the supported timer range." : null
+            }
         ],
     };
 
     private const int DefaultStaleAfterMinutes = 60;
     private const int DefaultTimeoutSeconds = 10;
+
+    // CancelAfter and WaitAsync accept at most uint.MaxValue - 1 milliseconds.
+    private const uint MaximumTimeoutSeconds = (uint.MaxValue - 1) / 1000;
 
     private static bool ShouldProbe(DateTime? lastChecked, DateTime staleCutoff)
     {

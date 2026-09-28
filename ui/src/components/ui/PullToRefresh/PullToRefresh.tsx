@@ -59,7 +59,7 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
         ref,
     ) => {
         const containerRef = useRef<HTMLDivElement>(null);
-        const isMobile = useMediaQuery('(max-width: 767px)');
+        const mainOwnsScroll = useMediaQuery('(max-width: 1023px)');
         const [state, setState] = useState<PullToRefreshState>('idle');
         const [pullDistance, setPullDistance] = useState(0);
 
@@ -72,8 +72,16 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                 return null;
             }
 
-            return isMobile ? (container.closest<HTMLElement>('[data-scroll-container]') ?? container) : container;
-        }, [isMobile]);
+            if (mainOwnsScroll) {
+                return container.closest<HTMLElement>('[data-scroll-container]') ?? container;
+            }
+
+            return (
+                container.closest<HTMLElement>(
+                    '[data-component="app-shell-main-wrapper"], [data-component="admin-shell-main-wrapper"]',
+                ) ?? container
+            );
+        }, [mainOwnsScroll]);
 
         const refresh = useCallback(async () => {
             if (state === 'refreshing' || disabled) {

@@ -235,6 +235,30 @@ describe('ExecutionDetailPanel', () => {
         expect(details).toHaveTextContent('abc-123');
     });
 
+    it('links a content hierarchy item only when its parameter is a real id', () => {
+        const id = '3f2a8c1e-5b6d-4e7f-8a9b-0c1d2e3f4a5b';
+        const { unmount } = renderWithClient(
+            <ExecutionDetailPanel
+                execution={makeExecution({
+                    parameters: { contentHierarchyItemId: '${event.content.hierarchyItemId}' },
+                })}
+            />,
+        );
+
+        const details = screen.getByTestId('execution-detail__details');
+        expect(details).toHaveTextContent('${event.content.hierarchyItemId}');
+        expect(within(details).queryByRole('link')).not.toBeInTheDocument();
+        unmount();
+
+        renderWithClient(
+            <ExecutionDetailPanel execution={makeExecution({ parameters: { contentHierarchyItemId: id } })} />,
+        );
+
+        expect(
+            within(screen.getByTestId('execution-detail__details')).getByRole('link', { name: id }),
+        ).toBeInTheDocument();
+    });
+
     it('renders the audit records the execution wrote as ledger rows', async () => {
         mockApiGet.mockImplementation((url: string) =>
             Promise.resolve(

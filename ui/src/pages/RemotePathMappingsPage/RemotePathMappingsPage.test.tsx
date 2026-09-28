@@ -426,7 +426,7 @@ describe('RemotePathMappingsPage selection', () => {
         await user.click(toggle);
         expect(toggle).toHaveAttribute('aria-pressed', 'true');
 
-        await user.click(screen.getByRole('button', { name: 'Stop selecting' }));
+        await user.click(screen.getByRole('button', { name: 'Select', pressed: true }));
         await user.click(screen.getByRole('button', { name: 'Select' }));
         expect(screen.getByLabelText('Select mapping for downloadbox.example.test')).toHaveAttribute(
             'aria-pressed',

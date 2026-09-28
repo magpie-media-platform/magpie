@@ -4,9 +4,11 @@ import { apiPost } from '@/lib/api';
 import { normalizeJobActionDisposition, type JobActionDisposition, type JobActionResponse } from '@/lib/jobActions';
 import { queryErrorOrNull } from '@/lib/utils';
 import { useJobAction, type JobActionLifecycleOptions } from '@/hooks/useJobAction';
+import type { DownloadStatusValue } from '@/types/content';
 
 import { contentQueryKeys } from './useContent';
 import { contentReleaseQueryKeys } from './useContentReleases';
+import type { DownloadFailureReasonValue } from './useDownloads';
 import type { ApiRelease } from './useReleases';
 
 type ReleaseMatchResult = 'NoMatch' | 'Indeterminate' | 'Confident' | 'Identity';
@@ -18,14 +20,26 @@ export interface InteractiveSearchCandidate {
     score?: number | null;
     isAcceptable?: boolean | null;
     meetsCutoff?: boolean | null;
+    acquisitionStatus?: DownloadStatusValue | null;
+    failureReason?: DownloadFailureReasonValue | null;
 }
 
 const interactiveSearchQueryKeys = {
     forItem: (contentHierarchyItemId: string) => ['interactive-search', contentHierarchyItemId] as const,
 };
 
-async function runInteractiveSearch(contentHierarchyItemId: string): Promise<InteractiveSearchCandidate[]> {
-    return apiPost<InteractiveSearchCandidate[]>(`/interactive-search/${contentHierarchyItemId}`);
+export interface InteractiveSearchResult {
+    candidates: InteractiveSearchCandidate[];
+    partial: boolean;
+    warning?: string | null;
+    retryAt?: string | null;
+}
+
+async function runInteractiveSearch(contentHierarchyItemId: string): Promise<InteractiveSearchResult> {
+    const result = await apiPost<InteractiveSearchResult | InteractiveSearchCandidate[]>(
+        `/interactive-search/${contentHierarchyItemId}`,
+    );
+    return Array.isArray(result) ? { candidates: result, partial: false } : result;
 }
 
 export function useInteractiveSearch(contentHierarchyItemId: string | undefined, options?: { enabled?: boolean }) {
@@ -40,7 +54,10 @@ export function useInteractiveSearch(contentHierarchyItemId: string | undefined,
     });
 
     return {
-        candidates: query.data ?? [],
+        candidates: query.data?.candidates ?? [],
+        partial: query.data?.partial ?? false,
+        warning: query.data?.warning,
+        retryAt: query.data?.retryAt,
         isLoading: query.isLoading,
         isFetching: query.isFetching,
         error: queryErrorOrNull(query),

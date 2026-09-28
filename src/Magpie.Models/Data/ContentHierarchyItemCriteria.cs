@@ -12,6 +12,16 @@ namespace Magpie.Models.Data;
 public sealed record ContentHierarchyItemCriteria
 {
     /// <summary>
+    /// Criteria for the stored primary-media size, or null before initialization.
+    /// </summary>
+    public CriteriaSet<PropertyCriterion<long>> PrimaryMediaSize { get; set; } = new();
+
+    /// <summary>
+    /// Criteria for the stored primary-media file count, or null before initialization.
+    /// </summary>
+    public CriteriaSet<PropertyCriterion<int>> PrimaryMediaFileCount { get; set; } = new();
+
+    /// <summary>
     /// Criteria for the id of the parent item.
     /// </summary>
     public CriteriaSet<PropertyCriterion<Guid>> ParentId { get; set; } = new();
@@ -47,12 +57,12 @@ public sealed record ContentHierarchyItemCriteria
     public CriteriaSet<PropertyCriterion<string>> Name { get; set; } = new();
 
     /// <summary>
-    /// Criteria for the explicit monitoring value of the item.
+    /// Criteria for the effective monitoring mode of the item.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<bool>> Monitoring { get; set; } = new();
+    public CriteriaSet<PropertyCriterion<MonitoringMode>> Monitoring { get; set; } = new();
 
     /// <summary>
-    /// The effective monitoring value to match.
+    /// Whether the item is effectively monitored in any mode, or <see langword="null"/> for no filter.
     /// </summary>
     public bool? EffectiveMonitoring { get; set; }
 
@@ -75,6 +85,11 @@ public sealed record ContentHierarchyItemCriteria
     /// Criteria for the <see cref="QualityStatus"/>.
     /// </summary>
     public CriteriaSet<PropertyCriterion<QualityStatus>> QualityStatus { get; set; } = new();
+
+    /// <summary>
+    /// Criteria for the media files of the item. All conditions in one criteria entry apply to the same file.
+    /// </summary>
+    public CollectionCriteria<MediaFileCriteria> MediaFiles { get; set; } = new();
 
     /// <summary>
     /// Criteria for the file system path.
@@ -105,6 +120,11 @@ public sealed record ContentHierarchyItemCriteria
     /// Whether the result contains only items that await a first metadata refresh.
     /// </summary>
     public bool? PendingMetadataRefresh { get; set; }
+
+    /// <summary>
+    /// Whether the result contains only items that a discovered file waits to import into, or only other items.
+    /// </summary>
+    public bool? ImportPending { get; set; }
 
     /// <summary>
     /// The time before which the last refresh must have happened, including an item never refreshed.

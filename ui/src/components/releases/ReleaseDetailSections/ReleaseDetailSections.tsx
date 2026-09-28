@@ -4,6 +4,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import {
     downloadStatusLabels,
     downloadFailureReasonLabels,
+    isFailedDownloadStatus,
     type ApiDownload,
     type DownloadFailureReasonValue,
 } from '@/hooks/useDownloads';
@@ -74,7 +75,7 @@ function downloadRows(download: ApiDownload, clientName: string): DetailRow[] {
                     ? null
                     : `${Number.isInteger(download.progress) ? download.progress : download.progress.toFixed(1)}%`,
         },
-        { label: 'Status reason', value: download.statusReason },
+        { label: 'Status reason', value: download.statusReason, multiline: true },
         {
             label: 'Failure reason',
             value: download.failureReason
@@ -83,7 +84,8 @@ function downloadRows(download: ApiDownload, clientName: string): DetailRow[] {
         },
         {
             label: 'Failed at',
-            value: download.status === 'Failed' && download.failedAt ? formatDateTime(download.failedAt) : null,
+            value:
+                isFailedDownloadStatus(download.status) && download.failedAt ? formatDateTime(download.failedAt) : null,
         },
         { label: 'Added', value: formatDateTime(download.createdAt) },
         { label: 'Completed', value: download.dateCompleted ? formatDateTime(download.dateCompleted) : null },

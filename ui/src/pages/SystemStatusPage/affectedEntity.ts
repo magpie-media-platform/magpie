@@ -1,10 +1,10 @@
+import { isGuid } from '@/lib/isGuid';
+
 interface AffectedEntityDisplay {
     label: string;
     reference: string | null;
     to: string | null;
 }
-
-const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface EntityTypeMeta {
     label: string;
@@ -12,7 +12,7 @@ interface EntityTypeMeta {
 }
 
 const ENTITY_TYPES: Record<string, EntityTypeMeta> = {
-    ContentItem: { label: 'Hierarchy item', to: (value) => `/library/${value}` },
+    ContentHierarchyItem: { label: 'Hierarchy item', to: (value) => `/library/${value}` },
     IndexerConnection: { label: 'Indexer', to: () => '/admin/indexers' },
     DownloadClient: { label: 'Download client', to: () => '/admin/download-clients' },
     MediaServer: { label: 'Media server', to: () => '/admin/media-servers' },
@@ -32,7 +32,7 @@ function humanizeType(type: string): string {
 }
 
 function shortenReference(value: string): string {
-    return GUID_PATTERN.test(value) ? value.slice(0, 8) : value;
+    return isGuid(value) ? value.slice(0, 8) : value;
 }
 
 export function describeAffectedEntity(token: string | null | undefined): AffectedEntityDisplay | null {

@@ -181,4 +181,22 @@ public sealed class JwtBearerAuthenticationProviderTests
             Assert.That(result.RejectionReason, Is.EqualTo("the access token is invalid or expired"));
         }
     }
+
+    [Test]
+    public async Task TryAuthenticate_UsesItsPortCookie_WhenAnotherInstanceCookieIsPresent()
+    {
+        // Arrange
+        var context = new DefaultHttpContext();
+        context.Request.Host = new HostString("localhost", 5000);
+        context.Request.Path = StreamPath;
+        context.Request.Headers.Cookie = "magpie.stream.5000=valid.jwt.token; magpie.stream.5001=other-token";
+
+        // Act
+        var result = await _provider.TryAuthenticateAsync(context).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Status, Is.EqualTo(AuthenticationAttemptStatus.Authenticated));
+        _tokenService.Verify(service => service.TryValidateAccessTokenAsync(
+            "other-token", It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

@@ -47,7 +47,7 @@ internal sealed class CommandTransportFactory(Func<CancellationToken, Task<WebAp
             url.Scheme is not ("http" or "https"))
         {
             throw new CommandTargetResolutionException(
-                $"Remote URL {options.Url} is invalid. Use an absolute http or https URL.");
+                $"Remote URL {options.Url} is not an absolute http or https URL.");
         }
 
         if (string.IsNullOrWhiteSpace(options.ApiKey))

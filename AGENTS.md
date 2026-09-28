@@ -39,6 +39,9 @@ rules that require judgment.
   property so that each caller gets a new instance.
 - Add `required` to non-nullable string properties.
 - Do not change an existing mutable DTO only for style.
+- Do not split a class across files with `partial`. If a class is too large, extract a separate class with its own
+  responsibility. Use `partial` only when a source generator requires it, and keep that class in one file.
+- When a call, signature, argument list or initializer wraps, put each argument, parameter or property on its own line.
 
 ### Repositories
 
@@ -76,7 +79,10 @@ rules that require judgment.
 
 - Use NUnit.
 - Use SQLite in-memory for repository tests. Do not use EF Core InMemory.
-- Use `NullLogger` or `NullLoggerFactory`.
+- Unit tests do not use the physical file system, database migrations, a real host or `TestServer`, or real delays.
+  Use fakes, `FakeTimeProvider`, and SQLite in-memory.
+- Put a test that needs one of these in `Magpie.Test.Integration`.
+- Use `NullLogger` or `NullLoggerFactory`. Do not write to the console or to `TestContext.Out`.
 - Name tests `Method_Result_WhenCondition`.
 - Use Arrange, Act, and Assert comments.
 - Use `Assert.EnterMultipleScope()` for grouped assertions.

@@ -50,8 +50,8 @@ const show: ApiContentHierarchyItem = {
     level: 'show',
     slug: 'show',
     name: 'The Show',
-    monitoring: true,
-    effectiveMonitoring: true,
+    monitoring: 'Monitored',
+    effectiveMonitoring: 'Monitored',
     createdAt: '2024-01-01T00:00:00Z',
     contentItem: {
         id: 'ci-show',
@@ -68,8 +68,8 @@ const movie: ApiContentHierarchyItem = {
     level: 'movie',
     slug: 'movie',
     name: 'Missing Movie',
-    monitoring: true,
-    effectiveMonitoring: true,
+    monitoring: 'Monitored',
+    effectiveMonitoring: 'Monitored',
     createdAt: '2024-01-01T00:00:00Z',
     contentItem: {
         id: 'ci-movie',
@@ -250,6 +250,47 @@ describe('WantedPage', () => {
         expect(await screen.findByText('2 missing descendants')).toBeInTheDocument();
     });
 
+    it('explains that a container has no child items and offers no descendant search', async () => {
+        setContentResponse((parentId) => (parentId === null ? [show] : []));
+
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+
+        expect(await screen.findByText('No child items yet')).toBeInTheDocument();
+        expect(
+            screen.queryByRole('button', { name: 'Search now for descendants of The Show' }),
+        ).not.toBeInTheDocument();
+    });
+
+    it('explains that an item has no child items when drilling into it', async () => {
+        setContentResponse(() => []);
+
+        render(<WantedPage />, {
+            wrapper: ({ children }) => testWrapper({ children, initialUrl: '/wanted?parentId=show-1' }),
+        });
+
+        expect(await screen.findByText('This item has no child items yet')).toBeInTheDocument();
+        expect(screen.queryByText('No wanted content under this item')).not.toBeInTheDocument();
+    });
+
+    it('keeps the nothing-wanted state when drilling into a populated item with nothing wanted', async () => {
+        vi.mocked(apiGet).mockImplementation(async (url: string) => {
+            if (url === '/content-types') {
+                return contentTypes;
+            }
+            if (url === '/subject-types') {
+                return [];
+            }
+            return pageOf(queryParams(url).get('pageSize') === '1' ? [season] : []);
+        });
+
+        render(<WantedPage />, {
+            wrapper: ({ children }) => testWrapper({ children, initialUrl: '/wanted?parentId=show-1' }),
+        });
+
+        expect(await screen.findByText('No wanted content under this item')).toBeInTheDocument();
+        expect(screen.queryByText('This item has no child items yet')).not.toBeInTheDocument();
+    });
+
     it('builds a scoped breadcrumb from the existing content ancestor hook', async () => {
         setContentResponse((parentId) => (parentId === 'show-1' ? [season] : []));
         mockUseContentAncestors.mockReturnValue({
@@ -260,8 +301,8 @@ describe('WantedPage', () => {
                     level: 'show',
                     levelLabel: 'Show',
                     contentType: 'shows',
-                    monitoring: true,
-                    effectiveMonitoring: true,
+                    monitoring: 'Monitored',
+                    effectiveMonitoring: 'Monitored',
                     fulfillment: 'partial',
                     previews: [],
                     images: [],
@@ -416,7 +457,7 @@ describe('WantedPage', () => {
         render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
 
         await screen.findAllByText('Missing Movie');
-        expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+        expect(document.querySelectorAll('[data-component="data-table"] [role="checkbox"]')).toHaveLength(0);
         expect(document.querySelector('[data-component="bulk-actions-toolbar"]')).not.toBeInTheDocument();
     });
 

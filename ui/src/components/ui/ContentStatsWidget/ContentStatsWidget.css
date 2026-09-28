@@ -162,6 +162,16 @@
         letter-spacing: var(--tracking-wide);
     }
 
+    .content-stats-widget__item-monitoring {
+        display: inline-flex;
+        align-items: center;
+        color: var(--text-muted);
+    }
+
+    .content-stats-widget__item-monitoring--active {
+        color: var(--status-healthy);
+    }
+
     .content-stats-widget__item--missing .content-stats-widget__item-status {
         color: var(--fulfillment-missing);
     }

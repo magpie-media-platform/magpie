@@ -22,13 +22,15 @@ vi.mock('@/auth', async () => {
     };
 });
 
-import { ApiError, apiGet, apiPost } from '@/lib/api';
+import { apiGet, apiPost } from '@/lib/api';
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import type { ApiContentHierarchyItem } from '@/types/content';
 import type { InteractiveSearchCandidate } from '@/hooks/useInteractiveSearch';
 
 import { InteractiveSearchPage } from './InteractiveSearchPage';
+
+const actualApi = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
 
 const ITEM_ID = 'content-1';
 
@@ -62,8 +64,8 @@ const detailItem: ApiContentHierarchyItem = {
     level: 'movie',
     slug: 'the-movie',
     name: 'The Movie',
-    monitoring: true,
-    effectiveMonitoring: true,
+    monitoring: 'Monitored',
+    effectiveMonitoring: 'Monitored',
     createdAt: '2024-01-01T00:00:00Z',
     contentItem: {
         id: 'ci-1',
@@ -125,6 +127,32 @@ function TestWrapper({ children }: { children: ReactNode }) {
 }
 
 describe('InteractiveSearchPage', () => {
+    it.each([true, false])(
+        'Search_RetainsAvailableCandidates_WhenResultIsIncomplete (healthy: %s)',
+        async (healthy) => {
+            // Arrange
+            vi.mocked(apiPost).mockResolvedValue({
+                candidates: healthy ? [candidate()] : [],
+                partial: true,
+                warning: 'One or more upstream providers are throttled. The search is incomplete.',
+                retryAt: '2027-01-01T00:00:00Z',
+            });
+
+            // Act
+            render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+            // Assert
+            expect(await screen.findByRole('alert')).toHaveTextContent('providers are throttled');
+            expect(screen.getByRole('alert')).toHaveTextContent('Retry after');
+            expect(screen.queryByText('No releases found')).not.toBeInTheDocument();
+            if (healthy) {
+                expect(screen.getByText('The.Movie.2024.1080p.BluRay')).toBeInTheDocument();
+            } else {
+                expect(screen.getByText('Search incomplete')).toBeInTheDocument();
+            }
+        },
+    );
+
     beforeEach(() => {
         installMatchMedia(1024);
         vi.mocked(apiGet).mockReset();
@@ -132,6 +160,9 @@ describe('InteractiveSearchPage', () => {
         vi.mocked(apiGet).mockImplementation(async (url: string) => {
             if (url.includes('/content-types') || url.includes('/subject-types')) {
                 return [];
+            }
+            if (url === '/indexers') {
+                return [{ id: 'indexer-1', connectionCount: 1 }];
             }
             return detailItem;
         });
@@ -169,6 +200,41 @@ describe('InteractiveSearchPage', () => {
         expect(screen.getByText('Indeterminate')).toBeInTheDocument();
     });
 
+    it.each(['Imported', 'Failed', 'Faulted'] as const)(
+        'Status_ShowsTheEarlierDownloadAndKeepsGrab_WhenTheReleaseWas%s',
+        async (status) => {
+            // Arrange
+            vi.mocked(apiPost).mockResolvedValue([candidate({ acquisitionStatus: status })]);
+
+            // Act
+            render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+            // Assert
+            const badge = await screen.findByText(status);
+            expect(badge.closest('[data-acquisition-status]')).toHaveAttribute('data-acquisition-status', status);
+            expect(screen.getByRole('button', { name: /grab/i })).toBeEnabled();
+        },
+    );
+
+    it.each([
+        ['Failed', 'ImportFailed', 'Import Failed'],
+        ['Faulted', 'DownloadStuck', 'Download Stuck'],
+        ['Imported', 'ImportFailed', null],
+    ] as const)(
+        'Status_ShowsTheFailureReasonAsATooltip_WhenTheReleaseWas%s',
+        async (status, failureReason, expectedTitle) => {
+            // Arrange
+            vi.mocked(apiPost).mockResolvedValue([candidate({ acquisitionStatus: status, failureReason })]);
+
+            // Act
+            render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+            // Assert
+            const badge = (await screen.findByText(status)).closest('[data-acquisition-status]');
+            expect(badge?.getAttribute('title')).toBe(expectedTitle);
+        },
+    );
+
     it('shows provider properties in generic release details', async () => {
         vi.mocked(apiPost).mockResolvedValue([candidate()]);
         const user = userEvent.setup();
@@ -193,6 +259,34 @@ describe('InteractiveSearchPage', () => {
         await screen.findByText('The.Movie.2024.1080p.BluRay');
         expect(document.querySelector('[data-page="interactive-search"]')).toHaveAttribute('data-layout', 'card');
         expect(document.querySelector(".interactive-search__table [data-column='action']")).toBeInTheDocument();
+    });
+
+    it('Status_SitsInTheCardHeader_WhenTheLayoutIsCard', async () => {
+        // Arrange
+        installMatchMedia(390);
+        vi.mocked(apiPost).mockResolvedValue([candidate({ acquisitionStatus: 'Imported' })]);
+
+        // Act
+        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+        // Assert
+        const badge = await screen.findByText('Imported');
+        const cell = badge.closest("[data-column='status']");
+        expect(cell).toHaveAttribute('data-mobile-role', 'header');
+        expect(cell).toContainElement(badge);
+    });
+
+    it('Status_RendersAnEmptyCell_WhenTheLayoutIsCardAndNoEarlierDownloadExists', async () => {
+        // Arrange
+        installMatchMedia(390);
+        vi.mocked(apiPost).mockResolvedValue([candidate({ acquisitionStatus: null })]);
+
+        // Act
+        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+        // Assert
+        await screen.findByText('The.Movie.2024.1080p.BluRay');
+        expect(document.querySelector("[data-column='status'][data-mobile-role]")).toBeEmptyDOMElement();
     });
 
     it('exposes a long release title as a tooltip while rendering it in the title cell', async () => {
@@ -225,6 +319,25 @@ describe('InteractiveSearchPage', () => {
         await waitFor(() => {
             expect(screen.getByText('No releases found')).toBeInTheDocument();
         });
+    });
+
+    it('explains that no indexer is configured instead of a no-matches result', async () => {
+        vi.mocked(apiGet).mockImplementation(async (url: string) => {
+            if (url.includes('/content-types') || url.includes('/subject-types')) {
+                return [];
+            }
+            if (url === '/indexers') {
+                return [{ id: 'definition-1', connectionCount: 0 }];
+            }
+            return detailItem;
+        });
+        vi.mocked(apiPost).mockResolvedValue([]);
+
+        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+        expect(await screen.findByText('No indexers configured')).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Configure indexers' })).toHaveAttribute('href', '/admin/indexers');
+        expect(screen.queryByText('No releases found')).not.toBeInTheDocument();
     });
 
     it('shows an in-progress affordance while the indexer search runs', async () => {
@@ -284,23 +397,93 @@ describe('InteractiveSearchPage', () => {
         },
     );
 
-    it('reports the no-download-client conflict as its own actionable condition', async () => {
-        // Arrange
-        const user = userEvent.setup();
-        vi.mocked(apiPost)
-            .mockResolvedValueOnce([candidate()])
-            .mockRejectedValueOnce(new ApiError(409, 'No enabled download client is configured.'));
-        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
-        // Act
-        await user.click(await screen.findByRole('button', { name: /^grab$/i }));
-        // Assert
-        expect(await screen.findByText('No download client configured')).toBeInTheDocument();
-        expect(
-            screen.getByText('Add a download client on the Download Clients page to download releases.'),
-        ).toBeInTheDocument();
-        expect(screen.queryByText('Grab failed')).not.toBeInTheDocument();
-    });
+    it.each([
+        [
+            'urn:magpie:problem:no-download-client',
+            'No enabled download client is configured.',
+            'No download client configured',
+            'Add a download client on the Download Clients page to download releases.',
+        ],
+        [
+            'urn:magpie:problem:no-download-client',
+            'Release rel-1 is already being acquired.',
+            'No download client configured',
+            'Add a download client on the Download Clients page to download releases.',
+        ],
+        [
+            'urn:magpie:problem:acquisition-in-progress',
+            'Release rel-1 is already being acquired.',
+            'Already downloading',
+            'This release is already queued or downloading.',
+        ],
+        [
+            'urn:magpie:problem:acquisition-in-progress',
+            'No enabled download client is configured.',
+            'Already downloading',
+            'This release is already queued or downloading.',
+        ],
+    ])(
+        'shows the guidance for the conflict problem type, not the detail text (%s, %s)',
+        async (type, detail, title, description) => {
+            // Arrange
+            const user = userEvent.setup();
+            vi.stubGlobal(
+                'fetch',
+                vi.fn().mockResolvedValue(
+                    new Response(JSON.stringify({ type, title: 'Conflict', status: 409, detail }), {
+                        status: 409,
+                        headers: { 'content-type': 'application/problem+json' },
+                    }),
+                ),
+            );
+            vi.mocked(apiPost).mockResolvedValueOnce([candidate()]).mockImplementationOnce(actualApi.apiPost);
+            render(<InteractiveSearchPage />, { wrapper: TestWrapper });
 
+            // Act
+            await user.click(await screen.findByRole('button', { name: /^grab$/i }));
+
+            // Assert
+            expect(await screen.findByText(title)).toBeInTheDocument();
+            expect(screen.getByText(description)).toBeInTheDocument();
+            expect(screen.queryByText(detail)).not.toBeInTheDocument();
+            expect(screen.queryByText('Grab failed')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /^grab$/i })).toBeEnabled();
+        },
+    );
+
+    it.each([undefined, 'https://tools.ietf.org/html/rfc9110#section-15.5.10', 'urn:magpie:problem:unknown'])(
+        'reports a conflict with an unrecognized problem type as a grab failure (%s)',
+        async (type) => {
+            // Arrange
+            const user = userEvent.setup();
+            vi.stubGlobal(
+                'fetch',
+                vi.fn().mockResolvedValue(
+                    new Response(
+                        JSON.stringify({
+                            type,
+                            title: 'Conflict',
+                            status: 409,
+                            detail: 'No enabled download client is configured.',
+                        }),
+                        { status: 409, headers: { 'content-type': 'application/problem+json' } },
+                    ),
+                ),
+            );
+            vi.mocked(apiPost).mockResolvedValueOnce([candidate()]).mockImplementationOnce(actualApi.apiPost);
+            render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+            // Act
+            await user.click(await screen.findByRole('button', { name: /^grab$/i }));
+
+            // Assert
+            expect(await screen.findByText('Grab failed')).toBeInTheDocument();
+            expect(screen.getByText('No enabled download client is configured.')).toBeInTheDocument();
+            expect(screen.queryByText('No download client configured')).not.toBeInTheDocument();
+            expect(screen.queryByText('Already downloading')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /^grab$/i })).toBeEnabled();
+        },
+    );
     it('grabs a matched candidate via the grab endpoint', async () => {
         vi.mocked(apiPost).mockImplementation(async (path: string) => {
             if (path.endsWith('/grab')) {

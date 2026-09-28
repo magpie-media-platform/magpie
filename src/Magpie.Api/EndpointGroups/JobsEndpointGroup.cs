@@ -66,8 +66,8 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireRequester();
 
-        builder.MapPost("{id:guid}/cancel", RequestJobCancellationAsync)
-            .WithName(nameof(RequestJobCancellationAsync))
+        builder.MapPost("{id:guid}/cancel", CancelJobAsync)
+            .WithName(nameof(CancelJobAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
@@ -246,12 +246,12 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
     }
 
     [MagpieCommand("cancel", "POST", "{id:guid}/cancel", "Cancel a job execution")]
-    internal async Task<IResult> RequestJobCancellationAsync(
+    internal async Task<IResult> CancelJobAsync(
         [FromServices] IJobManager jobManager,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var cancelled = await jobManager.RequestCancellationAsync(id, cancellationToken).ConfigureAwait(false);
+        var cancelled = await jobManager.CancelAsync(id, cancellationToken).ConfigureAwait(false);
 
         return cancelled ? Results.NoContent() : Results.NotFound();
     }

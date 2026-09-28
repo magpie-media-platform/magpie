@@ -4,7 +4,9 @@ import { ArrowRightIcon, DatabaseIcon, SkipForwardIcon } from '@phosphor-icons/r
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { countConfiguredIndexerInstances, useIndexers } from '@/hooks/useIndexers';
+import { useIndexerProviderTypes } from '@/hooks/useProviderTypes';
 import { IndexerForm, type IndexerFormValues } from '@/components/configuration/IndexerForm';
+import { AvailableCatalog } from '@/components/configuration/AvailableCatalog';
 
 import { AddAnotherActions } from './AddAnotherActions';
 import { useAddAnotherStep } from './useAddAnotherStep';
@@ -15,7 +17,8 @@ interface FirstIndexerStepProps {
 
 export function FirstIndexerStep({ onAdvance }: FirstIndexerStepProps): ReactNode {
     const { toast } = useToast();
-    const { createIndexer, isCreatingIndexer, indexers } = useIndexers();
+    const { createIndexer, isCreatingIndexer, indexers, isLoadingIndexers } = useIndexers();
+    const { types: providerTypes, isLoading: isLoadingProviderTypes } = useIndexerProviderTypes();
     const { formOpen, setFormOpen, added, markAdded, addAnother, continueToNext } = useAddAnotherStep(onAdvance);
     const configuredIndexerCount = countConfiguredIndexerInstances(indexers);
 
@@ -46,6 +49,9 @@ export function FirstIndexerStep({ onAdvance }: FirstIndexerStepProps): ReactNod
         [createIndexer, markAdded, toast],
     );
 
+    const hasDirectProviders = providerTypes.length > 0;
+    const hasCatalog = indexers.length > 0;
+    const nothingInstalled = !isLoadingIndexers && !isLoadingProviderTypes && !hasDirectProviders && !hasCatalog;
     const configuredIndexerCountLabel = `${configuredIndexerCount} indexer instance${configuredIndexerCount === 1 ? '' : 's'}`;
 
     return (
@@ -68,18 +74,27 @@ export function FirstIndexerStep({ onAdvance }: FirstIndexerStepProps): ReactNod
                 />
             ) : (
                 <>
-                    <Button
-                        type="button"
-                        variant="primary"
-                        size="lg"
-                        onClick={() => setFormOpen(true)}
-                        disabled={isCreatingIndexer}
-                        className="setup-page__submit"
-                        data-action="open-indexer-form"
-                    >
-                        <DatabaseIcon weight="bold" aria-hidden="true" />
-                        Add an indexer
-                    </Button>
+                    {hasDirectProviders && (
+                        <Button
+                            type="button"
+                            variant="primary"
+                            size="lg"
+                            onClick={() => setFormOpen(true)}
+                            disabled={isCreatingIndexer}
+                            className="setup-page__submit"
+                            data-action="open-indexer-form"
+                        >
+                            <DatabaseIcon weight="bold" aria-hidden="true" />
+                            Add an indexer
+                        </Button>
+                    )}
+                    {hasCatalog && <AvailableCatalog onConfigured={markAdded} />}
+                    {nothingInstalled && (
+                        <p className="setup-page__hint" data-state="no-indexer-integrations">
+                            No indexer integrations are installed. Install an extension that provides one, or skip for
+                            now.
+                        </p>
+                    )}
                     <Button
                         type="button"
                         variant="secondary"
@@ -95,12 +110,14 @@ export function FirstIndexerStep({ onAdvance }: FirstIndexerStepProps): ReactNod
                 </>
             )}
 
-            <IndexerForm
-                open={formOpen}
-                onOpenChange={setFormOpen}
-                onSubmit={handleSubmit}
-                isSubmitting={isCreatingIndexer}
-            />
+            {hasDirectProviders && (
+                <IndexerForm
+                    open={formOpen}
+                    onOpenChange={setFormOpen}
+                    onSubmit={handleSubmit}
+                    isSubmitting={isCreatingIndexer}
+                />
+            )}
         </div>
     );
 }

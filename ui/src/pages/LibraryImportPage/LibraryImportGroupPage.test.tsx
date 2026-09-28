@@ -372,6 +372,21 @@ describe('LibraryImportGroupPage', () => {
         });
     });
 
+    it('keeps the bucket Accept button mounted while its accept dialog is open', async () => {
+        const user = userEvent.setup();
+        autoSelectMonitoring = false;
+        setCandidates([episode('e1', '1', { matches: [matchOf()], matchCount: 1 })]);
+        render(<LibraryImportGroupPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper('/library/import?key=%2Fmedia%2Ftv%2FBluey&title=Bluey'),
+        });
+
+        const accept = within(bucketRows()[0]).getByRole('button', { name: /^Accept$/ });
+        await user.click(accept);
+
+        expect(screen.getByRole('dialog', { name: 'Accept import' })).toBeInTheDocument();
+        expect(accept).toBeInTheDocument();
+    });
+
     it('disables Accept for a bucket whose candidates are all still matching pending', () => {
         setCandidates([
             episode('e1', '1', { status: 'MatchingPending' }),
@@ -492,7 +507,7 @@ describe('LibraryImportGroupPage', () => {
         await user.click(screen.getByRole('button', { name: 'Select' }));
         expect(document.querySelectorAll('[data-action="toggle-row-mobile"]').length).toBe(2);
 
-        await user.click(screen.getByRole('button', { name: 'Stop selecting' }));
+        await user.click(screen.getByRole('button', { name: 'Select', pressed: true }));
         expect(document.querySelectorAll('[data-action="toggle-row-mobile"]').length).toBe(0);
     });
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -21,6 +22,34 @@ internal sealed class RootFolderService(
     IContentTypeRegistry contentTypeRegistry,
     IQualityService qualityService) : IRootFolderService
 {
+    internal static StorageCapacity? ReadDestinationCapacity(IFileSystem fileSystem, string path)
+    {
+        try
+        {
+            var capacity = fileSystem.GetStorageCapacity(path);
+            return capacity is { AvailableBytes: >= 0 } ? capacity : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    internal static string? CapacityWaitingReason(long? required, long? available)
+    {
+        var requiredText = required is >= 0
+            ? required.Value.ToString(CultureInfo.InvariantCulture) + " bytes" : "unknown";
+        var availableText = available is >= 0
+            ? available.Value.ToString(CultureInfo.InvariantCulture) + " bytes" : "unknown";
+        var values = $"Required: {requiredText}. Available: {availableText}.";
+        if (required is null or < 0 || available is null or < 0)
+        {
+            return "Waiting for destination capacity: the capacity check is unavailable. " + values;
+        }
+
+        return required > available ? "Waiting for destination capacity: insufficient free space. " + values : null;
+    }
+
     private static DiskSpaceResult BuildDiskSpaceResult(
         IEnumerable<RootFolder> rootFolders,
         IFileSystem fileSystem)
@@ -251,6 +280,7 @@ internal sealed class RootFolderService(
             ContentType = create.ContentType,
             IsDefault = create.IsDefault,
             DefaultMonitoring = create.DefaultMonitoring,
+            AutoImport = create.AutoImport,
             Defaults = defaults
         };
 
@@ -351,6 +381,7 @@ internal sealed class RootFolderService(
                 DefaultMonitoring: null,
                 RenameTemplate: null,
                 UpgradeFileHandling: null,
+                AutoImport: null,
                 Defaults: null
             })
         {

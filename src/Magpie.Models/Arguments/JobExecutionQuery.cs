@@ -94,9 +94,4 @@ public sealed record JobExecutionQuery
     /// The range of last heartbeat times to match.
     /// </summary>
     public Range<DateTime>? LastHeartbeat { get; init; }
-
-    /// <summary>
-    /// The range of timeout deadlines to match.
-    /// </summary>
-    public Range<DateTime>? TimeoutAt { get; init; }
 }

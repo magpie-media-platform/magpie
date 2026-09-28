@@ -23,7 +23,7 @@ interface MediaFile {
 interface ContentItem {
     id: string;
     name: string;
-    monitoring: boolean | null;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
     contentItem?: {
         fulfillment: string;
         mediaFiles: MediaFile[];
@@ -271,12 +271,12 @@ test.describe.serial('Journey 14: make room', () => {
             expect(response.ok()).toBe(true);
             expect(response.request().postDataJSON()).toEqual({
                 ids: [catalog47.id],
-                patch: { monitoring: { value: false } },
+                patch: { monitoring: { value: 'Unmonitored' } },
             });
             expect((await response.json()) as BulkResult).toEqual({ count: 1, error: null });
             expect(await api.get<ContentItem>(`/api/content/${catalog47.id}`)).toMatchObject({
                 id: catalog47.id,
-                monitoring: false,
+                monitoring: 'Unmonitored',
             });
             await expect(grid.locator(`[data-row-id="${catalog47.id}"]`)).toBeVisible();
         });

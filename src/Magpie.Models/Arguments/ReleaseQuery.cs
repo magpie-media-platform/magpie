@@ -29,6 +29,11 @@ public sealed record ReleaseQuery
     public IReadOnlyCollection<Guid>? ContentHierarchyItemIds { get; init; }
 
     /// <summary>
+    /// Whether the query includes the releases that a user unmatched.
+    /// </summary>
+    public bool IncludeUnmatched { get; init; }
+
+    /// <summary>
     /// The release title to match.
     /// </summary>
     public string? Title { get; init; }

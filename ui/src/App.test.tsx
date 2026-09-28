@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
@@ -54,6 +54,10 @@ import App from './App';
 import { clearAuthStorage, tokenExpirationStorage, tokenStorage } from '@/lib/tokenStorage';
 import { queryClient } from '@/lib/queryClient';
 import * as setupApiModule from '@/lib/setupApi';
+import { Role } from '@/auth';
+import { testEffectivePermissions } from '@/test/permissions';
+
+let sessionRole: Role = Role.Admin;
 
 function fakeJwt(claims: Record<string, string | number>): string {
     const claimsWithExp: Record<string, string | number> = {
@@ -100,11 +104,18 @@ function createMatchMedia(width: number) {
 }
 
 beforeEach(() => {
+    sessionRole = Role.Admin;
     seedAuthenticatedSession();
     vi.stubGlobal(
         'fetch',
         vi.fn(async (input: RequestInfo | URL) => {
             const url = String(input);
+            if (url.endsWith('/auth/permissions')) {
+                return new Response(JSON.stringify(testEffectivePermissions(sessionRole)), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                });
+            }
             if (url.includes('/ui/manifest')) {
                 return new Response(JSON.stringify({ assets: [], extensions: [] }), {
                     status: 200,
@@ -144,6 +155,13 @@ describe('App', () => {
         await waitFor(() => {
             expect(screen.getAllByText('Magpie').length).toBeGreaterThanOrEqual(1);
         });
+    });
+
+    it('renders the library search action in the header', async () => {
+        render(<App />);
+
+        const header = await screen.findByRole('banner');
+        expect(within(header).getByRole('button', { name: 'Search library' })).toBeInTheDocument();
     });
 
     it('renders the sidebar navigation', async () => {
@@ -347,6 +365,43 @@ describe('App', () => {
 });
 
 describe('App with different roles', () => {
+    it.each([
+        ['Viewer', Role.Viewer, 'Access denied'],
+        ['Requester', Role.Requester, 'Library add'],
+        ['Manager', Role.Manager, 'Library add'],
+    ])('gates the Add content route on content.add for %s', async (_name, role, page) => {
+        sessionRole = role;
+        tokenStorage.set(fakeJwt({ sub: 'user-1', name: 'user', role }));
+        window.history.replaceState({}, '', '/library/add');
+        render(<App />);
+
+        expect(await screen.findByText(page)).toBeInTheDocument();
+    });
+
+    it.each([
+        ['Viewer', Role.Viewer, 0],
+        ['Requester', Role.Requester, 1],
+        ['Manager', Role.Manager, 1],
+        ['Admin', Role.Admin, 1],
+    ])('gates the sidebar and mobile nav Add content on content.add for %s', async (_name, role, expected) => {
+        sessionRole = role;
+        tokenStorage.set(fakeJwt({ sub: 'user-1', name: 'user', role }));
+        render(<App />);
+
+        const bottomNav = await screen.findByRole('navigation', { name: 'Primary navigation' });
+        await waitFor(() =>
+            expect(
+                queryClient.getQueryCache().find({ queryKey: ['auth', 'permissions', 'user-1'], exact: false })?.state
+                    .status,
+            ).toBe('success'),
+        );
+        expect(within(bottomNav).getByRole('link', { name: 'Library' })).toBeInTheDocument();
+        expect(within(bottomNav).queryAllByRole('link', { name: 'Add content' })).toHaveLength(expected);
+        expect(within(screen.getByRole('complementary')).queryAllByRole('link', { name: 'Add content' })).toHaveLength(
+            expected,
+        );
+    });
+
     it('shows the header admin link when signed in as Admin', async () => {
         render(<App />);
 
@@ -383,6 +438,34 @@ describe('SetupRedirectGate', () => {
         await waitFor(() => {
             expect(window.location.pathname).toBe('/setup');
         });
+    });
+
+    it('keeps the setup route mounted while its status is reset after first login', async () => {
+        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+            isRequired: true,
+            isComplete: false,
+            requiresAdminClaim: true,
+        });
+        window.history.replaceState({}, '', '/setup');
+        render(<App />);
+        const setup = await screen.findByTestId('app-test-route');
+        expect(setup).toHaveTextContent('Setup');
+        let finishStatus!: (status: setupApiModule.SetupStatus) => void;
+        vi.mocked(setupApiModule.fetchSetupStatus).mockReturnValue(
+            new Promise((resolve) => {
+                finishStatus = resolve;
+            }),
+        );
+
+        await act(async () => {
+            void queryClient.resetQueries({ queryKey: setupApiModule.setupStatusQueryKey });
+        });
+
+        expect(screen.getByTestId('app-test-route')).toBe(setup);
+        await act(async () => {
+            finishStatus({ isRequired: true, isComplete: false, requiresAdminClaim: false });
+        });
+        expect(screen.getByTestId('app-test-route')).toBe(setup);
     });
 
     it('allows login when setup is incomplete but the administrator was already claimed', async () => {

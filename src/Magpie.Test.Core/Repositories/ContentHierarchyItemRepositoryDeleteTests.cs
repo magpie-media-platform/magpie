@@ -19,6 +19,7 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Services;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -34,16 +35,37 @@ namespace Magpie.Test.Core.Repositories;
 public sealed class ContentHierarchyItemRepositoryDeleteTests
 {
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private IContentHierarchyItemRepository _subject = null!;
     private Guid _metadataContainerId;
     private Guid _userId;
 
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.UseSqlite(_template).Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
-        _context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        _context = new MagpieDbContext(options.UseSqlite(connection, contextOwnsConnection: true).Options);
         var user = new User
         {
             Username = "TestUser",
@@ -73,7 +95,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             _context, auditRecords, transactions,
             metadataContainers,
             Mock.Of<IContentTypeRegistry>(), Mock.Of<IEventBus>(),
-            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System);
+            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System, Mock.Of<IContentRepository>());
     }
 
     [TearDown]
@@ -94,7 +116,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "to-delete-movie",
             Name = "To Delete Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item);
@@ -133,7 +155,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "delete-audit-movie",
             Name = "Delete Audit Movie",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item);
@@ -171,7 +193,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-b",
             Slug = "to-delete-series",
             Name = "To Delete Series",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(parent);
@@ -185,7 +207,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-c",
             Slug = "to-delete-season",
             Name = "To Delete Season",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(child);
@@ -235,7 +257,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-b",
             Slug = "coverage-delete-series",
             Name = "Coverage Delete Series",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(parent);
@@ -249,7 +271,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-c",
             Slug = "coverage-delete-season",
             Name = "Coverage Delete Season",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(child);
@@ -300,7 +322,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "graph-delete",
             Name = "Graph Delete",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var sibling = new ContentHierarchyItem
@@ -310,7 +332,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "graph-keep",
             Name = "Graph Keep",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(toDelete, sibling);
@@ -399,7 +421,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-b",
             Slug = "bulk-show",
             Name = "Bulk Show",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(show);
@@ -413,7 +435,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-c",
             Slug = "bulk-season",
             Name = "Bulk Season",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         var sibling = new ContentHierarchyItem
@@ -423,7 +445,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "bulk-keep",
             Name = "Bulk Keep",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(season, sibling);
@@ -478,7 +500,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "movie-with-files",
             Name = "Movie With Files",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(item);
@@ -545,7 +567,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-b",
             Slug = "series-with-file-child",
             Name = "Series With File Child",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(parent);
@@ -559,7 +581,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-c",
             Slug = "season-with-files",
             Name = "Season With Files",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(child);
@@ -615,7 +637,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "movie-a",
             Name = "movie-a",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(a);
@@ -631,7 +653,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "movie-b",
             Name = "movie-b",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(b);
@@ -647,7 +669,7 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Level = "level-a",
             Slug = "movie-c",
             Name = "movie-c",
-            Monitoring = true,
+            Monitoring = MonitoringMode.Monitored,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.Add(c);

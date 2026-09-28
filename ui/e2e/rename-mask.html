@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+    <head><meta charset="utf-8"><title>Isolated file rename acceptance</title></head>
+    <body>
+        <p>Disposable EVE-285 production-component fixture. Native API, SQLite, and disk acceptance runs separately.</p>
+        <pre id="requests" aria-label="Fixture request log"></pre>
+        <div id="root"></div>
+        <script type="module">
+            import '/src/styles/index.css';
+            import React from 'react';
+            import { createRoot } from 'react-dom/client';
+            import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+            import { FileRenameDialog } from '/src/components/content/FileRenameDialog.tsx';
+            import { AcceptImportDialog } from '/src/pages/LibraryImportPage/AcceptImportDialog.tsx';
+
+            const requests = [];
+            const record = (path, body) => {
+                requests.push({ path, body });
+                document.getElementById('requests').textContent = JSON.stringify(requests, null, 2);
+            };
+            const originalFetch = window.fetch;
+            window.fetch = async (input, options) => {
+                const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+                if (!url.pathname.startsWith('/api/')) return originalFetch(input, options);
+                const body = JSON.parse(options?.body || '{}');
+                record(url.pathname, body);
+                let result;
+                if (url.pathname.endsWith('/rename-preview')) {
+                    const bulk = url.pathname.includes('/parent/');
+                    result = { hasMask: !url.pathname.includes('/no-mask/'), files: Array.from({ length: bulk ? 80 : 1 }, (_, index) => ({
+                        candidateId: 'candidate', mediaFileId: body.filePath ? null : `file-${index}`,
+                        contentHierarchyItemId: 'content', originalPath: `/library/original-${index}.mkv`,
+                        destinationPath: `/library/Named/Episode-${index}.mkv`,
+                        isSidecar: false, completed: false,
+                        error: bulk && index === 1 ? 'The source file does not exist.' : null,
+                    })) };
+                } else if (url.pathname.endsWith('/rename-tokens')) {
+                    result = { tokens: [], preview: null };
+                } else if (url.pathname.endsWith('/files/rename')) {
+                    result = { ...body, files: body.files.map(file => ({ ...file, completed: !file.error })) };
+                } else if (url.pathname.endsWith('/bulk-accept')) {
+                    result = { queued: [{ candidateId: 'candidate', jobExecutionId: 'job' }], skipped: [] };
+                } else result = {};
+                return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
+            };
+            const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+            const h = React.createElement;
+            function Fixture() {
+                const [open, setOpen] = React.useState(null);
+                const [mode, setMode] = React.useState('Inherit');
+                const action = Object.assign(selectedMode => { record('accept-without-rename', { selectedMode }); },
+                    { renameSelection: { ids: ['candidate'] } });
+                return h(React.Fragment, null,
+                    h('button', { onClick: () => setOpen('manual') }, 'Open manual association'),
+                    h('button', { onClick: () => setOpen('no-mask') }, 'Open association without mask'),
+                    h('button', { onClick: () => setOpen('parent') }, 'Open descendant rename'),
+                    h('button', { onClick: () => setOpen('import') }, 'Open import acceptance'),
+                    open && open !== 'import' && h(FileRenameDialog, {
+                        key: open, contentId: open === 'manual' ? 'content' : open,
+                        filePath: open === 'parent' ? undefined : '/library/original-0.mkv',
+                        onAssociate: async filePath => { record('associate', { filePath }); return { mediaFile: { id: 'attached' } }; },
+                        onClose: () => setOpen(null),
+                    }),
+                    open === 'import' && h(AcceptImportDialog, { action, monitoringMode: mode,
+                        onMonitoringModeChange: setMode, onClose: () => setOpen(null) }),
+                );
+            }
+            createRoot(document.getElementById('root')).render(h(QueryClientProvider, { client }, h(Fixture)));
+        </script>
+    </body>
+</html>

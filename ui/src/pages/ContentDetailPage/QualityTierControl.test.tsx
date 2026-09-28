@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { QualityTierControl } from './QualityTierControl';
@@ -302,5 +302,72 @@ describe('QualityTierControl', () => {
         expect(screen.getByTestId('quality-tier-control__label')).toHaveTextContent('HD Tiers');
         expect(screen.queryByTestId('quality-tier-control__trigger')).not.toBeInTheDocument();
         expect(screen.queryByTestId('quality-tier-control__select')).not.toBeInTheDocument();
+    });
+
+    it('reports a failed lookup with a retry action instead of the empty value', async () => {
+        const user = userEvent.setup();
+        const refetch = vi.fn();
+        mockUseEffectiveQualityTierList.mockReturnValue({
+            data: undefined,
+            isLoading: false,
+            error: new Error('Request failed'),
+            isFetching: false,
+            refetch,
+        });
+        mockUseQualityTierLists.mockReturnValue({ tierLists: [makeList()], isLoading: false });
+
+        render(<QualityTierControl contentHierarchyItemId="c-1" />, { wrapper: Wrap });
+
+        expect(screen.getByTestId('quality-tier-control__label')).toHaveTextContent('Quality could not be loaded');
+        expect(screen.queryByText('No quality')).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Retry loading quality' }));
+        expect(refetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the empty value copy for a successful empty lookup', () => {
+        mockUseEffectiveQualityTierList.mockReturnValue({
+            data: {
+                source: 'None',
+                resolvingHierarchyItemId: null,
+                resolvingHierarchyItemName: null,
+                ownQualityTierListId: null,
+            },
+            isLoading: false,
+            error: null,
+        });
+        mockUseQualityTierLists.mockReturnValue({ tierLists: [], isLoading: false });
+
+        render(<QualityTierControl contentHierarchyItemId="c-1" />, { wrapper: Wrap });
+
+        expect(screen.getByTestId('quality-tier-control__label')).toHaveTextContent('No quality');
+        expect(screen.queryByRole('button', { name: 'Retry loading quality' })).not.toBeInTheDocument();
+    });
+
+    it('keeps a focused busy retry while a real failed lookup refetches, then shows the value', async () => {
+        const user = userEvent.setup();
+        let finishRetry: (value: EffectiveQualityTierList) => void = () => {};
+        const lookup = vi
+            .fn<() => Promise<EffectiveQualityTierList>>()
+            .mockRejectedValueOnce(new Error('Request failed'))
+            .mockImplementationOnce(() => new Promise((resolve) => (finishRetry = resolve)));
+        mockUseEffectiveQualityTierList.mockImplementation(() =>
+            useQuery({ queryKey: ['effective-quality-tier-list', 'c-1'], queryFn: lookup }),
+        );
+        mockUseQualityTierLists.mockReturnValue({ tierLists: [makeList()], isLoading: false });
+
+        render(<QualityTierControl contentHierarchyItemId="c-1" />, { wrapper: Wrap });
+        const retry = await screen.findByRole('button', { name: 'Retry loading quality' });
+        await user.click(retry);
+
+        expect(retry).toBeInTheDocument();
+        expect(retry).toHaveAttribute('aria-disabled', 'true');
+        expect(retry).toHaveAttribute('aria-busy', 'true');
+        expect(retry).toHaveFocus();
+        expect(screen.getByTestId('quality-tier-control__label')).toHaveTextContent('Quality could not be loaded');
+
+        act(() => finishRetry(makeEffective()));
+
+        expect(await screen.findByText('HD Tiers')).toBeInTheDocument();
+        expect(screen.getByTestId('quality-tier-control__trigger')).toHaveFocus();
     });
 });

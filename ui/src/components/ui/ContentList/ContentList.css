@@ -94,6 +94,16 @@
         }
     }
 
+    @media (min-width: 1024px) {
+        .content-list .data-table__table {
+            min-width: 1044px;
+        }
+
+        .content-list[data-selection-enabled='true'] .data-table__table {
+            min-width: 1088px;
+        }
+    }
+
     .content-list__empty {
         display: flex;
         flex-direction: column;
@@ -233,6 +243,16 @@
 
         .content-list__title {
             font-weight: var(--weight-semibold);
+        }
+    }
+
+    @media (min-width: 1280px) {
+        .content-list .data-table__table {
+            min-width: 1300px;
+        }
+
+        .content-list[data-selection-enabled='true'] .data-table__table {
+            min-width: 1344px;
         }
     }
 }

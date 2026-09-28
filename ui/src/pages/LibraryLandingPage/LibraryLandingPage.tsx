@@ -58,8 +58,8 @@ function TypeCardSkeleton() {
 export function LibraryLandingPage() {
     useDocumentTitle('Library');
     const navigate = useNavigate();
-    const { hasRole } = useAuth();
-    const canAddContent = hasRole(Role.Requester);
+    const { hasPermission, hasRole } = useAuth();
+    const canAddContent = hasPermission('content.add');
     const isAdmin = hasRole(Role.Admin);
 
     const { contentTypes, subjectTypes, isLoading, error, refetch } = useLibraryTypes();

@@ -45,12 +45,14 @@ public class QueryEngineTests
             NullLogger<TmdbQueryEngine>.Instance);
     }
 
-    [Test]
-    public async Task SearchAsync_ReturnsEmptyWithoutWarning_WhenRelationshipIsUnsupported()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SearchAsync_ReturnsEmptyWithoutWarning_WhenRelationshipIsUnsupported(bool continuation)
     {
         // Arrange
         var request = new QueryRequest
         {
+            Progress = continuation ? new QueryProgress() : null,
             Route = ContentRoute.Movie,
             Criteria = new MetadataCriteria
             {

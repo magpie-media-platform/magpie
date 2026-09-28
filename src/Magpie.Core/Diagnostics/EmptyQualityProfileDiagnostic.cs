@@ -37,7 +37,7 @@ internal sealed class EmptyQualityProfileDiagnostic(IQualityTierListRepository t
                     Title = $"Tier list {list.Name} has no tiers",
                     Detail =
                         $"The tier list {list.Name} has no quality tiers, so no release can match " +
-                        "it. Content using this tier list will never satisfy or grab until tiers are added.",
+                        "it. Content using this tier list will never satisfy or grab.",
                     AffectedEntity = $"QualityTierList:{list.Id}",
                 });
             }

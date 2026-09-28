@@ -10,10 +10,14 @@ using System.Threading.Tasks;
 
 using Magpie.Extensions.Wikidata;
 using Magpie.Extensions.Wikidata.QueryEngine;
+using Magpie.Sdk.Http;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
+using Moq.Protected;
 
 using NUnit.Framework;
 
@@ -24,6 +28,21 @@ namespace Magpie.Test.Extensions.Wikidata;
 [TestFixture]
 internal sealed class ClientTests
 {
+    private ServiceProvider _cooldownServices = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        var timeProvider = new Mock<TimeProvider>();
+        timeProvider.Setup(provider => provider.GetUtcNow())
+            .Returns(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
+        _cooldownServices = new ServiceCollection().AddSingleton(timeProvider.Object)
+            .AddHttpClient("test-cooldown").AddUpstreamCooldown().Services.BuildServiceProvider();
+    }
+
+    [TearDown]
+    public void DisposeCooldownServices() => _cooldownServices.Dispose();
+
     [Test]
     public void SearchEntitiesAsync_FailsAfterTenPages_WhenContinuationNeverEnds()
     {
@@ -39,7 +58,10 @@ internal sealed class ClientTests
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
             .Returns(() => new HttpClient(http, disposeHandler: false));
-        var subject = new WikidataClient(factory.Object, TimeProvider.System, NullLogger<WikidataClient>.Instance);
+        var subject = new WikidataClient(
+            factory.Object,
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
         var context = new RequestContext
         {
             Language = "en",
@@ -85,8 +107,8 @@ internal sealed class ClientTests
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
         var context = new RequestContext
         {
             Language = "fr",
@@ -135,8 +157,8 @@ internal sealed class ClientTests
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
         var context = new RequestContext
         {
             Language = "en",
@@ -190,13 +212,15 @@ internal sealed class ClientTests
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
+        var upstreamRequests = 0;
         var context = new RequestContext
         {
             Language = "en",
             FallbackLanguages = ["en"],
-            UserAgent = "Magpie/test"
+            UserAgent = "Magpie/test",
+            UpstreamRequestObserver = () => upstreamRequests++
         };
 
         // Act
@@ -206,6 +230,7 @@ internal sealed class ClientTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.EqualTo(["Q43416", "Q42", "Q99"]));
+            Assert.That(upstreamRequests, Is.EqualTo(2));
             Assert.That(requestUris, Has.Count.EqualTo(2));
             Assert.That(requestUris[0], Does.Contain("action=wbsearchentities"));
             Assert.That(requestUris[0], Does.Contain("search=Keanu%20Reeves"));
@@ -254,13 +279,15 @@ internal sealed class ClientTests
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
+        var upstreamRequests = 0;
         var context = new RequestContext
         {
             Language = "en",
             FallbackLanguages = ["en"],
-            UserAgent = "Magpie/test"
+            UserAgent = "Magpie/test",
+            UpstreamRequestObserver = () => upstreamRequests++
         };
 
         // Act
@@ -286,6 +313,7 @@ internal sealed class ClientTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(upstreamRequests, Is.EqualTo(2));
             Assert.That(methods, Is.EqualTo([HttpMethod.Get, HttpMethod.Post]));
             Assert.That(bodies[0], Is.Null);
             Assert.That(bodies[1], Does.Contain("query="));
@@ -295,7 +323,7 @@ internal sealed class ClientTests
     }
 
     [Test]
-    public async Task GetEntitiesAsync_RetriesOnce_WhenMaxlagEnvelope()
+    public void GetEntitiesAsync_DefersWithoutRetry_WhenMaxlagEnvelope()
     {
         // Arrange
         using var http = new MockHttpMessageHandler();
@@ -309,32 +337,34 @@ internal sealed class ClientTests
                 response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.Zero);
                 return response;
             });
-        var second = http.Expect(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
-            .Respond("application/json", "{\"entities\":{}}");
+
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory
             .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
+        var upstreamRequests = 0;
         var context = new RequestContext
         {
             Language = "en",
             FallbackLanguages = ["en"],
-            UserAgent = "Magpie/test"
+            UserAgent = "Magpie/test",
+            UpstreamRequestObserver = () => upstreamRequests++
         };
 
         // Act
-        var result = await subject.GetEntitiesAsync(["Q1"], context, default).ConfigureAwait(false);
+        var throttle = Assert.ThrowsAsync<Magpie.Models.UpstreamThrottledException>(async () =>
+            await subject.GetEntitiesAsync(["Q1"], context, default).ConfigureAwait(false));
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.Empty);
+            Assert.That(throttle!.RetryAt, Is.EqualTo(new DateTimeOffset(2026, 9, 22, 12, 0, 30, TimeSpan.Zero)));
+            Assert.That(upstreamRequests, Is.EqualTo(1));
             Assert.That(http.GetMatchCount(first), Is.EqualTo(1));
-            Assert.That(http.GetMatchCount(second), Is.EqualTo(1));
         }
 
         http.VerifyNoOutstandingExpectation();
@@ -351,8 +381,8 @@ internal sealed class ClientTests
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
         var ids = Enumerable.Range(1, 51).Select(value => "Q" + value).ToArray();
         var context = new RequestContext
         {
@@ -386,8 +416,8 @@ internal sealed class ClientTests
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
         var context = new RequestContext
         {
             Language = "en",
@@ -426,8 +456,8 @@ internal sealed class ClientTests
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
         var context = new RequestContext
         {
             Language = "en",
@@ -465,8 +495,8 @@ internal sealed class ClientTests
             .Returns(() => new HttpClient(http, disposeHandler: false));
         IWikidataClient subject = new WikidataClient(
             httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            TimeProvider.System);
         var context = new RequestContext
         {
             Language = "en",
@@ -497,68 +527,172 @@ internal sealed class ClientTests
         http.VerifyNoOutstandingExpectation();
     }
 
-    [Test]
-    public async Task ExecuteSparqlAsync_ThrowsCancellation_WhenRequestBudgetExpires()
+    [TestCase(false, 0.3)]
+    [TestCase(true, 21)]
+    public async Task SendAsync_DoesNotSpendRequestBudget_WhenWaitingForAdmission(bool action, double queueSeconds)
     {
         // Arrange
-        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var stream = new Mock<Stream> { CallBase = true };
-        stream.SetupGet(value => value.CanRead).Returns(true);
-        stream.Setup(value => value.ReadAsync(
-            It.IsAny<byte[]>(),
-            It.IsAny<int>(),
-            It.IsAny<int>(),
-            It.IsAny<CancellationToken>()))
-            .Returns(async (byte[] _, int _, int _, CancellationToken cancellationToken) =>
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
+        var occupied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sends = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns(async (HttpRequestMessage _, CancellationToken token) =>
             {
-                started.TrySetResult(true);
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
-                return 0;
+                var send = Interlocked.Increment(ref sends);
+                if (send <= 2)
+                {
+                    if (send == 2)
+                    {
+                        occupied.SetResult();
+                    }
+
+                    await release.Task.WaitAsync(token).ConfigureAwait(false);
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"entities\":{},\"results\":{\"bindings\":[]}}")
+                };
             });
-        using var http = new MockHttpMessageHandler();
-        var expected = http.Expect(HttpMethod.Get, WikidataClient.DefaultSparqlUrl + "*")
-            .Respond(_ => new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StreamContent(stream.Object)
-            });
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            TimeProvider.System,
-            NullLogger<WikidataClient>.Instance);
-        var context = new RequestContext
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
+            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
+        using var services = new ServiceCollection().AddSingleton<TimeProvider>(time)
+            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider();
+        var subject = new WikidataClient(factory.Object, services.GetRequiredService<IUpstreamCooldown>(), time);
+        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
+        var occupying = new SparqlRequest
         {
-            Language = "en",
-            FallbackLanguages = ["en"],
-            UserAgent = "Magpie/test"
+            QueryText = "SELECT ?item WHERE { ?item ?p ?o. }",
+            CanonicalCacheKey = "occupying",
+            Timeout = TimeSpan.FromSeconds(30)
         };
+        var queued = new SparqlRequest
+        {
+            QueryText = "SELECT ?item WHERE { ?item ?p ?o. }",
+            CanonicalCacheKey = "queued",
+            Timeout = TimeSpan.FromMilliseconds(100)
+        };
+        var first = subject.ExecuteSparqlAsync(occupying, context, default);
+        var second = subject.ExecuteSparqlAsync(occupying, context, default);
+        await occupied.Task.ConfigureAwait(false);
 
         // Act
-        var execution = subject.ExecuteSparqlAsync(
-            new SparqlRequest
-            {
-                QueryText = "SELECT ?item WHERE { ?item ?p ?o. }",
-                CanonicalCacheKey = "budget-timeout",
-                Timeout = TimeSpan.FromSeconds(2)
-            },
-            context,
-            default);
-        var firstCompletion = await Task.WhenAny(started.Task, execution).ConfigureAwait(false);
-        var exception = Assert.CatchAsync<OperationCanceledException>(async () =>
-            await execution.ConfigureAwait(false));
+        Task pending = action
+            ? subject.GetEntitiesAsync(["Q42"], context, default)
+            : subject.ExecuteSparqlAsync(queued, context, default);
+        time.Advance(TimeSpan.FromSeconds(queueSeconds));
+        var queuedSends = sends;
+        release.SetResult();
+        await pending.ConfigureAwait(false);
+        await Task.WhenAll(first, second).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(firstCompletion, Is.SameAs(started.Task));
-            Assert.That(exception, Is.Not.Null);
-            Assert.That(exception!.Data.Contains("wikidata.rate-limited"), Is.False);
-            Assert.That(http.GetMatchCount(expected), Is.EqualTo(1));
+            Assert.That(queuedSends, Is.EqualTo(2));
+            Assert.That(sends, Is.EqualTo(3));
+        }
+    }
+
+    [Test]
+    public async Task SearchEntitiesAsync_ReadsEveryPage_WhenThePagesTogetherTakeLongerThanOneRequestTimeout()
+    {
+        // Arrange
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
+        using var arrived = new SemaphoreSlim(0);
+        var subject = CreatePagedSearchClient(time, arrived, TimeSpan.FromSeconds(16), cancelAfterFirstPage: null);
+        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
+        var started = time.GetUtcNow();
+
+        // Act
+        var pending = subject.SearchEntitiesAsync("test", context, default);
+        for (var page = 0; page < 4; page++)
+        {
+            await arrived.WaitAsync().ConfigureAwait(false);
+            time.Advance(TimeSpan.FromSeconds(16));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        var result = await pending.ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.EqualTo(["Q1", "Q2", "Q3", "Q4"]));
+            Assert.That(time.GetUtcNow() - started, Is.EqualTo(TimeSpan.FromSeconds(64)));
+        }
+    }
+
+    [TestCase(false, 25)]
+    [TestCase(true, 16)]
+    public async Task SearchEntitiesAsync_StopsAfterOnePage_WhenTheRequestTimesOutOrTheCallerCancels(
+        bool cancelAfterFirstPage,
+        int responseSeconds)
+    {
+        // Arrange
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
+        using var arrived = new SemaphoreSlim(0);
+        using var lifetime = new CancellationTokenSource();
+        var subject = CreatePagedSearchClient(
+            time,
+            arrived,
+            TimeSpan.FromSeconds(responseSeconds),
+            cancelAfterFirstPage ? lifetime : null);
+        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
+
+        // Act
+        var pending = subject.SearchEntitiesAsync("test", context, lifetime.Token);
+        await arrived.WaitAsync().ConfigureAwait(false);
+        time.Advance(TimeSpan.FromSeconds(responseSeconds));
+
+        // Assert
+        Assert.CatchAsync<OperationCanceledException>(async () => await pending.ConfigureAwait(false));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(arrived.CurrentCount, Is.Zero);
+            Assert.That(lifetime.IsCancellationRequested, Is.EqualTo(cancelAfterFirstPage));
+        }
+    }
+
+    private static WikidataClient CreatePagedSearchClient(
+        FakeTimeProvider time,
+        SemaphoreSlim arrived,
+        TimeSpan responseDelay,
+        CancellationTokenSource? cancelAfterFirstPage)
+    {
+        string[] pages =
+        [
+            "{\"search\":[{\"id\":\"Q1\"}],\"search-continue\":1}",
+            "{\"search\":[{\"id\":\"Q2\"}],\"search-continue\":2}",
+            "{\"search\":[{\"id\":\"Q3\"}],\"search-continue\":3}",
+            "{\"search\":[{\"id\":\"Q4\"}]}"
+        ];
+        var sends = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns(async (HttpRequestMessage _, CancellationToken token) =>
+            {
+                var page = pages[Interlocked.Increment(ref sends) - 1];
+                var response = Task.Delay(responseDelay, time, token);
+                arrived.Release();
+                await response.ConfigureAwait(false);
+                if (cancelAfterFirstPage is not null)
+                {
+                    await cancelAfterFirstPage.CancelAsync().ConfigureAwait(false);
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(page) };
+            });
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
+            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
+        var cooldown = new ServiceCollection().AddSingleton<TimeProvider>(time)
+            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider()
+            .GetRequiredService<IUpstreamCooldown>();
+        return new WikidataClient(factory.Object, cooldown, time);
     }
 }

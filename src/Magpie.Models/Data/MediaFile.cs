@@ -56,6 +56,22 @@ public record MediaFile
     public MediaInfo? MediaInfo { get; set; }
 
     /// <summary>
+    /// The UTC time when the file on disk last changed, as read at the last completed inspection.
+    /// </summary>
+    public DateTime? FileModifiedAt { get; set; }
+
+    /// <summary>
+    /// The UTC time when Magpie last detected replacement file contents.
+    /// </summary>
+    public DateTime? ReplacedAt { get; set; }
+
+    /// <summary>
+    /// The id of the download whose import placed the current file content, or <see langword="null"/> when no
+    /// download import placed it.
+    /// </summary>
+    public Guid? DownloadId { get; set; }
+
+    /// <summary>
     /// The UTC time when the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }

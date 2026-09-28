@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import contentFieldCatalog from './content-field-catalog.txt?raw';
 import {
     contentFieldRegistry,
     getAllFieldNames,
@@ -12,6 +13,19 @@ import {
 } from './field-registry';
 
 describe('Field Registry', () => {
+    it('matches the backend content field catalog', () => {
+        const describeType = (field: { type: FieldType; enumValues?: string[] }) =>
+            field.enumValues ? `enum ${[...field.enumValues].sort().join('|')}` : field.type;
+        const scalars = contentFieldRegistry.scalarFields.map((field) => `scalar ${field.name} ${describeType(field)}`);
+        const collections = contentFieldRegistry.collectionFields.flatMap((field) =>
+            [field.name, ...field.aliases].map((name) =>
+                [`collection ${name}`, ...field.itemFields.map((item) => `${item.name}:${item.type}`).sort()].join(' '),
+            ),
+        );
+
+        expect([...scalars, ...collections].sort()).toEqual(contentFieldCatalog.trim().split(/\r?\n/));
+    });
+
     describe('Content Scalar Fields', () => {
         const expectedContentScalarFields: Record<string, FieldType> = {
             name: 'string',
@@ -19,7 +33,15 @@ describe('Field Registry', () => {
             path: 'string',
             contentType: 'string',
             level: 'string',
-            monitoring: 'boolean',
+            monitoring: 'enum',
+            fulfillment: 'enum',
+            activeAcquisitionStatus: 'enum',
+            qualityStatus: 'enum',
+            pendingMetadataRefresh: 'boolean',
+            hasSearchableTitle: 'boolean',
+            importPending: 'boolean',
+            primaryMediaSize: 'long',
+            primaryMediaFileCount: 'number',
             rootFolderId: 'guid',
             parentId: 'guid',
             title: 'string',
@@ -51,15 +73,20 @@ describe('Field Registry', () => {
             expect(actualNames.sort()).toEqual(expectedNames.sort());
         });
 
-        it('monitoring is a boolean field', () => {
+        it('monitoring is an enum of monitoring modes', () => {
             const field = getScalarField(contentFieldRegistry, 'monitoring');
-            expect(field?.enumValues).toBeUndefined();
+            expect(field?.enumValues).toEqual(['Unmonitored', 'Monitored', 'Shotgun']);
         });
 
-        it('does NOT advertise fulfillment (file status owns a dedicated control, not the filter)', () => {
-            expect(getScalarField(contentFieldRegistry, 'fulfillment')).toBeUndefined();
-            expect(getScalarField(contentFieldRegistry, 'Fulfillment')).toBeUndefined();
-            expect(getAllFieldNames(contentFieldRegistry)).not.toContain('fulfillment');
+        it('advertises the supported fulfillment values in the existing catalog', () => {
+            expect(getScalarField(contentFieldRegistry, 'Fulfillment')?.enumValues).toEqual([
+                'Missing',
+                'Partial',
+                'Upgradable',
+                'Fulfilled',
+                'FulfilledExternally',
+            ]);
+            expect(getAllFieldNames(contentFieldRegistry)).toContain('fulfillment');
         });
     });
 
@@ -133,12 +160,37 @@ describe('Field Registry', () => {
                 name: 'relationship',
                 aliases: ['relationships'],
                 primaryField: 'kind',
-                itemFieldNames: ['kind', 'qualifier', 'subject', 'name'],
+                itemFieldNames: [
+                    'kind',
+                    'type',
+                    'qualifier',
+                    'subject',
+                    'name',
+                    'relatedMetadataContainerId',
+                    'externalId',
+                    'externalIdSource',
+                ],
                 itemFieldTypes: {
                     kind: 'string',
+                    type: 'string',
                     qualifier: 'string',
                     subject: 'string',
                     name: 'string',
+                    relatedMetadataContainerId: 'guid',
+                    externalId: 'string',
+                    externalIdSource: 'string',
+                },
+            },
+            {
+                name: 'mediaFile',
+                aliases: ['mediaFiles'],
+                primaryField: 'fileKind',
+                itemFieldNames: ['fileKind', 'mimeType', 'filePath', 'fileSize'],
+                itemFieldTypes: {
+                    fileKind: 'string',
+                    mimeType: 'string',
+                    filePath: 'string',
+                    fileSize: 'long',
                 },
             },
         ];
@@ -375,7 +427,7 @@ describe('Field Registry', () => {
 
         it('returns correct count for content registry', () => {
             const names = getAllFieldNames(contentFieldRegistry);
-            expect(names.length).toBe(29);
+            expect(names.length).toBe(39);
         });
 
         it('returns all scalar and collection field names for subject', () => {

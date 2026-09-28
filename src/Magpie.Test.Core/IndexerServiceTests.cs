@@ -14,6 +14,7 @@ using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Caching;
 using Magpie.Sdk.Integrations;
@@ -1437,6 +1438,25 @@ public sealed class IndexerServiceTests
         }
 
         [Test]
+        public async Task SearchAsync_UsesInteractiveAdmission_WhenTheRequestComesFromIndexerSearch()
+        {
+            // Arrange
+            var request = new IndexerSearchRequest
+            {
+                ConnectionIds = [ConnectionAId],
+                Query = new ReleaseSearchRequest { Title = "the salt roads", IsInteractive = false }
+            };
+
+            // Act
+            await _subject.SearchAsync(request).ConfigureAwait(false);
+
+            // Assert
+            _integrationA.Verify(integration => integration.SearchAsync(
+                It.Is<ReleaseSearchRequest>(query => query.IsInteractive),
+                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
         public async Task SearchAsync_SkipsTheDisabledConnection_WhenTheSelectionIncludesIt()
         {
             // Arrange
@@ -1720,6 +1740,43 @@ public sealed class IndexerServiceTests
                 repository => repository.CreateAsync(
                     It.Is<ReleaseScope>(scope =>
                         scope.ReleaseId == release.Id && scope.ContentHierarchyItemId == ContentHierarchyItemId),
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
+        [Test]
+        public async Task MatchAsync_ClearsTheUnmatch_WhenTheScopeRowIsUnmatched()
+        {
+            // Arrange
+            var scopeId = Guid.NewGuid();
+            var release = new Release { Protocol = "torrent", Title = "The.Salt.Roads.2019.1080p" };
+            _releaseScopes
+                .Setup(repository => repository.QueryAsync(
+                    It.IsAny<ReleaseScopeQuery>(),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new PagedList<ReleaseScope>
+                {
+                    Items =
+                    [
+                        new ReleaseScope
+                        {
+                            Id = scopeId,
+                            ContentHierarchyItemId = ContentHierarchyItemId,
+                            Status = ReleaseScopeStatus.Unmatched,
+                        },
+                    ],
+                });
+
+            // Act
+            await _subject.MatchAsync(ContentHierarchyItemId, release, null).ConfigureAwait(false);
+
+            // Assert
+            _releaseScopes.Verify(
+                repository => repository.UpdateAsync(
+                    It.Is<ReleaseScope>(scope => scope.Id == scopeId && scope.Status == ReleaseScopeStatus.Matched),
                     null,
                     It.IsAny<CancellationToken>()),
                 Times.Once);

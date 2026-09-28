@@ -12,6 +12,7 @@ using Magpie.Extensions.Wikidata.Mapping;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.MetadataSearch;
+using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging;
 
@@ -24,13 +25,17 @@ internal sealed class QueryExecutor(
 {
     private sealed class QueryTotals
     {
-        public int RowsFetched { get; set; }
+        private int _requests;
 
-        public int Requests { get; set; }
+        public int CandidateWindowRowsFetched { get; set; }
+
+        public int Requests => _requests;
 
         public int PrunedStages { get; set; }
 
         public int Windows { get; set; }
+
+        public void RecordRequest() => Interlocked.Increment(ref _requests);
     }
 
     private sealed record CandidateWindowResult(
@@ -460,6 +465,8 @@ internal sealed class QueryExecutor(
         using var activity = Telemetry.Source.StartActivity("wikidata.query.execute");
         var startedTimestamp = Stopwatch.GetTimestamp();
         var totals = new QueryTotals();
+        using var accounting = new UpstreamRequestAccounting(totals.RecordRequest);
+        context = context with { UpstreamRequestObserver = totals.RecordRequest };
         activity?.SetTag("magpie.query.fingerprint", plan.Fingerprint);
         if (activity?.IsAllDataRequested == true)
         {
@@ -509,17 +516,15 @@ internal sealed class QueryExecutor(
             return empty;
         }
 
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMinutes(2));
         try
         {
             var resolvedPlan = plan;
-            resolvedPlan = await ResolveTitleCandidatesAsync(resolvedPlan, context, totals, timeout.Token)
+            resolvedPlan = await ResolveTitleCandidatesAsync(resolvedPlan, context, totals, cancellationToken)
                 .ConfigureAwait(false);
-            resolvedPlan = await ResolveEntityNamesAsync(resolvedPlan, context, totals, timeout.Token)
+            resolvedPlan = await ResolveEntityNamesAsync(resolvedPlan, context, totals, cancellationToken)
                 .ConfigureAwait(false);
             plan = resolvedPlan;
-            if (plan.Strategy == QueryStrategy.Empty)
+            if (plan.Strategy == QueryStrategy.Empty && context.Progress is null)
             {
                 var identityEmpty = Empty(plan, plan.Warnings);
                 Telemetry.PlansRefused.Add(
@@ -536,6 +541,15 @@ internal sealed class QueryExecutor(
                     survivingRows: 0,
                     identityEmpty);
                 return identityEmpty;
+            }
+
+            if (context.Progress is not null)
+            {
+                var continued = await ContinueWindowsAsync(plan, context, totals, cancellationToken)
+                    .ConfigureAwait(false);
+                Complete(activity, plan, totals, startedTimestamp, TerminalReason.Completed,
+                    continued.Hits.Count, continued);
+                return continued;
             }
 
             var logicalOffset = checked((plan.Page - 1) * plan.MaximumResults);
@@ -565,7 +579,7 @@ internal sealed class QueryExecutor(
                         context,
                         totals,
                         RequestRole.RelationshipSeedWindows,
-                        timeout.Token).ConfigureAwait(false);
+                        cancellationToken).ConfigureAwait(false);
                     var seedQids = (from row in seedRows
                                     let qid = Read(row, "item").ToQid()
                                     where qid is not null
@@ -587,7 +601,7 @@ internal sealed class QueryExecutor(
                         collected,
                         collectedQids,
                         executionWarnings,
-                        timeout.Token).ConfigureAwait(false);
+                        cancellationToken).ConfigureAwait(false);
                     if (!seedHasMore)
                     {
                         break;
@@ -606,7 +620,7 @@ internal sealed class QueryExecutor(
                     collected,
                     collectedQids,
                     executionWarnings,
-                    timeout.Token).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
             }
 
             var resultOffset = plan.UsesLocalPaging ? logicalOffset : 0;
@@ -709,6 +723,115 @@ internal sealed class QueryExecutor(
         }
     }
 
+    private async Task<QueryResult> ContinueWindowsAsync(
+        QueryPlan plan,
+        RequestContext context,
+        QueryTotals totals,
+        CancellationToken cancellationToken)
+    {
+        var progress = context.Progress!;
+        var resolved = JsonSerializer.Serialize(new { plan.Strategy, plan.Filters, plan.TitleCandidateQids });
+        if (progress.ResolvedSources is not null && progress.ResolvedSources != resolved)
+        {
+            throw new MetadataSearchContinuationException("Wikidata resolved sources changed. Start a new search.");
+        }
+
+        progress.ResolvedSources = resolved;
+        if (progress.ValidateOnly || plan.Strategy == QueryStrategy.Empty)
+        {
+            progress.Exhausted |= plan.Strategy == QueryStrategy.Empty;
+            return Empty(plan, plan.Warnings);
+        }
+
+        plan = plan with { UsesLocalPaging = true };
+        var hits = new List<SearchHit>();
+        var warnings = new List<string>(plan.Warnings);
+        try
+        {
+            while (!progress.Exhausted && hits.Count < plan.MaximumResults)
+            {
+                if (totals.Windows++ >= MaxSearchWindows)
+                {
+                    warnings.Add("Wikidata paused this search after its source-window limit. More results may remain.");
+                    break;
+                }
+
+                var windowPlan = plan;
+                var relationshipIndex = plan.RelationshipSeedFilterIndex();
+                var seedHasMore = false;
+                if (relationshipIndex >= 0)
+                {
+                    var seedRows = await ExecuteRequestAsync(SparqlQueryBuilder.BuildRelationshipSeed(
+                        plan.EntityKind, plan.Filters[relationshipIndex], progress.SeedOffset),
+                        context, totals, RequestRole.RelationshipSeedWindows, cancellationToken).ConfigureAwait(false);
+                    var seedQids = seedRows.Select(row => Read(row, "item").ToQid()).OfType<string>()
+                        .Distinct(StringComparer.Ordinal).ToArray();
+                    seedHasMore = seedQids.Length > SparqlQueryBuilder.CandidateWindow;
+                    var seed = seedQids.Take(SparqlQueryBuilder.CandidateWindow).ToArray();
+                    if (seed.Length == 0)
+                    {
+                        progress.Exhausted = true;
+                        break;
+                    }
+
+                    windowPlan = BindRelationshipSeed(plan, relationshipIndex, seed) with { UsesLocalPaging = true };
+                }
+
+                var window = await SearchCandidateWindowAsync(windowPlan, context, progress.CandidateOffset,
+                    totals, cancellationToken).ConfigureAwait(false);
+                warnings.AddRange(window.Warnings);
+                var undelivered = window.Hits.Where(hit => !progress.Delivered.Contains(hit.Qid)).ToArray();
+                foreach (var hit in undelivered.Take(plan.MaximumResults - hits.Count))
+                {
+                    if (progress.Delivered.Add(hit.Qid))
+                    {
+                        hits.Add(hit);
+                    }
+                }
+
+                if (hits.Count >= plan.MaximumResults || window.Warnings.Count > 0)
+                {
+                    break;
+                }
+
+                if (totals.Windows >= MaxSearchWindows &&
+                    (window.HasMore || (relationshipIndex >= 0 && seedHasMore)))
+                {
+                    warnings.Add("Wikidata paused this search after its source-window limit. More results may remain.");
+                    break;
+                }
+
+                if (window.HasMore)
+                {
+                    progress.CandidateOffset += SparqlQueryBuilder.CandidateWindow;
+                }
+                else if (relationshipIndex >= 0 && seedHasMore)
+                {
+                    progress.SeedOffset += SparqlQueryBuilder.CandidateWindow;
+                    progress.CandidateOffset = 0;
+                }
+                else
+                {
+                    progress.Exhausted = true;
+                }
+            }
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or JsonException or WikidataBudgetException ||
+            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Wikidata could not finish the continued search");
+            warnings.Add("Wikidata could not finish the search. More results may remain.");
+        }
+
+        return new QueryResult
+        {
+            Hits = hits,
+            PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = !progress.Exhausted },
+            Warnings = [.. warnings.Distinct()]
+        };
+    }
+
     private async Task CollectCandidateWindowsAsync(
         QueryPlan plan,
         RequestContext context,
@@ -757,7 +880,7 @@ internal sealed class QueryExecutor(
             totals,
             RequestRole.WdqsWindows,
             cancellationToken).ConfigureAwait(false);
-        totals.RowsFetched += rows.Count;
+        totals.CandidateWindowRowsFetched += rows.Count;
         var sentinelsRemoved = plan.Strategy == QueryStrategy.TitleSearch
             ? rows.Count(IsTitleWindowSentinel)
             : 0;
@@ -826,6 +949,13 @@ internal sealed class QueryExecutor(
         SearchCacheResult cached;
         try
         {
+            if (context.Progress is not null)
+            {
+                var rows = await client.ExecuteSparqlAsync(request, context, cancellationToken).ConfigureAwait(false);
+                EndRequest(activity, totals, role, QueryCoordinatorRegion.Searches, cacheHit: false, rows.Count);
+                return rows;
+            }
+
             cached = await cache.GetSearchAsync(
                 request.CanonicalCacheKey,
                 token => client.ExecuteSparqlAsync(request, context, token),
@@ -835,7 +965,9 @@ internal sealed class QueryExecutor(
         catch (Exception exception) when (exception is HttpRequestException or JsonException
             or OperationCanceledException or WikidataBudgetException)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+            activity?.AddException(exception);
+            activity?.SetTag("error.type", exception.GetType().FullName);
             EndRequest(activity, totals, role, QueryCoordinatorRegion.Searches, cacheHit: false, rows: 0);
             throw;
         }
@@ -875,11 +1007,6 @@ internal sealed class QueryExecutor(
         bool cacheHit,
         int rows)
     {
-        if (!cacheHit)
-        {
-            totals.Requests++;
-        }
-
         activity?.SetTag("magpie.cache.hit", cacheHit);
         activity?.SetTag("magpie.request.rows", rows);
         Telemetry.Requests.Add(
@@ -921,7 +1048,9 @@ internal sealed class QueryExecutor(
         int survivingRows,
         QueryResult? result)
     {
-        activity?.SetTag("magpie.query.rows_fetched", totals.RowsFetched);
+        activity?.SetTag(
+            "magpie.query.candidate_window_rows_fetched",
+            totals.CandidateWindowRowsFetched);
         activity?.SetTag("magpie.query.rows_surviving", survivingRows);
         activity?.SetTag("magpie.query.request_count", totals.Requests);
         activity?.SetTag("magpie.query.pruned_stages", totals.PrunedStages);
@@ -993,7 +1122,9 @@ internal sealed class QueryExecutor(
                 or WikidataBudgetException ||
                 (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
-                activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+                activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+                activity?.AddException(exception);
+                activity?.SetTag("error.type", exception.GetType().FullName);
                 EndRequest(
                     activity,
                     totals,
@@ -1048,7 +1179,9 @@ internal sealed class QueryExecutor(
             }
             catch (Exception exception)
             {
-                activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+                activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+                activity?.AddException(exception);
+                activity?.SetTag("error.type", exception.GetType().FullName);
                 EndRequest(
                     activity,
                     totals,

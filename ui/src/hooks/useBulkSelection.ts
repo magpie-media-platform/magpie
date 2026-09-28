@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { RowSelectionState } from '@tanstack/react-table';
 
 import type { BulkSelectionState } from '@/types/bulkSelection';
+import { useCardLayout } from '@/hooks/ui/useCardLayout';
 
 type BulkSelectionResolution = { mode: 'ids'; ids: string[] } | { mode: 'all'; excludeIds: string[] };
 
@@ -17,6 +18,7 @@ export interface BulkSelection extends BulkSelectionState {
 interface UseBulkSelectionArgs {
     pageRowIds: string[];
     totalCount: number;
+    allowSelectAllAcrossPages?: boolean;
 
     /** A value that identifies the current row set; the selection clears whenever it changes. */
     resetKey?: string;
@@ -32,11 +34,16 @@ function withKey(map: Record<string, true>, id: string, present: boolean): Recor
     return next;
 }
 
-export function useBulkSelection({ pageRowIds, totalCount, resetKey }: UseBulkSelectionArgs): BulkSelection {
+export function useBulkSelection({
+    pageRowIds,
+    totalCount,
+    allowSelectAllAcrossPages = true,
+    resetKey,
+}: UseBulkSelectionArgs): BulkSelection {
     const [picks, setPicks] = useState<Record<string, true>>({});
     const [allPages, setAllPages] = useState(false);
     const [excluded, setExcluded] = useState<Record<string, true>>({});
-    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectionModeRequested, setSelectionModeRequested] = useState(false);
 
     const isRowChecked = useCallback(
         (id: string) => (allPages ? !excluded[id] : Boolean(picks[id])),
@@ -96,20 +103,16 @@ export function useBulkSelection({ pageRowIds, totalCount, resetKey }: UseBulkSe
     );
 
     const selectAllAcrossPages = useCallback(() => {
+        if (!allowSelectAllAcrossPages) return;
         setAllPages(true);
         setExcluded({});
-    }, []);
+    }, [allowSelectAllAcrossPages]);
 
     const selectOnly = useCallback((ids: string[]) => {
         setAllPages(false);
         setExcluded({});
         setPicks(Object.fromEntries(ids.map((id) => [id, true as const])));
     }, []);
-
-    const toggleSelectionMode = useCallback(() => {
-        clear();
-        setSelectionMode((active) => !active);
-    }, [clear]);
 
     const pageAllChecked = pageRowIds.length > 0 && pageRowIds.every(isRowChecked);
     const pageSomeChecked = pageRowIds.some(isRowChecked);
@@ -119,7 +122,18 @@ export function useBulkSelection({ pageRowIds, totalCount, resetKey }: UseBulkSe
     const selectedCount = allPages ? Math.max(0, totalCount - excludedCount) : Object.keys(picks).length;
     const pageSelectedCount = pageRowIds.reduce((count, id) => (isRowChecked(id) ? count + 1 : count), 0);
     const hasSelection = selectedCount > 0;
-    const showAcrossPagesPrompt = !allPages && pageAllChecked && totalCount > pageRowIds.length;
+    // Selection mode is a card-layout control; a selection made in the table layout shows there as selection mode.
+    const isCardLayout = useCardLayout();
+    const selectionMode = selectionModeRequested || (isCardLayout && hasSelection);
+
+    const toggleSelectionMode = useCallback(() => {
+        if (selectionMode) {
+            clear();
+        }
+        setSelectionModeRequested(!selectionMode);
+    }, [clear, selectionMode]);
+    const showAcrossPagesPrompt =
+        allowSelectAllAcrossPages && !allPages && pageAllChecked && totalCount > pageRowIds.length;
 
     const rowSelection = useMemo(() => {
         const map: RowSelectionState = {};

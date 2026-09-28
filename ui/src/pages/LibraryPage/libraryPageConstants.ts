@@ -6,6 +6,8 @@ export const SERVER_SORT_FIELD: Record<string, string> = {
     publishDate: 'PublishDate',
     dateAdded: 'CreatedAt',
     fulfilledDate: 'FulfilledAt',
+    primaryMediaSize: 'PrimaryMediaSize',
+    primaryMediaFileCount: 'PrimaryMediaFileCount',
 };
 
 export const VALID_SORT_FIELDS = Object.keys(SERVER_SORT_FIELD);
@@ -35,6 +37,7 @@ export const LIBRARY_FILTER_DEFAULTS = {
     fulfillment: '',
     savedFilter: '',
     page: '1',
+    levels: '',
 };
 
 export const PAGE_SIZE = 50;

@@ -30,6 +30,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -47,6 +48,7 @@ public sealed class JobExecutionRepositoryTests
     private static readonly DateTimeOffset Now = new(2026, 7, 17, 12, 0, 0, TimeSpan.Zero);
 
     private MagpieDbContext _context = null!;
+    private SqliteConnection _template = null!;
     private List<MagpieEvent> _events = null!;
     private ILoggerFactory _loggerFactory = null!;
     private IJobExecutionRepository _subject = null!;
@@ -54,12 +56,632 @@ public sealed class JobExecutionRepositoryTests
     private ITransactionManager _transactionManager = null!;
     private Guid _userId;
 
+    [Test]
+    public async Task TryDeferRunningAsync_PreservesAttemptAndDelaysClaims_WhenUpstreamThrottles()
+    {
+        // Arrange
+        var execution = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "content=throttled",
+            Attempt = 3
+        }, null).ConfigureAwait(false);
+        await _subject.TryStartAsync(execution.Id, "owner").ConfigureAwait(false);
+        var auditsBefore = await _context.AuditRecords.CountAsync().ConfigureAwait(false);
+
+        // Act
+        var deferred = await _subject.TryDeferRunningAsync(execution.Id, "owner",
+            new DateTime(2026, 7, 17, 12, 2, 0, DateTimeKind.Utc)).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var queued = await _subject.GetByIdAsync(execution.Id).ConfigureAwait(false);
+        var earlyClaim = await _subject.TryClaimAsync(execution.Id, "other").ConfigureAwait(false);
+        var earlyStart = await _subject.TryStartAsync(execution.Id, "other").ConfigureAwait(false);
+        _timeProvider.Advance(TimeSpan.FromMinutes(2));
+        var auditsAfterDefer = await _context.AuditRecords.CountAsync().ConfigureAwait(false);
+        var dueClaim = await _subject.TryClaimAsync(execution.Id, "other").ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deferred, Is.True);
+            Assert.That(queued!.Status, Is.EqualTo(JobExecutionStatus.Queued));
+            Assert.That(queued.Attempt, Is.EqualTo(3));
+            Assert.That(queued.NodeId, Is.Null);
+            Assert.That(queued.CompletedAt, Is.Null);
+            Assert.That(queued.StatusMessage, Does.Contain("incomplete"));
+            Assert.That(queued.NotBeforeAt, Is.EqualTo(new DateTime(2026, 7, 17, 12, 2, 0, DateTimeKind.Utc)));
+            Assert.That(earlyClaim, Is.Null);
+            Assert.That(earlyStart, Is.False);
+            Assert.That(dueClaim, Is.Not.Null);
+            Assert.That(dueClaim!.Status, Is.EqualTo(JobExecutionStatus.Running));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(auditsAfterDefer, Is.EqualTo(auditsBefore));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ResumesPersistedWorkWithoutFailure_WhenItsUpstreamCooldownEnds()
+    {
+        // Arrange
+        var execution = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "test-cooldown",
+            Status = JobExecutionStatus.Queued,
+            Attempt = 3,
+            LockPartition = "throttled",
+            ExecutionMode = JobExecutionMode.Queue
+        }, null).ConfigureAwait(false);
+        var healthy = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "test-cooldown",
+            Status = JobExecutionStatus.Queued,
+            LockPartition = "healthy",
+            ExecutionMode = JobExecutionMode.Queue
+        }, null).ConfigureAwait(false);
+        var services = new ServiceCollection();
+        services.AddSingleton(_subject);
+        services.AddSingleton(_transactionManager);
+        services.AddSingleton(Mock.Of<IJobManager>());
+        services.AddSingleton(Mock.Of<IJobRetryPolicy>());
+        using var provider = services.BuildServiceProvider();
+        var spec = new JobSpec
+        {
+            JobType = "test-cooldown",
+            DisplayName = "test-cooldown",
+            Category = "Test",
+            Scope = JobScope.System,
+            OnDemand = true,
+            FailurePolicy = JobFailurePolicy.Fail
+        };
+        var registry = new Mock<IJobRegistry>();
+        registry.Setup(value => value.TryGetJobSpec("test-cooldown", out spec)).Returns(true);
+        var handler = new Mock<IJob>();
+        handler.Setup(value => value.ExecuteAsync(It.Is<JobContext>(context => context.ExecutionId == healthy.Id),
+            It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        handler.SetupSequence(value => value.ExecuteAsync(
+                It.Is<JobContext>(context => context.ExecutionId == execution.Id), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(Now.AddMinutes(2)))
+            .Returns(Task.CompletedTask);
+        var job = handler.Object;
+        var scope = new Mock<IJobExecutionScope>();
+        scope.Setup(value => value.TryGetHandler(spec, out job)).Returns(true);
+        var scopes = new Mock<IJobExecutionScopeFactory>();
+        scopes.Setup(value => value.CreateScope(It.IsAny<Guid>())).Returns(scope.Object);
+        using var runtime = new DefaultJobRuntime(scopes.Object, provider.GetRequiredService<IServiceScopeFactory>(),
+            registry.Object, new MagpieHostEnvironment("owner", false, false, "", "", "", "", Now.UtcDateTime),
+            Mock.Of<IEventBus>(), new JobShutdownSignal(), _timeProvider, NullLogger<DefaultJobRuntime>.Instance);
+
+        // Act
+        await runtime.ExecuteAsync(execution.Id).ConfigureAwait(false);
+        var deferred = await _subject.GetByIdAsync(execution.Id).ConfigureAwait(false);
+        await runtime.ExecuteAsync(execution.Id).ConfigureAwait(false);
+        await runtime.ExecuteAsync(healthy.Id).ConfigureAwait(false);
+        var completedHealthy = await _subject.GetByIdAsync(healthy.Id).ConfigureAwait(false);
+        _timeProvider.Advance(TimeSpan.FromMinutes(3));
+        await runtime.ExecuteAsync(execution.Id).ConfigureAwait(false);
+        var recovered = await _subject.GetByIdAsync(execution.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deferred!.Status, Is.EqualTo(JobExecutionStatus.Queued));
+            Assert.That(deferred.NodeId, Is.Null);
+            Assert.That(deferred.Attempt, Is.EqualTo(3));
+            Assert.That(completedHealthy!.Status, Is.EqualTo(JobExecutionStatus.Completed));
+            Assert.That(recovered!.Status, Is.EqualTo(JobExecutionStatus.Completed));
+            Assert.That(recovered.Attempt, Is.EqualTo(3));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(2));
+            Assert.That(_events.Any(value => value.Name.Contains("failed", StringComparison.Ordinal)), Is.False);
+            handler.Verify(value => value.ExecuteAsync(
+                It.Is<JobContext>(context => context.ExecutionId == execution.Id), It.IsAny<CancellationToken>()),
+                Times.Exactly(2));
+        }
+    }
+
+    [TestCase("other", false)]
+    [TestCase("owner", true)]
+    public async Task TryDeferRunningAsync_PreservesCancellationAndOwnership_WhenDeferralLosesRace(string node,
+        bool cancel)
+    {
+        // Arrange
+        var execution = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            LockPartition = "content=throttled"
+        }, null).ConfigureAwait(false);
+        await _subject.TryStartAsync(execution.Id, "owner").ConfigureAwait(false);
+        if (cancel)
+        {
+            await _subject.CancelAsync(execution.Id).ConfigureAwait(false);
+        }
+
+        // Act
+        var deferred = await _subject.TryDeferRunningAsync(execution.Id, node,
+            new DateTime(2026, 7, 17, 12, 2, 0, DateTimeKind.Utc)).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(deferred, Is.False);
+    }
+
+    [TestCase(null, "Original reason", "target")]
+    [TestCase("Updated reason", "Updated reason", "target")]
+    [TestCase("Updated reason", "Original reason", "other-target")]
+    public async Task CreateAsync_PreservesRetryState_WhenQueuedReasonIsCoalesced(string? incomingReason,
+        string expectedReason, string incomingTarget)
+    {
+        // Arrange
+        var original = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseDownloadItem",
+            Status = JobExecutionStatus.Queued,
+            LockPartition = "release=1",
+            NotBeforeAt = Now.UtcDateTime.AddMinutes(10),
+            StatusMessage = "Original reason",
+            Parameters = new Dictionary<string, string>
+            {
+                ["capacityDeferredAt"] = "original-guard",
+                ["contentHierarchyItemId"] = "target"
+            }
+        }, null).ConfigureAwait(false);
+
+        // Act
+        var coalesced = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseDownloadItem",
+            Status = JobExecutionStatus.Queued,
+            LockPartition = "release=1",
+            NotBeforeAt = Now.UtcDateTime.AddMinutes(20),
+            StatusMessage = incomingReason,
+            Parameters = new Dictionary<string, string>
+            {
+                ["capacityDeferredAt"] = "must-not-replace",
+                ["contentHierarchyItemId"] = incomingTarget
+            }
+        }, null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var persisted = await _subject.GetByIdAsync(original.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(coalesced.Id, Is.EqualTo(original.Id));
+            Assert.That(persisted!.StatusMessage, Is.EqualTo(expectedReason));
+            Assert.That(persisted.Status, Is.EqualTo(JobExecutionStatus.Queued));
+            Assert.That(persisted.NotBeforeAt, Is.EqualTo(new DateTime(2026, 7, 17, 12, 10, 0, DateTimeKind.Utc)));
+            Assert.That(persisted.Parameters["capacityDeferredAt"], Is.EqualTo("original-guard"));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+        }
+    }
+
+    [TestCase("ReleaseSearchItem", "false", "true", "true", 1)]
+    [TestCase("ReleaseSearchItem", "true", "false", "true", 0)]
+    [TestCase("ReleaseSearchItem", "false", "false", "false", 0)]
+    [TestCase("ReleaseSearchItem", "true", "true", "true", 0)]
+    [TestCase("RootFolderContentDiscovery", "false", "true", "false", 0)]
+    public async Task CreateAsync_KeepsTheForcedSearch_WhenAReleaseSearchCoalescesOntoAQueuedSearch(
+        string jobType,
+        string queuedForce,
+        string incomingForce,
+        string expectedForce,
+        int expectedForceUpgrades)
+    {
+        // Arrange
+        var original = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = jobType,
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "target",
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "target",
+                ["force"] = queuedForce
+            }
+        }, null).ConfigureAwait(false);
+
+        // Act
+        var coalesced = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = jobType,
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Immediate,
+            LockPartition = "target",
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "target",
+                ["force"] = incomingForce
+            }
+        }, null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var persisted = await _subject.GetByIdAsync(original.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(coalesced.Id, Is.EqualTo(original.Id));
+            Assert.That(coalesced.Parameters["force"], Is.EqualTo(expectedForce));
+            Assert.That(persisted!.Parameters["force"], Is.EqualTo(expectedForce));
+            Assert.That(persisted.Parameters["contentHierarchyItemId"], Is.EqualTo("target"));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(
+                await _context.AuditRecords
+                    .Where(record => record.Operation == "Coalesce")
+                    .Select(record => record.Detail)
+                    .ToListAsync()
+                    .ConfigureAwait(false),
+                Has.Exactly(expectedForceUpgrades).EndsWith("; upgraded the search to forced"));
+        }
+    }
+
+    [TestCase("RootFolderContentDiscovery", null, 1)]
+    [TestCase("MediaInfoExtractScan", "item-a", 0)]
+    public async Task CreateAsync_WidensOnlyADiscovery_WhenAnotherTargetCoalescesOntoItsQueuedRun(
+        string jobType,
+        string? expectedTarget,
+        int expectedWidenings)
+    {
+        // Arrange
+        var original = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = jobType,
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "shared",
+            Parameters = new Dictionary<string, string> { ["contentHierarchyItemId"] = "item-a" }
+        }, null).ConfigureAwait(false);
+
+        // Act
+        var coalesced = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = jobType,
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "shared",
+            Parameters = new Dictionary<string, string> { ["contentHierarchyItemId"] = "item-b" }
+        }, null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var persisted = await _subject.GetByIdAsync(original.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(coalesced.Id, Is.EqualTo(original.Id));
+            Assert.That(persisted!.Parameters.GetValueOrDefault("contentHierarchyItemId"), Is.EqualTo(expectedTarget));
+            Assert.That(
+                await _context.AuditRecords
+                    .Where(record => record.Operation == "Coalesce")
+                    .Select(record => record.Detail)
+                    .ToListAsync()
+                    .ConfigureAwait(false),
+                Has.Exactly(expectedWidenings).EndsWith("; widened the run to the whole root folder"));
+        }
+    }
+
+    [TestCase("true", null, false, false)]
+    [TestCase("false", "Waiting for capacity.", false, false)]
+    [TestCase("false", null, true, true)]
+    public async Task CreateAsync_EnqueuesANewExecution_WhenTheQueuedExecutionStartsBeforeTheCoalesceWrites(
+        string incomingForce,
+        string? incomingStatusMessage,
+        bool queuedDeferred,
+        bool incomingDeferred)
+    {
+        // Arrange
+        var claim = new Mock<DbCommandInterceptor> { CallBase = true };
+        claim
+            .Setup(interceptor => interceptor.NonQueryExecutingAsync(
+                It.Is<DbCommand>(command =>
+                    command.CommandText.StartsWith("UPDATE", StringComparison.Ordinal) &&
+                    command.CommandText.Contains("\"StatusMessage\"", StringComparison.Ordinal)),
+                It.IsAny<CommandEventData>(),
+                It.IsAny<InterceptionResult<int>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((DbCommand command, CommandEventData _, InterceptionResult<int> _, CancellationToken _) =>
+            {
+                using var start = command.Connection!.CreateCommand();
+                start.Transaction = command.Transaction;
+                start.CommandText = "UPDATE job_execution SET Status = 2 WHERE Status = 1";
+                start.ExecuteNonQuery();
+            })
+            .Returns((DbCommand _, CommandEventData _, InterceptionResult<int> result, CancellationToken _) =>
+                ValueTask.FromResult(result));
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.AddInterceptors(claim.Object).Options);
+        await context.Database.OpenConnectionAsync().ConfigureAwait(false);
+        await context.Database.EnsureCreatedAsync().ConfigureAwait(false);
+        var transactions = new TransactionManager(context, NullLogger<TransactionManager>.Instance);
+        IJobExecutionRepository subject = new JobExecutionRepository(
+            context,
+            new AuditRecordRepository(
+                context,
+                Mock.Of<IEventBus>(),
+                NullLogger<AuditRecordRepository>.Instance,
+                transactions,
+                Mock.Of<IJobExecutionScopeFactory>(),
+                _timeProvider),
+            transactions,
+            Mock.Of<IEventBus>(),
+            NullLogger<JobExecutionRepository>.Instance,
+            _timeProvider,
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+        var original = await subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "target",
+            NotBeforeAt = queuedDeferred ? Now.UtcDateTime.AddMinutes(10) : null,
+            StatusMessage = "Queued.",
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "target",
+                ["force"] = "false"
+            }
+        }, null).ConfigureAwait(false);
+
+        // Act
+        var result = await subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "target",
+            NotBeforeAt = incomingDeferred ? Now.UtcDateTime.AddMinutes(5) : null,
+            StatusMessage = incomingStatusMessage,
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "target",
+                ["force"] = incomingForce
+            }
+        }, null).ConfigureAwait(false);
+        context.ChangeTracker.Clear();
+        var started = await context.JobExecutions
+            .AsNoTracking()
+            .SingleAsync(execution => execution.Id == original.Id)
+            .ConfigureAwait(false);
+        var queued = await context.JobExecutions
+            .AsNoTracking()
+            .SingleAsync(execution => execution.Id != original.Id)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Id, Is.EqualTo(queued.Id));
+            Assert.That(started.Status, Is.EqualTo(JobExecutionStatus.Running));
+            Assert.That(started.Parameters["force"], Is.EqualTo("false"));
+            Assert.That(started.StatusMessage, Is.EqualTo("Queued."));
+            Assert.That(started.NotBeforeAt, Is.EqualTo(original.NotBeforeAt));
+            Assert.That(queued.Status, Is.EqualTo(JobExecutionStatus.Queued));
+            Assert.That(queued.Parameters["force"], Is.EqualTo(incomingForce));
+            Assert.That(queued.StatusMessage, Is.EqualTo(incomingStatusMessage));
+            Assert.That(
+                await context.AuditRecords
+                    .CountAsync(record => record.Operation == "Coalesce")
+                    .ConfigureAwait(false),
+                Is.Zero);
+        }
+    }
+
+    [Test]
+    public async Task CancelAsync_LeavesARunningExecutionAlone_WhenItStartedAfterItWasRead()
+    {
+        // Arrange
+        var queued = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "target",
+            Parameters = new Dictionary<string, string> { ["contentHierarchyItemId"] = "target" }
+        }, null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var read = await _subject.GetByIdAsync(queued.Id).ConfigureAwait(false);
+        await _subject.TryClaimAsync(queued.Id, "node-a", CancellationToken.None).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.CancelAsync(read!).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var persisted = await _subject.GetByIdAsync(queued.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Null);
+            Assert.That(persisted!.Status, Is.EqualTo(JobExecutionStatus.Running));
+        }
+    }
+
+    [TestCase(true, JobExecutionStatus.Cancelled, true)]
+    [TestCase(false, JobExecutionStatus.Queued, false)]
+    public async Task CancelAsync_CancelsTheQueuedExecution_WhenItIsUnchangedSinceItWasRead(
+        bool readAfterTheUpgrade,
+        JobExecutionStatus expectedStatus,
+        bool expectedCancelled)
+    {
+        // Arrange
+        var queued = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "target",
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "target",
+                ["force"] = "false"
+            }
+        }, null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var readBeforeTheUpgrade = await _subject.GetByIdAsync(queued.Id).ConfigureAwait(false);
+        _timeProvider.Advance(TimeSpan.FromTicks(1_234_567));
+        await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "target",
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "target",
+                ["force"] = "true"
+            }
+        }, null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var read = readAfterTheUpgrade
+            ? await _subject.GetByIdAsync(queued.Id).ConfigureAwait(false)
+            : readBeforeTheUpgrade;
+
+        // Act
+        var result = await _subject.CancelAsync(read!).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var persisted = await _subject.GetByIdAsync(queued.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result is not null, Is.EqualTo(expectedCancelled));
+            Assert.That(persisted!.Status, Is.EqualTo(expectedStatus));
+            Assert.That(read!.ModifiedAt is null, Is.EqualTo(!readAfterTheUpgrade));
+        }
+    }
+
+    [TestCase("sqlite")]
+    [TestCase("postgresql")]
+    [TestCase("sqlserver")]
+    public void Model_MatchesMigrationWithoutDeadline_WhenProviderIsSupported(string provider)
+    {
+        // Arrange
+        using var context = provider switch
+        {
+            "postgresql" => Magpie.Data.PostgreSQL.MagpieDbContextFactory.Create(
+                "Host=127.0.0.1;Database=unused", [], []),
+            "sqlserver" => Magpie.Data.SqlServer.MagpieDbContextFactory.Create(
+                "Server=127.0.0.1;Database=unused", [], []),
+            _ => MagpieDbContextFactory.Create("Data Source=:memory:", [], [])
+        };
+
+        // Act
+        var pendingChanges = context.Database.HasPendingModelChanges();
+        var createScript = context.Database.GenerateCreateScript();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(pendingChanges, Is.False);
+            Assert.That(createScript, Does.Not.Contain("TimeoutAt"));
+        }
+    }
+
+    [TestCase(JobExecutionStatus.Running, false)]
+    [TestCase(JobExecutionStatus.Running, true)]
+    [TestCase(JobExecutionStatus.CancellationRequested, false)]
+    [TestCase(JobExecutionStatus.CancellationRequested, true)]
+    public async Task TryRecoverInactiveAsync_PreservesExecution_WhenHeartbeatOrOwnerChanges(
+        JobExecutionStatus status, bool ownerChanges)
+    {
+        // Arrange
+        var observed = new JobExecution
+        {
+            JobType = "long-running",
+            Status = status,
+            NodeId = "old-owner",
+            LastHeartbeat = Now.UtcDateTime.AddHours(-1),
+            CreatedAt = Now.UtcDateTime.AddHours(-2)
+        };
+        _context.JobExecutions.Add(observed);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        if (ownerChanges)
+        {
+            await _context.JobExecutions.Where(item => item.Id == observed.Id)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.NodeId, "new-owner"))
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            await _subject.TouchHeartbeatAsync(observed.Id, "old-owner").ConfigureAwait(false);
+        }
+
+        // Act
+        var recovered = await _subject.TryRecoverInactiveAsync(observed, "inactive worker").ConfigureAwait(false);
+
+        // Assert
+        var stored = await _subject.GetByIdAsync(observed.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(recovered, Is.False);
+            Assert.That(stored!.Status, Is.EqualTo(status));
+            Assert.That(_events, Is.Empty);
+            Assert.That(await _context.AuditRecords.CountAsync().ConfigureAwait(false), Is.EqualTo(0));
+        }
+    }
+
+    [TestCase(JobExecutionStatus.Running, JobExecutionStatus.Failed, 0)]
+    [TestCase(JobExecutionStatus.CancellationRequested, JobExecutionStatus.Cancelled, 1)]
+    public async Task TryRecoverInactiveAsync_TransitionsOnce_WhenObservedLeaseIsUnchanged(
+        JobExecutionStatus status, JobExecutionStatus expectedStatus, int auditCount)
+    {
+        // Arrange
+        var observed = new JobExecution
+        {
+            JobType = "inactive",
+            Status = status,
+            NodeId = "owner",
+            LastHeartbeat = Now.UtcDateTime.AddHours(-1),
+            CreatedAt = Now.UtcDateTime.AddHours(-2)
+        };
+        _context.JobExecutions.Add(observed);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var first = await _subject.TryRecoverInactiveAsync(observed, "inactive worker").ConfigureAwait(false);
+        var second = await _subject.TryRecoverInactiveAsync(observed, "inactive worker").ConfigureAwait(false);
+
+        // Assert
+        var stored = await _subject.GetByIdAsync(observed.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first, Is.True);
+            Assert.That(second, Is.False);
+            Assert.That(stored!.Status, Is.EqualTo(expectedStatus));
+            Assert.That(await _context.AuditRecords.CountAsync().ConfigureAwait(false), Is.EqualTo(auditCount));
+            Assert.That(_events, Has.Count.EqualTo(auditCount));
+        }
+    }
+
+    [OneTimeSetUp]
+    public void CreateTemplate()
+    {
+        _template = new SqliteConnection("Data Source=:memory:");
+        _template.Open();
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        using var context = new MagpieDbContext(options.UseSqlite(_template).Options);
+        context.Database.EnsureCreated();
+    }
+
+    [OneTimeTearDown]
+    public void DisposeTemplate()
+    {
+        _template.Dispose();
+    }
+
     [SetUp]
     public void SetUp()
     {
-        _context = MagpieDbContextFactory.Create("Data Source=:memory:", [], []);
-        _context.Database.OpenConnection();
-        _context.Database.EnsureCreated();
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        _template.BackupDatabase(connection);
+        var options = new DbContextOptionsBuilder<MagpieDbContext>();
+        MagpieDbContextFactory.ConfigureOptions(options, "Data Source=:memory:", [], []);
+        _context = new MagpieDbContext(options.UseSqlite(connection, contextOwnsConnection: true).Options);
 
         var user = new User
         {
@@ -95,7 +717,15 @@ public sealed class JobExecutionRepositoryTests
             _transactionManager,
             eventBus.Object,
             NullLogger<JobExecutionRepository>.Instance,
-            _timeProvider);
+            _timeProvider,
+            new JobRegistry(
+                [
+                    new(DownloadImportItemJob.Spec, typeof(DownloadImportItemJob)),
+                    new(MediaInfoExtractScanJob.Spec, typeof(MediaInfoExtractScanJob)),
+                    new(MediaServerRefreshJob.Spec, typeof(MediaServerRefreshJob)),
+                    new(RootFolderContentDiscoveryJob.Spec, typeof(RootFolderContentDiscoveryJob))
+                ],
+                NullLogger<JobRegistry>.Instance));
     }
 
     [TearDown]
@@ -168,6 +798,120 @@ public sealed class JobExecutionRepositoryTests
             Assert.That(persistedSuccessor.ParentExecutionId, Is.EqualTo(running.Id));
             Assert.That(blockedCandidates.Select(candidate => candidate.Id), Does.Not.Contain(successor.Id));
             Assert.That(unblockedCandidates.Select(candidate => candidate.Id), Does.Contain(successor.Id));
+        }
+    }
+
+    [TestCase(JobExecutionStatus.Queued)]
+    [TestCase(JobExecutionStatus.Running)]
+    [TestCase(JobExecutionStatus.CancellationRequested)]
+    public async Task CreateIfInactiveAsync_PreservesOwner_WhenPartitionHasWork(JobExecutionStatus status)
+    {
+        // Arrange
+        var owner = new JobExecution
+        {
+            JobType = "DownloadImportItem",
+            Status = status,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "type:DownloadImportItem|downloadId=abcdefff-1234-5678-90ab-cdef12345678",
+            NotBeforeAt = new DateTime(2026, 7, 17, 12, 30, 0, DateTimeKind.Utc),
+            Parameters = new() { ["downloadId"] = "abcdefff-1234-5678-90ab-cdef12345678", ["collisionMode"] = "skip" },
+            CreatedAt = new DateTime(2026, 7, 17, 11, 0, 0, DateTimeKind.Utc)
+        };
+        _context.JobExecutions.Add(owner);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var recovery = new JobExecution
+        {
+            JobType = "DownloadImportItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "type:DownloadImportItem|downloadId=abcdefff-1234-5678-90ab-cdef12345678",
+            Parameters = new()
+            {
+                ["downloadId"] = "abcdefff-1234-5678-90ab-cdef12345678",
+                ["collisionMode"] = "replace"
+            }
+        };
+
+        // Act
+        var result = await _subject.CreateIfInactiveAsync(recovery, _userId).ConfigureAwait(false);
+
+        // Assert
+        var persisted = await _context.JobExecutions.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Id, Is.EqualTo(owner.Id));
+            Assert.That(persisted.Status, Is.EqualTo(status));
+            Assert.That(persisted.NotBeforeAt, Is.EqualTo(new DateTime(2026, 7, 17, 12, 30, 0, DateTimeKind.Utc)));
+            Assert.That(persisted.Parameters["collisionMode"], Is.EqualTo("skip"));
+            Assert.That(persisted.CreatedAt, Is.EqualTo(new DateTime(2026, 7, 17, 11, 0, 0, DateTimeKind.Utc)));
+            Assert.That(persisted.ModifiedAt, Is.Null);
+            Assert.That(await _context.AuditRecords.CountAsync().ConfigureAwait(false), Is.EqualTo(0));
+            Assert.That(_events, Is.Empty);
+        }
+    }
+
+    [TestCase(JobExecutionStatus.Completed)]
+    [TestCase(JobExecutionStatus.Failed)]
+    [TestCase(JobExecutionStatus.Cancelled)]
+    public async Task CreateIfInactiveAsync_CreatesRecovery_WhenPreviousOwnerIsTerminal(JobExecutionStatus status)
+    {
+        // Arrange
+        _context.JobExecutions.Add(new JobExecution
+        {
+            JobType = "DownloadImportItem",
+            Status = status,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "type:DownloadImportItem|downloadId=abcdefff-1234-5678-90ab-cdef12345678",
+            CreatedAt = new DateTime(2026, 7, 17, 11, 0, 0, DateTimeKind.Utc)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var recovery = new JobExecution
+        {
+            JobType = "DownloadImportItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "type:DownloadImportItem|downloadId=abcdefff-1234-5678-90ab-cdef12345678"
+        };
+
+        // Act
+        var result = await _subject.CreateIfInactiveAsync(recovery, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Status, Is.EqualTo(JobExecutionStatus.Queued));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(2));
+            Assert.That(await _context.AuditRecords.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(_events, Has.Count.EqualTo(2));
+        }
+    }
+
+    [TestCase(null, JobExecutionMode.Queue, JobExecutionStatus.Queued)]
+    [TestCase("", JobExecutionMode.Queue, JobExecutionStatus.Queued)]
+    [TestCase("partition", JobExecutionMode.Immediate, JobExecutionStatus.Queued)]
+    [TestCase("partition", JobExecutionMode.Queue, JobExecutionStatus.Running)]
+    public async Task CreateIfInactiveAsync_RejectsRequest_WhenOwnershipCannotBeChecked(
+        string? partition, JobExecutionMode mode, JobExecutionStatus status)
+    {
+        // Arrange
+        var request = new JobExecution
+        {
+            JobType = "DownloadImportItem",
+            LockPartition = partition,
+            ExecutionMode = mode,
+            Status = status
+        };
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(async () =>
+            await _subject.CreateIfInactiveAsync(request, null).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.ParamName, Is.EqualTo("model"));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(0));
+            Assert.That(_events, Is.Empty);
         }
     }
 
@@ -528,6 +1272,62 @@ public sealed class JobExecutionRepositoryTests
         Assert.That(candidates.Select(candidate => candidate.Id), Does.Not.Contain(queued.Id));
     }
 
+    [TestCase("item-a", "item-b", null)]
+    [TestCase("item-a", null, null)]
+    [TestCase("item-a", "item-a", "item-a")]
+    [TestCase(null, "item-b", null)]
+    public async Task ExecuteAsync_KeepsEveryRequestedFolderInOneDiscovery_WhenScopesInTheSameRootFolderCoalesce(
+        string? firstItem, string? secondItem, string? expectedItem)
+    {
+        // Arrange
+        IJobManager manager = new JobManager(
+            Mock.Of<IJobRuntime>(),
+            Mock.Of<IJobRegistry>(registry =>
+                registry.ListJobSpecs() == new[] { RootFolderContentDiscoveryJob.Spec }),
+            _subject,
+            Mock.Of<IScheduleTriggerRepository>(),
+            Mock.Of<IEventTriggerRepository>(),
+            Mock.Of<IJobConcurrencyScheduler>(),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            _timeProvider,
+            NullLogger<JobManager>.Instance, _transactionManager);
+        var rootFolderId = Guid.NewGuid();
+        var itemIds = new Dictionary<string, string>
+        {
+            ["item-a"] = Guid.NewGuid().ToString("D"),
+            ["item-b"] = Guid.NewGuid().ToString("D")
+        };
+        var first = new Dictionary<string, string> { ["rootFolderId"] = rootFolderId.ToString("D") };
+        var second = new Dictionary<string, string>(first);
+        if (firstItem is not null)
+        {
+            first["contentHierarchyItemId"] = itemIds[firstItem];
+        }
+
+        if (secondItem is not null)
+        {
+            second["contentHierarchyItemId"] = itemIds[secondItem];
+        }
+
+        // Act
+        var firstId = await manager.ExecuteAsync(
+            new JobEnqueueRequest { JobType = "RootFolderContentDiscovery", Parameters = first })
+            .ConfigureAwait(false);
+        var secondId = await manager.ExecuteAsync(
+            new JobEnqueueRequest { JobType = "RootFolderContentDiscovery", Parameters = second })
+            .ConfigureAwait(false);
+
+        // Assert
+        var execution = await _context.JobExecutions.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(secondId, Is.EqualTo(firstId));
+            Assert.That(
+                execution.Parameters.GetValueOrDefault("contentHierarchyItemId"),
+                Is.EqualTo(expectedItem is null ? null : itemIds[expectedItem]));
+        }
+    }
+
     [Test]
     public async Task ExecuteAsync_CoalescesSameRootFolder_WhenTargetsUseParameterAndEventContext()
     {
@@ -542,7 +1342,7 @@ public sealed class JobExecutionRepositoryTests
             Mock.Of<IJobConcurrencyScheduler>(),
             Mock.Of<IJobExecutionScopeFactory>(),
             _timeProvider,
-            NullLogger<JobManager>.Instance);
+            NullLogger<JobManager>.Instance, _transactionManager);
         var rootFolderId = Guid.NewGuid();
         var otherRootFolderId = Guid.NewGuid();
 
@@ -687,123 +1487,6 @@ public sealed class JobExecutionRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_OneDeferredExecution_WhenSameIdentityTransactionsOverlap()
-    {
-        // Arrange
-        var connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = $"coalescing-{Guid.NewGuid():N}",
-            Mode = SqliteOpenMode.Memory,
-            Cache = SqliteCacheMode.Shared,
-            DefaultTimeout = 5
-        }.ToString();
-        using var keeper = new SqliteConnection(connectionString);
-        await keeper.OpenAsync().ConfigureAwait(false);
-        var options = new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite(connectionString)
-            .Options;
-        using (var schemaContext = new MagpieDbContext(options))
-        {
-            await schemaContext.Database.EnsureCreatedAsync().ConfigureAwait(false);
-        }
-
-        using var firstContext = new MagpieDbContext(options);
-        var secondStarting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var transactions = new Mock<DbTransactionInterceptor> { CallBase = true };
-        transactions.Setup(interceptor => interceptor.TransactionStartingAsync(
-                It.IsAny<DbConnection>(), It.IsAny<TransactionStartingEventData>(),
-                It.IsAny<InterceptionResult<DbTransaction>>(), It.IsAny<CancellationToken>()))
-            .Callback(() => secondStarting.TrySetResult())
-            .ReturnsAsync(default(InterceptionResult<DbTransaction>));
-        using var secondContext = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
-            .UseSqlite(connectionString).AddInterceptors(transactions.Object).Options);
-        var firstTransactions = new TransactionManager(firstContext, NullLogger<TransactionManager>.Instance);
-        var firstRepository = new JobExecutionRepository(
-            firstContext,
-            new AuditRecordRepository(
-                firstContext,
-                Mock.Of<IEventBus>(),
-                NullLogger<AuditRecordRepository>.Instance,
-                firstTransactions,
-                Mock.Of<IJobExecutionScopeFactory>(),
-                _timeProvider),
-            firstTransactions,
-            Mock.Of<IEventBus>(),
-            NullLogger<JobExecutionRepository>.Instance,
-            _timeProvider);
-        var secondTransactions = new TransactionManager(secondContext, NullLogger<TransactionManager>.Instance);
-        var secondRepository = new JobExecutionRepository(
-            secondContext,
-            new AuditRecordRepository(
-                secondContext,
-                Mock.Of<IEventBus>(),
-                NullLogger<AuditRecordRepository>.Instance,
-                secondTransactions,
-                Mock.Of<IJobExecutionScopeFactory>(),
-                _timeProvider),
-            secondTransactions,
-            Mock.Of<IEventBus>(),
-            NullLogger<JobExecutionRepository>.Instance,
-            _timeProvider);
-        var firstRequest = new JobExecution
-        {
-            Id = Guid.NewGuid(),
-            JobType = "DownloadRefresh",
-            Scope = JobScope.System,
-            Status = JobExecutionStatus.Queued,
-            LockPartition = "partition:shared",
-            NotBeforeAt = Now.UtcDateTime.AddSeconds(30),
-        };
-        var secondRequest = new JobExecution
-        {
-            Id = Guid.NewGuid(),
-            JobType = "DownloadRefresh",
-            Scope = JobScope.System,
-            Status = JobExecutionStatus.Queued,
-            LockPartition = "partition:shared",
-            NotBeforeAt = Now.UtcDateTime.AddSeconds(20),
-        };
-        var firstCreated = new TaskCompletionSource<JobExecution>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var firstTransaction = firstTransactions.ExecuteWithTransactionAsync(
-            async ct =>
-            {
-                firstCreated.TrySetResult(
-                    await firstRepository.CreateAsync(firstRequest, createdByUserId: null, ct)
-                        .ConfigureAwait(false));
-                await releaseFirst.Task.ConfigureAwait(false);
-            },
-            CancellationToken.None);
-        var first = await firstCreated.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-
-        // Act
-        var secondTask = Task.Run(() => secondRepository.CreateAsync(
-            secondRequest, createdByUserId: null, CancellationToken.None));
-        await secondStarting.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        var secondWasBlocked = !secondTask.IsCompleted;
-        releaseFirst.TrySetResult(true);
-        await firstTransaction.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-
-        // Assert
-        using var verificationContext = new MagpieDbContext(options);
-        var execution = await verificationContext.JobExecutions
-            .AsNoTracking()
-            .SingleAsync()
-            .ConfigureAwait(false);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(secondWasBlocked, Is.True);
-            Assert.That(second.Id, Is.EqualTo(first.Id));
-            Assert.That(execution.NotBeforeAt, Is.EqualTo(secondRequest.NotBeforeAt));
-            Assert.That(
-                await verificationContext.Set<Dictionary<string, object>>("JobEnqueueCoalescingLock")
-                    .CountAsync().ConfigureAwait(false),
-                Is.Zero);
-        }
-    }
-
-    [Test]
     public async Task CreateAsync_SamePartition_WhenRetryClone()
     {
         // Arrange
@@ -819,7 +1502,8 @@ public sealed class JobExecutionRepositoryTests
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             _loggerFactory.CreateLogger<JobExecutionRepository>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
         var original = await subject.CreateAsync(
             new JobExecution
             {
@@ -866,7 +1550,8 @@ public sealed class JobExecutionRepositoryTests
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             _loggerFactory.CreateLogger<JobExecutionRepository>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
         var original = await subject.CreateAsync(
             new JobExecution
             {
@@ -913,7 +1598,8 @@ public sealed class JobExecutionRepositoryTests
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             _loggerFactory.CreateLogger<JobExecutionRepository>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
         var holder = new JobExecution
         {
             JobType = "FullScan",
@@ -963,7 +1649,8 @@ public sealed class JobExecutionRepositoryTests
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             _loggerFactory.CreateLogger<JobExecutionRepository>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
         var holder = new JobExecution
         {
             JobType = "FullScan",
@@ -997,6 +1684,94 @@ public sealed class JobExecutionRepositoryTests
     }
 
     [Test]
+    public async Task TouchHeartbeatAsync_True_WhenTheNodeOwnsTheExecution()
+    {
+        // Arrange
+        var subject = new JobExecutionRepository(
+            _context,
+            new AuditRecordRepository(
+                _context,
+                Mock.Of<IEventBus>(),
+                _loggerFactory.CreateLogger<AuditRecordRepository>(),
+                new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+                Mock.Of<IJobExecutionScopeFactory>(),
+                timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IEventBus>(),
+            _loggerFactory.CreateLogger<JobExecutionRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+        var running = new JobExecution
+        {
+            JobType = "FullScan",
+            Scope = JobScope.System,
+            Status = JobExecutionStatus.Running,
+            NodeId = "node-1",
+            LastHeartbeat = new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.JobExecutions.Add(running);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Entry(running).State = EntityState.Detached;
+
+        // Act
+        var owned = await subject.TouchHeartbeatAsync(running.Id, "node-1", default).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.JobExecutions.AsNoTracking().SingleAsync(e => e.Id == running.Id)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(owned, Is.True);
+            Assert.That(stored.LastHeartbeat, Is.EqualTo(new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc)));
+        }
+    }
+
+    [Test]
+    public async Task TouchHeartbeatAsync_False_WhenAnotherNodeOwnsTheExecution()
+    {
+        // Arrange
+        var subject = new JobExecutionRepository(
+            _context,
+            new AuditRecordRepository(
+                _context,
+                Mock.Of<IEventBus>(),
+                _loggerFactory.CreateLogger<AuditRecordRepository>(),
+                new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+                Mock.Of<IJobExecutionScopeFactory>(),
+                timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            Mock.Of<IEventBus>(),
+            _loggerFactory.CreateLogger<JobExecutionRepository>(),
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+        var running = new JobExecution
+        {
+            JobType = "FullScan",
+            Scope = JobScope.System,
+            Status = JobExecutionStatus.Running,
+            NodeId = "node-1",
+            LastHeartbeat = new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.JobExecutions.Add(running);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Entry(running).State = EntityState.Detached;
+
+        // Act
+        var owned = await subject.TouchHeartbeatAsync(running.Id, "node-2", default).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.JobExecutions.AsNoTracking().SingleAsync(e => e.Id == running.Id)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(owned, Is.False);
+            Assert.That(stored.LastHeartbeat, Is.EqualTo(new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc)));
+        }
+    }
+
+    [Test]
     public async Task TryStartAsync_False_WhenPartitionHeldByCancellationRequested()
     {
         // Arrange
@@ -1012,7 +1787,8 @@ public sealed class JobExecutionRepositoryTests
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             _loggerFactory.CreateLogger<JobExecutionRepository>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
         var holder = new JobExecution
         {
             JobType = "FullScan",
@@ -1061,7 +1837,8 @@ public sealed class JobExecutionRepositoryTests
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             _loggerFactory.CreateLogger<JobExecutionRepository>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
         var holder = new JobExecution
         {
             JobType = "FullScan",
@@ -1377,7 +2154,7 @@ public sealed class JobExecutionRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
         _context.Entry(execution).State = EntityState.Detached;
         _events.Clear();
-        await _subject.RequestCancellationAsync(execution.Id).ConfigureAwait(false);
+        await _subject.CancelAsync(execution.Id).ConfigureAwait(false);
         _events.Clear();
 
         // Act
@@ -1444,7 +2221,7 @@ public sealed class JobExecutionRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
         _context.Entry(execution).State = EntityState.Detached;
         _events.Clear();
-        await _subject.RequestCancellationAsync(execution.Id).ConfigureAwait(false);
+        await _subject.CancelAsync(execution.Id).ConfigureAwait(false);
         _events.Clear();
 
         // Act
@@ -1463,7 +2240,7 @@ public sealed class JobExecutionRepositoryTests
     }
 
     [Test]
-    public async Task RequestCancellationAsync_CancelledEvent_WhenQueuedExecutionCancelled()
+    public async Task CancelAsync_CancelledEvent_WhenQueuedExecutionCancelled()
     {
         // Arrange
         _timeProvider.AdjustTime(EventNow);
@@ -1481,7 +2258,7 @@ public sealed class JobExecutionRepositoryTests
         _events.Clear();
 
         // Act
-        var result = await _subject.RequestCancellationAsync(execution.Id).ConfigureAwait(false);
+        var result = await _subject.CancelAsync(execution.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1496,7 +2273,7 @@ public sealed class JobExecutionRepositoryTests
     }
 
     [Test]
-    public async Task RequestCancellationAsync_CancellationRequestedEventOnce_WhenRunningExecutionRequested()
+    public async Task CancelAsync_CancellationRequestedEventOnce_WhenRunningExecutionRequested()
     {
         // Arrange
         _timeProvider.AdjustTime(EventNow);
@@ -1515,7 +2292,7 @@ public sealed class JobExecutionRepositoryTests
         _events.Clear();
 
         // Act
-        var result = await _subject.RequestCancellationAsync(execution.Id).ConfigureAwait(false);
+        var result = await _subject.CancelAsync(execution.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1531,7 +2308,7 @@ public sealed class JobExecutionRepositoryTests
         _events.Clear();
 
         // Act
-        var repeated = await _subject.RequestCancellationAsync(execution.Id).ConfigureAwait(false);
+        var repeated = await _subject.CancelAsync(execution.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1753,6 +2530,41 @@ public sealed class JobExecutionRepositoryTests
         }
     }
 
+    [TestCase(MagpieJobs.Types.MediaInfoExtractScan, true)]
+    [TestCase(MagpieJobs.Types.MediaServerRefresh, true)]
+    [TestCase(MagpieJobs.Types.RootFolderContentDiscovery, false)]
+    public async Task QueryAsync_MatchesTriggerContext_OnlyWhenTheJobTypeTargetsThatEventKey(
+        string jobType,
+        bool expected)
+    {
+        // Arrange
+        var contentHierarchyItemId = Guid.NewGuid().ToString("D");
+        var execution = new JobExecution
+        {
+            Id = Guid.NewGuid(),
+            JobType = jobType,
+            Scope = JobScope.Administrative,
+            Status = JobExecutionStatus.Completed,
+            TriggerContext = new()
+            {
+                [MagpieEvents.Keys.ContentHierarchyItemId.ToEventContextKey()] = contentHierarchyItemId
+            },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.JobExecutions.Add(execution);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.QueryAsync(
+            new JobExecutionQuery { ParameterValueReferences = [contentHierarchyItemId] },
+            new PagingParameter { PageNumber = 1, PageSize = 25 },
+            sort: null,
+            default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(page.Items.Any(item => item.Id == execution.Id), Is.EqualTo(expected));
+    }
+
     [TestCase("D")]
     [TestCase("N")]
     [TestCase("B")]
@@ -1926,7 +2738,8 @@ public sealed class JobExecutionRepositoryTests
                 transactionManager,
                 Mock.Of<IEventBus>(),
                 NullLogger<JobExecutionRepository>.Instance,
-                timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+                timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)),
+                new JobRegistry([], NullLogger<JobRegistry>.Instance));
             commands.Clear();
 
             // Act
@@ -2368,7 +3181,7 @@ public sealed class JobExecutionRepositoryTests
             Mock.Of<IJobConcurrencyScheduler>(),
             Mock.Of<IJobExecutionScopeFactory>(),
             _timeProvider,
-            NullLogger<JobManager>.Instance);
+            NullLogger<JobManager>.Instance, _transactionManager);
         var subjectId = Guid.NewGuid();
         var enqueuedIds = new List<Guid>();
 
@@ -2571,8 +3384,14 @@ public sealed class JobExecutionRepositoryTests
         var audit = new Mock<IAuditRecordRepository>();
         audit.Setup(a => a.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Audit failed."));
-        var subject = new JobExecutionRepository(_context, audit.Object, _transactionManager,
-            Mock.Of<IEventBus>(), NullLogger<JobExecutionRepository>.Instance, _timeProvider);
+        var subject = new JobExecutionRepository(
+            _context,
+            audit.Object,
+            _transactionManager,
+            Mock.Of<IEventBus>(),
+            NullLogger<JobExecutionRepository>.Instance,
+            _timeProvider,
+            new JobRegistry([], NullLogger<JobRegistry>.Instance));
 
         // Act
         var exception = Assert.ThrowsAsync<InvalidOperationException>(async () => await subject.CreateAsync(

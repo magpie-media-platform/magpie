@@ -12,6 +12,22 @@ namespace Magpie.Abstractions.Repositories;
 public interface IRefreshTokenRepository : IRepository
 {
     /// <summary>
+    /// Gets the current token for a committed renewal with matching credentials.
+    /// </summary>
+    /// <param name="tokenHash">The previous or current refresh token hash</param>
+    /// <param name="renewalKeyHash">The client renewal proof hash</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<RefreshToken?> GetRenewalAsync(
+        string tokenHash, string renewalKeyHash, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stores the recovery receipt on the current refresh token.
+    /// </summary>
+    /// <param name="token">The current token and its recovery fields</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task StoreRenewalAsync(RefreshToken token, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates a new refresh token.
     /// </summary>
     /// <param name="token">The refresh token to create</param>

@@ -150,8 +150,14 @@
             order: 1;
         }
 
-        & .interactive-search__table .data-table__cell:not([data-column='title'], [data-column='action']) {
+        &
+            .interactive-search__table
+            .data-table__cell:not([data-column='title'], [data-column='action'], [data-column='status']) {
             order: 2;
+        }
+
+        & .interactive-search__table .data-table__cell[data-column='status']:empty {
+            display: none;
         }
 
         & .interactive-search__table [data-action='grab'] {

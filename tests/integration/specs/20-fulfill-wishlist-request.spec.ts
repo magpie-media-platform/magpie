@@ -51,8 +51,8 @@ interface JobExecution {
 interface ContentItem {
     id: string;
     name: string;
-    monitoring: boolean | null;
-    effectiveMonitoring: boolean;
+    monitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
+    effectiveMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun';
     pendingMetadataRefresh: boolean;
     contentItem?: {
         fulfillment: string;
@@ -196,7 +196,7 @@ test.describe.serial('Journey 20: fulfill a wishlist request', () => {
                 500,
             );
             expect(hydrated.contentItem?.fulfillment).toBe('Missing');
-            expect(hydrated).toMatchObject({ monitoring: null, effectiveMonitoring: true });
+            expect(hydrated).toMatchObject({ monitoring: null, effectiveMonitoring: 'Monitored' });
             expect(await api.get(`/api/content/${id}/metadata`)).toMatchObject({
                 title: 'Wishlist Journey Feature',
                 externalIds: expect.arrayContaining([expect.objectContaining({ value: 'wishlist-feature' })]),

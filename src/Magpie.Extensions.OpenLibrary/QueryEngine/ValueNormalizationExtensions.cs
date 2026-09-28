@@ -8,6 +8,8 @@ namespace Magpie.Extensions.OpenLibrary.QueryEngine;
 
 internal static class ValueNormalizationExtensions
 {
+    private const string OpenLibrarySubjectKeyDroppedCharacters = ";/?:@&=+$,<>#%\"{}|\\^[]`\n\r";
+
     private static readonly IReadOnlyDictionary<string, string> LanguageNames = BuildLanguageNames();
 
     private static readonly IReadOnlyDictionary<string, string> LanguageAliases =
@@ -130,6 +132,32 @@ internal static class ValueNormalizationExtensions
             normalized[2..^1].All(char.IsDigit)
                 ? normalized
                 : null;
+    }
+
+    /// <summary>
+    /// Builds the subject key that Open Library stores for a subject name.
+    /// </summary>
+    /// <remarks>
+    /// A literal port of Open Library's <c>normalize_subject_name</c> (formerly <c>str_to_key</c>), which builds the
+    /// search <c>*_key</c> fields, so it must not normalize further than Open Library does.
+    /// </remarks>
+    /// <param name="name">The subject name</param>
+    internal static string ToOpenLibrarySubjectKey(this string name)
+    {
+        var builder = new StringBuilder(name.Length);
+        foreach (var character in name.Trim().ToLowerInvariant())
+        {
+            if (character == ' ')
+            {
+                builder.Append('_');
+            }
+            else if (OpenLibrarySubjectKeyDroppedCharacters.IndexOf(character) < 0)
+            {
+                builder.Append(character);
+            }
+        }
+
+        return builder.ToString();
     }
 
     internal static string NormalizeSubjectKey(this string value)

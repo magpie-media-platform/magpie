@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -15,6 +16,7 @@ using Magpie.Extensions.Cardigann.Engine.Session;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Sdk.Caching;
+using Magpie.Sdk.Http;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -91,6 +93,7 @@ public sealed class CardigannSessionManagerTests
         [".Config.password"] = "secret",
     };
 
+    private ServiceProvider _cooldownServices = null!;
     private ICardigannSessionManager _sessions = null!;
     private MockHttpMessageHandler _http = null!;
     private Mock<IResultParser> _resultParser = null!;
@@ -104,6 +107,8 @@ public sealed class CardigannSessionManagerTests
     [SetUp]
     public void SetUp()
     {
+        _cooldownServices = new ServiceCollection().AddHttpClient("test-cooldown")
+            .AddUpstreamCooldown().Services.BuildServiceProvider();
         _http = new MockHttpMessageHandler();
         var clientFactory = new Mock<IHttpClientFactory>();
         clientFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => _http.ToHttpClient());
@@ -154,8 +159,8 @@ public sealed class CardigannSessionManagerTests
                 _clientFactory,
                 _settingsService,
                 _memoFactory,
-                NullLogger<FlareSolverrClient>.Instance,
-                new SolverQueue()),
+                NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+                new SolverQueue(), TimeProvider.System),
             new CardigannSessionState(),
             TimeProvider.System,
             NullLogger<CardigannSessionManager>.Instance);
@@ -188,6 +193,7 @@ public sealed class CardigannSessionManagerTests
     [TearDown]
     public void TearDown()
     {
+        _cooldownServices.Dispose();
         _http.Dispose();
     }
 
@@ -1159,188 +1165,6 @@ public sealed class CardigannSessionManagerTests
     }
 
     [Test]
-    public async Task SendAsync_SolvesOneAtATime_WhenTwoTrackersAreChallengedAtOnce()
-    {
-        // Arrange
-        var held = new TaskCompletionSource();
-        var arrivals = new SemaphoreSlim(0);
-        _http.When(HttpMethod.Post, "http://solver.test:8191/v1").Respond(async _ =>
-        {
-            arrivals.Release();
-            await held.Task.ConfigureAwait(false);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(SolvedResponse, Encoding.UTF8, "application/json"),
-            };
-        });
-        _http.When(HttpMethod.Get, "https://tracker.test/search").Respond(request =>
-        {
-            var cookie = request.Headers.TryGetValues("Cookie", out var values)
-                ? string.Join("; ", values)
-                : string.Empty;
-            if (cookie.Contains("cf_clearance=TOKEN", StringComparison.Ordinal))
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html></html>") };
-            }
-
-            var challenge = new HttpResponseMessage(HttpStatusCode.Forbidden)
-            {
-                Content = new StringContent(ChallengePage),
-            };
-            challenge.Headers.TryAddWithoutValidation("CF-RAY", "7a1b2c3d");
-            return challenge;
-        });
-        _http.When(HttpMethod.Get, "https://other.test/search").Respond(request =>
-        {
-            var cookie = request.Headers.TryGetValues("Cookie", out var values)
-                ? string.Join("; ", values)
-                : string.Empty;
-            if (cookie.Contains("cf_clearance=TOKEN", StringComparison.Ordinal))
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html></html>") };
-            }
-
-            var challenge = new HttpResponseMessage(HttpStatusCode.Forbidden)
-            {
-                Content = new StringContent(ChallengePage),
-            };
-            challenge.Headers.TryAddWithoutValidation("CF-RAY", "7a1b2c3d");
-            return challenge;
-        });
-
-        // Act
-        var first = _sessions.SendAsync(
-            SessionKey,
-            BaseUri,
-            HttpMethod.Get,
-            new Uri("https://tracker.test/search"),
-            null,
-            "magpie-test",
-            captureCookies: false,
-            default);
-        var second = _sessions.SendAsync(
-            "priv@https://other.test",
-            new Uri("https://other.test/"),
-            HttpMethod.Get,
-            new Uri("https://other.test/search"),
-            null,
-            "magpie-test",
-            captureCookies: false,
-            default);
-        var oneSolveStarted = await arrivals.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        var secondSolveStarted = await arrivals.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
-        held.SetResult();
-        using var firstResponse = await first.ConfigureAwait(false);
-        using var secondResponse = await second.ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(oneSolveStarted, Is.True);
-            Assert.That(secondSolveStarted, Is.False);
-            Assert.That(firstResponse.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(secondResponse.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-        }
-    }
-
-    [Test]
-    public async Task SendAsync_ReturnsTheChallenge_WhenTheSolverQueueStaysBusy()
-    {
-        // Arrange
-        var held = new TaskCompletionSource();
-        var arrivals = new SemaphoreSlim(0);
-        var solverCalls = 0;
-        var impatient = new CardigannSessionManager(
-            _clientFactory,
-            _resultParser.Object,
-            new FlareSolverrClient(
-                _clientFactory,
-                _settingsService,
-                _memoFactory,
-                NullLogger<FlareSolverrClient>.Instance,
-                new SolverQueue { Wait = TimeSpan.FromMilliseconds(100) }),
-            new CardigannSessionState(),
-            TimeProvider.System,
-            NullLogger<CardigannSessionManager>.Instance);
-        _http.When(HttpMethod.Post, "http://solver.test:8191/v1").Respond(async _ =>
-        {
-            Interlocked.Increment(ref solverCalls);
-            arrivals.Release();
-            await held.Task.ConfigureAwait(false);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(SolvedResponse, Encoding.UTF8, "application/json"),
-            };
-        });
-        _http.When(HttpMethod.Get, "https://tracker.test/search").Respond(request =>
-        {
-            var cookie = request.Headers.TryGetValues("Cookie", out var values)
-                ? string.Join("; ", values)
-                : string.Empty;
-            if (cookie.Contains("cf_clearance=TOKEN", StringComparison.Ordinal))
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html></html>") };
-            }
-
-            var challenge = new HttpResponseMessage(HttpStatusCode.Forbidden)
-            {
-                Content = new StringContent(ChallengePage),
-            };
-            challenge.Headers.TryAddWithoutValidation("CF-RAY", "7a1b2c3d");
-            return challenge;
-        });
-        _http.When(HttpMethod.Get, "https://other.test/search").Respond(request =>
-        {
-            var cookie = request.Headers.TryGetValues("Cookie", out var values)
-                ? string.Join("; ", values)
-                : string.Empty;
-            if (cookie.Contains("cf_clearance=TOKEN", StringComparison.Ordinal))
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html></html>") };
-            }
-
-            var challenge = new HttpResponseMessage(HttpStatusCode.Forbidden)
-            {
-                Content = new StringContent(ChallengePage),
-            };
-            challenge.Headers.TryAddWithoutValidation("CF-RAY", "7a1b2c3d");
-            return challenge;
-        });
-
-        // Act
-        var blocking = impatient.SendAsync(
-            SessionKey,
-            BaseUri,
-            HttpMethod.Get,
-            new Uri("https://tracker.test/search"),
-            null,
-            "magpie-test",
-            captureCookies: false,
-            default);
-        await arrivals.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        using var queued = await impatient.SendAsync(
-            "priv@https://other.test",
-            new Uri("https://other.test/"),
-            HttpMethod.Get,
-            new Uri("https://other.test/search"),
-            null,
-            "magpie-test",
-            captureCookies: false,
-            default)
-            .ConfigureAwait(false);
-        held.SetResult();
-        using var blocked = await blocking.ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(queued.StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
-            Assert.That(queued.DetectCloudflareChallenge(), Is.EqualTo("HTTP 403 with CF headers"));
-            Assert.That(solverCalls, Is.EqualTo(1));
-        }
-    }
-
-    [Test]
     public async Task SendAsync_FetchesAFreshPage_WhenTheSecondSendRepeatsASolvedUrl()
     {
         // Arrange
@@ -1663,8 +1487,8 @@ public sealed class CardigannSessionManagerTests
                 _clientFactory,
                 _settingsService,
                 _memoFactory,
-                NullLogger<FlareSolverrClient>.Instance,
-                new SolverQueue()),
+                NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+                new SolverQueue(), TimeProvider.System),
             new CardigannSessionState(),
             clock,
             NullLogger<CardigannSessionManager>.Instance);
@@ -1734,7 +1558,8 @@ public sealed class CardigannSessionManagerTests
         // Arrange
         var solver = new FlareSolverrClient(
             _clientFactory, Mock.Of<ISettingsService>(), _memoFactory, NullLogger<FlareSolverrClient>.Instance,
-            new SolverQueue());
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(), TimeProvider.System);
 
         // Act
         var result = await solver.SolveAsync(new Uri("https://tracker.test/"), reuse: true, default)
@@ -1742,6 +1567,76 @@ public sealed class CardigannSessionManagerTests
 
         // Assert
         Assert.That(result, Is.Null);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SolveAsync_RejectsBeforeSend_WhenUpstreamThrottlesWhileWaitingForSolver(bool interactive)
+    {
+        // Arrange
+        var cooldown = _cooldownServices.GetRequiredService<IUpstreamCooldown>();
+        var request = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .Respond("application/json", SolvedResponse);
+        var queue = new SolverQueue();
+        using var scope = new SolverRequestScope(interactive
+            ? SolverRequestKind.Interactive : SolverRequestKind.Background);
+        await queue.EnterAsync(default).ConfigureAwait(false);
+        var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance, cooldown, queue, TimeProvider.System);
+        var waiting = solver.SolveAsync(BaseUri, reuse: false, default, "account-a");
+        using var upstream = new HttpRequestMessage(HttpMethod.Get, BaseUri);
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        response.Headers.TryAddWithoutValidation("Retry-After", "120");
+
+        // Act
+        cooldown.RecordThrottle(upstream, "account-a", response);
+        queue.Leave();
+        var rejected = Assert.ThrowsAsync<UpstreamThrottledException>(async () =>
+            await waiting.ConfigureAwait(false));
+        var healthy = await solver.SolveAsync(BaseUri, reuse: false, default, "account-b").ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rejected!.RequestSent, Is.False);
+            Assert.That(healthy, Is.Not.Null);
+            Assert.That(_http.GetMatchCount(request), Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public void SendAsync_SharesSolverThrottle_WhenAuthenticatedSessionRetries()
+    {
+        // Arrange
+        _http.When(HttpMethod.Get, "https://tracker.test/*")
+            .Respond(_ =>
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+                {
+                    Content = new StringContent(ChallengePage)
+                };
+                response.Headers.TryAddWithoutValidation("CF-RAY", "test");
+                return response;
+            });
+        var solverRequest = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .Respond("application/json",
+                """{"status":"ok","solution":{"status":429,"headers":{"Retry-After":"120"}}}""");
+
+        // Act
+        var first = Assert.ThrowsAsync<UpstreamThrottledException>(() => _sessions.SendAsync(
+            SessionKey + "#account-a", BaseUri, HttpMethod.Get, new Uri(BaseUri, "search"),
+            null, "test", false, default));
+        var second = Assert.ThrowsAsync<UpstreamThrottledException>(() => _sessions.SendAsync(
+            SessionKey + "#account-a", BaseUri, HttpMethod.Get, new Uri(BaseUri, "other"),
+            null, "test", false, default));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first!.RequestSent, Is.True);
+            Assert.That(second!.RequestSent, Is.False);
+            Assert.That(_http.GetMatchCount(solverRequest), Is.EqualTo(1));
+        }
     }
 
     [Test]
@@ -1778,8 +1673,8 @@ public sealed class CardigannSessionManagerTests
             _settingsService,
             Mock.Of<ICacheFactory>(factory =>
                 factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()) == memo.Object),
-            NullLogger<FlareSolverrClient>.Instance,
-            new SolverQueue());
+            NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(), TimeProvider.System);
 
         // Act
         await solver.SolveAsync(new Uri("https://tracker.test/one"), reuse: true, default).ConfigureAwait(false);
@@ -1800,7 +1695,8 @@ public sealed class CardigannSessionManagerTests
             .ThrowsAsync(new InvalidOperationException("Settings unavailable."));
         var solver = new FlareSolverrClient(
             _clientFactory, settings.Object, _memoFactory, NullLogger<FlareSolverrClient>.Instance,
-            new SolverQueue());
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(), TimeProvider.System);
 
         // Act
         var action = async () => await solver.SolveAsync(new Uri("https://tracker.test/"), reuse: true, default)
@@ -2007,7 +1903,8 @@ public sealed class CardigannSessionManagerTests
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(client => client.CreateClient(It.IsAny<string>())).Returns(http);
         var solver = new FlareSolverrClient(factory.Object, _settingsService, _memoFactory,
-            NullLogger<FlareSolverrClient>.Instance, new SolverQueue { Wait = TimeSpan.FromSeconds(1) });
+            NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue { Wait = TimeSpan.FromSeconds(1) }, TimeProvider.System);
         await solver.SolveAsync(BaseUri, reuse: true, default).ConfigureAwait(false);
 
         // Act
@@ -2034,8 +1931,8 @@ public sealed class CardigannSessionManagerTests
             _settingsService,
             Mock.Of<ICacheFactory>(factory =>
                 factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()) == memo.Object),
-            NullLogger<FlareSolverrClient>.Instance,
-            new SolverQueue { Wait = TimeSpan.FromSeconds(1) });
+            NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue { Wait = TimeSpan.FromSeconds(1) }, TimeProvider.System);
         _http.When(HttpMethod.Post, "http://solver.test:8191/v1").Respond("application/json", SolvedResponse);
 
         // Act
@@ -2048,6 +1945,501 @@ public sealed class CardigannSessionManagerTests
             Assert.That(key, Has.Length.EqualTo(64));
             Assert.That(key, Does.Not.Contain("secret-value"));
             Assert.That(key, Does.Not.Contain("tracker.test"));
+        }
+    }
+
+    [Test]
+    public async Task SolveAsync_HoldsCapacityUntilTheSolverAnswers_WhenAnAdmittedCallIsCancelled()
+    {
+        // Arrange
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns<HttpRequestMessage, CancellationToken>(async (_, token) =>
+            {
+                entered.TrySetResult();
+                await answer.Task.WaitAsync(token).ConfigureAwait(false);
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(SolvedResponse) };
+            });
+        using var http = new HttpClient(handler.Object);
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(It.IsAny<string>())).Returns(http);
+        var solver = new FlareSolverrClient(factory.Object, _settingsService, _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue { Wait = TimeSpan.Zero }, TimeProvider.System);
+        using var cancellation = new CancellationTokenSource();
+
+        // Act
+        Task<CloudflareClearance?> pending;
+        using (new SolverRequestScope(SolverRequestKind.Interactive))
+        {
+            pending = solver.SolveAsync(BaseUri, reuse: false, cancellation.Token);
+        }
+
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+        await cancellation.CancelAsync().ConfigureAwait(false);
+        var cancelled = Assert.CatchAsync<OperationCanceledException>(async () =>
+            await pending.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false));
+        var busy = Assert.CatchAsync(async () =>
+            await solver.SolveAsync(BaseUri, reuse: false, default).WaitAsync(TimeSpan.FromSeconds(1))
+                .ConfigureAwait(false));
+        answer.SetResult();
+        CloudflareClearance? next;
+        using (new SolverRequestScope(SolverRequestKind.Interactive))
+        {
+            next = await solver.SolveAsync(BaseUri, reuse: false, default).WaitAsync(TimeSpan.FromSeconds(1))
+                .ConfigureAwait(false);
+        }
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(cancelled, Is.Not.Null);
+            Assert.That(busy, Is.InstanceOf<SolverBusyException>());
+            Assert.That(next, Is.Not.Null);
+            handler.Protected().Verify("SendAsync", Times.Exactly(2),
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+        }
+    }
+
+    [Test]
+    public async Task SendAsync_SolvesTheSiteRootOnce_WhenTheSolutionCarriesNoCloudflareCookie()
+    {
+        // Arrange
+        var rootSolve = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/","maxTimeout":60000}""")
+            .Respond("application/json", SolvedPageWithoutCookiesResponse);
+        _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .Respond("application/json", SolvedPageWithoutCookiesResponse);
+        _http.When(HttpMethod.Get, "https://tracker.test/*").Respond(_ =>
+        {
+            var challenge = new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent(ChallengePage),
+            };
+            challenge.Headers.TryAddWithoutValidation("CF-RAY", "7a1b2c3d");
+            return challenge;
+        });
+        var sessions = new CardigannSessionManager(_clientFactory, _resultParser.Object,
+            new FlareSolverrClient(_clientFactory, _settingsService, Mock.Of<ICacheFactory>(factory =>
+                    factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()) == Mock.Of<ICache>()),
+                NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+                new SolverQueue(), TimeProvider.System),
+            new CardigannSessionState(), TimeProvider.System, NullLogger<CardigannSessionManager>.Instance);
+
+        // Act
+        using var first = await sessions.SendAsync(SessionKey, BaseUri, HttpMethod.Get,
+            new Uri("https://tracker.test/search?q=one"), null, "magpie-test", false, default).ConfigureAwait(false);
+        using var second = await sessions.SendAsync(SessionKey, BaseUri, HttpMethod.Get,
+            new Uri("https://tracker.test/search?q=two"), null, "magpie-test", false, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(second.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(_http.GetMatchCount(rootSolve), Is.EqualTo(1));
+        }
+    }
+
+    [TestCase(HttpStatusCode.InternalServerError,
+        """{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds."}""")]
+    [TestCase(HttpStatusCode.InternalServerError,
+        """{"status":"error","message":"Error: Error solving the challenge. Cloudflare has blocked """ +
+        """this request. Probably your IP is banned for this site, check in your web browser."}""")]
+    public async Task SolveAsync_SkipsBackgroundSolvesOfTheSite_WhenTheSolverFailedTheChallengeThere(
+        HttpStatusCode status, string body)
+    {
+        // Arrange
+        var failed = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/search?q=one","maxTimeout":60000}""")
+            .Respond(status, "application/json", body);
+        var skipped = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/search?q=two","maxTimeout":60000}""")
+            .Respond("application/json", SolvedPageResponse);
+        var other = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithContent("""{"cmd":"request.get","url":"https://other.test/search","maxTimeout":60000}""")
+            .Respond("application/json", SolvedPageResponse);
+        var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(), TimeProvider.System);
+
+        // Act
+        var first = await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
+            .ConfigureAwait(false);
+        var second = await solver.SolveAsync(new Uri("https://tracker.test/search?q=two"), reuse: false, default)
+            .ConfigureAwait(false);
+        var unrelated = await solver.SolveAsync(new Uri("https://other.test/search"), reuse: false, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first, Is.Null);
+            Assert.That(second, Is.Null);
+            Assert.That(unrelated, Is.Not.Null);
+            Assert.That(_http.GetMatchCount(failed), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(skipped), Is.Zero);
+            Assert.That(_http.GetMatchCount(other), Is.EqualTo(1));
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SolveAsync_ReachesTheSolverDuringABackoff_WhenTheCallerIsNotBackground(bool connectionTest)
+    {
+        // Arrange
+        _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/search?q=one","maxTimeout":60000}""")
+            .Respond(HttpStatusCode.InternalServerError, "application/json",
+                """{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds."}""");
+        var bypassed = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/search?q=two","maxTimeout":60000}""")
+            .Respond("application/json", SolvedPageResponse);
+        var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(), TimeProvider.System);
+        await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
+            .ConfigureAwait(false);
+
+        // Act
+        CloudflareClearance? solved;
+        using (new SolverRequestScope(connectionTest
+            ? SolverRequestKind.ConnectionTest : SolverRequestKind.Interactive))
+        {
+            solved = await solver.SolveAsync(new Uri("https://tracker.test/search?q=two"), reuse: false, default)
+                .ConfigureAwait(false);
+        }
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(solved, Is.Not.Null);
+            Assert.That(_http.GetMatchCount(bypassed), Is.EqualTo(1));
+        }
+    }
+
+    [TestCase("""{"status":"error","message":"Error: Error starting Chrome: Message: session not created: """ +
+        """cannot connect to chrome at 127.0.0.1:50123"}""")]
+    [TestCase("""{"status":"error","message":"Error: Error solving the challenge. Message: session not """ +
+        """created: cannot connect to chrome at 127.0.0.1:50123"}""")]
+    [TestCase("""{"status":"error","message":"Error: Error solving the challenge. HTTPConnectionPool(""" +
+        """host='localhost', port=50123): Read timed out. (read timeout=120)"}""")]
+    [TestCase("""{"status":"error","message":"Error: Error solving the challenge. "}""")]
+    [TestCase("""{"status":"error","message":"Error: Message: invalid session id"}""")]
+    [TestCase("<html><body>Internal Server Error</body></html>")]
+    public async Task SolveAsync_KeepsSolvingTheSite_WhenTheSolverFailedWithALocalFault(string body)
+    {
+        // Arrange
+        var solve = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .Respond(HttpStatusCode.InternalServerError, "application/json", body);
+        var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(), TimeProvider.System);
+
+        // Act
+        var first = await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
+            .ConfigureAwait(false);
+        var second = await solver.SolveAsync(new Uri("https://tracker.test/search?q=two"), reuse: false, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first, Is.Null);
+            Assert.That(second, Is.Null);
+            Assert.That(_http.GetMatchCount(solve), Is.EqualTo(2));
+        }
+    }
+
+    [Test]
+    public async Task TestConnectionAsync_Succeeds_WhenABackgroundSearchFailedOnTheBackoffAndTheSolverRecovered()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "backoff", Name = "Backoff" };
+        definition.Links.Add("https://tracker.test/");
+        definition.Search.Paths.Add(new SearchPath { Path = "/search" });
+        var integration = new CardigannIndexerIntegration(Guid.Empty, definition, _resultParser.Object, _sessions,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+        _http.When(HttpMethod.Get, "https://tracker.test/*").Respond(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("<html>Just a moment...</html>")
+            };
+            response.Headers.TryAddWithoutValidation("CF-RAY", "challenge");
+            return response;
+        });
+        var solves = 0;
+        _http.When(HttpMethod.Post, "http://solver.test:8191/v1").Respond(_ => ++solves == 1
+            ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent(
+                    """{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 s."}""")
+            }
+            : new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(SolvedPageWithoutCookiesResponse)
+            });
+
+        // Act
+        var failure = Assert.CatchAsync(async () =>
+            await integration.SearchAsync(new ReleaseSearchRequest { Title = "query" },
+                new Dictionary<string, string>(), default).ConfigureAwait(false));
+        var result = await integration.TestConnectionAsync(new Dictionary<string, string>()).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(failure, Is.InstanceOf<HttpRequestException>());
+            Assert.That(result.Success, Is.True);
+            Assert.That(solves, Is.EqualTo(3));
+        }
+    }
+
+    [Test]
+    public async Task SearchAsync_DropsOnlyTheChallengedRow_WhenADetailFetchMeetsTheBackoff()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "details", Name = "Details" };
+        definition.Links.Add("https://tracker.test/");
+        definition.Search.Paths.Add(new SearchPath { Path = "/search" });
+        definition.Download = new DownloadBlock { Selector = "a.magnet", Attribute = "href" };
+        var integration = new CardigannIndexerIntegration(Guid.Empty, definition, _resultParser.Object, _sessions,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+        _http.When(HttpMethod.Get, "https://tracker.test/search").Respond("text/html", "<html>rows</html>");
+        _http.When(HttpMethod.Get, "https://tracker.test/details/b").Respond("text/html", "<html>b</html>");
+        _http.When(HttpMethod.Get, "https://tracker.test/details/a").Respond(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("<html>Just a moment...</html>")
+            };
+            response.Headers.TryAddWithoutValidation("CF-RAY", "challenge");
+            return response;
+        });
+        var solve = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .Respond(HttpStatusCode.InternalServerError, "application/json",
+                """{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds."}""");
+        _resultParser.Setup(value => value.Parse(It.IsAny<string>(), It.IsAny<CardigannDefinition>(),
+                It.IsAny<Uri>(), It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns(
+            [
+                new Release
+                {
+                    Title = "Row A", Protocol = "torrent", InfoUrl = new Uri("https://tracker.test/details/a")
+                },
+                new Release
+                {
+                    Title = "Row B", Protocol = "torrent", InfoUrl = new Uri("https://tracker.test/details/b")
+                },
+            ]);
+        _resultParser.Setup(value => value.ExtractDownloadTarget(It.IsAny<string>(), It.IsAny<DownloadBlock>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns("magnet:?xt=urn:btih:b");
+
+        // Act
+        var releases = await integration.SearchAsync(new ReleaseSearchRequest { Title = "query" },
+            new Dictionary<string, string>(), default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases.Select(release => release.Title), Is.EqualTo(["Row B"]));
+            Assert.That(_http.GetMatchCount(solve), Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task TestConnectionAsync_ReturnsFatal_WhenTheTrackerCannotBeReached()
+    {
+        // Arrange
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(new HttpRequestException("tracker offline"));
+        using var http = new HttpClient(handler.Object);
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(It.IsAny<string>())).Returns(http);
+        var manager = new CardigannSessionManager(factory.Object, _resultParser.Object,
+            Mock.Of<ICloudflareSolver>(), new CardigannSessionState(), TimeProvider.System,
+            NullLogger<CardigannSessionManager>.Instance);
+        var definition = new CardigannDefinition { Id = "offline", Name = "Offline" };
+        definition.Links.Add("https://tracker.test/");
+        var integration = new CardigannIndexerIntegration(Guid.Empty, definition, _resultParser.Object, manager,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var result = await integration.TestConnectionAsync(new Dictionary<string, string>())
+            .WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.FailureKind, Is.EqualTo(ConfigurationFailureKind.Fatal));
+            Assert.That(result.Message, Is.EqualTo("Network error: tracker offline"));
+        }
+    }
+
+    [Test]
+    public async Task TestConnectionAsync_ReturnsFatal_WhenTheSolverRejectsTheChallenge()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "rejected", Name = "Rejected" };
+        definition.Links.Add("https://tracker.test/");
+        var integration = new CardigannIndexerIntegration(Guid.Empty, definition, _resultParser.Object, _sessions,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+        _http.When(HttpMethod.Get, "https://tracker.test/").Respond(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("<html>Just a moment...</html>")
+            };
+            response.Headers.TryAddWithoutValidation("CF-RAY", "challenge");
+            return response;
+        });
+        _http.When(HttpMethod.Post, "http://solver.test:8191/v1").Respond(HttpStatusCode.ServiceUnavailable);
+
+        // Act
+        var result = await integration.TestConnectionAsync(new Dictionary<string, string>()).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.FailureKind, Is.EqualTo(ConfigurationFailureKind.Fatal));
+            Assert.That(result.Message, Is.EqualTo(
+                "Cloudflare protection detected at https://tracker.test/: HTTP 403 with CF headers"));
+        }
+    }
+
+    [Test]
+    public void RegisterServices_PreservesSolverLimits_WhenContentionAdmissionIsEnabled()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        new CardigannExtension().RegisterServices(services);
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        using var client = provider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient("magpie.cardigann.flaresolverr");
+        var queue = provider.GetRequiredService<SolverQueue>();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(client.Timeout.TotalSeconds, Is.EqualTo(120));
+            Assert.That(FlareSolverrClient.ReuseWindow.TotalSeconds, Is.EqualTo(60));
+            Assert.That(queue.Wait.TotalSeconds, Is.EqualTo(20));
+        }
+    }
+
+    [Test]
+    public async Task EnsureLoggedInAsync_AdmitsInteractiveFirst_WhenBackgroundWaitsOnTheSameTracker()
+    {
+        // Arrange
+        var state = new CardigannSessionState();
+        var gate = new SolverQueue { WaitForBackground = true };
+        await gate.EnterAsync(default).ConfigureAwait(false);
+        state.LoginGates[SessionKey] = gate;
+        var manager = new CardigannSessionManager(_clientFactory, _resultParser.Object,
+            Mock.Of<ICloudflareSolver>(), state, TimeProvider.System, NullLogger<CardigannSessionManager>.Instance);
+        var sentAgents = new List<string>();
+        _http.When(HttpMethod.Get, "https://tracker.test/login").Respond(request =>
+        {
+            sentAgents.Add(request.Headers.UserAgent.ToString());
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(LogoutPage) };
+        });
+        var login = new LoginBlock { Method = "get", Path = "/login" };
+
+        // Act
+        var background = manager.EnsureLoggedInAsync(SessionKey, login, BaseUri, Variables, null,
+            "background", false, default);
+        Task<CardigannLoginOutcome> interactive;
+        using (new SolverRequestScope(SolverRequestKind.Interactive))
+        {
+            interactive = manager.EnsureLoggedInAsync(SessionKey, login, BaseUri, Variables, null,
+                "interactive", false, default);
+        }
+
+        gate.Leave();
+        var results = await Task.WhenAll(background, interactive).WaitAsync(TimeSpan.FromSeconds(1))
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(sentAgents, Is.EqualTo(["interactive"]));
+            Assert.That(results.Select(result => result.Success), Is.EqualTo([true, true]));
+        }
+    }
+
+    [Test]
+    public async Task SendAsync_AdmitsInteractiveClearanceFirst_WhenBackgroundWaitsOnTheSameTracker()
+    {
+        // Arrange
+        var state = new CardigannSessionState();
+        var tracker = new TrackerSession();
+        state.Sessions[SessionKey] = tracker;
+        await tracker.ClearanceGate.EnterAsync(default).ConfigureAwait(false);
+        var solver = new Mock<ICloudflareSolver>();
+        var callers = new List<SolverRequestKind>();
+        solver.Setup(value => value.SolveAsync(It.IsAny<Uri>(), true, It.IsAny<CancellationToken>(), null))
+            .Callback(() => callers.Add(SolverRequestScope.Current))
+            .ReturnsAsync(new CloudflareClearance
+            {
+                Cookies = new Dictionary<string, string> { ["cf_clearance"] = "TOKEN" }
+            });
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns<HttpRequestMessage, CancellationToken>((request, _) =>
+            {
+                if (request.Headers.Contains("Cookie"))
+                {
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("healthy")
+                    });
+                }
+
+                var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+                {
+                    Content = new StringContent("<html>Just a moment...</html>")
+                };
+                response.Headers.TryAddWithoutValidation("CF-RAY", "challenge");
+                return Task.FromResult(response);
+            });
+        using var http = new HttpClient(handler.Object);
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(It.IsAny<string>())).Returns(http);
+        var manager = new CardigannSessionManager(factory.Object, _resultParser.Object, solver.Object,
+            state, TimeProvider.System, NullLogger<CardigannSessionManager>.Instance);
+
+        // Act
+        var background = manager.SendAsync(SessionKey, BaseUri, HttpMethod.Get,
+            new Uri("https://tracker.test/search"), null, "background", false, default);
+        Task<HttpResponseMessage> interactive;
+        using (new SolverRequestScope(SolverRequestKind.Interactive))
+        {
+            interactive = manager.SendAsync(SessionKey, BaseUri, HttpMethod.Get,
+                new Uri("https://tracker.test/search"), null, "interactive", false, default);
+        }
+
+        tracker.ClearanceGate.Leave();
+        using var first = await interactive.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+        using var second = await background.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(callers, Is.EqualTo([SolverRequestKind.Interactive]));
+            Assert.That(first.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(second.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         }
     }
 }

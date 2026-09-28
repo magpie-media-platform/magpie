@@ -76,6 +76,7 @@ const moviesFolder: ApiRootFolder = {
     isDefault: true,
     defaultMonitoring: true,
     upgradeFileHandling: 'Replace',
+    autoImport: false,
     defaults: { movie: { qualityTierListId: 'quality-default' } },
     createdAt: '2024-01-01T00:00:00Z',
 };
@@ -88,6 +89,7 @@ const tvFolder: ApiRootFolder = {
     isDefault: true,
     defaultMonitoring: true,
     upgradeFileHandling: 'Replace',
+    autoImport: false,
     defaults: { series: { qualityTierListId: 'quality-default' } },
     createdAt: '2024-01-01T00:00:00Z',
 };
@@ -560,6 +562,21 @@ describe('LibraryImportPage', () => {
         expect(manualMatchProp?.kind === 'group' && manualMatchProp.group.groupKey).toBe('query:unknown show');
     });
 
+    it('keeps the group Match button mounted while its manual-match dialog is open', async () => {
+        const user = userEvent.setup();
+        setGroups([buildUnmatchedGroup()]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('query:unknown show')).toBeInTheDocument());
+        const match = within(rowFor('query:unknown show')).getByRole('button', { name: /^Match$/ });
+        await user.click(match);
+
+        expect(await screen.findByTestId('manual-match-dialog-open')).toBeInTheDocument();
+        expect(match).toBeInTheDocument();
+    });
+
     it('drops a selected group from the selection once it is matched, so the pick does not outlive its key', async () => {
         const user = userEvent.setup();
         setGroups([buildUnmatchedGroup()]);
@@ -580,7 +597,21 @@ describe('LibraryImportPage', () => {
         expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
     });
 
-    it('renders a matching-pending group honestly, with no Match action', async () => {
+    it('renders a silenced group with its Silenced count and only the dig-in action', async () => {
+        setGroups([buildUnmatchedGroup({ groupKey: 'silenced-group', statusCounts: { Rejected: 1 } })]);
+        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+
+        await waitFor(() => expect(rowFor('silenced-group')).toBeInTheDocument());
+        const row = rowFor('silenced-group');
+        expect(row).toHaveTextContent('1 Silenced');
+        expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
+        expect(within(row).queryByRole('button', { name: /^Accept$/ })).toBeNull();
+        expect(within(row).getByRole('button', { name: /^Season$/ })).toBeInTheDocument();
+    });
+
+    it('renders a matching-pending group as pending and still offers a manual Match', async () => {
         setGroups([buildUnmatchedGroup({ groupKey: 'pending-group', statusCounts: { MatchingPending: 3 } })]);
         render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
             wrapper: createTestWrapper(),
@@ -589,7 +620,9 @@ describe('LibraryImportPage', () => {
         await waitFor(() => expect(rowFor('pending-group')).toBeInTheDocument());
         const row = rowFor('pending-group');
         expect(row).toHaveTextContent('Matching pending');
-        expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
+        expect(row).toHaveTextContent('3 Matching pending');
+        expect(row).not.toHaveTextContent('MatchingPending');
+        expect(within(row).getByRole('button', { name: /^Match$/ })).toBeEnabled();
         expect(within(row).queryByRole('button', { name: /^Accept$/ })).toBeNull();
         expect(within(row).getByRole('button', { name: /^Season$/ })).toBeInTheDocument();
     });
@@ -695,22 +728,94 @@ describe('LibraryImportPage', () => {
         expect(screen.queryByText('Import partially queued')).not.toBeInTheDocument();
     });
 
-    it('drops the selection when the page changes, so the toolbar cannot count rows the accept will not reach', async () => {
+    it('BulkAccept_TargetsSelectedGroupsAcrossPages_WhenReturningToTheFirstPage', async () => {
+        // Arrange
         const user = userEvent.setup();
-        setGroups([buildGroup()], 30);
+        useLibraryImportCandidateGroupsMock.mockImplementation((params: LibraryImportCandidateGroupQueryParams) => ({
+            items:
+                params.pageNumber === 2
+                    ? [buildGroup({ groupKey: '/media/tv/Other', sourcePath: '/media/tv/Other', title: 'Other' })]
+                    : [buildGroup()],
+            pagination: { pageNumber: params.pageNumber, pageSize: 25, totalItems: 30 },
+            isLoading: false,
+            isFetching: false,
+            isError: false,
+            error: null,
+            refetch: refetchMock,
+        }));
         render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
             wrapper: createTestWrapper(),
         });
 
+        // Act
         await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
         await user.click(within(rowFor('/media/tv/Bluey')).getByRole('checkbox', { name: 'Select Bluey' }));
-        expect(screen.getByText('1 selected')).toBeInTheDocument();
-
         await user.click(screen.getByRole('button', { name: /go to next page/i }));
+        await waitFor(() => expect(rowFor('/media/tv/Other')).toBeInTheDocument());
+        await user.click(within(rowFor('/media/tv/Other')).getByRole('checkbox', { name: 'Select Other' }));
+        await user.click(screen.getByRole('button', { name: /go to previous page/i }));
+        await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
 
-        await waitFor(() => {
-            expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+        // Assert
+        expect(within(rowFor('/media/tv/Bluey')).getByRole('checkbox', { name: 'Select Bluey' })).toBeChecked();
+        expect(screen.getByText('2 selected')).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Accept selected' }));
+        await waitFor(() => expect(acceptGroupMutateAsync).toHaveBeenCalledTimes(2));
+        expect(acceptGroupMutateAsync).toHaveBeenCalledWith({
+            groupKey: '/media/tv/Bluey',
+            rootFolderId: undefined,
+            monitoringMode: 'Inherit',
         });
+        expect(acceptGroupMutateAsync).toHaveBeenCalledWith({
+            groupKey: '/media/tv/Other',
+            rootFolderId: undefined,
+            monitoringMode: 'Inherit',
+        });
+    });
+
+    it('BulkAccept_UsesRefreshedReadiness_WhenSelectedGroupBecomesReady', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        setGroups([buildGroup({ match: null, statusCounts: { MatchingPending: 157 } })]);
+        const { rerender } = render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('checkbox', { name: 'Select Bluey' }));
+
+        // Act
+        setGroups([buildGroup()]);
+        rerender(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />);
+        expect(within(rowFor('/media/tv/Bluey')).getByRole('button', { name: 'Accept' })).toBeEnabled();
+        await user.click(screen.getByRole('button', { name: 'Accept selected' }));
+
+        // Assert
+        await waitFor(() =>
+            expect(acceptGroupMutateAsync).toHaveBeenCalledWith({
+                groupKey: '/media/tv/Bluey',
+                rootFolderId: undefined,
+                monitoringMode: 'Inherit',
+            }),
+        );
+    });
+
+    it('BulkAccept_SkipsRefreshedGroup_WhenSelectedGroupBecomesNotReady', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        setGroups([buildGroup()]);
+        const { rerender } = render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper(),
+        });
+        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('checkbox', { name: 'Select Bluey' }));
+
+        // Act
+        setGroups([buildGroup({ match: null, statusCounts: { MatchingPending: 157 } })]);
+        rerender(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />);
+        expect(within(rowFor('/media/tv/Bluey')).queryByRole('button', { name: 'Accept' })).toBeNull();
+        await user.click(screen.getByRole('button', { name: 'Accept selected' }));
+
+        // Assert
+        await waitFor(() => expect(screen.getByText('Nothing queued for import')).toBeInTheDocument());
+        expect(acceptGroupMutateAsync).not.toHaveBeenCalled();
     });
 
     it('drops the selection when the root-folder filter changes', async () => {

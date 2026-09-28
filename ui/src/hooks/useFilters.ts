@@ -42,6 +42,7 @@ export interface ContentFilterItem {
     criteriaCount: number;
     ownerLock: boolean;
     query: string;
+    queryError?: Error | null;
     criteria: ContentFilterCriteria;
     createdAt: string;
     modifiedAt: string | null;
@@ -183,12 +184,14 @@ export function useContentFilters() {
     const filters: ContentFilterItem[] = allRawFilters.map((filter, index) => ({
         ...transformContentFilter(filter),
         query: formattedCriteriaQueries[index]?.data ?? '',
+        queryError: formattedCriteriaQueries[index]?.error ?? null,
     }));
 
     return {
         filters,
-        isLoading,
+        isLoading: isLoading || formattedCriteriaQueries.some((query) => query.isLoading),
         error: queryErrorOrNull({ error: error || formatterError }),
+        listError: queryErrorOrNull({ error }),
         refetch: async () => {
             await Promise.all([
                 sharedQuery.refetch(),

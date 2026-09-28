@@ -1,21 +1,24 @@
 import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CaretRightIcon, EyeIcon, EyeSlashIcon } from '@phosphor-icons/react';
+import { CaretRightIcon } from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { DataTable } from '@/components/ui/DataTable';
 import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
-import { ContentFulfillmentBadge, ContentPoster } from '@/components/content/ContentCardPrimitives';
+import {
+    ContentFulfillmentBadge,
+    ContentMonitoringIndicator,
+    ContentPoster,
+} from '@/components/content/ContentCardPrimitives';
 import { Pager } from '@/components/ui/Pager';
 import { MobileListToolbar } from '@/components/ui/MobileListToolbar';
 import { sortTableRows } from '@/lib/sortTableRows';
-import { Tooltip } from '@/components/ui/Tooltip';
 import type { FulfillmentStatus } from '@/components/ui/ContentList';
-import type { AcquisitionStatus } from '@/types';
+import type { AcquisitionStatus, MonitoringMode } from '@/types';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
-import { resolveEffectiveMonitoring, type ResolvedMonitoring } from '@/lib/monitoring';
 
 import { formatDate } from '@/lib/dateFormatting';
+import { formatFileSize, formatPrimaryMediaSummary } from '@/lib/formatSize';
 
 import './ContentTabs.css';
 
@@ -28,11 +31,13 @@ export interface ChildItem {
 
     posterUrl?: string;
 
-    monitoring: boolean | null;
+    monitoring: MonitoringMode | null;
 
-    effectiveMonitoring: boolean;
+    effectiveMonitoring: MonitoringMode;
 
     fulfillment: FulfillmentStatus;
+
+    importPending?: boolean;
 
     acquisitionStatus?: AcquisitionStatus;
 
@@ -41,6 +46,9 @@ export interface ChildItem {
     date?: string;
 
     fileCount?: number;
+    primaryMediaSize?: number;
+    primaryMediaFileCount?: number;
+    fulfilledAt?: string;
 }
 
 export interface ChildrenTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
@@ -79,50 +87,31 @@ function TitleCell({ title, subtitle, number }: { title: string; subtitle?: stri
     );
 }
 
-function MonitoringCell({ effective }: { effective: ResolvedMonitoring }) {
-    const { monitored: isMonitored, inherited } = effective;
-    const label = isMonitored ? 'Monitored' : 'Not monitored';
-    const baseDescription = isMonitored
-        ? 'Magpie will search for and grab this item automatically'
-        : 'Magpie will not search for or grab this item automatically';
-    const description = inherited
-        ? `${label}. ${baseDescription} (inherited from parent)`
-        : `${label}. ${baseDescription}`;
-    const ariaLabel = inherited ? `${label} (inherited): ${baseDescription}` : `${label}: ${baseDescription}`;
-    const classes = [
-        'children-tab__monitoring',
-        isMonitored ? 'children-tab__monitoring--active' : 'children-tab__monitoring--inactive',
-        inherited ? 'children-tab__monitoring--inherited' : '',
-    ]
-        .filter(Boolean)
-        .join(' ');
-
+function MonitoringCell({ child }: { child: ChildItem }) {
     return (
-        <Tooltip content={description}>
-            <div className={classes} aria-label={ariaLabel} data-inherited={inherited || undefined}>
-                {isMonitored ? (
-                    <EyeIcon weight="fill" aria-hidden="true" />
-                ) : (
-                    <EyeSlashIcon weight="regular" aria-hidden="true" />
-                )}
-            </div>
-        </Tooltip>
+        <ContentMonitoringIndicator
+            monitoring={child.monitoring}
+            effectiveMonitoring={child.effectiveMonitoring}
+            className="children-tab__monitoring"
+            activeClassName="children-tab__monitoring--active"
+            inactiveClassName="children-tab__monitoring--inactive"
+        />
     );
 }
 
 function StatusCell({
     fulfillment,
-    effectiveMonitoring,
+    importPending,
     acquisitionStatus,
 }: {
     fulfillment: FulfillmentStatus;
-    effectiveMonitoring: boolean;
+    importPending?: boolean;
     acquisitionStatus?: AcquisitionStatus;
 }) {
     if (acquisitionStatus) {
         return <AcquisitionBadge status={acquisitionStatus} />;
     }
-    return <ContentFulfillmentBadge fulfillment={fulfillment} effectiveMonitoring={effectiveMonitoring} />;
+    return <ContentFulfillmentBadge fulfillment={fulfillment} importPending={importPending} />;
 }
 
 export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
@@ -149,6 +138,9 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                 { id: 'title', label: 'Title' },
                 { id: 'date', label: dateColumnHeader },
                 { id: 'fulfillment', label: 'Status' },
+                { id: 'fulfilledAt', label: 'Fulfilled' },
+                { id: 'primaryMediaSize', label: 'Media size' },
+                { id: 'primaryMediaFileCount', label: 'Media files' },
             ],
             [dateColumnHeader],
         );
@@ -196,14 +188,34 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                     header: '',
                     enableSorting: false,
                     size: 50,
-                    cell: ({ row }) => (
-                        <MonitoringCell
-                            effective={resolveEffectiveMonitoring(
-                                row.original.monitoring,
-                                row.original.effectiveMonitoring,
-                            )}
-                        />
-                    ),
+                    cell: ({ row }) => <MonitoringCell child={row.original} />,
+                },
+                {
+                    id: 'fulfilledAt',
+                    accessorKey: 'fulfilledAt',
+                    header: 'Fulfilled',
+                    size: 120,
+                    sortUndefined: 'last',
+                    cell: ({ row }) => (row.original.fulfilledAt ? formatDate(row.original.fulfilledAt) : '—'),
+                },
+                {
+                    id: 'primaryMediaSize',
+                    accessorKey: 'primaryMediaSize',
+                    header: 'Media size',
+                    size: 110,
+                    sortUndefined: 'last',
+                    cell: ({ row }) =>
+                        row.original.primaryMediaSize === undefined
+                            ? '—'
+                            : formatFileSize(row.original.primaryMediaSize),
+                },
+                {
+                    id: 'primaryMediaFileCount',
+                    accessorKey: 'primaryMediaFileCount',
+                    header: 'Media files',
+                    size: 100,
+                    sortUndefined: 'last',
+                    cell: ({ row }) => row.original.primaryMediaFileCount ?? '—',
                 },
                 {
                     id: 'fulfillment',
@@ -213,7 +225,7 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                     cell: ({ row }) => (
                         <StatusCell
                             fulfillment={row.original.fulfillment}
-                            effectiveMonitoring={row.original.effectiveMonitoring}
+                            importPending={row.original.importPending}
                             acquisitionStatus={row.original.acquisitionStatus}
                         />
                     ),
@@ -301,16 +313,21 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                                 {child.date && (
                                     <span className="children-tab__mobile-date">{formatDate(child.date)}</span>
                                 )}
+                                <span className="children-tab__mobile-date">
+                                    Media:{' '}
+                                    {formatPrimaryMediaSummary(child.primaryMediaFileCount, child.primaryMediaSize)}
+                                </span>
+                                <span className="children-tab__mobile-date">
+                                    Fulfilled: {child.fulfilledAt ? formatDate(child.fulfilledAt) : '—'}
+                                </span>
                                 <StatusCell
                                     fulfillment={child.fulfillment}
-                                    effectiveMonitoring={child.effectiveMonitoring}
+                                    importPending={child.importPending}
                                     acquisitionStatus={child.acquisitionStatus}
                                 />
                             </div>
                             <div className="children-tab__mobile-status">
-                                <MonitoringCell
-                                    effective={resolveEffectiveMonitoring(child.monitoring, child.effectiveMonitoring)}
-                                />
+                                <MonitoringCell child={child} />
                                 <CaretRightIcon weight="bold" className="children-tab__caret" aria-hidden="true" />
                             </div>
                         </Link>
@@ -321,6 +338,7 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                         className="children-tab__mobile-pager"
                         page={mobilePage}
                         pageCount={mobilePageCount}
+                        totalItems={sortedChildren.length}
                         onFirst={() => goToMobilePage(1)}
                         onPrevious={() => goToMobilePage(mobilePage - 1)}
                         onNext={() => goToMobilePage(mobilePage + 1)}

@@ -35,7 +35,7 @@ export const MetadataLinks = forwardRef<HTMLDivElement, MetadataLinksProps>(
             const content = (
                 <>
                     <span className="metadata-links__badge">{rawBadge}</span>
-                    {showName && <span className="metadata-links__name">{displayName}</span>}
+                    {showName && <span className="metadata-links__name truncate">{displayName}</span>}
                 </>
             );
             const testId = `metadata-link-${(reference.source || reference.kind).toLowerCase()}`;

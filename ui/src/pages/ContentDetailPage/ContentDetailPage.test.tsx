@@ -8,13 +8,26 @@ import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 
 import { ContentDetailPage } from './ContentDetailPage';
 import { Role } from '@/auth';
-import { ApiError } from '@/lib/api';
+import { ApiError, apiGet } from '@/lib/api';
 import { ToastProvider, ToastStateProvider, ToastList, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import type { ContentDetailItem } from '@/types/content';
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
+const originalApiGet = vi.hoisted(() => ({ current: undefined as unknown as typeof apiGet }));
+
+vi.mock('@/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/api')>();
+    originalApiGet.current = actual.apiGet;
+    return {
+        ...actual,
+        apiGet: vi.fn(actual.apiGet),
+        apiPost: vi.fn().mockResolvedValue({ hasMask: false, files: [] }),
+    };
+});
+
+const mockApiGet = vi.mocked(apiGet);
 
 vi.mock('@/components/configuration/FileBrowser', () => ({
     FileBrowser: ({
@@ -79,6 +92,8 @@ function normalizeDetail(item: RawDetailItem): ContentDetailItem {
     };
 }
 
+const longUnbrokenFileName = `${'a'.repeat(210)}.mkv`;
+
 const rawContentData: Record<string, RawDetailItem> = {
     'content-1': {
         id: 'content-1',
@@ -86,8 +101,8 @@ const rawContentData: Record<string, RawDetailItem> = {
         posterUrl: 'https://example.com/poster1.jpg',
         level: 'show',
         levelLabel: 'Show',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2008,
         publishDate: '2008-01-20',
@@ -107,8 +122,8 @@ const rawContentData: Record<string, RawDetailItem> = {
         level: 'movie',
         levelLabel: 'Movie',
         contentType: 'movie',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 1999,
         overview: 'A hacker learns the truth.',
@@ -124,6 +139,27 @@ const rawContentData: Record<string, RawDetailItem> = {
             },
         ],
     },
+    'content-files-long': {
+        id: 'content-files-long',
+        title: 'Long filename fixture',
+        level: 'movie',
+        levelLabel: 'Movie',
+        contentType: 'movie',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'fulfilled',
+        path: 'Long filename fixture',
+        mediaFiles: [
+            {
+                id: 'media-file-long',
+                contentItemId: 'content-item-long',
+                fileKind: 'Video',
+                filePath: `/media/library/Long filename fixture/${longUnbrokenFileName}`,
+                fileSize: 1024,
+                createdAt: '2024-01-01T00:00:00Z',
+            },
+        ],
+    },
     'content-3': {
         id: 'content-3',
         title: 'Dune: Part Two',
@@ -131,11 +167,22 @@ const rawContentData: Record<string, RawDetailItem> = {
         level: 'movie',
         levelLabel: 'Movie',
         contentType: 'movie',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'missing',
         year: 2024,
         overview: 'Paul Atreides unites with Chani and the Fremen.',
+    },
+    'content-year-only': {
+        id: 'content-year-only',
+        title: 'Fantastic Mr Fox',
+        level: 'movie',
+        levelLabel: 'Movie',
+        contentType: 'movie',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'missing',
+        publishDate: '1970-01-01T00:00:00Z',
     },
     'content-cycle': {
         id: 'content-cycle',
@@ -143,8 +190,8 @@ const rawContentData: Record<string, RawDetailItem> = {
         level: 'alpha',
         levelLabel: 'Alpha',
         contentType: 'cycle',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'missing',
     },
     'content-trailers': {
@@ -154,8 +201,8 @@ const rawContentData: Record<string, RawDetailItem> = {
         level: 'movie',
         levelLabel: 'Movie',
         contentType: 'movie',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'missing',
         year: 2000,
         overview: 'A betrayed general seeks revenge.',
@@ -174,8 +221,8 @@ const rawContentData: Record<string, RawDetailItem> = {
         posterUrl: 'https://example.com/poster5.jpg',
         level: 'show',
         levelLabel: 'Show',
-        monitoring: false,
-        effectiveMonitoring: false,
+        monitoring: 'Unmonitored',
+        effectiveMonitoring: 'Unmonitored',
         fulfillment: 'missing',
         year: 2024,
         overview: 'A nobleman inherits a weed empire.',
@@ -186,8 +233,8 @@ const rawContentData: Record<string, RawDetailItem> = {
         posterUrl: 'https://example.com/poster8.jpg',
         level: 'movie',
         levelLabel: 'Movie',
-        monitoring: false,
-        effectiveMonitoring: false,
+        monitoring: 'Unmonitored',
+        effectiveMonitoring: 'Unmonitored',
         fulfillment: 'fulfilledExternally',
         year: 2023,
         overview: 'The story of Bella Baxter.',
@@ -197,8 +244,8 @@ const rawContentData: Record<string, RawDetailItem> = {
         title: 'Fallout',
         level: 'show',
         levelLabel: 'Show',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2024,
         overview: 'Post-apocalyptic survival.',
@@ -209,8 +256,8 @@ const rawContentData: Record<string, RawDetailItem> = {
         posterUrl: 'https://example.com/poster1.jpg',
         level: 'season',
         levelLabel: 'Season',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2008,
         overview: 'The first season of Breaking Bad.',
@@ -222,12 +269,71 @@ const rawContentData: Record<string, RawDetailItem> = {
         posterUrl: 'https://example.com/poster1.jpg',
         level: 'episode',
         levelLabel: 'Episode',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled',
         year: 2008,
         overview: 'Walter White decides to get into the meth-making business.',
         parentId: 'season-1',
+    },
+    'tv-show-files': {
+        id: 'tv-show-files',
+        title: 'Example Show',
+        level: 'show',
+        levelLabel: 'Show',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'fulfilled',
+        mediaFiles: [
+            {
+                id: 'misassigned-file',
+                contentItemId: 'misassigned-content-item',
+                fileKind: 'Video',
+                filePath: '/media/library/Example Show/Season 1/example.s01e01.mkv',
+                fileSize: 2048,
+                createdAt: '2026-09-01T00:00:00Z',
+            },
+        ],
+    },
+    'tv-season-files': {
+        id: 'tv-season-files',
+        title: 'Season 1',
+        level: 'season',
+        levelLabel: 'Season',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'fulfilled',
+        parentId: 'tv-show-files',
+        mediaFiles: [
+            {
+                id: 'misassigned-file',
+                contentItemId: 'misassigned-content-item',
+                fileKind: 'Video',
+                filePath: '/media/library/Example Show/Season 1/example.s01e01.mkv',
+                fileSize: 2048,
+                createdAt: '2026-09-01T00:00:00Z',
+            },
+        ],
+    },
+    'tv-episode-files': {
+        id: 'tv-episode-files',
+        title: 'Episode 1',
+        level: 'episode',
+        levelLabel: 'Episode',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'fulfilled',
+        parentId: 'tv-season-files',
+        mediaFiles: [
+            {
+                id: 'misassigned-file',
+                contentItemId: 'misassigned-content-item',
+                fileKind: 'Video',
+                filePath: '/media/library/Example Show/Season 1/example.s01e01.mkv',
+                fileSize: 2048,
+                createdAt: '2026-09-01T00:00:00Z',
+            },
+        ],
     },
 };
 
@@ -483,7 +589,11 @@ vi.mock('@/hooks/useDeleteContentFile', () => ({
 }));
 
 vi.mock('@/hooks/useContentFileMutations', () => ({
-    useAttachContentFile: () => ({ mutate: mockAttachFileMutate, isPending: mockAttachFilePending.current }),
+    useAttachContentFile: () => ({
+        mutate: mockAttachFileMutate,
+        mutateAsync: mockAttachFileMutate,
+        isPending: mockAttachFilePending.current,
+    }),
     useUnlinkContentFile: () => ({ mutate: mockUnlinkFileMutate, isPending: mockUnlinkFilePending.current }),
     useContentFileBrowserLocation: () => ({
         data: mockFileBrowserLocation.current,
@@ -516,11 +626,28 @@ function ContentDetailRoute() {
         <>
             <ContentDetailPage />
             <output data-testid="content-detail-page__location-search">{location.search}</output>
+            <output data-testid="content-detail-page__location-pathname">{location.pathname}</output>
         </>
     );
 }
 
-function renderWithRouter(contentId: string, childId?: string, grandchildId?: string, search?: string) {
+function OriginRoute() {
+    const location = useLocation();
+    return (
+        <>
+            <output data-testid="origin-route">{`${location.pathname}${location.search}${location.hash}`}</output>
+            <output data-testid="origin-route-state">{JSON.stringify(location.state)}</output>
+        </>
+    );
+}
+
+function renderWithRouter(
+    contentId: string,
+    childId?: string,
+    grandchildId?: string,
+    search?: string,
+    origin?: { pathname: string; search: string; hash: string; state?: unknown },
+) {
     const queryClient = createTestQueryClient();
     const basePath = grandchildId
         ? `/library/${contentId}/${childId}/${grandchildId}`
@@ -531,12 +658,15 @@ function renderWithRouter(contentId: string, childId?: string, grandchildId?: st
 
     return render(
         <QueryClientProvider client={queryClient}>
-            <MemoryRouter initialEntries={[path]}>
+            <MemoryRouter
+                initialEntries={[origin ? { pathname: basePath, search, state: { contentOrigin: origin } } : path]}
+            >
                 <TooltipProvider>
                     <ToastProvider>
                         <ToastStateProvider>
                             <Routes>
                                 <Route path="/library" element={<div data-testid="library-route" />} />
+                                <Route path="/wanted" element={<OriginRoute />} />
                                 <Route
                                     path="/interactive-search/:contentId"
                                     element={<div data-testid="interactive-search-route" />}
@@ -600,6 +730,12 @@ describe('ContentDetailPage', () => {
         mockMetadataInspectorState.error = null;
         mockUseExtensions.mockReturnValue(defaultContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
+        mockApiGet.mockImplementation((path, options) => {
+            if (path.startsWith('/content?parentId=')) {
+                return Promise.resolve({ items: [], pageNumber: 1, pageSize: 100, totalItems: 0 });
+            }
+            return originalApiGet.current(path, options);
+        });
 
         mockUseContentHierarchy.mockImplementation(
             (activeId: string | undefined, parentId: string | undefined, rootId: string | undefined) => {
@@ -759,6 +895,18 @@ describe('ContentDetailPage', () => {
                                       ...preview,
                                   })),
                                   images: item.images.map((image, ordinal) => ({ ...image, ordinal })),
+                                  references:
+                                      item.id === 'content-1'
+                                          ? [
+                                                {
+                                                    id: 'reference-1',
+                                                    ordinal: 0,
+                                                    kind: 'official',
+                                                    source: 'Provider-A',
+                                                    url: 'https://tv.apple.com/show/umc.cmc.4luj45vtqpmjsvb6sc2675oeg',
+                                                },
+                                            ]
+                                          : [],
                               },
                               contributions: [],
                               subjects: {},
@@ -858,7 +1006,51 @@ describe('ContentDetailPage', () => {
             });
         });
 
-        it('surfaces a success toast and navigates back to the library on success', async () => {
+        it.each([false, true])(
+            'returns to the originating list after successful removal with deleteFiles=%s',
+            async (deleteFiles) => {
+                mockRemoveContentMutate.mockImplementation((_vars, opts) => {
+                    opts?.onSuccess?.();
+                });
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, undefined, {
+                    pathname: '/wanted',
+                    search: '?page=3&sort=title',
+                    hash: '#results',
+                    state: { view: 'gallery' },
+                });
+                await waitFor(() => {
+                    expect(document.querySelector('[data-page="content-detail"]')).toBeInTheDocument();
+                });
+                await user.click(await screen.findByRole('button', { name: /^remove$/i }));
+                const dialog = await screen.findByRole('dialog');
+                if (deleteFiles) {
+                    await user.click(within(dialog).getByRole('switch', { name: /also delete files from disk/i }));
+                }
+                await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+
+                expect(await screen.findByTestId('origin-route')).toHaveTextContent(
+                    '/wanted?page=3&sort=title#results',
+                );
+                expect(screen.getByTestId('origin-route-state')).toHaveTextContent('{"view":"gallery"}');
+                expect(mockRemoveContentMutate.mock.calls[0][0]).toEqual({
+                    contentHierarchyItemId: 'content-files',
+                    deleteFiles,
+                });
+                await waitFor(() => {
+                    expect(screen.getAllByText(/Removed from library/i).length).toBeGreaterThan(0);
+                });
+                expect(
+                    screen.getAllByText(
+                        deleteFiles
+                            ? 'Magpie removed the item and its library files.'
+                            : 'Magpie removed the item from the library. The files remain on disk.',
+                    ).length,
+                ).toBeGreaterThan(0);
+            },
+        );
+
+        it('returns a direct-entry removal to the library when there is no origin', async () => {
             mockRemoveContentMutate.mockImplementation((_vars, opts) => {
                 opts?.onSuccess?.();
             });
@@ -868,12 +1060,7 @@ describe('ContentDetailPage', () => {
             const dialog = await screen.findByRole('dialog');
             await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
 
-            await waitFor(() => {
-                expect(screen.getAllByText(/Removed from library/i).length).toBeGreaterThan(0);
-            });
-            expect(
-                screen.getAllByText('Magpie removed the item from the library. The files remain on disk.').length,
-            ).toBeGreaterThan(0);
+            expect(await screen.findByTestId('library-route')).toBeInTheDocument();
         });
 
         it('does not call the mutation when the dialog is cancelled', async () => {
@@ -939,13 +1126,17 @@ describe('ContentDetailPage', () => {
             });
         });
 
-        it('renders monitoring status in the unified settings block', async () => {
+        it('renders monitoring status in the header and unified settings block', async () => {
+            // Arrange
+            // Act
             renderWithRouter('content-1');
+
+            // Assert
             await waitFor(() => {
                 expect(screen.getByTestId('content-policy-settings')).toBeInTheDocument();
                 expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent('Monitored');
             });
-            expect(document.querySelector('.content-details-header__monitoring')).not.toBeInTheDocument();
+            expect(document.querySelector('.content-details-header__monitoring')).toHaveTextContent('Monitored');
         });
 
         it('orders every supporting row on one shared label and value grid', async () => {
@@ -959,6 +1150,27 @@ describe('ContentDetailPage', () => {
             expect(
                 Array.from(grid.querySelectorAll('.detail-info-row__label')).map((label) => label.textContent),
             ).toEqual(['Monitoring', 'Path', 'Root Folder', 'Quality', 'Tags', 'Publish Date', 'Links', 'Genres']);
+        });
+
+        it('labels a reference without a display name with its host and links to the full url', async () => {
+            // Arrange
+            // Act
+            renderWithRouter('content-1');
+
+            // Assert
+            const link = await screen.findByTestId('metadata-link-provider-a');
+            expect(link).toHaveAttribute('href', 'https://tv.apple.com/show/umc.cmc.4luj45vtqpmjsvb6sc2675oeg');
+            expect(within(link).getByText('tv.apple.com', { selector: '.metadata-links__name' })).toHaveClass(
+                'truncate',
+            );
+        });
+
+        it('shows the known year, not Never, when only the publication year is known', async () => {
+            renderWithRouter('content-year-only');
+
+            await waitFor(() => {
+                expect(screen.getByTestId('content-publish-date-row')).toHaveTextContent('Publish Date1970');
+            });
         });
 
         it('omits the publish date row when no date is materialized', async () => {
@@ -1216,6 +1428,79 @@ describe('ContentDetailPage', () => {
                 expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
             });
         }
+
+        it('preserves capacity waits and adjacent acquisition states through the page adapter', async () => {
+            const waitingReason =
+                'Waiting for destination capacity: insufficient free space. Required: 100 bytes. Available: 99 bytes.';
+            mockHasRole.current = (minRole: number) => minRole <= Role.Requester;
+            mockContentReleaseRows.current = [
+                releaseRow({
+                    id: 'waiting-release',
+                    title: 'Waiting release',
+                    acquisitionStatus: 'Failed',
+                    acquisitionWaitingReason: waitingReason,
+                    failureReason: 'MissingFiles',
+                }),
+                releaseRow({ id: 'available-release', title: 'Available release', acquisitionStatus: null }),
+                releaseRow({ id: 'active-release', title: 'Active release', acquisitionStatus: 'Downloading' }),
+                releaseRow({ id: 'failed-release', title: 'Failed release', acquisitionStatus: 'Failed' }),
+                releaseRow({ id: 'cancelled-release', title: 'Cancelled release', acquisitionStatus: 'Cancelled' }),
+            ];
+
+            const user = userEvent.setup();
+            renderWithRouter('content-1');
+            await user.click(await screen.findByRole('tab', { name: /releases/i }));
+
+            const waitingCard = document.querySelector<HTMLElement>(
+                '.releases-tab__mobile-card[data-release-id="waiting-release"]',
+            );
+            const availableCard = document.querySelector<HTMLElement>(
+                '.releases-tab__mobile-card[data-release-id="available-release"]',
+            );
+            const activeCard = document.querySelector<HTMLElement>(
+                '.releases-tab__mobile-card[data-release-id="active-release"]',
+            );
+            const failedCard = document.querySelector<HTMLElement>(
+                '.releases-tab__mobile-card[data-release-id="failed-release"]',
+            );
+            const cancelledCard = document.querySelector<HTMLElement>(
+                '.releases-tab__mobile-card[data-release-id="cancelled-release"]',
+            );
+            expect(screen.getByText(waitingReason)).toBeVisible();
+            expect(within(waitingCard!).getByText('Waiting for capacity')).toBeInTheDocument();
+            expect(within(waitingCard!).queryByRole('button', { name: 'Grab' })).toBeNull();
+            expect(within(waitingCard!).queryByText('Failed')).toBeNull();
+            expect(within(availableCard!).getByRole('button', { name: 'Grab' })).toBeEnabled();
+            expect(within(activeCard!).getByText('Downloading')).toBeInTheDocument();
+            expect(within(activeCard!).queryByRole('button', { name: 'Grab' })).toBeNull();
+            expect(within(failedCard!).getByText('Failed')).toBeInTheDocument();
+            expect(within(failedCard!).getByRole('button', { name: 'Grab' })).toBeEnabled();
+            expect(within(cancelledCard!).getByText('Cancelled')).toBeInTheDocument();
+            expect(within(cancelledCard!).getByRole('button', { name: 'Grab' })).toBeEnabled();
+
+            mockContentReleaseRows.current = [
+                releaseRow({
+                    id: 'waiting-release',
+                    title: 'Waiting release',
+                    acquisitionStatus: 'Downloading',
+                    acquisitionWaitingReason: null,
+                }),
+                releaseRow({ id: 'cancelled-release', title: 'Cancelled release', acquisitionStatus: 'Cancelled' }),
+            ];
+            await user.click(screen.getByRole('tab', { name: /details/i }));
+            await user.click(screen.getByRole('tab', { name: /releases/i }));
+
+            const recoveredCard = document.querySelector<HTMLElement>(
+                '.releases-tab__mobile-card[data-release-id="waiting-release"]',
+            );
+            const retryableCard = document.querySelector<HTMLElement>(
+                '.releases-tab__mobile-card[data-release-id="cancelled-release"]',
+            );
+            expect(screen.queryByText(waitingReason)).not.toBeInTheDocument();
+            expect(within(recoveredCard!).getByText('Downloading')).toBeInTheDocument();
+            expect(within(recoveredCard!).queryByRole('button', { name: 'Grab' })).toBeNull();
+            expect(within(retryableCard!).getByRole('button', { name: 'Grab' })).toBeEnabled();
+        });
 
         it('grabs a matching release without prompting via the confirm dialog', async () => {
             const confirmSpy = vi.spyOn(window, 'confirm');
@@ -1557,167 +1842,547 @@ describe('ContentDetailPage', () => {
             expect(within(tabPanel).getAllByText(/no files attached/i).length).toBeGreaterThan(0);
         });
 
-        it('opens the host-file picker at the effective path within the configured root', async () => {
-            const user = userEvent.setup();
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
-
-            await user.click(await screen.findByRole('button', { name: 'Import file' }));
-
-            const dialog = screen.getByRole('dialog', { name: 'Import file' });
-            expect(dialog).toHaveAttribute('data-initial-path', '/media/library/The Matrix');
-            expect(dialog).toHaveAttribute('data-root-path', '/media/library');
-            expect(dialog).toHaveAttribute('data-endpoint', '/system/files?scope=content-files');
-            expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(1);
-        });
-
-        it('refetches the browser location every time the host-file picker opens', async () => {
-            const user = userEvent.setup();
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
-
-            await user.click(await screen.findByRole('button', { name: 'Import file' }));
-            await user.click(screen.getByRole('button', { name: 'Select host file' }));
-            await user.click(screen.getByRole('button', { name: 'Import file' }));
-
-            expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(2);
-        });
-
-        it('fetches the browser location before opening the host-file picker when it is not cached', async () => {
-            const user = userEvent.setup();
-            mockFileBrowserLocation.current = undefined;
-            mockFileBrowserLocationRefetch.mockImplementation(async () => {
-                mockFileBrowserLocation.current = {
-                    rootPath: '/media/library',
-                    initialPath: '/media/library/The Matrix',
-                };
-                return { data: mockFileBrowserLocation.current, error: null, isError: false };
+        describe('file actions at desktop width', () => {
+            beforeEach(() => {
+                window.innerWidth = 1280;
             });
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
 
-            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+            it.each([
+                ['a direct show route', 'tv-show-files', undefined, undefined, '/library/tv-show-files'],
+                ['a direct season route', 'tv-season-files', undefined, undefined, '/library/tv-season-files'],
+                ['a direct episode route', 'tv-episode-files', undefined, undefined, '/library/tv-episode-files'],
+                [
+                    'a nested season route',
+                    'tv-show-files',
+                    'tv-season-files',
+                    undefined,
+                    '/library/tv-show-files/tv-season-files',
+                ],
+                [
+                    'a nested episode route',
+                    'tv-show-files',
+                    'tv-season-files',
+                    'tv-episode-files',
+                    '/library/tv-show-files/tv-season-files/tv-episode-files',
+                ],
+            ])(
+                'loads correction destinations from the actual show on %s',
+                async (_name, contentId, childId, grandchildId, expectedPath) => {
+                    const user = userEvent.setup();
+                    renderWithRouter(contentId, childId, grandchildId, '?tab=files');
 
-            expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(1);
-            expect(await screen.findByRole('dialog', { name: 'Import file' })).toBeInTheDocument();
-        });
+                    await user.click(await screen.findByRole('button', { name: 'Correct episode association' }));
 
-        it('shows an error when the browser location cannot be fetched', async () => {
-            const user = userEvent.setup();
-            mockFileBrowserLocation.current = undefined;
-            mockFileBrowserLocationRefetch.mockResolvedValue({
-                data: undefined,
-                error: new ApiError(503, 'Browser offline'),
-                isError: true,
+                    expect(
+                        await screen.findByRole('dialog', { name: 'Correct episode association' }),
+                    ).toBeInTheDocument();
+                    await waitFor(() => {
+                        expect(mockApiGet).toHaveBeenCalledWith(
+                            '/content?parentId=tv-show-files&pageNumber=1&pageSize=100&sortBy=Ordinal&sortDirection=Ascending',
+                        );
+                    });
+                    expect(screen.getByTestId('content-detail-page__location-pathname')).toHaveTextContent(
+                        expectedPath,
+                    );
+                },
+            );
+
+            it.each([
+                ['while the direct season ancestor is loading', true],
+                ['when the direct season ancestor is absent', false],
+            ])('does not offer correction %s', async (_name, isLoading) => {
+                mockUseContentAncestors.mockReturnValue({ ancestors: [], isLoading });
+
+                renderWithRouter('tv-season-files', undefined, undefined, '?tab=files');
+
+                await screen.findByText('example.s01e01.mkv');
+                expect(screen.queryByRole('button', { name: 'Correct episode association' })).not.toBeInTheDocument();
+                expect(mockApiGet).not.toHaveBeenCalledWith(
+                    '/content?parentId=tv-show-files&pageNumber=1&pageSize=100&sortBy=Ordinal&sortDirection=Ascending',
+                );
             });
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
 
-            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+            it('returns keyboard focus to the correction action after Cancel', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('tv-season-files', undefined, undefined, '?tab=files');
+                const trigger = await screen.findByRole('button', { name: 'Correct episode association' });
 
-            expect(await screen.findByText('File browser unavailable')).toBeInTheDocument();
-            expect(screen.getByText('Browser offline')).toBeInTheDocument();
-        });
+                trigger.focus();
+                await user.keyboard('{Enter}');
+                await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
-        it('does not open the host-file picker with stale data after a failed refresh', async () => {
-            const user = userEvent.setup();
-            mockFileBrowserLocationRefetch.mockResolvedValue({
-                data: mockFileBrowserLocation.current,
-                error: new ApiError(503, 'Browser offline'),
-                isError: true,
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                expect(trigger).toHaveFocus();
             });
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
 
-            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+            it('returns keyboard focus to the correction action after Escape', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('tv-season-files', undefined, undefined, '?tab=files');
+                const trigger = await screen.findByRole('button', { name: 'Correct episode association' });
 
-            expect(await screen.findByText('File browser unavailable')).toBeInTheDocument();
-            expect(screen.queryByRole('dialog', { name: 'Import file' })).not.toBeInTheDocument();
-        });
+                trigger.focus();
+                await user.keyboard('{Enter}');
+                await user.keyboard('{Escape}');
 
-        it('attaches the selected host file and identifies primary content', async () => {
-            const user = userEvent.setup();
-            mockAttachFileMutate.mockImplementation((_variables, options) => {
-                options.onSuccess({
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                expect(trigger).toHaveFocus();
+            });
+
+            it('returns keyboard focus to the correction action after the close action', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('tv-season-files', undefined, undefined, '?tab=files');
+                const trigger = await screen.findByRole('button', { name: 'Correct episode association' });
+
+                trigger.focus();
+                await user.keyboard('{Enter}');
+                await user.click(screen.getByRole('button', { name: 'Close' }));
+
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                expect(trigger).toHaveFocus();
+            });
+
+            it('keeps the direct episode route and shows destination loading errors', async () => {
+                mockApiGet.mockImplementation((path, options) =>
+                    path.startsWith('/content?parentId=')
+                        ? Promise.reject(new Error('The destination hierarchy could not be loaded.'))
+                        : originalApiGet.current(path, options),
+                );
+                const user = userEvent.setup();
+                renderWithRouter('tv-episode-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Correct episode association' }));
+
+                expect(await screen.findByRole('alert')).toHaveTextContent(
+                    'The destination hierarchy could not be loaded.',
+                );
+                expect(screen.getByTestId('content-detail-page__location-pathname')).toHaveTextContent(
+                    '/library/tv-episode-files',
+                );
+            });
+
+            it('opens the host-file picker at the effective path within the configured root', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Import file' }));
+
+                const dialog = screen.getByRole('dialog', { name: 'Import file' });
+                expect(dialog).toHaveAttribute('data-initial-path', '/media/library/The Matrix');
+                expect(dialog).toHaveAttribute('data-root-path', '/media/library');
+                expect(dialog).toHaveAttribute('data-endpoint', '/system/files?scope=content-files');
+                expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(1);
+            });
+
+            it('refetches the browser location every time the host-file picker opens', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Import file' }));
+                await user.click(screen.getByRole('button', { name: 'Select host file' }));
+                await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+                await user.click(screen.getByRole('button', { name: 'Import file' }));
+
+                expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(2);
+            });
+
+            it('fetches the browser location before opening the host-file picker when it is not cached', async () => {
+                const user = userEvent.setup();
+                mockFileBrowserLocation.current = undefined;
+                mockFileBrowserLocationRefetch.mockImplementation(async () => {
+                    mockFileBrowserLocation.current = {
+                        rootPath: '/media/library',
+                        initialPath: '/media/library/The Matrix',
+                    };
+                    return { data: mockFileBrowserLocation.current, error: null, isError: false };
+                });
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Import file' }));
+
+                expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(1);
+                expect(await screen.findByRole('dialog', { name: 'Import file' })).toBeInTheDocument();
+            });
+
+            it('shows an error when the browser location cannot be fetched', async () => {
+                const user = userEvent.setup();
+                mockFileBrowserLocation.current = undefined;
+                mockFileBrowserLocationRefetch.mockResolvedValue({
+                    data: undefined,
+                    error: new ApiError(503, 'Browser offline'),
+                    isError: true,
+                });
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Import file' }));
+
+                expect(await screen.findByText('File browser unavailable')).toBeInTheDocument();
+                expect(screen.getByText('Browser offline')).toBeInTheDocument();
+            });
+
+            it('does not open the host-file picker with stale data after a failed refresh', async () => {
+                const user = userEvent.setup();
+                mockFileBrowserLocationRefetch.mockResolvedValue({
+                    data: mockFileBrowserLocation.current,
+                    error: new ApiError(503, 'Browser offline'),
+                    isError: true,
+                });
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Import file' }));
+
+                expect(await screen.findByText('File browser unavailable')).toBeInTheDocument();
+                expect(screen.queryByRole('dialog', { name: 'Import file' })).not.toBeInTheDocument();
+            });
+
+            it('attaches the selected host file and identifies primary content', async () => {
+                const user = userEvent.setup();
+                mockAttachFileMutate.mockResolvedValue({
                     mediaFile: { id: 'new-file', filePath: '/media/library/The Matrix/new.mkv' },
                     isPrimary: true,
                 });
-            });
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
 
-            await user.click(await screen.findByRole('button', { name: 'Import file' }));
-            await user.click(screen.getByRole('button', { name: 'Select host file' }));
+                await user.click(await screen.findByRole('button', { name: 'Import file' }));
+                await user.click(screen.getByRole('button', { name: 'Select host file' }));
 
-            expect(mockAttachFileMutate).toHaveBeenCalledWith(
-                {
+                expect(mockAttachFileMutate).not.toHaveBeenCalled();
+                const confirm = await screen.findByRole('button', { name: 'Associate file' });
+                await waitFor(() => expect(confirm).toBeEnabled());
+                await user.click(confirm);
+                expect(mockAttachFileMutate).toHaveBeenCalledWith({
                     contentHierarchyItemId: 'content-files',
                     filePath: '/media/library/The Matrix/new.mkv',
+                });
+                expect(await screen.findByText('The file is attached as primary content.')).toBeInTheDocument();
+            });
+
+            it('confirms that unlink keeps the host file before removing the association', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
+
+                const dialog = screen.getByRole('dialog');
+                expect(within(dialog).getByText(/removes only the association/i)).toBeInTheDocument();
+                expect(within(dialog).getByText(/host file stays on disk/i)).toBeInTheDocument();
+                await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+                expect(mockUnlinkFileMutate).toHaveBeenCalledWith(
+                    { contentHierarchyItemId: 'content-files', mediaFileId: 'media-file-1' },
+                    expect.any(Object),
+                );
+            });
+
+            it('marks an unbroken filename for wrapping in the unlink confirmation', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files-long', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: `Unlink ${longUnbrokenFileName}` }));
+
+                const dialog = screen.getByRole('dialog');
+                expect(within(dialog).getByText(longUnbrokenFileName)).toHaveClass(
+                    'content-detail-page__file-confirm-name',
+                );
+                await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+                expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+            });
+
+            it('returns keyboard focus to the Unlink button after the unlink dialog is cancelled', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+                const unlink = await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' });
+
+                unlink.focus();
+                await user.keyboard('{Enter}');
+                expect(await screen.findByRole('dialog', { name: 'Unlink file' })).toBeInTheDocument();
+                await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                await waitFor(() => expect(unlink).toHaveFocus());
+            });
+
+            it('keeps the unlink dialog open and shows the server error after failure', async () => {
+                const user = userEvent.setup();
+                mockUnlinkFileMutate.mockImplementation((_variables, options) => {
+                    options.onError(new Error('The association could not be removed.'));
+                });
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
+                await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unlink' }));
+
+                expect(screen.getByRole('dialog')).toBeInTheDocument();
+                expect(await screen.findByText('The association could not be removed.')).toBeInTheDocument();
+            });
+
+            it('blocks repeated unlink submissions while the request is pending', async () => {
+                const user = userEvent.setup();
+                mockUnlinkFilePending.current = true;
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
+
+                expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unlinking...' })).toBeDisabled();
+                expect(document.querySelector('[data-action="unlink-file"]')).toBeDisabled();
+                expect(document.querySelector('[data-action="delete-file"]')).toBeDisabled();
+                expect(mockUnlinkFileMutate).not.toHaveBeenCalled();
+            });
+
+            it('hides file mutation actions from users below Manager', async () => {
+                mockHasRole.current = () => false;
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await screen.findByText('the-matrix.mkv');
+                expect(screen.queryByRole('button', { name: 'Import file' })).not.toBeInTheDocument();
+                expect(screen.queryByRole('button', { name: 'Unlink the-matrix.mkv' })).not.toBeInTheDocument();
+                expect(screen.queryByRole('button', { name: 'Delete the-matrix.mkv' })).not.toBeInTheDocument();
+            });
+
+            it('does not claim a disk outcome the 204 response cannot confirm after a file delete', async () => {
+                mockDeleteFileMutate.mockImplementation((_vars, opts) => {
+                    opts?.onSuccess?.();
+                });
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Delete the-matrix.mkv' }));
+                const dialog = screen.getByRole('dialog');
+                await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+
+                expect(await screen.findByText('Deleted "the-matrix.mkv".')).toBeInTheDocument();
+            });
+        });
+
+        describe('file actions in the card layout', () => {
+            it('adds the Files tab actions to the floating content actions sheet on the Files tab', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+                await screen.findByText('the-matrix.mkv');
+                const trigger = screen.getByRole('button', { name: 'Content Actions' });
+
+                expect(trigger).toHaveClass('quick-actions-button__fab');
+                trigger.focus();
+                await user.keyboard('{Enter}');
+
+                const sheet = await screen.findByRole('dialog', { name: 'Content Actions' });
+                const actions = within(within(sheet).getByRole('group', { name: 'Quick actions' })).getAllByRole(
+                    'button',
+                );
+                expect(actions.map((action) => action.textContent)).toEqual([
+                    'Refresh Metadata',
+                    'Rescan media info',
+                    'Search Now',
+                    'Interactive Search',
+                    'Remove from library',
+                    'Apply rename mask to descendant files',
+                    'Import file',
+                ]);
+                actions[0].focus();
+                await user.tab();
+                expect(actions[1]).toHaveFocus();
+                await user.tab();
+                expect(actions[2]).toHaveFocus();
+                await user.keyboard('{Escape}');
+
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                await waitFor(() => expect(trigger).toHaveFocus());
+            });
+
+            it('shows no content actions trigger on the Files tab to a user with no content actions', async () => {
+                mockHasRole.current = () => false;
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await screen.findByText('the-matrix.mkv');
+                expect(screen.queryByRole('button', { name: 'Content Actions' })).not.toBeInTheDocument();
+                expect(screen.queryByRole('button', { name: 'Actions' })).not.toBeInTheDocument();
+                expect(document.querySelector('.quick-actions-button')).toBeNull();
+            });
+
+            it('runs an action from the inline sheet and closes it', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Content Actions' }));
+                await user.click(await screen.findByRole('button', { name: 'Interactive Search' }));
+
+                expect(await screen.findByTestId('interactive-search-route')).toBeInTheDocument();
+            });
+
+            it.each(['details', 'releases', 'metadata', 'activity'])(
+                'opens the page content actions, without the Files tab actions, from the floating button on the %s tab',
+                async (tab) => {
+                    const user = userEvent.setup();
+                    renderWithRouter('content-files', undefined, undefined, `?tab=${tab}`);
+
+                    const trigger = await screen.findByRole('button', { name: 'Content Actions' });
+                    expect(trigger).toHaveClass('quick-actions-button__fab');
+                    await user.click(trigger);
+                    const sheet = await screen.findByRole('dialog', { name: 'Content Actions' });
+                    expect(
+                        within(within(sheet).getByRole('group', { name: 'Quick actions' }))
+                            .getAllByRole('button')
+                            .map((action) => action.textContent),
+                    ).toEqual([
+                        'Refresh Metadata',
+                        'Rescan media info',
+                        'Search Now',
+                        'Interactive Search',
+                        'Remove from library',
+                    ]);
                 },
-                expect.any(Object),
             );
-            expect(await screen.findByText('The file is attached as primary content.')).toBeInTheDocument();
-        });
 
-        it('confirms that unlink keeps the host file before removing the association', async () => {
-            const user = userEvent.setup();
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+            it('offers extension content actions from the floating button to a user with no built-in actions', async () => {
+                mockHasRole.current = () => false;
+                mockUseSlotExtensions.mockImplementation((slot: string) =>
+                    slot === 'content.details.actions'
+                        ? {
+                              extensions: [
+                                  {
+                                      id: 'qa-action',
+                                      extensionId: 'qa-extension',
+                                      name: 'QA action',
+                                      slot: 'content.details.actions',
+                                      modifier: 'After',
+                                      tagName: 'qa-extension-action',
+                                      priority: 0,
+                                      attributes: null,
+                                  },
+                              ],
+                              isReady: true,
+                              isLoading: false,
+                          }
+                        : noExtensions,
+                );
+                renderWithRouter('content-files', undefined, undefined, '?tab=details');
 
-            await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
-
-            const dialog = screen.getByRole('dialog');
-            expect(within(dialog).getByText(/removes only the association/i)).toBeInTheDocument();
-            expect(within(dialog).getByText(/host file stays on disk/i)).toBeInTheDocument();
-            await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
-            expect(mockUnlinkFileMutate).toHaveBeenCalledWith(
-                { contentHierarchyItemId: 'content-files', mediaFileId: 'media-file-1' },
-                expect.any(Object),
-            );
-        });
-
-        it('keeps the unlink dialog open and shows the server error after failure', async () => {
-            const user = userEvent.setup();
-            mockUnlinkFileMutate.mockImplementation((_variables, options) => {
-                options.onError(new Error('The association could not be removed.'));
+                expect(await screen.findByRole('button', { name: 'Content Actions' })).toHaveClass(
+                    'quick-actions-button__fab',
+                );
             });
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
 
-            await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
-            await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unlink' }));
+            it('shows no content actions trigger on the Details tab to a user with no content actions', async () => {
+                mockHasRole.current = () => false;
+                renderWithRouter('content-files', undefined, undefined, '?tab=details');
 
-            expect(screen.getByRole('dialog')).toBeInTheDocument();
-            expect(await screen.findByText('The association could not be removed.')).toBeInTheDocument();
-        });
-
-        it('blocks repeated unlink submissions while the request is pending', async () => {
-            const user = userEvent.setup();
-            mockUnlinkFilePending.current = true;
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
-
-            await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
-
-            expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unlinking...' })).toBeDisabled();
-            expect(document.querySelector('[data-action="unlink-file"]')).toBeDisabled();
-            expect(document.querySelector('[data-action="delete-file"]')).toBeDisabled();
-            expect(mockUnlinkFileMutate).not.toHaveBeenCalled();
-        });
-
-        it('hides file mutation actions from users below Manager', async () => {
-            mockHasRole.current = () => false;
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
-
-            await screen.findByText('the-matrix.mkv');
-            expect(screen.queryByRole('button', { name: 'Import file' })).not.toBeInTheDocument();
-            expect(screen.queryByRole('button', { name: 'Unlink the-matrix.mkv' })).not.toBeInTheDocument();
-            expect(screen.queryByRole('button', { name: 'Delete the-matrix.mkv' })).not.toBeInTheDocument();
-        });
-
-        it('does not claim a disk outcome the 204 response cannot confirm after a file delete', async () => {
-            mockDeleteFileMutate.mockImplementation((_vars, opts) => {
-                opts?.onSuccess?.();
+                await waitFor(() => expect(screen.queryByRole('tab', { name: /Details/ })).toBeInTheDocument());
+                expect(screen.queryByRole('button', { name: 'Content Actions' })).not.toBeInTheDocument();
+                expect(document.querySelector('.quick-actions-button')).toBeNull();
             });
-            const user = userEvent.setup();
-            renderWithRouter('content-files', undefined, undefined, '?tab=files');
 
-            await user.click(await screen.findByRole('button', { name: 'Delete the-matrix.mkv' }));
-            const dialog = screen.getByRole('dialog');
-            await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+            it('returns keyboard focus to the file menu after the rename dialog is cancelled', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+                const trigger = await screen.findByRole('button', { name: 'Actions for the-matrix.mkv' });
 
-            expect(await screen.findByText('Deleted "the-matrix.mkv".')).toBeInTheDocument();
+                trigger.focus();
+                await user.keyboard('{Enter}');
+                await user.click(screen.getByRole('menuitem', { name: 'Apply rename mask' }));
+                expect(await screen.findByRole('dialog', { name: 'Apply rename mask' })).toBeInTheDocument();
+                await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                await waitFor(() => expect(trigger).toHaveFocus());
+            });
+
+            it('returns keyboard focus to the header button after Remove from library is cancelled', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files');
+                await screen.findByRole('button', { name: 'Content Actions' });
+                const remove = document.querySelector<HTMLElement>(
+                    '.content-details-header__actions [data-action="remove-from-library"]',
+                )!;
+
+                remove.focus();
+                await user.keyboard('{Enter}');
+                expect(await screen.findByRole('dialog')).toBeInTheDocument();
+                await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                await waitFor(() => expect(remove).toHaveFocus());
+            });
+
+            it('returns keyboard focus to the content actions trigger after Remove from library is dismissed', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files');
+                const trigger = await screen.findByRole('button', { name: 'Content Actions' });
+
+                await user.click(trigger);
+                const sheet = await screen.findByRole('dialog', { name: 'Content Actions' });
+                await user.click(within(sheet).getByRole('button', { name: 'Remove from library' }));
+                await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Content Actions' })).toBeNull());
+                expect(await screen.findByRole('dialog')).toBeInTheDocument();
+                await user.keyboard('{Escape}');
+
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                await waitFor(() => expect(trigger).toHaveFocus());
+            });
+
+            it('reaches every file action through the file menu, with Delete last and set apart', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('tv-season-files', undefined, undefined, '?tab=files');
+
+                await user.click(await screen.findByRole('button', { name: 'Actions for example.s01e01.mkv' }));
+
+                const items = screen.getAllByRole('menuitem');
+                expect(items.map((item) => item.getAttribute('aria-label') ?? item.textContent)).toEqual([
+                    'Correct episode association',
+                    'Apply rename mask',
+                    'Unlink example.s01e01.mkv',
+                    'Delete example.s01e01.mkv',
+                ]);
+                expect(screen.getByRole('separator')).toBeInTheDocument();
+                expect(screen.queryByRole('button', { name: 'Delete example.s01e01.mkv' })).not.toBeInTheDocument();
+            });
+
+            it('shows the rename and import actions as toolbar buttons', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                expect(
+                    await screen.findByRole('button', { name: 'Apply rename mask to selected files' }),
+                ).toBeDisabled();
+                expect(
+                    screen.getByRole('button', { name: 'Apply rename mask to descendant files' }),
+                ).toBeInTheDocument();
+                await user.click(screen.getByRole('button', { name: 'Import file' }));
+                expect(await screen.findByRole('dialog', { name: 'Import file' })).toBeInTheDocument();
+            });
+
+            it('leaves rename-all and import to the content actions button on a phone', async () => {
+                window.innerWidth = 390;
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                expect(
+                    await screen.findByRole('button', { name: 'Apply rename mask to selected files' }),
+                ).toBeInTheDocument();
+                expect(
+                    screen.queryByRole('button', { name: 'Apply rename mask to descendant files' }),
+                ).not.toBeInTheDocument();
+                expect(screen.queryByRole('button', { name: 'Import file' })).not.toBeInTheDocument();
+            });
+
+            it('returns keyboard focus to the file menu after the correction dialog closes', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('tv-season-files', undefined, undefined, '?tab=files');
+                const trigger = await screen.findByRole('button', { name: 'Actions for example.s01e01.mkv' });
+
+                trigger.focus();
+                await user.keyboard('{Enter}');
+                await user.click(screen.getByRole('menuitem', { name: 'Correct episode association' }));
+                expect(await screen.findByRole('dialog', { name: 'Correct episode association' })).toBeInTheDocument();
+                await user.keyboard('{Escape}');
+
+                await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+                await waitFor(() => expect(trigger).toHaveFocus());
+            });
+
+            it('offers no file menus to users below Manager', async () => {
+                mockHasRole.current = () => false;
+                renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+                await screen.findByText('the-matrix.mkv');
+                expect(screen.queryByRole('button', { name: 'Actions for the-matrix.mkv' })).not.toBeInTheDocument();
+            });
         });
 
         it('switches to Activity tab when clicked', async () => {
@@ -1909,8 +2574,8 @@ describe('ContentDetailPage', () => {
                         {
                             id: 'season-1',
                             title: 'Season 1',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -1945,8 +2610,8 @@ describe('ContentDetailPage', () => {
                         {
                             id: 'season-1',
                             title: 'Season 1',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -1980,8 +2645,8 @@ describe('ContentDetailPage', () => {
                         {
                             id: 'season-1',
                             title: 'Season 1',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -2012,8 +2677,8 @@ describe('ContentDetailPage', () => {
                         {
                             id: 'season-1',
                             title: 'Season 1',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -2040,8 +2705,8 @@ describe('ContentDetailPage', () => {
                         {
                             id: 'season-1',
                             title: 'Season 1',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -2067,8 +2732,8 @@ describe('ContentDetailPage', () => {
                         {
                             id: 'season-1',
                             title: 'Season 1',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -2095,8 +2760,8 @@ describe('ContentDetailPage', () => {
                             title: 'Season 1',
                             level: 'season',
                             levelLabel: 'Wrong Label',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -2123,8 +2788,8 @@ describe('ContentDetailPage', () => {
                             id: 'season-1',
                             title: 'Season 1',
                             posterUrl: 'https://example.com/season1.jpg',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -2157,8 +2822,8 @@ describe('ContentDetailPage', () => {
                         {
                             id: 'season-1',
                             title: 'Season 1',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                             publishDate: '2020-03-15T00:00:00Z',
                         },
@@ -2209,8 +2874,8 @@ describe('ContentDetailPage', () => {
                         {
                             id: 'episode-1',
                             title: 'Pilot',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                         },
                     ],
@@ -2235,24 +2900,24 @@ describe('ContentDetailPage', () => {
                         {
                             id: 's1',
                             title: 'Season 1',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                             sequenceNumber: 1,
                         },
                         {
                             id: 's2',
                             title: 'Season 2',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                             sequenceNumber: 2,
                         },
                         {
                             id: 's10',
                             title: 'Season 10',
-                            monitoring: true,
-                            effectiveMonitoring: true,
+                            monitoring: 'Monitored',
+                            effectiveMonitoring: 'Monitored',
                             fulfillment: 'fulfilled',
                             sequenceNumber: 10,
                         },
@@ -2486,21 +3151,29 @@ describe('ContentDetailPage', () => {
         });
 
         it('renders unmonitored content correctly', async () => {
+            // Arrange
+            // Act
             renderWithRouter('content-5');
+
+            // Assert
             await waitFor(() => {
-                expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent('Not monitored');
+                expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent('Unmonitored');
             });
-            expect(within(screen.getByRole('banner')).queryByText('Not monitored')).not.toBeInTheDocument();
+            expect(within(screen.getByRole('banner')).getByText('Unmonitored')).toBeInTheDocument();
         });
 
-        it('renders no fulfillment badge for an unmonitored item', async () => {
+        it('renders fulfillment independently for an unmonitored item', async () => {
+            // Arrange
+            // Act
             renderWithRouter('content-8');
+
+            // Assert
             await waitFor(() => {
                 expect(screen.getByRole('heading', { name: /Poor Things/i })).toBeInTheDocument();
             });
             const header = screen.getByRole('banner');
-            expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent('Not monitored');
-            expect(within(header).queryByText('External')).not.toBeInTheDocument();
+            expect(screen.getByTestId('monitoring-control__effective')).toHaveTextContent('Unmonitored');
+            expect(within(header).getByText('External')).toBeInTheDocument();
         });
 
         it('renders content without poster', async () => {

@@ -36,6 +36,68 @@ public class TvContentTypeDefinitionProviderTests
         Assert.That(contributions, Is.EqualTo([true, false, false]));
     }
 
+    [TestCase("/media/An Alias/Season 1/s01e02_reordered.mkv", "show", 1, "season", 1, true)]
+    [TestCase("/media/An Alias/Season 1/s01e02_reordered.mkv", "season", 1, "episode", 2, true)]
+    [TestCase("/media/An Alias/Season 4/s04e05.mkv", "season", 2, "episode", 5, true)]
+    [TestCase("/media/An Alias/Season 4/s04e05.mkv", "show", 1, "season", 2, false)]
+    [TestCase("/media/An Alias/Season 1/02.mkv", "season", 1, "episode", 2, true)]
+    public void ResolveFileChild_UsesConfirmedParent_WhenFileTitleOrProviderNumberingDiffers(
+        string path, string parentLevel, int parentOrdinal, string childLevel, int childOrdinal, bool expectedMatch)
+    {
+        // Arrange
+        var parent = new ContentHierarchyItem
+        {
+            ContentType = "tv",
+            Level = parentLevel,
+            Name = "Canonical title",
+            Slug = "canonical",
+            Ordinal = parentOrdinal
+        };
+        var child = new ContentHierarchyItem
+        {
+            Id = new Guid("00000000-0000-0000-0000-000000000001"),
+            ParentId = parent.Id,
+            ContentType = "tv",
+            Level = childLevel,
+            Name = "Provider title",
+            Slug = "provider",
+            Ordinal = childOrdinal
+        };
+        var parsed = _subject.Parse(path, out _)!;
+
+        // Act
+        var result = ((IFileRoutingContentTypeDefinitionProvider)_subject).ResolveFileChild(
+            parent, [child], parsed.ToDictionary(pair => pair.Key, pair => pair.Value.ToList()));
+
+        // Assert
+        Assert.That(result.HasValue, Is.EqualTo(expectedMatch));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ResolveFileChild_ReturnsUnresolved_WhenChildIsMissingOrAmbiguous(bool duplicate)
+    {
+        // Arrange
+        var parent = new ContentHierarchyItem { ContentType = "tv", Level = "show", Name = "Show", Slug = "show" };
+        var first = new ContentHierarchyItem
+        {
+            ContentType = "tv",
+            Level = "season",
+            Name = "Season 1",
+            Slug = "one",
+            Ordinal = 1
+        };
+        var second = first with { Id = Guid.NewGuid(), Slug = "duplicate" };
+        ContentHierarchyItem[] children = duplicate ? [first, second] : [];
+
+        // Act
+        var result = ((IFileRoutingContentTypeDefinitionProvider)_subject).ResolveFileChild(
+            parent, children, new Dictionary<string, List<string>> { ["season"] = ["1"] });
+
+        // Assert
+        Assert.That(result, Is.Null);
+    }
+
     [Test]
     public void BuildPath_Result_WhenEpisodeHasSeasonAndEpisodeNumbers()
     {
@@ -302,6 +364,85 @@ public class TvContentTypeDefinitionProviderTests
             target,
             [],
             new Release { Protocol = "torrent", Title = releaseTitle },
+            []);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [TestCase("Show.S01.1080p-GRP", "2026-06-29", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01.1080p-GRP", "2026-07-23", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01.1080p-GRP", "2026-07-24", "2026-06-29", "2026-07-22", ReleaseMatchResult.NoMatch)]
+    [TestCase("Show.S01.1080p-GRP", null, "2026-06-29", "2026-07-22", ReleaseMatchResult.NoMatch)]
+    [TestCase("Show.S01.1080p-GRP", null, null, "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01E40.1080p-GRP", null, "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01E40.1080p-GRP", "2026-07-24", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.Complete.Series.1080p-GRP", "2026-06-29", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.Complete.Series.1080p-GRP", "2026-07-24", "2026-06-29", "2026-07-22", ReleaseMatchResult.NoMatch)]
+    [TestCase("Show.Complete.Series.1080p-GRP", null, "2026-06-29", "2026-07-22", ReleaseMatchResult.NoMatch)]
+    [TestCase("Show.S01.1080p-GRP", null, "1988-01-02", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01.1080p-GRP", null, "2025-07-21", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01.1080p-GRP", null, "2025-07-22", "2026-07-22", ReleaseMatchResult.NoMatch)]
+    [TestCase("Show.S01.1080p-GRP", "2026-07-24", "2026-06-29", "0001-01-01", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01.1080p-GRP", null, "2026-06-29", "0001-01-01", ReleaseMatchResult.Confident)]
+    public void IsMatch_Result_WhenPackIsPublishedBeforeOrAfterTheEpisode(
+        string releaseTitle,
+        DateTime? episodePublishDate,
+        DateTime? seasonPublishDate,
+        DateTime releasePublishDate,
+        ReleaseMatchResult expected)
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            Ordinal = 1,
+        };
+        var episode = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "ice-chair",
+            Name = "Ice Chair",
+            Ordinal = 40,
+        };
+        var target = new ContentTarget
+        {
+            Item = episode,
+            Lineage = [episode, season, show],
+            Metadata = new Dictionary<Guid, MaterializedMetadata>
+            {
+                [show.Id] = new() { Title = "Show" },
+                [season.Id] = new() { Title = "Season 1", PublishDate = seasonPublishDate },
+                [episode.Id] = new() { Title = "Ice Chair", PublishDate = episodePublishDate },
+            },
+        };
+
+        // Act
+        var result = _subject.IsMatch(
+            target,
+            [],
+            new Release
+            {
+                Protocol = "torrent",
+                Title = releaseTitle,
+                PublishDate = releasePublishDate,
+            },
             []);
 
         // Assert

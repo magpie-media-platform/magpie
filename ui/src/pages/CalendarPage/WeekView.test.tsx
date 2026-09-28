@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,7 @@ vi.mock('./calendarUtils', async (importActual) => {
 
 import { getWeekDays, getWeekStart, WEEKDAY_NAMES } from './calendarUtils';
 import { WeekView } from './WeekView';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 let realGetWeekStart: typeof getWeekStart;
 
@@ -45,8 +46,8 @@ function makeEvent(id: string, title: string): CalendarEvent {
         contentType: 'tv',
         level: 'episode',
         fulfillment: 'missing',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
     };
 }
 
@@ -59,7 +60,7 @@ const defaultProps = {
 
 describe('WeekView', () => {
     it('renders 7 weekday header columns', () => {
-        render(<WeekView {...defaultProps} />);
+        render(<WeekView {...defaultProps} />, { wrapper: TooltipProvider });
         const dateElements = screen.getAllByTestId('calendar-page__weekday-date');
         expect(dateElements).toHaveLength(7);
     });
@@ -69,6 +70,7 @@ describe('WeekView', () => {
         const onDayClick = vi.fn();
         render(
             <WeekView {...defaultProps} getEventsForDate={() => [makeEvent('1', 'Test')]} onDayClick={onDayClick} />,
+            { wrapper: TooltipProvider },
         );
 
         const col = document.querySelector('[data-date="2024-01-14"] > button');
@@ -82,7 +84,7 @@ describe('WeekView', () => {
         // Arrange
         const user = userEvent.setup();
         const onDayClick = vi.fn();
-        render(<WeekView {...defaultProps} onDayClick={onDayClick} />);
+        render(<WeekView {...defaultProps} onDayClick={onDayClick} />, { wrapper: TooltipProvider });
         // Act
         await user.click(document.querySelectorAll('button.calendar-page__weekday-col')[0]);
         // Assert
@@ -102,6 +104,7 @@ describe('WeekView', () => {
                 onDayClick={onDayClick}
                 onEventClick={onEventClick}
             />,
+            { wrapper: TooltipProvider },
         );
 
         await user.click(screen.getAllByTestId('calendar-page__event-card')[0]);
@@ -111,12 +114,12 @@ describe('WeekView', () => {
     });
 
     it('has the correct data-component attribute', () => {
-        const { container } = render(<WeekView {...defaultProps} />);
+        const { container } = render(<WeekView {...defaultProps} />, { wrapper: TooltipProvider });
         expect(container.querySelector('[data-component="week-view"]')).toBeInTheDocument();
     });
 
     it('renders all 7 day columns', () => {
-        render(<WeekView {...defaultProps} />);
+        render(<WeekView {...defaultProps} />, { wrapper: TooltipProvider });
         expect(document.querySelectorAll('.calendar-page__week-col')).toHaveLength(7);
     });
 
@@ -126,6 +129,7 @@ describe('WeekView', () => {
                 {...defaultProps}
                 getEventsForDate={(date) => (date.getDay() === 1 ? [makeEvent('1', 'Readable title')] : [])}
             />,
+            { wrapper: TooltipProvider },
         );
 
         expect(document.querySelectorAll('.calendar-page__week-day-heading')).toHaveLength(7);
@@ -133,6 +137,42 @@ describe('WeekView', () => {
         expect(screen.getByText('Readable title').closest('[data-component="content-lineage-title"]')).toHaveClass(
             'calendar-page__event-title',
         );
+    });
+
+    it('shows monitoring and fulfillment separately in the actual compact week path', () => {
+        // Arrange
+        const inheritedEvent = {
+            ...makeEvent('1', 'Inherited external release'),
+            monitoring: null,
+            effectiveMonitoring: 'Unmonitored' as const,
+            fulfillment: 'fulfilledExternally' as const,
+        };
+        const monitoredEvent = {
+            ...makeEvent('2', 'Explicit monitored release'),
+            fulfillment: 'fulfilled' as const,
+        };
+
+        // Act
+        render(
+            <WeekView
+                {...defaultProps}
+                getEventsForDate={(date) => (date.getDay() === 1 ? [inheritedEvent, monitoredEvent] : [])}
+            />,
+            { wrapper: TooltipProvider },
+        );
+
+        // Assert
+        const inheritedCard = screen
+            .getByText('Inherited external release', { selector: '.content-lineage-title__segment--leaf' })
+            .closest('[data-testid="calendar-page__event-card"]');
+        const monitoredCard = screen
+            .getByText('Explicit monitored release', { selector: '.content-lineage-title__segment--leaf' })
+            .closest('[data-testid="calendar-page__event-card"]');
+
+        expect(within(inheritedCard as HTMLElement).getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
+        expect(within(inheritedCard as HTMLElement).getByText('External')).toBeInTheDocument();
+        expect(within(monitoredCard as HTMLElement).getByLabelText('Monitored')).toBeInTheDocument();
+        expect(within(monitoredCard as HTMLElement).getByText('Fulfilled')).toBeInTheDocument();
     });
 
     it('keeps the 7-column structure with a long-titled event and a busy day', () => {
@@ -154,6 +194,7 @@ describe('WeekView', () => {
                     return [];
                 }}
             />,
+            { wrapper: TooltipProvider },
         );
 
         const cols = document.querySelectorAll('.calendar-page__week-col');
@@ -169,7 +210,7 @@ describe('WeekView', () => {
     });
 
     it('labels each column with the weekday of the date beneath it (Sunday-first)', () => {
-        render(<WeekView {...defaultProps} />);
+        render(<WeekView {...defaultProps} />, { wrapper: TooltipProvider });
 
         const expected = getWeekDays(getWeekStart(defaultProps.currentDate));
         const header = readHeaderCells();
@@ -185,7 +226,7 @@ describe('WeekView', () => {
     it('formats data-date in local terms under a positive UTC offset', () => {
         vi.stubEnv('TZ', 'Asia/Tokyo');
         try {
-            render(<WeekView {...defaultProps} currentDate={new Date(2024, 0, 15)} />);
+            render(<WeekView {...defaultProps} currentDate={new Date(2024, 0, 15)} />, { wrapper: TooltipProvider });
 
             const cols = document.querySelectorAll('.calendar-page__week-col');
             expect(cols[0].getAttribute('data-date')).toBe('2024-01-14');
@@ -198,7 +239,7 @@ describe('WeekView', () => {
 
     it('keeps labels aligned with their dates in a Monday-first locale', () => {
         vi.mocked(getWeekStart).mockReturnValue(new Date(2024, 0, 15));
-        render(<WeekView {...defaultProps} />);
+        render(<WeekView {...defaultProps} />, { wrapper: TooltipProvider });
 
         const expected = getWeekDays(new Date(2024, 0, 15));
         const header = readHeaderCells();

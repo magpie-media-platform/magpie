@@ -109,12 +109,12 @@
     }
 
     .execution-ledger__row[data-tone='done'] .execution-ledger__icon {
-        color: var(--status-success, var(--accent-secondary));
+        color: var(--status-healthy);
     }
 
     .execution-ledger__row[data-tone='error'] .execution-ledger__icon,
     .execution-ledger__row[data-tone='error'] .execution-ledger__text {
-        color: var(--status-error, var(--text-primary));
+        color: var(--status-unhealthy);
     }
 
     .execution-ledger__row[data-tone='job'] .execution-ledger__icon {

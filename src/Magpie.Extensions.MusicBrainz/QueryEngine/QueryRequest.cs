@@ -4,6 +4,8 @@ namespace Magpie.Extensions.MusicBrainz.QueryEngine;
 
 internal sealed record QueryRequest
 {
+    internal QueryProgress? Progress { get; init; }
+
     public required QueryTarget Target { get; init; }
 
     public required MetadataCriteria Criteria { get; init; }

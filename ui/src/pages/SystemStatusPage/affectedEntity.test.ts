@@ -6,7 +6,7 @@ describe('describeAffectedEntity', () => {
     it('links a hierarchy item token to its detail route with a shortened reference', () => {
         const guid = 'a1fc4c2b-1234-4def-89ab-0123456789ab';
 
-        const display = describeAffectedEntity(`ContentItem:${guid}`);
+        const display = describeAffectedEntity(`ContentHierarchyItem:${guid}`);
 
         expect(display).toEqual({ label: 'Hierarchy item', reference: 'a1fc4c2b', to: `/library/${guid}` });
     });

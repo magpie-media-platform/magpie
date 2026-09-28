@@ -42,7 +42,6 @@ internal sealed class WishlistRefreshItemJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Requeue,
-        Timeout = TimeSpan.FromMinutes(30),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
         LockPartitionFields = [MagpieJobs.Parameters.WishlistId],
@@ -55,6 +54,10 @@ internal sealed class WishlistRefreshItemJob(
                 DataType.String,
                 true,
                 null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            }
         ],
     };
 
@@ -150,6 +153,7 @@ internal sealed class WishlistRefreshItemJob(
         var matchesSeen = 0;
         var skippedSeen = 0;
         var page = 1;
+        string? continuation = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -157,7 +161,7 @@ internal sealed class WishlistRefreshItemJob(
             progressReporter.Report(null, $"The refresh will search page {page} of wishlist {wishlist.Name}.");
 
             var searchResult = await metadataSearchService
-                .SearchCandidatesAsync(contentFilter.Criteria, string.Empty, page, cancellationToken)
+                .SearchCandidatesAsync(contentFilter.Criteria, string.Empty, page, continuation, cancellationToken)
                 .ConfigureAwait(false);
 
             foreach (var warning in searchResult.Warnings)
@@ -234,11 +238,20 @@ internal sealed class WishlistRefreshItemJob(
                     .ConfigureAwait(false);
             }
 
+            if (searchResult.Warnings.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "The wishlist search was incomplete. Its completed matches were retained.");
+            }
+
             if (!searchResult.PageInfo.HasMore)
             {
                 break;
             }
 
+            continuation = searchResult.NextContinuation ??
+                throw new InvalidOperationException(
+                    "The metadata search did not return a continuation for the next page.");
             page++;
         }
 

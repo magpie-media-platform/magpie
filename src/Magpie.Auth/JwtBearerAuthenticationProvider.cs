@@ -54,7 +54,9 @@ internal sealed class JwtBearerAuthenticationProvider(ITokenService tokenService
             return null;
         }
 
-        var cookie = context.Request.Cookies[StreamAuthentication.CookieName];
+        var cookie = context.Request.Cookies[
+            AuthenticationCookies.GetName(StreamAuthentication.CookieName, context.Request)]
+            ?? context.Request.Cookies[StreamAuthentication.CookieName];
         return string.IsNullOrWhiteSpace(cookie) ? null : cookie;
     }
 

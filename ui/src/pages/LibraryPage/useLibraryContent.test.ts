@@ -26,6 +26,36 @@ describe('useLibraryContent bulk filter', () => {
         });
     });
 
+    it('hides cached unrestricted rows while a saved filter is unresolved', () => {
+        mockUseContentList.mockReturnValue({
+            data: { items: [{ id: 'unfiltered-row' }], totalItems: 1 },
+            isLoading: false,
+            error: null,
+            refetch: vi.fn(),
+        });
+
+        const { result } = renderHook(() =>
+            useLibraryContent({
+                contentTypeSlug: undefined,
+                currentContentType: null,
+                routeContentTypeSlug: undefined,
+                selectedLevel: null,
+                libraryTypesError: null,
+                isRestoringFilter: true,
+                debouncedFilterQuery: '',
+                filterQuery: '',
+                sortField: 'title',
+                sortDir: 'asc',
+                pageIndex: 0,
+            }),
+        );
+
+        expect(mockUseContentList).toHaveBeenLastCalledWith(expect.anything(), { enabled: false });
+        expect(result.current.contentItems).toEqual([]);
+        expect(result.current.pageRowIds).toEqual([]);
+        expect(result.current.totalItems).toBe(0);
+    });
+
     it('restricts the selection to top-level rows when no scope is chosen', () => {
         const { result } = renderHook(() =>
             useLibraryContent({
@@ -35,7 +65,7 @@ describe('useLibraryContent bulk filter', () => {
                 selectedLevel: null,
                 libraryTypesError: null,
                 debouncedFilterQuery: '',
-                fulfillment: '',
+                filterQuery: '',
                 sortField: 'name',
                 sortDir: 'asc',
                 pageIndex: 0,
@@ -43,6 +73,36 @@ describe('useLibraryContent bulk filter', () => {
         );
 
         expect(result.current.bulkFilter).toBe('ParentId null');
+    });
+
+    it('queries and selects matching items at every level when the all-levels scope is chosen', () => {
+        const { result } = renderHook(() =>
+            useLibraryContent({
+                contentTypeSlug: undefined,
+                currentContentType: null,
+                routeContentTypeSlug: undefined,
+                selectedLevel: null,
+                allLevels: true,
+                libraryTypesError: null,
+                debouncedFilterQuery: 'title contains "dark"',
+                filterQuery: 'title contains "dark"',
+                sortField: 'title',
+                sortDir: 'asc',
+                pageIndex: 1,
+            }),
+        );
+
+        expect(mockUseContentList).toHaveBeenLastCalledWith(
+            {
+                pageNumber: 2,
+                pageSize: 50,
+                filter: 'title contains "dark"',
+                sortBy: 'Name',
+                sortDirection: 'Ascending',
+            },
+            { enabled: true },
+        );
+        expect(result.current.bulkFilter).toBe('(title contains "dark")');
     });
 
     it('queries a top-level library route by content type instead of parent id', () => {
@@ -60,7 +120,7 @@ describe('useLibraryContent bulk filter', () => {
                 selectedLevel: null,
                 libraryTypesError: null,
                 debouncedFilterQuery: '',
-                fulfillment: '',
+                filterQuery: '',
                 sortField: 'title',
                 sortDir: 'asc',
                 pageIndex: 0,
@@ -89,7 +149,7 @@ describe('useLibraryContent bulk filter', () => {
                 selectedLevel: null,
                 libraryTypesError: null,
                 debouncedFilterQuery: '',
-                fulfillment: '',
+                filterQuery: '',
                 sortField: 'fulfilledDate',
                 sortDir: 'desc',
                 pageIndex: 0,
@@ -116,7 +176,7 @@ describe('useLibraryContent bulk filter', () => {
                 },
                 libraryTypesError: null,
                 debouncedFilterQuery: '',
-                fulfillment: '',
+                filterQuery: '',
                 sortField: 'name',
                 sortDir: 'asc',
                 pageIndex: 0,
@@ -134,15 +194,16 @@ describe('useLibraryContent bulk filter', () => {
                 routeContentTypeSlug: 'tv',
                 selectedLevel: null,
                 libraryTypesError: null,
-                debouncedFilterQuery: '',
-                fulfillment: 'Missing',
+                debouncedFilterQuery: 'fulfillment = Missing',
+                filterQuery: 'fulfillment = Missing',
                 sortField: 'name',
                 sortDir: 'asc',
                 pageIndex: 0,
             }),
         );
 
-        expect(result.current.bulkFilter).toBe('ParentId null and ContentType = "tv" and Fulfillment = Missing');
+        expect(result.current.bulkFilter).toBe('ParentId null and ContentType = "tv" and (fulfillment = Missing)');
+        expect(mockUseContentList.mock.calls.at(-1)?.[0].fulfillment).toBeUndefined();
     });
 
     it('wraps the typed filter query so its operators cannot escape the scope', () => {
@@ -154,7 +215,7 @@ describe('useLibraryContent bulk filter', () => {
                 selectedLevel: null,
                 libraryTypesError: null,
                 debouncedFilterQuery: '  Name contains "wire" or Monitoring = true  ',
-                fulfillment: '',
+                filterQuery: '  Name contains "wire" or Monitoring = true  ',
                 sortField: 'name',
                 sortDir: 'asc',
                 pageIndex: 0,
@@ -164,5 +225,31 @@ describe('useLibraryContent bulk filter', () => {
         expect(result.current.bulkFilter).toBe(
             'ParentId null and ContentType = "tv" and (Name contains "wire" or Monitoring = true)',
         );
+    });
+
+    it('useLibraryContent_UsesCurrentFilterForBulkScope_WhenRequestFilterIsSettling', () => {
+        // Arrange
+        const args = {
+            contentTypeSlug: 'tv',
+            currentContentType: { id: 'tv', name: 'TV', pluralName: 'TV', slug: 'tv', levels: [] },
+            routeContentTypeSlug: 'tv',
+            selectedLevel: null,
+            libraryTypesError: null,
+            debouncedFilterQuery: 'Name contains "older"',
+            filterQuery: 'Name contains "latest"',
+            sortField: 'name',
+            sortDir: 'asc',
+            pageIndex: 0,
+        };
+
+        // Act
+        const { result } = renderHook(() => useLibraryContent(args));
+
+        // Assert
+        expect(mockUseContentList).toHaveBeenLastCalledWith(
+            expect.objectContaining({ filter: 'Name contains "older"' }),
+            { enabled: true },
+        );
+        expect(result.current.bulkFilter).toBe('ParentId null and ContentType = "tv" and (Name contains "latest")');
     });
 });

@@ -5,6 +5,7 @@ import { MemoryRouter, useSearchParams } from 'react-router-dom';
 
 import { CalendarPage } from './CalendarPage';
 import type { CalendarEvent } from '@/types/calendar';
+import { TooltipProvider } from '@/components/ui/Tooltip';
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
@@ -15,6 +16,8 @@ vi.mock('@/extensions/useExtensions', () => ({
 }));
 
 const mockNavigate = vi.fn();
+const mockOpenPreview = vi.fn();
+vi.mock('@/components/content/LocalContentPreview', () => ({ useOpenLocalContentPreview: () => mockOpenPreview }));
 vi.mock('react-router-dom', async () => {
     const actual = await vi.importActual('react-router-dom');
     return {
@@ -39,8 +42,8 @@ const mockEvents: CalendarEvent[] = [
         level: 'episode',
         levelLabel: 'Episode',
         fulfillment: 'missing',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
     },
     {
         id: 'evt-2',
@@ -53,8 +56,8 @@ const mockEvents: CalendarEvent[] = [
         level: 'episode',
         levelLabel: 'Episode',
         fulfillment: 'fulfilled',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
     },
     {
         id: 'evt-3',
@@ -66,8 +69,8 @@ const mockEvents: CalendarEvent[] = [
         level: 'movie',
         levelLabel: 'Movie',
         fulfillment: 'missing',
-        monitoring: true,
-        effectiveMonitoring: true,
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
     },
 ];
 
@@ -109,6 +112,7 @@ describe('CalendarPage', () => {
             <MemoryRouter initialEntries={['/calendar?view=list']}>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
@@ -125,6 +129,7 @@ describe('CalendarPage', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         // Assert
@@ -137,6 +142,7 @@ describe('CalendarPage', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(document.querySelector('[data-page="calendar"]')).toBeInTheDocument();
@@ -147,6 +153,7 @@ describe('CalendarPage', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(screen.getByRole('heading', { name: 'Calendar', level: 1 })).toBeInTheDocument();
@@ -157,6 +164,7 @@ describe('CalendarPage', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const icon = screen.getByTestId('calendar-page__icon');
@@ -176,6 +184,7 @@ describe('CalendarPage', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(screen.getByTestId('calendar-loading')).toBeInTheDocument();
@@ -188,6 +197,7 @@ describe('CalendarPage', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(screen.queryByTestId('calendar-loading')).not.toBeInTheDocument();
@@ -227,6 +237,7 @@ describe('CalendarPage view switcher', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(document.querySelector('[data-view="month"]')).toBeInTheDocument();
@@ -240,6 +251,7 @@ describe('CalendarPage view switcher', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const monthBtn = document.querySelector('[data-view="month"]');
@@ -254,6 +266,7 @@ describe('CalendarPage view switcher', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const weekBtn = document.querySelector('[data-view="week"]');
@@ -270,6 +283,7 @@ describe('CalendarPage view switcher', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayBtn = document.querySelector('[data-view="day"]');
@@ -286,6 +300,7 @@ describe('CalendarPage view switcher', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const listBtn = document.querySelector('[data-view="list"]');
@@ -300,6 +315,7 @@ describe('CalendarPage view switcher', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const monthBtn = document.querySelector('[data-view="month"]');
@@ -314,6 +330,7 @@ describe('CalendarPage view switcher', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(screen.getByText('Month')).toBeInTheDocument();
@@ -355,6 +372,7 @@ describe('CalendarPage navigation', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(document.querySelector('[data-action="prev"]')).toBeInTheDocument();
@@ -367,6 +385,7 @@ describe('CalendarPage navigation', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const now = new Date();
@@ -381,6 +400,7 @@ describe('CalendarPage navigation', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const now = new Date();
@@ -400,6 +420,7 @@ describe('CalendarPage navigation', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const now = new Date();
@@ -452,6 +473,7 @@ describe('CalendarPage month overflow', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const nextBtn = document.querySelector('[data-action="next"]');
@@ -468,6 +490,7 @@ describe('CalendarPage month overflow', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const prevBtn = document.querySelector('[data-action="prev"]');
@@ -510,6 +533,7 @@ describe('CalendarPage month view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(screen.getByText('Sun')).toBeInTheDocument();
@@ -526,6 +550,7 @@ describe('CalendarPage month view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayCells = document.querySelectorAll('[data-date]');
@@ -537,6 +562,7 @@ describe('CalendarPage month view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const todayCell = screen.getByTestId('calendar-page__day-cell--today');
@@ -548,6 +574,7 @@ describe('CalendarPage month view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayEvents = screen.getAllByTestId('calendar-page__day-event');
@@ -561,6 +588,7 @@ describe('CalendarPage month view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const todayCell = screen.getByTestId('calendar-page__day-cell--today');
@@ -604,6 +632,7 @@ describe('CalendarPage week view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const weekBtn = document.querySelector('[data-view="week"]');
@@ -620,6 +649,7 @@ describe('CalendarPage week view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const weekBtn = document.querySelector('[data-view="week"]');
@@ -636,6 +666,7 @@ describe('CalendarPage week view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const weekBtn = document.querySelector('[data-view="week"]');
@@ -680,6 +711,7 @@ describe('CalendarPage event cards', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayBtn = document.querySelector('[data-view="day"]');
@@ -696,6 +728,7 @@ describe('CalendarPage event cards', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayBtn = document.querySelector('[data-view="day"]');
@@ -705,13 +738,14 @@ describe('CalendarPage event cards', () => {
         expect(eventCard).toHaveAttribute('data-fulfillment');
     });
 
-    it('navigates to content details when event is clicked', async () => {
+    it('opens the local preview when an event is clicked', async () => {
         const user = userEvent.setup();
 
         render(
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayBtn = document.querySelector('[data-view="day"]');
@@ -722,7 +756,8 @@ describe('CalendarPage event cards', () => {
 
         await user.click(eventCard!);
 
-        expect(mockNavigate).toHaveBeenCalledWith(`/library/${contentId}`);
+        expect(mockOpenPreview).toHaveBeenCalledWith(contentId);
+        expect(mockNavigate).not.toHaveBeenCalled();
     });
 
     it('shows event title and subtitle', async () => {
@@ -732,6 +767,7 @@ describe('CalendarPage event cards', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayBtn = document.querySelector('[data-view="day"]');
@@ -775,6 +811,7 @@ describe('CalendarPage list view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const listBtn = document.querySelector('[data-view="list"]');
@@ -793,6 +830,7 @@ describe('CalendarPage list view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const listBtn = document.querySelector('[data-view="list"]');
@@ -820,6 +858,7 @@ describe('CalendarPage list view', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         await user.click(document.querySelector('[data-view="list"]')!);
@@ -862,6 +901,7 @@ describe('CalendarPage empty state', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const prevBtn = document.querySelector('[data-action="prev"]');
@@ -884,6 +924,7 @@ describe('CalendarPage empty state', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const prevBtn = document.querySelector('[data-action="prev"]');
@@ -905,6 +946,7 @@ describe('CalendarPage empty state', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const prevBtn = document.querySelector('[data-action="prev"]');
@@ -951,6 +993,7 @@ describe('CalendarPage accessibility', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(document.querySelector('[data-view="month"]')).toHaveAttribute('aria-label', 'Month view');
@@ -964,6 +1007,7 @@ describe('CalendarPage accessibility', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         expect(document.querySelector('[data-action="prev"]')).toHaveAttribute('aria-label', 'Previous');
@@ -975,6 +1019,7 @@ describe('CalendarPage accessibility', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayCells = document.querySelectorAll('[data-date]');
@@ -988,6 +1033,7 @@ describe('CalendarPage accessibility', () => {
             <MemoryRouter>
                 <CalendarPage />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const icon = screen.getByTestId('calendar-page__icon');
@@ -1033,6 +1079,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const weekBtn = document.querySelector('[data-view="week"]');
@@ -1046,6 +1093,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const expected = new Date(2025, 5, 15).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -1058,6 +1106,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const monthBtn = document.querySelector('[data-view="month"]');
@@ -1072,6 +1121,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const weekBtn = document.querySelector('[data-view="week"]');
@@ -1089,6 +1139,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const monthBtn = document.querySelector('[data-view="month"]');
@@ -1106,6 +1157,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const nextBtn = document.querySelector('[data-action="next"]');
@@ -1123,6 +1175,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const dayCell = document.querySelector('[data-date="2025-06-20"]');
@@ -1139,6 +1192,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const monthBtn = document.querySelector('[data-view="month"]');
@@ -1154,6 +1208,7 @@ describe('CalendarPage URL persistence', () => {
                 <CalendarPage />
                 <UrlObserver />
             </MemoryRouter>,
+            { wrapper: TooltipProvider },
         );
 
         const now = new Date();

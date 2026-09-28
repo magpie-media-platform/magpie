@@ -144,9 +144,11 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
 
     const seededForRef = useRef<string | null>(null);
     const lastSearchRef = useRef<MatchSearchRequest | null>(null);
+    const candidateRequestVersion = useRef(0);
     const resetCandidateSearch = candidateSearch.reset;
     useEffect(() => {
         if (target && seededForRef.current !== targetKey(target)) {
+            candidateRequestVersion.current++;
             seededForRef.current = targetKey(target);
             const seeded = targetSeed(target);
             setTitle(seeded.title);
@@ -157,6 +159,7 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
             lastSearchRef.current = null;
             resetCandidateSearch();
         } else if (!target) {
+            candidateRequestVersion.current++;
             seededForRef.current = null;
         }
     }, [target, resetCandidateSearch]);
@@ -166,7 +169,8 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
     }, []);
 
     const runCandidateSearch = useCallback(
-        async (request: MatchSearchRequest, candidateSearchPage: number) => {
+        async (request: MatchSearchRequest, candidateSearchPage: number, resume = false) => {
+            const version = ++candidateRequestVersion.current;
             setCandidateSearchError(null);
             lastSearchRef.current = request;
 
@@ -174,9 +178,12 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
                 await candidateSearch.mutateAsync({
                     query: request.queryText,
                     page: candidateSearchPage,
+                    resume,
                 });
             } catch (error) {
-                setCandidateSearchError(candidateSearchErrorMessage(error));
+                if (version === candidateRequestVersion.current) {
+                    setCandidateSearchError(candidateSearchErrorMessage(error));
+                }
             }
         },
         [candidateSearch],
@@ -195,7 +202,7 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
             const clampedPage = Math.max(1, nextPage);
             setPage(clampedPage);
             if (lastSearchRef.current) {
-                void runCandidateSearch(lastSearchRef.current, clampedPage);
+                void runCandidateSearch(lastSearchRef.current, clampedPage, true);
             }
         },
         [runCandidateSearch],
@@ -326,7 +333,20 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
 
                     <DialogBody className="manual-match-dialog__body">
                         <section className="manual-match-dialog__section">
-                            <div className="manual-match-dialog__search-row">
+                            <div
+                                className="manual-match-dialog__search-row"
+                                onKeyDown={(event) => {
+                                    if (
+                                        event.key === 'Enter' &&
+                                        !event.nativeEvent.isComposing &&
+                                        event.target instanceof HTMLInputElement &&
+                                        !searchPending
+                                    ) {
+                                        event.preventDefault();
+                                        void runSearch();
+                                    }
+                                }}
+                            >
                                 <div className="manual-match-dialog__fields">
                                     <div className="manual-match-dialog__field manual-match-dialog__field--title">
                                         <Label htmlFor="manual-match-title">Title</Label>
@@ -424,7 +444,11 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
                         )}
 
                         {!candidateSearchError && !searchPending && candidates.length > 0 && (
-                            <ul className="manual-match-dialog__results" data-testid="manual-match-dialog__results">
+                            <ul
+                                className="manual-match-dialog__results"
+                                data-testid="manual-match-dialog__results"
+                                role="list"
+                            >
                                 {candidates.map((candidate) => {
                                     const key = candidateKey(candidate);
                                     const candidateTitle = candidate.title?.trim() || 'Untitled';
@@ -490,10 +514,9 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
                             />
                         )}
                     </DialogBody>
+                    <PreviewDrawer open={previewOpen} onOpenChange={setPreviewOpen} target={previewTarget} />
                 </DialogContent>
             </Dialog>
-
-            <PreviewDrawer open={previewOpen} onOpenChange={setPreviewOpen} target={previewTarget} />
         </>
     );
 }

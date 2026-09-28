@@ -35,7 +35,6 @@ internal sealed class ReleaseSearchScanJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Requeue,
-        Timeout = TimeSpan.FromMinutes(15),
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters =
@@ -146,11 +145,11 @@ internal sealed class ReleaseSearchScanJob(
             var currentId = leafId;
             while (walked.Add(currentId) &&
                 ancestry.TryGetValue(currentId, out var node) &&
-                node.EffectiveMonitoring)
+                node.EffectiveMonitoring != MonitoringMode.Unmonitored)
             {
                 if (node.ParentId is not { } parentId ||
                     !ancestry.TryGetValue(parentId, out var parent) ||
-                    !parent.EffectiveMonitoring)
+                    parent.EffectiveMonitoring == MonitoringMode.Unmonitored)
                 {
                     roots.Add(currentId);
                     break;
@@ -174,6 +173,7 @@ internal sealed class ReleaseSearchScanJob(
                 {
                     LeafOnly = true,
                     EffectiveMonitoring = true,
+                    ImportPending = false,
                     Fulfillment = new()
                     {
                         And = [new()

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useOpenLocalContentPreview } from '@/components/content/LocalContentPreview';
 import { type SortingState } from '@tanstack/react-table';
 
 import {
@@ -46,6 +47,7 @@ import { useToggle } from '@/hooks/useToggle';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { setContentFilterSelection } from '@/lib/contentColumnFilters';
 import { candidateSearchErrorMessage, getErrorMessage } from '@/lib/errors';
+import { isAbortError } from '@/lib/api';
 import { parseMagpieQl } from '@/lib/magpieQl';
 import { toPlainTextSummary } from '@/lib/plainTextSummary';
 import { sortTableRows } from '@/lib/sortTableRows';
@@ -162,6 +164,7 @@ export type { LibraryAddPreloadState } from '@/types/navigation';
 export function LibraryAddPage() {
     useDocumentTitle('Add content');
     const navigate = useNavigate();
+    const openLocalPreview = useOpenLocalContentPreview();
     const location = useLocation();
     const { toast } = useToast();
 
@@ -180,12 +183,13 @@ export function LibraryAddPage() {
     const [filterQuery, setFilterQuery] = useState<string>('');
     const [saveFilterDialogOpen, , openSaveFilterDialog, closeSaveFilterDialog] = useToggle();
     const [saveFilterError, setSaveFilterError] = useState<string | null>(null);
+    const [saveFilterQueryError, setSaveFilterQueryError] = useState<string | null>(null);
     const [candidateSearchError, setCandidateSearchError] = useState<string | null>(null);
 
     const liveCandidateSearch = useProviderMetadataCandidateSearch();
     const savedCandidateSearch = useProviderMetadataCandidateSearch();
 
-    const addMutation = useAddContentByExternalId();
+    const { mutate: addContent } = useAddContentByExternalId();
 
     const { filters: savedContentFilters, isLoading: savedFiltersLoading } = useContentFilters();
     const savedFilterOptions = useMemo(
@@ -198,6 +202,7 @@ export function LibraryAddPage() {
     const lastCandidateSearchRef = useRef<{ kind: 'adhoc'; query: string } | { kind: 'saved'; query: string } | null>(
         null,
     );
+    const candidateRequestVersion = useRef(0);
 
     const handleFilterQueryChange = useCallback((value: string) => {
         setFilterQuery(value);
@@ -236,7 +241,7 @@ export function LibraryAddPage() {
 
             setAddingKey(candidate.key);
 
-            addMutation.mutate(
+            addContent(
                 {
                     providerType: candidate.providerType,
                     externalIdKey: candidate.externalIdSource,
@@ -261,16 +266,21 @@ export function LibraryAddPage() {
                 },
             );
         },
-        [addMutation, handleAddSuccess, toast],
+        [addContent, handleAddSuccess, toast],
     );
 
-    const handlePreview = useCallback((candidate: AddableCandidate) => {
-        if (candidate.inLibrary) {
-            return;
-        }
-        setPreviewCandidate(candidate);
-        setPreviewOpen(true);
-    }, []);
+    const handlePreview = useCallback(
+        (candidate: AddableCandidate) => {
+            if (candidate.inLibrary) {
+                if (candidate.existingContentHierarchyItemId)
+                    openLocalPreview(candidate.existingContentHierarchyItemId);
+                return;
+            }
+            setPreviewCandidate(candidate);
+            setPreviewOpen(true);
+        },
+        [openLocalPreview],
+    );
 
     const previewTarget: PreviewDrawerTarget | null = useMemo(() => {
         if (!previewCandidate || !previewCandidate.contentType) {
@@ -310,7 +320,7 @@ export function LibraryAddPage() {
 
             setAddingKey(candidateKey);
 
-            addMutation.mutate(
+            addContent(
                 {
                     providerType: target.providerType,
                     externalIdKey: target.externalIdKey,
@@ -335,11 +345,12 @@ export function LibraryAddPage() {
                 },
             );
         },
-        [addMutation, handleAddSuccess, previewCandidate, toast],
+        [addContent, handleAddSuccess, previewCandidate, toast],
     );
 
     const runCandidateSearch = useCallback(
-        async (queryText: string, candidateSearchPage: number) => {
+        async (queryText: string, candidateSearchPage: number, resume = false) => {
+            const version = ++candidateRequestVersion.current;
             setCandidateSearchError(null);
             lastCandidateSearchRef.current = { kind: 'adhoc', query: queryText };
 
@@ -347,9 +358,12 @@ export function LibraryAddPage() {
                 await liveCandidateSearch.mutateAsync({
                     query: queryText,
                     page: candidateSearchPage,
+                    resume,
                 });
             } catch (error) {
-                setCandidateSearchError(candidateSearchErrorMessage(error));
+                if (version === candidateRequestVersion.current && !isAbortError(error)) {
+                    setCandidateSearchError(candidateSearchErrorMessage(error));
+                }
             }
         },
         [liveCandidateSearch],
@@ -364,7 +378,8 @@ export function LibraryAddPage() {
     }, [runCandidateSearch, filterQuery]);
 
     const runSavedCandidateSearch = useCallback(
-        async (queryText: string, candidateSearchPage: number) => {
+        async (queryText: string, candidateSearchPage: number, resume = false) => {
+            const version = ++candidateRequestVersion.current;
             if (!queryText.trim()) {
                 return;
             }
@@ -375,9 +390,12 @@ export function LibraryAddPage() {
                 await savedCandidateSearch.mutateAsync({
                     query: queryText,
                     page: candidateSearchPage,
+                    resume,
                 });
             } catch (error) {
-                setCandidateSearchError(candidateSearchErrorMessage(error));
+                if (version === candidateRequestVersion.current && !isAbortError(error)) {
+                    setCandidateSearchError(candidateSearchErrorMessage(error));
+                }
             }
         },
         [savedCandidateSearch],
@@ -452,9 +470,10 @@ export function LibraryAddPage() {
     }, [navigate, selectedSavedFilterId]);
 
     const preload = location.state as LibraryAddPreloadState | null;
-    const preloadAppliedRef = useRef(false);
+    // Holds the history entry whose preload was applied, so a new preload also applies while this page is open.
+    const preloadAppliedRef = useRef<string | null>(null);
     useEffect(() => {
-        if (preloadAppliedRef.current || !preload?.filterQuery) {
+        if (preloadAppliedRef.current === location.key || !preload?.filterQuery) {
             return;
         }
         if (preload.savedFilterId && savedFiltersLoading) {
@@ -474,45 +493,54 @@ export function LibraryAddPage() {
                 return;
             }
 
-            preloadAppliedRef.current = true;
+            preloadAppliedRef.current = location.key;
             void runCandidateSearchForSavedFilter(preloadFilter, 1);
         } else {
-            preloadAppliedRef.current = true;
+            preloadAppliedRef.current = location.key;
             setPage(1);
             setTab('live');
             setFilterQuery(preload.filterQuery);
             void runCandidateSearch(preload.filterQuery, 1);
         }
-    }, [preload, savedContentFilters, savedFiltersLoading, runCandidateSearch, runCandidateSearchForSavedFilter]);
+    }, [
+        location.key,
+        preload,
+        savedContentFilters,
+        savedFiltersLoading,
+        runCandidateSearch,
+        runCandidateSearchForSavedFilter,
+    ]);
 
     useEffect(() => {
-        if (preloadAppliedRef.current) {
+        if (preloadAppliedRef.current === location.key) {
             return;
         }
         const contentTypeParam = new URLSearchParams(location.search).get('contentType')?.trim();
         if (!contentTypeParam) {
             return;
         }
-        preloadAppliedRef.current = true;
+        preloadAppliedRef.current = location.key;
 
         const seededQuery = setContentFilterSelection('', { contentType: contentTypeParam });
         setTab('live');
         setFilterQuery(seededQuery);
         setPage(1);
-    }, [location.search]);
+    }, [location.key, location.search]);
 
     const handleOpenSaveFilter = useCallback(() => {
         setSaveFilterError(null);
+        setSaveFilterQueryError(null);
         openSaveFilterDialog();
     }, [openSaveFilterDialog]);
 
     const handleSaveFilter = useCallback(
         async (name: string) => {
             setSaveFilterError(null);
+            setSaveFilterQueryError(null);
 
             const parseResult = await parseMagpieQl(filterQuery, 'content');
             if (parseResult.error) {
-                setSaveFilterError(parseResult.error.message);
+                setSaveFilterQueryError(parseResult.error.message);
                 return;
             }
 
@@ -539,6 +567,14 @@ export function LibraryAddPage() {
     );
 
     const activeSearchKind = lastCandidateSearchRef.current?.kind ?? (tab === 'saved' ? 'saved' : 'adhoc');
+
+    const handleCancelCandidateSearch = useCallback(() => {
+        candidateRequestVersion.current++;
+        const completed = activeSearchKind === 'saved' ? savedCandidateSearch.cancel() : liveCandidateSearch.cancel();
+        setCandidateSearchError(null);
+        setPage(completed?.page ?? 1);
+        lastCandidateSearchRef.current = completed ? { kind: activeSearchKind, query: completed.query } : null;
+    }, [activeSearchKind, liveCandidateSearch, savedCandidateSearch]);
 
     const providerCandidateSearch = useMemo(
         () =>
@@ -619,9 +655,9 @@ export function LibraryAddPage() {
             setPage(target);
             const last = lastCandidateSearchRef.current;
             if (last?.kind === 'adhoc') {
-                void runCandidateSearch(last.query, target);
+                void runCandidateSearch(last.query, target, true);
             } else if (last?.kind === 'saved') {
-                void runSavedCandidateSearch(last.query, target);
+                void runSavedCandidateSearch(last.query, target, true);
             }
         },
         [runCandidateSearch, runSavedCandidateSearch],
@@ -640,6 +676,7 @@ export function LibraryAddPage() {
 
     const switchTab = useCallback(
         (next: AddTab) => {
+            candidateRequestVersion.current++;
             setTab(next);
             setPage(1);
             setCandidateSearchError(null);
@@ -713,6 +750,16 @@ export function LibraryAddPage() {
                                 Add a filter criterion to search.
                             </p>
                         )}
+                        {providerCandidateSearch.isPending && (
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={handleCancelCandidateSearch}
+                                data-action="cancel-search"
+                            >
+                                Cancel search
+                            </Button>
+                        )}
                         <Button
                             variant="primary"
                             size="sm"
@@ -781,6 +828,16 @@ export function LibraryAddPage() {
                         </p>
                     )}
                     <div className="library-add-page__filter-actions">
+                        {providerCandidateSearch.isPending && (
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={handleCancelCandidateSearch}
+                                data-action="cancel-search"
+                            >
+                                Cancel search
+                            </Button>
+                        )}
                         <Button
                             variant="primary"
                             size="sm"
@@ -960,7 +1017,8 @@ export function LibraryAddPage() {
                 onSave={handleSaveFilter}
                 isSaving={createFilterMutation.isPending}
                 filterQuery={filterQuery}
-                error={saveFilterError}
+                nameError={saveFilterError}
+                queryError={saveFilterQueryError}
                 existingNames={savedContentFilters.map((f) => f.name)}
             />
 

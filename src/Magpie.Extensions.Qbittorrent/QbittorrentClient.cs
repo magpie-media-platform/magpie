@@ -295,7 +295,8 @@ internal sealed class QbittorrentClient(
             settings,
             () => BuildDeleteRequest(settings, hash, deleteFiles),
             cancellationToken).ConfigureAwait(false);
-        return InterpretMutation(response, $"/torrents/delete (hash {hash})");
+        response.EnsureSuccessStatusCode();
+        return true;
     }
 
     public async Task<bool> PauseAsync(
@@ -546,7 +547,8 @@ internal sealed class QbittorrentClient(
             response.EnsureSuccessStatusCode();
 
             var body = (await response.Content.ReadAsStringAsync().ConfigureAwait(false)).Trim();
-            var ok = string.Equals(body, "Ok.", StringComparison.Ordinal);
+
+            var ok = body.Length == 0 || string.Equals(body, "Ok.", StringComparison.Ordinal);
             if (ok)
             {
                 _authenticatedSettings.TryAdd(settings, 0);
@@ -554,7 +556,7 @@ internal sealed class QbittorrentClient(
             else
             {
                 logger.LogWarning(
-                    "The qBittorrent login at {Host} returned {Body} (expected 'Ok.').",
+                    "The qBittorrent login at {Host} returned {Body} (expected 'Ok.' or an empty body).",
                     settings.Host,
                     body);
             }
